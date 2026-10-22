@@ -20,7 +20,7 @@ import { alertStore, selectedCharID } from '../stores.svelte'
  *   captured at the event itself (a monotonic counter of pointer/keyboard/input/touch/wheel events); any later interaction voids it, the apply
  *   re-asks after every wait and releases its plan instead of arming. A window is never re-opened by a timer or a late response.
  *   A plan whose actual targets include the chat on screen is applied only in a reopen/startup/manual window; otherwise it is
- *   released, reported as deferred for that chat, and applied when a chat-open event arrives. The pre-arm wait is bounded
+ *   released, reported as deferred for that chat, and applied when a chat-open event arrives. Client preparation after the plan is bounded
  *   (deadlineMs): past it the plan is released. An ARMED apply is never interrupted and settles through finish/recovery.
  * - Failures back off 5 → 15 → 60 s, capped at 5 min; reports (failed uploads, rotation, held/quarantined, repair failures) are never
  *   shown as "up to date". Disabling cancels future cycles only: outbox, store and data stay. Nothing runs while hidden.
@@ -156,9 +156,9 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 else if (o.generating() || o.alerting() || interacted()) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' }
                 else {
                     stage = 'apply'
-                    // The pre-arm wait is bounded; an armed apply ignores the abort by contract (settles through finish/recovery).
-                    deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs)
-                    const result = await o.apply(true, signal, { window: safe.window, interacted })
+                    // Large Wiki plans may take longer without blocking play. Bound client preparation after the server answers.
+                    const result = await o.apply(true, signal, { window: safe.window, interacted, planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
+                    if (result.state === 'deferred' && signal.aborted && /deadline/i.test(String(signal.reason))) throw signal.reason
                     outcome = result.state
                     if (result.state === 'deferred-active-chat') state.deferredForChat = o.activeChat() || '-'
                     else if (result.state === 'applied' || result.state === 'empty') state.deferredForChat = ''
@@ -171,7 +171,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
             } catch (error: any) {
                 if (error instanceof Cancelled || generation !== state.generation || !active()) { state.lastOutcome = 'cancelled'; return 'cancelled' } // never reschedule a stopped/disabled/paused coordinator
                 if (stage === 'snapshot' && error?.code === 'NAS_SYNC_PLAN_PENDING') { state.lastOutcome = 'deferred'; state.lastError = ''; schedule(o.pollMs); return state.lastOutcome }
-                if (stage === 'apply' && /deadline/i.test(String(error?.message ?? error))) { state.lastOutcome = 'pulled'; state.lastError = ''; state.deferredForChat ||= o.activeChat() || '-'; if (generation === state.generation) schedule(o.pollMs); return state.lastOutcome } // plan released; incoming stays received
+                if (stage === 'apply' && /deadline/i.test(String(error?.message ?? error))) { state.lastOutcome = 'pulled'; state.lastError = ''; state.deferredForChat ||= o.activeChat() || '-'; transferStatus.set('받은 변경은 보관 중이에요. 다음 적용 기회에 다시 시도해요.'); if (generation === state.generation) schedule(o.pollMs); return state.lastOutcome } // plan released; incoming stays received
                 // Offline/server/publish error: local play continues (an un-armed apply released its hold), retry with backoff.
                 state.failures += 1
                 const message = String(error?.message ?? error)

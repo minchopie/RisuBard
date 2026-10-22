@@ -5,7 +5,7 @@
 ## 0. 현재 동작: 비차단 백그라운드 동기화 (0.9.81 이후)
 - 로컬 플레이·전송은 NAS를 기다리지 않는다. 전송 전 검사(`preSendSync`)는 미해결 apply의 hold만 거부하고 네트워크를 호출하지 않는다.
 - 주기(5 s 저장 안정·30 s 폴·전면 복귀·reconnect)는 status → [snapshot(생성·가져오기 중 생략) → publish] → pull → pending 미리보기까지만 백그라운드로 돈다. 받은 커밋은 store에 영구 보관된다("받았음, 나중 적용").
-- apply(plan→arm→save→finish)는 **안전 창**에서만: 앱 시작, 전면 복귀(visibilitychange/focus), 대화 열기(`risubard-chat-opened` 이벤트·캐릭터 전환), 수동 「지금 동기화」. 타이머·저장·전송·reconnect·"유휴"는 적용하지 않는다. 창은 이벤트 시점의 상호작용 카운터(pointerdown/keydown/input/touchstart/wheel, document 캡처)를 epoch로 가지며 갱신되지 않는다; 그 뒤 입력이 있으면 plan은 해제된다(await마다 재확인). plan의 실제 대상이 열어 둔 대화면 전면 창에서는 보류(`deferred-active-chat`)하고 다시 열 때 적용한다. pre-arm 대기는 10 s로 한정; 서버에 남은 prepared plan은 다음 주기에 해제한다(armed 저널은 finish/recovery만).
+- apply(plan→arm→save→finish)는 **안전 창**에서만: 앱 시작, 전면 복귀(visibilitychange/focus), 대화 열기(`risubard-chat-opened` 이벤트·캐릭터 전환), 수동 「지금 동기화」. 타이머·저장·전송·reconnect·"유휴"는 적용하지 않는다. 창은 이벤트 시점의 상호작용 카운터(pointerdown/keydown/input/touchstart/wheel, document 캡처)를 epoch로 가지며 갱신되지 않는다; 그 뒤 입력이 있으면 plan은 해제된다(await마다 재확인). plan의 실제 대상이 열어 둔 대화면 전면 창에서는 보류(`deferred-active-chat`)하고 다시 열 때 적용한다. UI·저장 잠금이 없는 서버 plan 계산은 기존 요청 제한을 사용하고, 응답 후 클라이언트 pre-arm 준비를 10 s로 한정; 서버에 남은 prepared plan은 다음 주기에 해제한다(armed 저널은 finish/recovery만).
 - hold(`syncSaveHold`)와 `inert`는 arm→finish(및 시작 복구)에만 걸리고, 자동 동기화의 상태는 화면을 덮지 않는 인플로우 상태 줄로만 표시된다(수동 전송은 기존 모달).
 - 한계: OS 백그라운드 서비스 없음(앱이 보일 때만), 입력 추적은 document 이벤트, 스냅샷 exclusive 구간의 423 재시도 지연 유지, armed 구간의 지속 시간은 보장하지 않음. 호스트(upstream 파일)에는 작은 훅만 남아 있으며 그 훅은 검토된 패치 한 장(`integration.patch`)으로 관리한다.
 

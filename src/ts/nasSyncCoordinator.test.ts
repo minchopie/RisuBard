@@ -12,13 +12,14 @@ vi.mock('./transfer-sync/nasSync', () => ({ activityBlocksSync: () => f.activity
 vi.mock('./platform', () => ({ isNodeServer: true }))
 vi.mock('./stores.svelte', () => { const selectedCharID = writable(0); f.selected = selectedCharID; return { alertStore: writable(f.alert), selectedCharID } })
 import { createSyncCoordinator } from './nasSyncCoordinator'
-import { canonicalSaveSettled, transferBusy, syncSaveHold } from './transferState'
+import { canonicalSaveSettled, transferBusy, transferStatus, syncSaveHold } from './transferState'
 
 /** The real apply's admission contract, modelled on the stores: hold+busy are set at arm and released on a pre-arm abort/failure; once
  *  "armed" they are released only by its own verdict (never by the coordinator). `guard.interacted()` is consulted like the product does. */
 function applyModel(calls: string[], behaviour: { hang?: boolean; armed?: boolean; result?: any; touchesActiveChat?: boolean } = {}, guards: any[] = []) {
     return vi.fn(async (_auto: boolean, signal?: AbortSignal, guard?: any) => {
         calls.push('apply'); guards.push(guard)
+        guard?.planReady?.()
         if (behaviour.hang) {
             try { await new Promise<void>((_resolve, reject) => { if (signal?.aborted) return reject(signal.reason); signal?.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted'))) }) }
             catch (error) {
@@ -55,6 +56,40 @@ test('manual upload only snapshots and publishes; manual download protects local
     expect(await h.c.downloadNow()).toBe('applied')
     expect(h.calls).toEqual(['status', 'snapshot', 'pull', 'preview', 'apply'])
     expect(h.guards[0].window).toBe('manual')
+    h.c.stop()
+})
+
+test('a slow non-blocking server plan does not consume the client preparation deadline', async () => {
+    const h = harness(); await h.c.start(); h.setPending(1)
+    h.io.apply.mockImplementation(async (_auto: boolean, signal?: AbortSignal, guard?: any) => {
+        await new Promise(r => setTimeout(r, 20_000))
+        if (signal?.aborted) throw signal.reason
+        guard?.planReady?.()
+        return { state: 'applied' }
+    })
+    const running = h.c.downloadNow()
+    await vi.advanceTimersByTimeAsync(19_999)
+    expect(h.c.state.running).toBe(true)
+    expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await running).toBe('applied')
+    h.c.stop()
+})
+
+test('a hydration deadline returned as deferred uses the same honest pending status as a rejected flush', async () => {
+    const h = harness(); await h.c.start(); h.setPending(1)
+    h.io.apply.mockImplementation(async (_auto: boolean, _signal?: AbortSignal, guard?: any) => {
+        guard?.planReady?.()
+        await new Promise(r => setTimeout(r, 10_001))
+        transferStatus.set('Error: sync apply cancelled')
+        return { state: 'deferred' }
+    })
+    const running = h.c.downloadNow()
+    await vi.advanceTimersByTimeAsync(10_001)
+    expect(await running).toBe('pulled')
+    expect(get(transferStatus)).toBe('받은 변경은 보관 중이에요. 다음 적용 기회에 다시 시도해요.')
+    expect(h.c.state.lastError).toBe('')
+    expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
     h.c.stop()
 })
 

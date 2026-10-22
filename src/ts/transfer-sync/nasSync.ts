@@ -231,7 +231,7 @@ const foreignBusy = () => get(transferBusy) && !syncOwnsBusy
  * every wait, so a plan prepared while the user started playing is released, never armed. Plans whose actual targets include the chat
  * on screen are applied only in a window where that chat was just (re)opened or the user asked (startup/reopen/manual).
  */
-export interface SyncApplyGuard { window: 'startup' | 'foreground' | 'reopen' | 'manual'; interacted: () => boolean }
+export interface SyncApplyGuard { window: 'startup' | 'foreground' | 'reopen' | 'manual'; interacted: () => boolean; planReady?: () => void }
 export function applySync(automatic = false, signal?: AbortSignal, guard?: SyncApplyGuard): Promise<SyncApplyOutcome> { return applying ??= applySyncOnce(automatic, signal, guard).finally(() => { applying = null }) }
 /** True when the plan's actual targets (chat rows or deletions) include the chat currently on screen. */
 export function planTouchesActiveChat(plan: SyncPlan): boolean {
@@ -253,6 +253,7 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
         // `localEditsOverlap` below; the hold starts only right before arm (after a fresh drain), for the armed stage alone.
         const openedBefore = activeChatSignature()
         plan = await post('/plan', {}, signal)
+        guard?.planReady?.() // Server preparation holds no UI/save lock; bound client preparation only after its answer.
         // Safe-window re-check after the wait: the user opened another chat (or character) meanwhile → this plan was prepared for a view
         // that is gone; it is released and the coordinator decides again from the new selection.
         if (!plan!.empty && activeChatSignature() !== openedBefore) throw Object.assign(new Error('대화를 바꿔서 동기화 적용을 다음 기회로 미뤘어요.'), { code: 'SYNC_RECHECK', transaction: plan!.transaction })

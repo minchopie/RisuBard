@@ -356,3 +356,30 @@ test('pending memory differences are not reported as latest and never acquire a 
     const result = await applySync(); expect(result.state).toBe('review-needed'); expect(get(syncSaveHold)).toBe(false)
     expect(f.request.mock.calls.some(([path]: any[]) => path === '/arm')).toBe(false)
 })
+
+test('client preparation starts only after the unlocked server plan wait returns', async () => {
+    let release!: (response: Response) => void
+    const planReady = vi.fn(() => {
+        expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+    })
+    script({ '/plan': () => new Promise<Response>(r => { release = r }), '/arm': () => reply({ ready: true }), '/finish': () => reply({ state: 'applied' }) })
+    const running = applySync(true, undefined, { window: 'manual', interacted: () => false, planReady })
+    await new Promise(r => setTimeout(r, 0))
+    expect(planReady).not.toHaveBeenCalled()
+    expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+    release(reply(basePlan()))
+    expect((await running).state).toBe('applied')
+    expect(planReady).toHaveBeenCalledTimes(1)
+})
+
+test('a deadline while hydrating releases the prepared plan and returns deferred without arming', async () => {
+    const controller = new AbortController(), before = JSON.stringify(f.db)
+    f.hydrate = async () => { controller.abort(new Error('sync apply deadline')) }
+    const finish = vi.fn(() => reply({ state: 'rolled-back' }))
+    script({ '/plan': () => reply(basePlan()), '/finish': finish })
+    expect((await applySync(true, controller.signal, { window: 'manual', interacted: () => false })).state).toBe('deferred')
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(f.request.mock.calls.some(([p]) => p === '/arm')).toBe(false)
+    expect(JSON.stringify(f.db)).toBe(before)
+    expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+})
