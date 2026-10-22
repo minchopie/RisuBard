@@ -35,6 +35,11 @@ const { memorySaveWorkspaceId } = require('../risubard-memory-save.ts');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const clone = v => JSON.parse(JSON.stringify(v));
 const localHash = value => sha256(canonical(value, true));
+const messageBody = revision => (revision.content?.message ?? []).map(message => {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
+    const { risubardCanonicalReceipt: _receipt, ...body } = message;
+    return body;
+});
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const b64 = text => Buffer.from(text).toString('base64url');
 async function safeParents(root, path) {
@@ -232,13 +237,14 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
         const cached = differenceCache.get(key);
         if (cached?.signature === signature) return cached.result;
         const first = heads[0], differs = [], same = pick => heads.every(h => hashJson(pick(h)) === hashJson(pick(first)));
-        if (!same(h => h.content?.message ?? [])) differs.push('messages');
+        const sameMessages = same(messageBody);
+        if (!sameMessages) differs.push('messages');
         const deps = (h, prefix) => Object.fromEntries(Object.entries(h.dependencies).filter(([k]) => prefix.some(p => k.startsWith(p))));
         if (!same(h => deps(h, ['bard:']))) differs.push('wiki');
         if (!same(h => deps(h, ['slot:', 'page:']))) differs.push('slots');
         if (!same(h => deps(h, ['pin:', 'envelope:']))) differs.push('settings');
         if (!same(h => deps(h, ['asset:', 'inlay:', 'inlay-metadata:']))) differs.push('media');
-        if (!same(h => Object.fromEntries(Object.entries(h.content ?? {}).filter(([k]) => !['message', 'id', 'name'].includes(k))))) differs.push('state');
+        if (!same(h => Object.fromEntries(Object.entries(h.content ?? {}).filter(([k]) => !['message', 'id', 'name'].includes(k)))) || (sameMessages && !same(h => h.content?.message ?? []))) differs.push('state');
         const result = { sameMessages: !differs.includes('messages'), differs };
         differenceCache.set(key, { signature, result });
         return result;
@@ -768,7 +774,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
             if (c.state === 'deleted') { for (const { character, chat } of locals) { result.deletions.push({ kind: 'chat', characterId: character.chaId, id: chat.id }); before.chats.push({ characterId: character.chaId, chat: clone(chat) }); } applyRoot(key); result.lineage[key + '#' + rootId] = c.tombstoneHeads[0]; continue; }
             // Delete-pending (a deletion and an unseen live edit coexist): the live edit is kept and offered as a branch; nothing is removed.
             if (c.state === 'delete-pending' && !locals.length && !(db.characters ?? []).some(x => x.chaId === chatOwner.get(rootId))) { result.pending.push({ root: key, reason: 'delete-pending', heads: c.liveHeads }); continue; }
-            if (c.variants.length > 1 && c.state === 'diverged' && c.liveHeads.every(id => hashJson(s.graph.get(id).content?.message ?? []) === hashJson(s.graph.get(c.liveHeads[0]).content?.message ?? []))) {
+            if (c.variants.length > 1 && c.state === 'diverged' && chatDifference(c.liveHeads.map(id => s.graph.get(id))).sameMessages) {
                 result.pending.push({ root: key, reason: 'same-messages', variants: c.variants.length }); continue;
             }
             const segments = s.graph.branchSegments(key), taken = new Set(locals.map(l => l.chat.id)); // local ids in use, including the ones this plan assigns

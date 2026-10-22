@@ -909,6 +909,31 @@ test('legacy userNote revisions are acknowledged without overwriting the selecte
     expect(d.service.store().graph.get(legacy.id)).toBeTruthy();
 })
 
+test('receipt-only message differences are state conflicts, not new conversation branches', async t => {
+    const dav = fixtureDav(), left = await seedTablet(t, dav)
+    const right = await device(t, dav, 'receipt-right', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] })
+    right.service.enable({ workspaceId: 'ws-fixture' }); await right.service.pull(); await settle(right)
+    const receipts = new Map()
+    for (const [d, eventId] of [[left, 'left-event'], [right, 'right-event']] as const) {
+        const db = d.db(), receipt = { sourceMessageIds: ['m1'], eventIds: [eventId], changes: [], warnings: [], recordedAt: '2026-10-22T00:00:00Z' }
+        db.characters[0].chats[0].message[0].risubardCanonicalReceipt = receipt; d.save(db); receipts.set(d, receipt)
+        await d.service.snapshot(); await d.service.publish()
+    }
+    await left.service.pull(); await right.service.pull()
+    const conflict = left.service.conflicts().find((c: any) => c.type === 'chat')
+    expect(conflict.sameMessages).toBe(true); expect(conflict.differs).toContain('state'); expect(conflict.differs).not.toContain('messages')
+    expect(conflict.state).not.toBe('branches-preserved')
+    const plan = await right.service.plan()
+    expect(plan.chats ?? []).toHaveLength(0); expect(plan.pending.some((p: any) => p.reason === 'same-messages')).toBe(true)
+    for (const d of [left, right]) {
+        expect(d.db().characters[0].chats).toHaveLength(1)
+        expect(d.db().characters[0].chats[0].message[0].risubardCanonicalReceipt).toEqual(receipts.get(d))
+    }
+    const edited = right.db(); edited.characters[0].chats[0].message[0].data += ' 실제 본문 변경'; right.save(edited)
+    await right.service.snapshot(); await right.service.publish(); await left.service.pull()
+    expect(left.service.conflicts().find((c: any) => c.type === 'chat')).toMatchObject({ sameMessages: false, differs: expect.arrayContaining(['messages']) })
+})
+
 test('same messages with two Wiki revisions do not create duplicate chats, expose no message content, and show Wiki counts after receipt', async t => {
     const dav = fixtureDav();
     const left = await seedTablet(t, dav); const right = await device(t, dav, 'wiki-right', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] });
