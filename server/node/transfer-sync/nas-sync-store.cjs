@@ -175,6 +175,20 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
             return clone(entry);
         });
     }
+    /** NAS file times are display metadata only; they never participate in revision IDs or conflict decisions. */
+    function noteNasTimes(entries) {
+        const updates = {};
+        for (const { device, incarnation, sequence, commitId, at } of entries) {
+            if (!Number.isSafeInteger(at) || at <= 0 || at > 8640000000000000) continue;
+            const ids = device === state.deviceId
+                ? state.commits.find(c => c.incarnationId === incarnation && c.sequence === sequence && c.commitId === commitId && c.published)?.revisions
+                : state.peers[peerKey(device, incarnation)]?.admittedRevisions?.[pair(sequence, commitId)];
+            // An identical revision published by several devices keeps its earliest known NAS time.
+            for (const id of ids ?? []) if (at < (updates[id] ?? state.nasTimes?.[id] ?? Infinity)) updates[id] = at;
+        }
+        if (!Object.keys(updates).length) return;
+        transact(s => { s.nasTimes = { ...s.nasTimes, ...updates }; });
+    }
     function markPublishFailed(sequence, error, at = now()) {
         transact(s => {
             const entry = s.commits.find(c => c.sequence === sequence && !c.published && c.incarnationId === s.incarnationId);
@@ -380,7 +394,7 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
         trash: trash().length, physicalPurge: PHYSICAL_PURGE });
     const resumed = resumeResolutions();
     return { root, graph: { get: id => graph.get(id), heads: k => graph.heads(k), classify: k => graph.classify(k), rootKeys: () => graph.rootKeys(), revisions: () => graph.revisions(), isAncestor: (a, b) => graph.isAncestor(a, b), branchSegments: k => graph.branchSegments(k), containerState: (k, op) => graph.containerState(k, op), bootstrapResolution: (a, b) => graph.bootstrapResolution(a, b), tombstones: (op, targets) => graph.tombstones(op, targets), restore: id => graph.restore(id), resolve: r => graph.resolve(r) }, resumed,
-        setWorkspace, commit, commitObject, dueCommits, publishedCommits, unpublishedBlobs, markBlobPublished, markPublished, markPublishFailed, rotateIncarnation, needsCheckpoint, checkpointObject, recordCheckpoint, recordBase,
+        setWorkspace, commit, commitObject, dueCommits, publishedCommits, unpublishedBlobs, markBlobPublished, markPublished, noteNasTimes, markPublishFailed, rotateIncarnation, needsCheckpoint, checkpointObject, recordCheckpoint, recordBase,
         validateCommitObject, missingCommitBlobs, admitRemote, waitingEntries, retryWaiting, resolveAmbiguity, resumeResolutions, pendingApply, markApplied, ackObject, ackChanged, markAckPublished, knownRemote, isWaiting, rotateBuckets, peer, trash, status,
         hasBlob, blobFile, blobPath, storeBlobFromFile: importBlob, envelopePhysical, missingBlobs, identity: () => ({ deviceId: state.deviceId, incarnationId: state.incarnationId, workspaceId: state.workspaceId }), state: () => clone(state) };
 }

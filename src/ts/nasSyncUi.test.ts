@@ -1,6 +1,11 @@
 // View helpers behind the NAS sync area: authority binding, explicit peer choice, safe conflict labels, state rows, route restriction.
 import { test, expect } from 'vitest'
-import { syncItemTitle, syncDifference, SYNC_ITEM_STATE, bootstrapAuthority, incomingPeers, conflictVariantLabel, syncStateRows, keyRequestNeeded, shareMethodAllowed, hydrateSyncForm, withSavedHomeSsids, routeLabel } from './nasSyncUi'
+import { syncItemTitle, syncDifference, syncRevisionTime, SYNC_ITEM_STATE, bootstrapAuthority, incomingPeers, conflictVariantLabel, syncStateRows, keyRequestNeeded, shareMethodAllowed, hydrateSyncForm, withSavedHomeSsids, routeLabel } from './nasSyncUi'
+
+test('revision dates always show Korea time and old or invalid dates stay unknown', () => {
+    expect(syncRevisionTime(Date.parse('2026-10-22T16:05:00Z'))).toBe('2026. 10. 23. 01:05')
+    for (const at of [undefined, null, '', '2026-10-22', 0, -1, NaN, Infinity, 8640000000000001]) expect(syncRevisionTime(at)).toBe('날짜 기록 없음')
+})
 
 test('bootstrap authority is the recorded grant sender, never the first incoming peer; peers are offered as identifiable choices', () => {
     const status = { enabled: true, role: 'joining', vault: { origin: 'shared', sharedFrom: 'tablet-device' }, sync: { incoming: { 'pc-device/inc1': { admitted: 3, applied: 1 }, 'tablet-device/inc9': { admitted: 7, applied: 7 } } } }

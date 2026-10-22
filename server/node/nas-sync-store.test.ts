@@ -21,6 +21,20 @@ function deliver(from: any, to: any, entry: any) {
     return object
 }
 
+test('NAS display dates batch one durable write, ignore unknown/invalid dates, and stay stable across duplicate publications', async t => {
+    let writes = 0
+    const a = open(await temp(t), { writeJson: (...args: any[]) => { if (args[1] === 'state.json') writes++; return atomicWriteJson(...args) } }); a.setWorkspace('date-batch')
+    const r1 = chat('one', { x: 1 }), r2 = chat('two', { x: 2 }), e1 = a.commit([r1]), e2 = a.commit([r2])
+    a.markPublished(e1.sequence, e1.commitId); a.markPublished(e2.sequence, e2.commitId)
+    const address = (e: any, at: number) => ({ device: a.identity().deviceId, incarnation: a.identity().incarnationId, sequence: e.sequence, commitId: e.commitId, at })
+    writes = 0
+    a.noteNasTimes([address(e1, 2000), address(e2, 3000), address({ ...e1, commitId: 'f'.repeat(64) }, 1000), address(e1, NaN)])
+    expect(writes).toBe(1); expect(a.state().nasTimes).toEqual({ [r1.id]: 2000, [r2.id]: 3000 })
+    a.noteNasTimes([address(e1, 4000), address(e2, 3000)]); expect(writes).toBe(1)
+    a.noteNasTimes([address(e1, 1000)]); expect(writes).toBe(2); expect(a.state().nasTimes[r1.id]).toBe(1000)
+    expect(a.graph.heads(key('one'))).toEqual([r1.id])
+})
+
 test('identity, workspace, commit outbox and graph survive restart; identical commits are not re-queued', async t => {
     const root = await temp(t), a = open(root)
     const id = a.identity(); expect(id.deviceId).toMatch(/^[0-9a-f-]{36}$/); expect(id.workspaceId).toBeNull()

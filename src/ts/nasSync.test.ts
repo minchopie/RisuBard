@@ -29,6 +29,24 @@ beforeEach(() => {
 const EMPTY_TRACKED = { character: [] as string[], chat: [] as [string, string][], root: false, botPreset: false, modules: false, plugins: false, pluginCustomStorage: false }
 const script = (handlers: Record<string, (init?: RequestInit) => Response | Promise<Response>>) => f.request.mockImplementation(async (path: string, init?: RequestInit) => { const h = handlers[path]; if (!h) throw new Error('unexpected ' + path); return h(init) })
 
+test('a generic hydration failure releases only its known pre-arm plan, preserving data and ordinary saves', async () => {
+    const before = JSON.stringify(f.db), finish = vi.fn((_init?: RequestInit) => reply({ state: 'rolled-back' }))
+    f.hydrate = async () => { throw new Error('hydrate failed') }
+    script({ '/plan': () => reply(basePlan()), '/finish': finish })
+    await expect(applySync()).rejects.toThrow('hydrate failed')
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(finish.mock.calls[0][0]!.body as string)).toMatchObject({ transaction: 'tx', confirmed: false })
+    expect(f.request.mock.calls.some(([p]) => p === '/arm')).toBe(false)
+    expect(JSON.stringify(f.db)).toBe(before); expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+})
+
+test('a lost arm response never uses generic pre-arm cleanup to discard a possibly armed plan', async () => {
+    const before = JSON.stringify(f.db), finish = vi.fn((_init?: RequestInit) => reply({ state: 'rolled-back' }))
+    script({ '/plan': () => reply(basePlan()), '/arm': () => { throw new Error('arm response lost') }, '/finish': finish })
+    await expect(applySync()).rejects.toThrow('arm response lost')
+    expect(finish).not.toHaveBeenCalled(); expect(JSON.stringify(f.db)).toBe(before)
+})
+
 test('arm comes before any mutation, the header is set before the save, selection follows ids (not indexes), in-place chat identity and local fields survive', async () => {
     const order: string[] = [], chatRef = f.db.characters[0].chats[0]
     f.db.characters[0].chats[1].draftText = '작성 중 초안'

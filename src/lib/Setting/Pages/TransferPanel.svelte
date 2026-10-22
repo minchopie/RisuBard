@@ -10,7 +10,7 @@
     import { isNodeServer } from 'src/ts/platform'
     import { syncStatus, syncOverview, enableSync, disableSync, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
-    import { syncStateRows, syncItemTitle, syncDifference, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, OUTCOME_LABEL } from 'src/ts/nasSyncUi'
+    import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, OUTCOME_LABEL } from 'src/ts/nasSyncUi'
     let selected = $state<string[]>([])
     let compatibility = $state(false)
     let result = $state<any>(null)
@@ -71,6 +71,15 @@
     let syncFormHydrated = false
     const syncSupported = isNodeServer
     const coordinator = () => syncCoordinator()
+    async function runSync(direction: 'upload' | 'download') {
+        await run(async () => {
+            const label = direction === 'upload' ? '업로드' : '다운로드'
+            transferStatus.set(`${label} 중…`)
+            const outcome = await (direction === 'upload' ? coordinator().uploadNow() : coordinator().downloadNow())
+            await refreshSync()
+            transferStatus.set(`${label}: ${OUTCOME_LABEL[outcome.replace(/^key-pending:/, '')] ?? outcome}${outcome.startsWith('key-pending:') ? ' · 동기화 키 대기' : ''}`)
+        })
+    }
     /** One scoped status poll (10 s, visible only, while enabled) + the coordinator's reactive snapshot; user edits of role/workspace are never overwritten while disabled. */
     async function refreshSync() {
         if (!syncSupported) return
@@ -119,17 +128,21 @@
 {#if syncRoute}<p>{routeLabel(syncRoute)}</p>{/if}
             {#each [syncRows[1], syncRows[4]].filter(Boolean) as row}<p>{row}</p>{/each}
             <details><summary>연결·복구 상세</summary>{#each [syncRows[0], syncRows[2], syncRows[3]].filter(Boolean) as row}<p>{row}</p>{/each}</details>
-            <ShButton variant="outline" onclick={() => run(async () => { transferStatus.set('동기화 주기 실행 중…'); const outcome = await coordinator().retryNow(); await refreshSync(); transferStatus.set(`동기화: ${OUTCOME_LABEL[outcome] ?? outcome}`) })}>지금 동기화</ShButton>
+            <p>업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기. 자동 동기화는 기존 설정대로 계속돼요.</p>
+            <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload')}>{$coordinatorState?.running && $coordinatorState.direction === 'upload' ? '업로드 중…' : '업로드'}</ShButton>
+            <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '다운로드'}</ShButton>
+            {#if $coordinatorState?.paused}<p>전송하려면 자동 동기화를 재개해 주세요.</p>{/if}
             <ShButton variant="outline" onclick={() => coordinator().pause(!($coordinatorState?.paused ?? false))}>{$coordinatorState?.paused ? '자동 동기화 재개' : '잠시 중지'}</ShButton>
             <ShButton variant="outline" onclick={() => run(async () => { if (!await alertConfirm('자동 동기화를 끌까요? 대화·설정과 NAS에 올린 자료는 그대로 남고, 다시 켜면 이어서 동기화돼요.')) return; coordinator().enabled(false); sync = await disableSync(); await refreshSync(); transferStatus.set('자동 동기화를 껐어요.') })}>자동 동기화 끄기</ShButton>
             {#if syncOverviewState}
                 {#each syncOverviewState.localIssues ?? [] as issue}
-                    <p role="status">페르소나 「{issue.name}」의 현재 표시값과 저장된 내용이 달라서 받기를 기다려요. 페르소나 편집 화면에서 이 항목의 이름·그림·설명·메모를 확인하고 저장해 주세요. 그 뒤 「지금 동기화」를 누르면 다시 확인해요. 현재 값과 받은 원본은 덮어쓰지 않았어요.</p>
+                    <p role="status">페르소나 「{issue.name}」의 현재 표시값과 저장된 내용이 달라서 받기를 기다려요. 페르소나 편집 화면에서 이 항목의 이름·그림·설명·메모를 확인하고 저장해 주세요. 그 뒤 「다운로드」를 누르면 다시 확인해요. 현재 값과 받은 원본은 덮어쓰지 않았어요.</p>
                 {/each}
                 <p>마지막 동기화 기록이에요. NAS 업로드 완료와 다른 기기의 적용 완료는 달라요. 다른 기기의 적용 여부는 아직 확인되지 않았어요.</p>
                 <p>페르소나 {syncOverviewState.personas.length}개: {syncOverviewState.personas.map((p: any) => p.name).join(', ')}</p>
-                {#each syncOverviewState.chats as item}
-                    <div class="remote-file"><strong>{item.character} · {item.name}</strong><span>{SYNC_ITEM_STATE[item.state] ?? '확인 중'}</span><span>이 기기에 반영된 기록: Wiki·기억 {item.wikiFiles}파일 · 저장 슬롯 {item.slots}개 · 참조 페이지 {item.pages}개</span></div>
+                <p>최근 전송으로 확인한 NAS 최신판 · 한국시간. 날짜는 표시용이며, 내용이 다른 자료를 날짜만 보고 덮어쓰지 않아요.</p>
+                {#each syncOverviewState.items ?? syncOverviewState.chats as item}
+                    <div class="remote-file"><strong>{item.type ? syncItemTitle(item) : `${item.character} · ${item.name}`}</strong><span>NAS 최신판: {syncRevisionTime(item.nasAt)}{item.nasTimeKind === 'uploaded' ? ' (업로드 확인)' : ''}</span><span>{SYNC_ITEM_STATE[item.state] ?? '확인 중'}</span>{#if item.wikiFiles !== undefined}<span>이 기기에 반영된 기록: Wiki·기억 {item.wikiFiles}파일 · 저장 슬롯 {item.slots}개 · 참조 페이지 {item.pages}개</span>{/if}</div>
                 {/each}
             {/if}
             {#if keyRequestNeeded(sync)}

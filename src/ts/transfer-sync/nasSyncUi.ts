@@ -44,9 +44,13 @@ export function syncDifference(item: any): string {
     const labels: Record<string, string> = { messages: '대화 본문', wiki: 'Wiki·기억', slots: '저장 슬롯', settings: '페르소나·모듈·프리셋 연결', media: '이미지·삽입 자료', state: '변수·플레이 상태' };
     return (item?.sameMessages ? '대화 본문은 같아요. ' : '') + '다른 항목: ' + (item?.differs ?? []).map((k: string) => labels[k] ?? '연결 자료').join(', ');
 }
-export const SYNC_ITEM_STATE: Record<string, string> = { 'local-changes': '새 대화 내용 업로드 대기', uncaptured: '아직 동기화 기록 없음', pending: '받은 변경 적용 대기', review: '차이 확인 필요', uploaded: 'NAS 업로드 완료', 'upload-pending': 'NAS 업로드 대기', applied: '받아서 이 기기에 적용 완료' };
+export const SYNC_ITEM_STATE: Record<string, string> = { 'local-changes': '새 대화 내용 업로드 대기', uncaptured: '아직 동기화 기록 없음', pending: '다운로드 완료 · 반영 대기', review: '차이 확인 필요', uploaded: 'NAS 업로드 완료', 'upload-pending': 'NAS 업로드 대기', applied: '받아서 이 기기에 적용 완료', recorded: 'NAS에 기록된 판본', deleted: '삭제 기록' };
+export function syncRevisionTime(at: unknown): string {
+    if (typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0 || at > 8640000000000000) return '날짜 기록 없음'
+    return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at)
+}
 
-export const OUTCOME_LABEL: Record<string, string> = { 'review-needed': '받은 변경 확인 필요', empty: '최신 상태', applied: '적용 완료', deferred: '수정 중이어서 미룸', busy: '다른 작업 중', offline: '연결 안 됨 · 재시도 예정', error: '오류 · 재시도 예정', 'publish-failed': 'NAS 업로드 실패 · 재시도 예정', 'repair-failed': 'NAS 자료 다시 받기 실패 · 재시도 예정', hidden: '화면이 보일 때 재시도', 'deferred-active-chat': '받은 변경 보관 중 · 열어 둔 대화를 다시 열면 적용', 'pulled': '받기 완료 · 한가할 때 적용', cancelled: '취소됨', disabled: '꺼짐', 'finish-pending': '적용 결과 확인 대기 · 복구 보관', 'save-failed': '저장 실패 · 되돌림', running: '진행 중', idle: '대기' }
+export const OUTCOME_LABEL: Record<string, string> = { uploaded: 'NAS 업로드 완료', 'upload-pending': '아직 업로드할 변경이 남아 있어요', 'review-needed': '받은 변경 확인 필요', empty: '최신 상태', applied: '적용 완료', deferred: '수정 중이어서 미룸', busy: '다른 작업 중', offline: '연결 안 됨 · 재시도 예정', error: '오류 · 재시도 예정', 'publish-failed': 'NAS 업로드 실패 · 재시도 예정', 'repair-failed': 'NAS 자료 다시 받기 실패 · 재시도 예정', hidden: '화면이 보일 때 재시도', 'deferred-active-chat': '받은 변경 보관 중 · 열어 둔 대화를 다시 열면 적용', 'pulled': '받기 완료 · 한가할 때 적용', cancelled: '취소됨', disabled: '꺼짐', 'finish-pending': '적용 결과 확인 대기 · 복구 보관', 'save-failed': '저장 실패 · 되돌림', running: '진행 중', idle: '대기' }
 /** Durable states for the compact status area: local save → NAS → peers, conflicts/trash/recovery, key, last cycle. */
 export function syncStateRows(status: any, c: CoordinatorState | null): string[] {
     if (!status?.enabled) return []

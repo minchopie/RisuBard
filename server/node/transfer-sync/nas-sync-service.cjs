@@ -273,13 +273,35 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
             const localChanges = rev && hashJson(messageContent(chat.message)) !== hashJson(messageContent(rev.content?.message));
             const isCurrent = rev && c.liveHeads.some(id => { const h = s.graph.get(id); return h.contentHash === rev.contentHash && h.dependencyHash === rev.dependencyHash; });
             const deps = Object.keys(rev?.dependencies ?? {});
-            rows.push({ character: character.name || '이름 없는 캐릭터', name: chat.name || '이름 없는 대화',
+            rows.push({ root: key, character: character.name || '이름 없는 캐릭터', name: chat.name || '이름 없는 대화',
                 state: !rev ? 'uncaptured' : localChanges ? 'local-changes' : c.state === 'diverged' && !branchesPreserved(s, key, c) ? 'review' : !isCurrent ? 'pending' : own.length ? (own.some(x => x.published) ? 'uploaded' : 'upload-pending') : 'applied',
                 wikiFiles: deps.filter(k => k.startsWith('bard:')).length,
                 slots: new Set(deps.filter(k => k.startsWith('slot:')).map(k => k.split(':')[1])).size,
                 pages: deps.filter(k => k.startsWith('page:')).length });
         }
-        return { chats: rows, personas: (db?.personas ?? []).map(p => ({ name: p.name || '이름 없는 페르소나' })), localIssues: [personaMirrorIssue(db ?? {})].filter(Boolean), peerApplied: 'unconfirmed' };
+        const known = new Set(), times = new Map();
+        for (const commit of state.commits) if (commit.published) for (const id of commit.revisions) { known.add(id); times.set(id, { at: commit.published.at, kind: 'uploaded' }); }
+        for (const peer of Object.values(state.peers)) for (const ids of Object.values(peer.admittedRevisions ?? {})) for (const id of ids) known.add(id);
+        const parents = new Set(), nasHeads = new Map();
+        for (const id of known) { const r = s.graph.get(id); for (const parent of r?.parents ?? []) parents.add(parent); }
+        for (const id of known) {
+            const r = s.graph.get(id); if (!r || parents.has(id)) continue;
+            const key = `${r.domain}\n${r.type}\n${r.root}`;
+            if (!nasHeads.has(key)) nasHeads.set(key, []);
+            nasHeads.get(key).push(id);
+        }
+        const chatRows = new Map();
+        for (const row of rows) { if (!chatRows.has(row.root)) chatRows.set(row.root, []); chatRows.get(row.root).push(row); }
+        const items = [...new Set([...s.graph.rootKeys(), ...chatRows.keys()])].filter(key => key !== 'settings\ngroup\nuserNote').flatMap(key => {
+            const [, type, id] = key.split('\n'), c = s.graph.classify(key), heads = nasHeads.get(key) ?? [];
+            const dates = heads.map(id => state.nasTimes?.[id] ? { at: state.nasTimes[id], kind: 'modified' } : times.get(id));
+            const dated = dates.length && dates.every(x => Number.isSafeInteger(x?.at) && x.at > 0) ? dates.reduce((a, b) => a.at >= b.at ? a : b) : null;
+            return (chatRows.get(key) ?? [null]).map(chat => ({ root: key, type, id, title: chat ? `${chat.character} · ${chat.name}` : rootTitle(s, key),
+                nasAt: dated?.at ?? null, nasTimeKind: dated?.kind ?? null,
+                state: chat?.state ?? (c.state === 'diverged' || c.state === 'delete-pending' ? 'review' : c.state === 'deleted' ? 'deleted' : !heads.length ? 'upload-pending' : c.heads.some(id => !known.has(id)) ? 'upload-pending' : 'recorded'),
+                ...(chat ? { wikiFiles: chat.wikiFiles, slots: chat.slots, pages: chat.pages } : {}) }));
+        });
+        return { chats: rows, items, personas: (db?.personas ?? []).map(p => ({ name: p.name || '이름 없는 페르소나' })), localIssues: [personaMirrorIssue(db ?? {})].filter(Boolean), peerApplied: 'unconfirmed' };
     }
     /** Resolution parents every head (core resolve) with the kept head's content; the plan then materializes it locally. */
     async function resolveConflict({ root, keep }) {
@@ -493,7 +515,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
     /** Snapshot: hydrated canonical DB → changed revisions committed with their blobs. Rejects while a plan is active. */
     async function snapshot() {
         const s = requireEnabled(), v = await openVault();
-        if (service().plan) throw new Error('Finish the pending sync apply before taking a snapshot');
+        if (service().plan) throw Object.assign(new Error('Finish the pending sync apply before taking a snapshot'), { code: 'NAS_SYNC_PLAN_PENDING' });
         const db = await readDatabase();
         if (!db) throw new Error('Database unavailable');
         const work = await fsp.mkdtemp(join(root, 'snapshot-')), captures = new Map(), cleanups = [];

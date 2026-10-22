@@ -24,6 +24,35 @@ function device(t: any, dav: ReturnType<typeof fixtureDav>, root: string, extra:
 }
 const NS = NAMESPACE.join('/') + '/ws-fixture'
 
+test('NAS dates come from WebDAV, backfill admitted old records, survive restart and never change commit bytes or revision IDs', async t => {
+    const listing = (value: string) => `<d:response><d:href>/files/a.json</d:href><d:propstat><d:prop><d:getlastmodified>${value}</d:getlastmodified></d:prop></d:propstat></d:response>`
+    expect(parseListing(listing('bad date'), 'https://nas.invalid/files')[0]).not.toHaveProperty('modifiedAt')
+    expect(parseListing(listing('Thu, 22 Oct 2026 16:05:00 GMT'), 'https://nas.invalid/files')[0].modifiedAt).toBe(Date.parse('2026-10-22T16:05:00Z'))
+    const dav = fixtureDav(), a = device(t, dav, await temp(t)), rootB = await temp(t), b = device(t, dav, rootB)
+    const rev = chat('date-chat', { name: '날짜 표본', message: [] }), entry = a.store.commit([rev])
+    const bytes = canonical(a.store.commitObject(entry))
+    const addr = { device: a.store.identity().deviceId, incarnation: a.store.identity().incarnationId, sequence: entry.sequence, commitId: entry.commitId }
+    const path = `${NS}/devices/${addr.device}/${addr.incarnation}/commits/0/${entry.sequence}_${entry.commitId}.json`
+    dav.modifiedAt.set(path, Date.parse('2026-10-22T16:05:00Z'))
+    expect((await a.transport.publish()).failed).toEqual([])
+    expect(a.store.state().nasTimes[rev.id]).toBe(dav.modifiedAt.get(path))
+    expect(canonical(a.store.commitObject(entry))).toBe(bytes)
+    dav.modifiedAt.delete(path)
+    await b.transport.pull(); expect(b.store.state().nasTimes?.[rev.id]).toBeUndefined()
+    dav.modifiedAt.set(path, Date.parse('2026-10-22T16:06:00Z'))
+    const ids = b.store.graph.heads(key('date-chat'))
+    expect((await b.transport.pull()).identical).toBe(1)
+    expect(b.store.graph.heads(key('date-chat'))).toEqual(ids)
+    expect(device(t, dav, rootB).store.state().nasTimes[rev.id]).toBe(dav.modifiedAt.get(path))
+    b.store.noteNasTimes([{ ...addr, at: NaN }, { ...addr, commitId: 'f'.repeat(64), at: Date.now() }])
+    expect(b.store.state().nasTimes[rev.id]).toBe(dav.modifiedAt.get(path))
+    const misplaced = path.replace('/commits/0/', '/commits/1/')
+    dav.dirs.add(misplaced.slice(0, misplaced.lastIndexOf('/'))); dav.files.set(misplaced, dav.files.get(path)!); dav.modifiedAt.set(misplaced, 1000)
+    await b.transport.pull(); expect(b.store.state().nasTimes[rev.id]).toBe(dav.modifiedAt.get(path))
+    b.store.noteNasTimes = () => { throw new Error('date metadata disk full') }
+    expect((await b.transport.pull()).identical).toBe(1)
+})
+
 test('immutable put on an empty tree creates every namespace parent, verifies, moves, and never leaves temp files', async t => {
     const dav = fixtureDav(), remote = createSyncRemote({ secrets: dav.secrets, fetch: dav.fetch })
     const bytes = Buffer.from('{"v":1}')

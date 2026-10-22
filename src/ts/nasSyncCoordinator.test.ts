@@ -46,6 +46,46 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 beforeEach(() => { vi.useFakeTimers(); canonicalSaveSettled.set(0); transferBusy.set(false); syncSaveHold.set(false); f.unavailable.mockReturnValue(false); f.activity.mockReturnValue(false); f.alert.type = 'none'; f.chat = 'card/chat'; f.selected.set(0) })
 afterEach(() => { vi.useRealTimers() })
 
+test('manual upload only snapshots and publishes; manual download protects local edits but never publishes', async () => {
+    const h = harness(); await h.c.start(); h.calls.length = 0; h.setPending(1)
+    expect(await h.c.uploadNow()).toBe('uploaded')
+    expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'status'])
+    h.calls.length = 0
+    h.io.publish.mockRejectedValue(new Error('must not upload'))
+    expect(await h.c.downloadNow()).toBe('applied')
+    expect(h.calls).toEqual(['status', 'snapshot', 'pull', 'preview', 'apply'])
+    expect(h.guards[0].window).toBe('manual')
+    h.c.stop()
+})
+
+test('direction buttons use the same running lane as automatic sync and do nothing during generation or pause', async () => {
+    const h = harness(); await h.c.start(); h.calls.length = 0
+    f.activity.mockReturnValue(true)
+    expect(await h.c.uploadNow()).toBe('deferred'); expect(await h.c.downloadNow()).toBe('deferred'); expect(h.calls).toEqual([])
+    f.activity.mockReturnValue(false)
+    h.c.pause(true); expect(await h.c.downloadNow()).toBe('idle'); expect(h.calls).toEqual([])
+    h.c.pause(false)
+    let release!: () => void
+    h.io.publish.mockImplementationOnce(async () => { h.calls.push('publish'); await new Promise<void>(r => { release = r }); return { stored: [], failed: [] } })
+    const first = h.c.uploadNow(); await flush()
+    expect(h.c.state.running).toBe(true)
+    expect(await h.c.downloadNow()).toBe('running'); expect(await h.c.cycle('timer')).toBe('running')
+    release(); expect(await first).toBe('uploaded'); expect(h.calls).not.toContain('pull')
+    h.c.stop()
+})
+
+test('manual upload failures, pending outbox and missing keys never claim completion or start a download', async () => {
+    const h = harness(); await h.c.start(); h.calls.length = 0
+    h.io.publish.mockResolvedValueOnce({ failed: [{ error: 'NAS unavailable' }] })
+    expect(await h.c.uploadNow()).toBe('publish-failed'); expect(h.calls).not.toContain('pull')
+    h.io.status.mockResolvedValue({ ...STATUS(), sync: { outbox: { pending: [{}] } } } as any)
+    expect(await h.c.uploadNow()).toBe('upload-pending')
+    h.io.status.mockResolvedValue({ enabled: true, role: 'joining', vault: { origin: null, missing: true } } as any)
+    h.calls.length = 0
+    h.io.status.mockClear(); expect(await h.c.uploadNow()).toBe('key-pending:idle'); expect(h.io.status).toHaveBeenCalledTimes(1); expect(h.calls).toEqual([])
+    h.c.stop()
+})
+
 test('startup window: the first cycle applies waiting work; a settled save runs snapshot → publish → pull → preview WITHOUT apply; polling (30 s) never applies; nothing while hidden; foreground opens a window', async () => {
     const h = harness(); h.setPending(1)
     expect(await h.c.start()).toBe(true); expect(await h.c.start()).toBe(false)
@@ -298,6 +338,19 @@ test('every cycle refreshes the network view for the home/external route before 
     fail = true; await vi.advanceTimersByTimeAsync(30_000); await flush()
     expect(network).toHaveBeenCalledTimes(2); expect(c.state.lastOutcome).toBe('empty'); expect(c.state.failures).toBe(0)
     c.stop()
+})
+
+test('a status/snapshot race waits without a false error or transfer, then releases the late prepared plan on retry', async () => {
+    const h = harness(); let pending = false
+    h.io.status = h.step('status', () => ({ ...STATUS(), plan: pending ? { transaction: 'late-tx', phase: 'prepared' } : null }))
+    h.io.snapshot.mockImplementationOnce(async () => { h.calls.push('snapshot'); pending = true; throw Object.assign(new Error('Finish the pending sync apply before taking a snapshot'), { code: 'NAS_SYNC_PLAN_PENDING' }) })
+    const release = vi.fn(async () => { pending = false; return { state: 'rolled-back' } })
+    const c = createSyncCoordinator({ ...h.io, release, visible: () => true, online: () => true, supported: () => true })
+    await c.start(); h.calls.length = 0
+    expect(await c.uploadNow()).toBe('deferred')
+    expect(h.calls).toEqual(['status', 'snapshot']); expect(c.state).toMatchObject({ failures: 0, lastError: '', lastOutcome: 'deferred' })
+    expect(await c.uploadNow()).toBe('uploaded'); expect(release).toHaveBeenCalledTimes(1)
+    expect(h.calls).not.toContain('pull'); expect(h.calls).not.toContain('apply'); c.stop()
 })
 
 test('late prepared plan: the bounded pre-arm wait gives up before /plan answers and the server keeps a prepared journal → the next cycle releases it (unconfirmed finish) before snapshot and proceeds; an ARMED journal (saving/committed) is never released and the cycle does no local work', async () => {

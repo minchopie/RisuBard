@@ -42,7 +42,7 @@ export interface CoordinatorOptions {
     /** "<character>/<chat>" on screen (for the deferred-chat bookkeeping). */
     activeChat?: () => string
 }
-export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string }
+export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download' }
 export type SafeWindow = { window: SyncApplyGuard['window']; epoch: number }
 const DEFAULT_BACKOFF = [5_000, 15_000, 60_000, 300_000]
 let instance: ReturnType<typeof createSyncCoordinator> | null = null
@@ -91,18 +91,19 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
      * One cycle. `safe` is the window opened by the triggering lifecycle event (null for timer/save/send/reconnect cycles, which never
      * apply). Its epoch is compared with the live interaction count at every decision point; a count that moved means the user is playing.
      */
-    async function cycle(reason: string, external?: AbortSignal, safe: SafeWindow | null = null): Promise<string> {
+    async function cycle(reason: string, external?: AbortSignal, safe: SafeWindow | null = null, direction: 'both' | 'upload' | 'download' = 'both'): Promise<string> {
         if (!active()) return 'idle'
         if (state.running) return 'running'
         if (!o.visible()) { state.lastOutcome = 'hidden'; return 'hidden' } // no background work; the visibility listener resumes
         if (o.blocked()) { state.lastOutcome = 'busy'; schedule(Math.min(o.pollMs, 5_000)); return 'busy' } // manual transfer/import or an unresolved hold: try again shortly
+        if (direction !== 'both' && o.generating()) { state.lastOutcome = 'deferred'; publish(); return 'deferred' } // manual actions must capture settled local edits first
         const generation = state.generation, mine = controller = new AbortController(), signal = mine.signal
         const onExternal = () => mine.abort(new Cancelled('cancelled'))
         if (external) { if (external.aborted) onExternal(); else external.addEventListener('abort', onExternal, { once: true }) }
         // Boundary guard: a late response after disable/pause/stop (new generation) or an abort never proceeds to the next step.
         const boundary = () => { if (generation !== state.generation || !active()) throw new Cancelled('sync cycle invalidated'); if (signal.aborted) throw signal.reason ?? new Error('sync network deadline') }
         const interacted = () => !safe || o.interactions() > safe.epoch
-        state.running = true; state.lastWindow = safe?.window ?? ''
+        state.running = true; state.direction = direction; state.lastWindow = safe?.window ?? ''; publish()
         let stage = 'status', deadline: ReturnType<typeof setTimeout> | null = null
         const run = (async () => {
             try {
@@ -111,6 +112,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 boundary()
                 const status = await o.status(signal); boundary()
                 if (!status.enabled) { state.enabled = false; stopTimers(); state.lastOutcome = 'disabled'; return 'disabled' }
+                if (direction !== 'both' && o.generating()) { state.lastOutcome = 'deferred'; schedule(o.pollMs); return 'deferred' }
                 // A plan the server still holds: `prepared` means nothing was armed (typically our bounded wait gave up before the /plan answer
                 // arrived) — release it now so snapshot/preview are not wedged; `saving`/`committed` is an ARMED journal that only finish/recovery
                 // may settle — this cycle does no local work and reports it, never a rollback.
@@ -126,9 +128,18 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // before publishing its own encrypted history. The snapshot is skipped (not the publish) while a generation/import runs: the
                     // next settled save schedules it; edits made meanwhile are simply part of that later snapshot.
                     if (!o.generating()) { stage = 'snapshot'; await o.snapshot(signal); boundary() }
-                    stage = 'publish'; const report = await o.publish(signal); boundary()
-                    if (report?.rotated) attention = 'rotated'
-                    if (report?.failed?.length) throw Object.assign(new Error('publish failed: ' + report.failed.map((x: any) => x.error ?? x.sequence ?? x).join('; ')), { code: 'PUBLISH_FAILED', report })
+                    if (direction !== 'download') {
+                        stage = 'publish'; const report = await o.publish(signal); boundary()
+                        if (report?.rotated) attention = 'rotated'
+                        if (report?.failed?.length) throw Object.assign(new Error('publish failed: ' + report.failed.map((x: any) => x.error ?? x.sequence ?? x).join('; ')), { code: 'PUBLISH_FAILED', report })
+                    }
+                }
+                if (direction === 'upload') {
+                    const remaining = keyReady ? await o.status(signal) : null; boundary()
+                    state.lastOutcome = !keyReady ? 'key-pending:idle' : attention || remaining?.sync?.outbox?.pending?.length ? 'upload-pending' : 'uploaded'
+                    state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
+                    schedule(o.pollMs)
+                    return state.lastOutcome
                 }
                 stage = 'pull'; const pulled = await o.pull(signal); boundary()
                 // A blob pinned by an admitted revision could not be re-fetched: that is lost material, not an "up to date" cycle. Like a failed
@@ -159,6 +170,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 return state.lastOutcome
             } catch (error: any) {
                 if (error instanceof Cancelled || generation !== state.generation || !active()) { state.lastOutcome = 'cancelled'; return 'cancelled' } // never reschedule a stopped/disabled/paused coordinator
+                if (stage === 'snapshot' && error?.code === 'NAS_SYNC_PLAN_PENDING') { state.lastOutcome = 'deferred'; state.lastError = ''; schedule(o.pollMs); return state.lastOutcome }
                 if (stage === 'apply' && /deadline/i.test(String(error?.message ?? error))) { state.lastOutcome = 'pulled'; state.lastError = ''; state.deferredForChat ||= o.activeChat() || '-'; if (generation === state.generation) schedule(o.pollMs); return state.lastOutcome } // plan released; incoming stays received
                 // Offline/server/publish error: local play continues (an un-armed apply released its hold), retry with backoff.
                 state.failures += 1
@@ -233,6 +245,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         pause(value: boolean) { state.paused = value; if (value) { invalidate('sync paused'); stopTimers() } else if (state.enabled) schedule(500); publish() },
         /** The user asked: a manual window (its epoch is now; typing right after still voids it). */
         retryNow: () => { state.failures = 0; return cycle('manual', undefined, openWindow('manual')) },
+        uploadNow: () => { state.failures = 0; return cycle('manual', undefined, openWindow('manual'), 'upload') },
+        downloadNow: () => { state.failures = 0; return cycle('manual', undefined, openWindow('manual'), 'download') },
         stop() { started = false; startupWindow = null; pendingWindow = null; invalidate('sync stopped'); stopTimers(); unsubscribe?.(); unsubscribe = null; unsubscribeSelection?.(); unsubscribeSelection = null; for (const l of listeners) l.target.removeEventListener(l.type, l.handler, { capture: l.capture }); listeners.length = 0 },
     }
 }

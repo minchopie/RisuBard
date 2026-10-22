@@ -344,6 +344,7 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
         if (!forageStorage.realStorage.syncTransaction) {
             resolved = true
             if (error?.code === 'SYNC_RECHECK') { await finishWithRetry(error.transaction, false).catch(() => null); return { state: error.reason === 'active-chat' ? 'deferred-active-chat' : 'deferred', transaction: error.transaction, deferred: [error.reason ?? 'activity'], error: String(error) } }
+            if (plan?.transaction && !plan.empty && !tookBusy) await finishWithRetry(plan.transaction, false).catch(() => null)
         }
         else {
             // Armed but the outcome never reached the server verdict path (e.g. the finish call itself threw): keep hold and journal.

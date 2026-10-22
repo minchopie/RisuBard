@@ -36,7 +36,8 @@ function parseListing(xml, directoryHref) {
         if (path === base || !path.startsWith(base + '/')) continue;
         const rest = path.slice(base.length + 1);
         if (rest.includes('/')) continue;
-        entries.push({ name: decodeURIComponent(rest), collection: /<(?:[A-Za-z0-9_]+:)?collection\b/i.test(m[1]) });
+        const modified = Date.parse(/<(?:[A-Za-z0-9_]+:)?getlastmodified\b[^>]*>\s*([^<]+?)\s*</i.exec(m[1])?.[1] ?? '');
+        entries.push({ name: decodeURIComponent(rest), collection: /<(?:[A-Za-z0-9_]+:)?collection\b/i.test(m[1]), ...(Number.isFinite(modified) && modified > 0 ? { modifiedAt: modified } : {}) });
     }
     return entries.sort((a, b) => a.name < b.name ? -1 : 1);
 }
@@ -69,7 +70,7 @@ function createSyncRemote({ secrets, fetch = request, route = null }) {
     }
     async function list(segments) {
         const b = await base();
-        const xml = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>';
+        const xml = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>';
         const response = await send(b, 'PROPFIND', segments, { Depth: '1', 'Content-Type': 'application/xml', 'Content-Length': String(Buffer.byteLength(xml)) }, Readable.from([xml]));
         if (response.statusCode === 404) { await drain(response); return []; }
         return parseListing((await bounded(checked(response, [207]), LIST_LIMIT)).toString('utf8'), href(b, segments));
@@ -123,7 +124,7 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
     const blobSegments = hash => [ws(), 'blobs', hash.slice(0, 2), hash];
     const bucketOf = sequence => String(Math.floor(sequence / BUCKET));
     const objectName = (sequence, id) => `${sequence}_${id}.json`;
-    const listObjects = async segments => (await remote.list(segments)).filter(e => !e.collection && OBJECT.test(e.name)).map(e => ({ name: e.name, sequence: Number(OBJECT.exec(e.name)[1]), commitId: OBJECT.exec(e.name)[2] })).sort((a, b) => a.sequence - b.sequence);
+    const listObjects = async segments => (await remote.list(segments)).filter(e => !e.collection && OBJECT.test(e.name)).map(e => ({ name: e.name, modifiedAt: e.modifiedAt, sequence: Number(OBJECT.exec(e.name)[1]), commitId: OBJECT.exec(e.name)[2] })).sort((a, b) => a.sequence - b.sequence);
     async function publish({ at = now() } = {}) {
         const report = { stored: [], blobs: 0, failed: [], rotated: null, checkpoint: null, ack: null };
         const listed = new Map();
@@ -150,6 +151,11 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                 if (result.state === 'conflict') { report.rotated = store.rotateIncarnation(`sequence ${entry.sequence} object differs`); return report; }
                 store.markPublished(entry.sequence, entry.commitId, at); report.stored.push({ sequence: entry.sequence, commitId: entry.commitId, state: result.state });
             } catch (error) { store.markPublishFailed(entry.sequence, error, at); report.failed.push({ sequence: entry.sequence, error: String(error.message) }); return report; } // offline: stop here, retry later
+        }
+        // Read dates once per touched bucket, including old uploads. Missing dates never fail a verified upload.
+        for (const bucket of listed.keys()) {
+            const { deviceId, incarnationId } = store.identity();
+            try { store.noteNasTimes((await listObjects([...devicePath(deviceId, incarnationId), 'commits', bucket])).map(item => ({ device: deviceId, incarnation: incarnationId, sequence: item.sequence, commitId: item.commitId, at: item.modifiedAt }))); } catch { /* keep the upload-confirmation time */ }
         }
         if (store.needsCheckpoint()) {
             const { deviceId, incarnationId } = store.identity(), object = store.checkpointObject(), id = hashJson(object);
@@ -192,7 +198,8 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                 const chosen = full ? buckets : [...buckets.filter(b => b >= active), ...store.rotateBuckets(device.name, incarnation.name, buckets.filter(b => b < active), oldBucketsPerScan)];
                 for (const bucket of chosen) {
                     report.scanned.push(`${device.name}/${incarnation.name}/${bucket}`);
-                    for (const { name, sequence, commitId } of await listObjects([...base, String(bucket)])) {
+                    const objects = await listObjects([...base, String(bucket)]);
+                    for (const { name, sequence, commitId } of objects) {
                         if (Math.floor(sequence / BUCKET) !== bucket) continue; // misplaced object: never trusted
                         if (store.knownRemote(device.name, incarnation.name, sequence, commitId)) { report.identical++; continue; }
                         if (store.isWaiting(device.name, incarnation.name, sequence, commitId)) continue; // retried below from the durable copy
@@ -204,6 +211,7 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                         const result = store.admitRemote(object, { device: device.name, incarnation: incarnation.name, sequence, commitId });
                         if (result.state === 'identical') report.identical++; else report[result.state].push({ device: device.name, incarnation: incarnation.name, sequence, commitId, ...(result.reason ? { reason: result.reason } : {}) });
                     }
+                    try { store.noteNasTimes(objects.filter(item => Math.floor(item.sequence / BUCKET) === bucket).map(item => ({ device: device.name, incarnation: incarnation.name, sequence: item.sequence, commitId: item.commitId, at: item.modifiedAt }))); } catch { /* display metadata must not fail a pull */ }
                 }
             }
         }

@@ -6,7 +6,7 @@ export interface DavRequest { method: string; path: string; headers: Record<stri
 export type DavHook = (request: DavRequest) => any
 export function fixtureDav(base = 'https://nas.invalid/home/RisuAI/') {
     const basePath = new URL(base).pathname
-    const dirs = new Set<string>(['']), files = new Map<string, Buffer>(), log: string[] = [], hooks: DavHook[] = []
+    const dirs = new Set<string>(['']), files = new Map<string, Buffer>(), modifiedAt = new Map<string, number>(), log: string[] = [], hooks: DavHook[] = []
     const rel = (url: string) => { if (!url.startsWith(base)) throw new Error('outside base: ' + url); return url.slice(base.length).replace(/\/+$/, '') }
     const parent = (p: string) => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''
     const respond = (statusCode: number, body: Buffer | string = '', headers: Record<string, string> = {}) => Object.assign(Readable.from([Buffer.isBuffer(body) ? body : Buffer.from(body)]), { statusCode, headers })
@@ -24,7 +24,7 @@ export function fixtureDav(base = 'https://nas.invalid/home/RisuAI/') {
             case 'PROPFIND': {
                 await collect(body)
                 if (!dirs.has(path) && !files.has(path)) return respond(404)
-                const entry = (p: string, dir: boolean) => `<D:response><D:href>${basePath}${p}${dir ? '/' : ''}</D:href><D:propstat><D:prop><D:resourcetype>${dir ? '<D:collection/>' : ''}</D:resourcetype></D:prop></D:propstat></D:response>`
+                const entry = (p: string, dir: boolean) => `<D:response><D:href>${basePath}${p}${dir ? '/' : ''}</D:href><D:propstat><D:prop><D:resourcetype>${dir ? '<D:collection/>' : ''}</D:resourcetype>${modifiedAt.has(p) ? `<D:getlastmodified>${new Date(modifiedAt.get(p)!).toUTCString()}</D:getlastmodified>` : ''}</D:prop></D:propstat></D:response>`
                 const children = [...[...dirs].filter(d => d && parent(d) === path && d !== path).map(d => entry(d, true)), ...[...files.keys()].filter(f => parent(f) === path).map(f => entry(f, false))]
                 return respond(207, `<?xml version="1.0"?><D:multistatus xmlns:D="DAV:">${entry(path, dirs.has(path))}${children.join('')}</D:multistatus>`)
             }
@@ -32,5 +32,5 @@ export function fixtureDav(base = 'https://nas.invalid/home/RisuAI/') {
         }
     }
     const paths = () => [...files.keys()].map(p => decodeURIComponent(p)).sort()
-    return { fetch, files, dirs, log, hooks, base, paths, secrets: { get: async () => ({ url: base, username: 'fixture', password: 'fixture-password' }) } }
+    return { fetch, files, modifiedAt, dirs, log, hooks, base, paths, secrets: { get: async () => ({ url: base, username: 'fixture', password: 'fixture-password' }) } }
 }

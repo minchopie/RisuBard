@@ -100,6 +100,9 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     const planned = await post('/plan'); expect(planned.ok, await planned.clone().text()).toBe(true)
     const plan = await planned.json(); expect(plan.empty).toBeUndefined(); expect(plan.settings.language).toBe('en'); expect(plan.chats).toEqual([])
     expect(JSON.stringify(await status())).toContain(plan.transaction)
+    const snapshotPending = await post('/snapshot'); expect(snapshotPending.status).toBe(400)
+    expect(await snapshotPending.json()).toMatchObject({ error: 'Finish the pending sync apply before taking a snapshot', code: 'NAS_SYNC_PLAN_PENDING' })
+    expect((await status()).plan.transaction).toBe(plan.transaction)
     const beforeArm = await write(database); expect(beforeArm.ok, await beforeArm.clone().text()).toBe(true) // prepared, not yet armed: ordinary saves still flow
     const applied = structuredClone(database)
     for (const [k, v] of Object.entries(plan.settings)) { if (v === null) delete applied[k]; else applied[k] = v }

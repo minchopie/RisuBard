@@ -92,6 +92,43 @@ async function seedTablet(t: any, dav: ReturnType<typeof fixtureDav>) {
     return tablet
 }
 
+test('overview lists local and remote-only materials with NAS dates, and keeps older NAS dates when local edits are unpublished', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const own = await tablet.service.overview()
+    expect(own.items.find((i: any) => i.type === 'chat')).toMatchObject({ title: '표본 · 현재', nasTimeKind: 'uploaded', nasAt: clock })
+    const phone = await device(t, dav, 'date-phone', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] })
+    phone.service.enable({ workspaceId: 'ws-fixture' }); await phone.service.pull()
+    const before = await phone.service.overview()
+    expect(before.chats).toEqual([])
+    expect(before.items.find((i: any) => i.type === 'chat')).toMatchObject({ title: '표본 · 현재', nasAt: null })
+    expect(before.items.some((i: any) => i.type === 'module' && i.title === '모듈')).toBe(true)
+    expect(before.items.some((i: any) => i.id === 'personas')).toBe(true)
+    const at = Date.parse('2026-10-22T16:05:00Z')
+    for (const path of dav.files.keys()) if (path.includes('/commits/')) dav.modifiedAt.set(path, at)
+    await phone.service.pull()
+    expect((await phone.service.overview()).items.find((i: any) => i.type === 'chat').nasAt).toBe(at)
+    const db = tablet.db(); db.characters[0].chats[0].message.push({ role: 'char', data: '아직 보내지 않은 변경' }); tablet.save(db); await tablet.service.snapshot()
+    expect((await tablet.service.overview()).items.find((i: any) => i.type === 'chat').nasAt).toBe(clock)
+    expect(phone.db().characters).toEqual([]) // a list refresh never applies data
+})
+
+test('a plan finishing after status was read defers a queued snapshot without dropping the plan or touching user data', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await device(t, dav, 'snapshot-race', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] })
+    phone.service.enable({ workspaceId: 'ws-fixture' }); await phone.service.pull()
+    const before = JSON.stringify(phone.db()), preparing = phone.service.plan()
+    expect(phone.service.status().plan).toBeNull() // /status is not queued behind /plan
+    const snapshot = phone.service.snapshot()
+    const rejected = expect(snapshot).rejects.toMatchObject({ code: 'NAS_SYNC_PLAN_PENDING' })
+    const plan = await preparing; await rejected
+    expect(phone.service.status().plan).toMatchObject({ transaction: plan.transaction, phase: 'prepared' })
+    await phone.service.arm(plan.transaction, echoOf(plan, applyPlanToDb(structuredClone(phone.db()), plan)))
+    await expect(phone.service.snapshot()).rejects.toMatchObject({ code: 'NAS_SYNC_PLAN_PENDING' })
+    expect(phone.service.status().plan.phase).toBe('saving'); expect(JSON.stringify(phone.db())).toBe(before)
+    expect((await phone.service.finish(plan.transaction, false)).state).toBe('rolled-back')
+    await expect(phone.service.snapshot()).resolves.toHaveProperty('committed')
+})
+
 test('real snapshot → publish → pull → plan → canonical save → arm → finish: data lands on disk, journals/recovery hold no plaintext secrets, ACK and no echo', async t => {
     const dav = fixtureDav(), tablet = await seedTablet(t, dav)
     await assertNoSentinel(tablet.dataRoot)
@@ -341,6 +378,8 @@ test('three devices: two offline edits of one chat arrive at a third device as t
     const c2 = c.make(); expect(c2.state().plan).toBeNull()
     expect(c2.db ?? true).toBeTruthy()
     expect(c.db().characters[0].chats).toHaveLength(2)
+    const branchOverview = await c.service.overview()
+    expect(branchOverview.items.filter((i: any) => i.type === 'chat')).toHaveLength(2)
     await c2.pull(); expect(await c2.plan()).toMatchObject({ empty: true })
     const echo = await c2.snapshot()
     expect(echo.committed ? c2.store().state().commits.at(-1).revisions.map((id: string) => { const r = c2.store().graph.get(id); return `${r.type}:${r.root}`; }) : []).toEqual([]) // no echo after applying two branches
