@@ -266,11 +266,13 @@ export let requiresFullEncoderReload = $state({
 })
 
 let requestImmediateSaveImpl: ((options?: {
+    chats?: [string, string][]
     forceFullWrite?: boolean
     flushServer?: boolean | 'canonical' | 'canonical-background'
     // Waits for the flush without the write timeout; abort to stop waiting.
     flushSignal?: AbortSignal
     rejectOnFailure?: boolean
+    syncOwned?: boolean
 }) => Promise<void> | void) = () => {}
 let patchSyncBaseline: Database | null = null
 
@@ -375,14 +377,24 @@ export function previewPersistFailureToast() {
     })
 }
 
+import { syncSaveHold, canonicalSaveSettled } from './transferState'
 export function requestImmediateSave(options?: {
+    chats?: [string, string][]
     forceFullWrite?: boolean
+    /** The NAS sync apply's own save: allowed while syncSaveHold blocks every other save. */
+    syncOwned?: boolean
     flushServer?: boolean | 'canonical' | 'canonical-background'
     // Waits for the flush without the write timeout; abort to stop waiting.
     flushSignal?: AbortSignal
     rejectOnFailure?: boolean
 }) {
     return requestImmediateSaveImpl(options)
+}
+
+let trackedChangesImpl: (() => toSaveType | null) = () => null
+/** Read-only copy of the changes the save runtime has tracked but not yet persisted (null before the runtime starts). */
+export function pendingTrackedChanges(): toSaveType | null {
+    return trackedChangesImpl()
 }
 
 export function setPatchSyncBaseline(data: Database | null) {
@@ -827,16 +839,20 @@ export async function saveDb() {
                 saveTimeout = null;
             }
             changed = true;
-            void triggerSave({
+            const pending = triggerSave({
                 skipBroadcast: true,
             })
             void flushServerDbKeepalive()
+            if (navigator.userAgent.includes('RisuBardAndroid/')) {
+                void pending.then(flushServerDbKeepalive, () => {})
+            }
         }
         const handleVisibilityFlush = () => {
             if (document.visibilityState === 'hidden') flushImmediate();
         }
         document.addEventListener('visibilitychange', handleVisibilityFlush);
         window.addEventListener('pagehide', flushImmediate);
+        if (navigator.userAgent.includes('RisuBardAndroid/')) window.addEventListener('risubard-native-background', flushImmediate);
 
         $effect(() => {
             for (const key in DBState.db) {
@@ -847,8 +863,11 @@ export async function saveDb() {
                     deepTouch(DBState.db[key])
                 }
             }
-            const botPresetMirrored = syncActiveBotPresetFromMirror()
-            const themePresetMirrored = syncActiveThemePresetFromMirror()
+            // Inside a NAS sync apply (hold on) the planned preset entries must reach the disk verbatim: the server verifies the saved
+            // bytes against the plan, and the mirrors would rewrite the active entries from root values. Ordinary saves keep mirroring.
+            const mirroring = !get(syncSaveHold)
+            const botPresetMirrored = mirroring && syncActiveBotPresetFromMirror()
+            const themePresetMirrored = mirroring && syncActiveThemePresetFromMirror()
             if (botPresetMirrored) changeTracker.botPreset = true
             if (!didInitRootEffect) {
                 didInitRootEffect = true
@@ -986,6 +1005,7 @@ export async function saveDb() {
             unsubscribeSelectedCharacter()
             document.removeEventListener('visibilitychange', handleVisibilityFlush)
             window.removeEventListener('pagehide', flushImmediate)
+            window.removeEventListener('risubard-native-background', flushImmediate)
         }
     })
     saveRuntime.addCleanup(disposeSaveEffects)
@@ -1505,12 +1525,18 @@ export async function saveDb() {
         skipBroadcast?: boolean
         rejectOnFailure?: boolean
         refresh?: boolean
+        syncOwned?: boolean
     }) {
         if (!saveRuntime.isActive()) return
+        // Common save entry (autosave loop, immediate saves, visibility/unload flushes): while a NAS sync apply is unresolved,
+        // only that transaction's own save may persist; everything else waits for recovery to settle the outcome.
+        if (get(syncSaveHold) && !options?.syncOwned) return
         while (saveInFlight) {
             try { await saveInFlight } catch {}
         }
         if (!saveRuntime.isActive()) return
+        // Re-check after waiting: a save queued before the hold must not resume with its stale admission.
+        if (get(syncSaveHold) && !options?.syncOwned) return
 
         if (gotChannel) {
             if (options?.rejectOnFailure) throw new Error(language.sessionSavePausedTitle)
@@ -1546,8 +1572,13 @@ export async function saveDb() {
                     changed = true
                 }
                 if (result === 'saved') {
+                    // Android can kill the embedded server with the UI; finish disk persistence before acknowledging a save.
+                    if (supportsPatchSync && navigator.userAgent.includes('RisuBardAndroid/')) await flushServerDbNow(false, true)
                     forceFullWriteOnRetry = false
                     savetrys = 0
+                    // A user save settled: the NAS sync coordinator (if enabled) snapshots after its debounce. The sync apply's own
+                    // save is not a trigger, so a received apply never echoes into a snapshot cycle.
+                    if (!options?.syncOwned) canonicalSaveSettled.set(Date.now())
                     // Node clients use the server lock. A failed/passive save
                     // must not kick another tab through a second authority.
                     if (!supportsPatchSync && channel && !options?.skipBroadcast) {
@@ -1610,12 +1641,19 @@ export async function saveDb() {
             void sessionHandoff.show()
             throw new Error(language.sessionSavePausedTitle)
         }
+        if (get(syncSaveHold) && !options?.syncOwned) throw new Error('NAS 동기화 적용이 끝날 때까지 저장이 잠겨 있어요.')
+        // Imports can append chats without selecting their character in the UI.
+        for (const [id, chatId] of options?.chats ?? []) {
+            if (!changeTracker.character.includes(id)) changeTracker.character.push(id)
+            if (!changeTracker.chat.some(pair => pair[0] === id && pair[1] === chatId)) changeTracker.chat.push([id, chatId])
+        }
         changed = true
         await tick()
         await triggerSave({
             forceFullWrite: options?.forceFullWrite,
             rejectOnFailure: options?.rejectOnFailure,
             refresh: true,
+            syncOwned: options?.syncOwned,
         })
         if (options?.flushServer === 'canonical-background' && supportsPatchSync) {
             // The server already holds the patch; durable files follow without
@@ -1627,8 +1665,9 @@ export async function saveDb() {
     }
 
     let savetrys = 0
+    trackedChangesImpl = () => saveRuntime.isActive() ? safeStructuredClone(changeTracker) : null
     while (saveRuntime.isActive()) {
-        if (!changed || gotChannel) {
+        if (!changed || gotChannel || get(syncSaveHold)) {
             await sleep(200)
             continue
         }
@@ -3153,6 +3192,8 @@ export function changeChatTo(IdOrIndex: string | number) {
     chatDeselected.set(false)
     const char = DBState.db.characters[selIdState.selId]
     char.chatPage = index
+    // A chat was (re)opened by the user: the NAS sync coordinator treats this instant as a safe window for incoming changes to this chat.
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('risubard-chat-opened'))
     const newChat = char.chats[index]
     if(newChat){
         if(newChat._placeholder){

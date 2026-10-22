@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "ES2023", "module": "ESNext", "moduleResolution": "Bundler",
+    "strict": true, "noEmit": true, "allowImportingTsExtensions": true,
+    "skipLibCheck": true, "lib": ["ES2023", "DOM"]
+  },
+  "include": ["protocol.ts", "importer.ts", "snapshot.ts", "apply.ts", "characterChats.ts"]
+}

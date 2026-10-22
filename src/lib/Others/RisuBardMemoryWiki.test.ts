@@ -157,6 +157,7 @@ vi.mock('src/ts/storage/chatStorage', () => ({
 }))
 vi.mock('src/ts/stores.svelte', () => ({
     DBState: { db: mocks.db },
+    selectedCharID: { subscribe: (run: (value: number) => void) => { run(-1); return () => {} } },
     selIdState: { selId: -1 },
     botMakerMode: { set: vi.fn() },
     CharConfigSubMenu: { set: vi.fn() },

@@ -1,4 +1,5 @@
 import "./ts/polyfill";
+import "katex/dist/katex.min.css";
 import "./styles.css";
 import "./styles/nodeonly-standard.css";
 import "core-js/actual"

@@ -1,13 +1,9 @@
 import type { Chat, Message } from '../storage/database.svelte'
-import { Packr, Unpackr } from 'msgpackr/index-no-eval'
+import { encodeMemorySaveChat, decodeMemorySaveChat } from './memorySaveCodec'
 import { invokeBrowserFetch } from './browserFetch'
 import { rebindPainterChatScope } from '../bardPainter/chatScope'
 
-const chatPacker = new Packr({ useRecords: false })
-const chatUnpacker = new Unpackr({
-    int64AsType: 'number',
-    useRecords: false,
-})
+export { encodeMemorySaveChat, decodeMemorySaveChat } from './memorySaveCodec'
 const MEMORY_SAVE_REQUEST_TIMEOUT_MS = 10 * 60_000
 
 export interface MemorySaveEventPreview {
@@ -143,15 +139,7 @@ export function shouldConfirmMemorySaveLoad(
         || newest.latestMessageId !== currentLatestMessageId
 }
 
-export function encodeMemorySaveChat(chat: Chat): Uint8Array {
-    return chatPacker.pack(chat)
-}
-
-export function decodeMemorySaveChat(bytes: Uint8Array): unknown {
-    return chatUnpacker.unpack(bytes)
-}
-
-function applyMemorySavePromptSettings(chat: Chat, currentChat?: Chat): void {
+export function applyMemorySavePromptSettings(chat: Chat, currentChat?: Chat): void {
     // Save slots rewind story state, not the current sidebar preferences.
     for (const key of [
         'bindedPersona', 'bindedBotPreset', 'usePromptPresetParams',

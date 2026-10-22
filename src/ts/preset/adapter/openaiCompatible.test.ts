@@ -511,6 +511,13 @@ describe('sendChatRequest (non-stream)', () => {
 })
 
 describe('streamChatRequest', () => {
+    test.each([400, 500])('surfaces a local engine SSE error instead of silently accepting an empty response (%s)', async (code) => {
+        const { fetchImpl } = captureFetch(sseResponse([
+            'data: ' + JSON.stringify({ error: { code, message: 'local engine failed', type: 'server_error' } }) + '\n\n',
+        ]))
+        const stream = streamChatRequest(makePreset(), { messages: userMessages, fetchImpl }, { apiKey: 'sk' })
+        await expect(stream.next()).rejects.toMatchObject({ message: 'local engine failed', status: code })
+    })
     test('yields textDelta chunks and stops at [DONE]', async () => {
         const { fetchImpl, calls } = captureFetch(
             sseResponse([

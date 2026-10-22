@@ -2,6 +2,7 @@ import { getDatabase, type Chat, type Database } from 'src/ts/storage/database.s
 import type { AdapterCredential } from 'src/ts/preset/adapter'
 import type { ModelBindingSet, ModelPreset } from 'src/ts/preset/types'
 import { resolveStoredSamplingParameter, resolveStoredTemperature, type ModelModeExtended } from './shared'
+import { localAI, localAIPreset } from 'src/ts/localAI.svelte'
 
 /**
  * P4 dual-regime resolution (plan v6 §7, model-preset-p4-task).
@@ -66,6 +67,7 @@ export function resolveChatModelBinding(
     mode: ModelModeExtended,
     moduleId?: string,
 ): ResolvedBinding {
+    if (localAI.available && localAI.enabled) return { kind: 'modelPreset', preset: localAIPreset() }
     const db = getDatabase()
     const lock = db.nodeOnlyModelModeLock ?? 'none'
 

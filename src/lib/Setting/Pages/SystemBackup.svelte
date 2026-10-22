@@ -1,4 +1,5 @@
 <script lang="ts">
+    import TransferPanel from './TransferPanel.svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import { DownloadIcon, UploadIcon, SettingsIcon } from '@lucide/svelte'
     import { alertConfirm } from 'src/ts/alert'
@@ -41,6 +42,8 @@
         SavePartialLocalBackup()
     }
 </script>
+
+<TransferPanel />
 
 <p class="text-textcolor2 text-sm mb-4">{language.backupTabDesc}</p>
 

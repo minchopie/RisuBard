@@ -78,6 +78,18 @@ describe('truncation', () => {
 })
 
 describe('insert and query', () => {
+    it('masks opaque and encoded query credentials before persistence and detail display', () => {
+        const url = 'https://example.invalid/generate?model=keep&%6bey=url-secret&access_token=opaque-token&view=full'
+        logs.addRequestLogBatch([entry({ url, requestHeaders: '{"Authorization":"Bearer header-secret","x-api-key":"header-key"}', errorMessage: `Failed ${url}` })])
+        const row = logs.getRequestLog(logs.queryRequestLogs({})[0].id)
+        expect(row.url).toBe('https://example.invalid/generate?model=keep&%6bey=[REDACTED]&access_token=[REDACTED]&view=full')
+        const disk = fs.readFileSync(path.join(tmpDir, 'request-logs', 'requests.jsonl'), 'utf8')
+        for (const secret of ['url-secret', 'opaque-token', 'header-secret', 'header-key']) {
+            expect(JSON.stringify(row)).not.toContain(secret)
+            expect(disk).not.toContain(secret)
+        }
+    })
+
     it('writes a request row and a matching usage row', () => {
         expect(logs.addRequestLogBatch([entry()])).toBe(1)
 

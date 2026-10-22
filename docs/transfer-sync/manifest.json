@@ -1,0 +1,479 @@
+{
+  "name": "risubard-transfer-sync",
+  "description": "RisuBard play-set transfer (USB/Wi-Fi/NAS/GitHub) + NAS automatic sync. Module files are owned here; host files carry small reviewed hooks (integration.patch).",
+  "upstream": {
+    "repo": "https://github.com/rpaddict/RisuBard.git",
+    "base": {
+      "tag": "v0.9.71",
+      "sha": "64ebfb2397188ae30f88dd2e8b25747192ccbb4b",
+      "note": "the commit this fork's host hooks were written against; integration.patch is generated from it"
+    },
+    "verified": {
+      "tag": "v0.9.76",
+      "sha": "6b723a75031591df6f4a6d26c424057ad9fbde4b",
+      "checkedAt": "2026-10-21",
+      "result": "PASS. Evidence (Codex independent, 2026-10-21): (1) --full r2 on .76: module server 152 passed/1 skipped, client 57, svelte-check 0 errors, build (reports/codex-verify-076-full-r2.json); (2) upstream FULL server suite on the .76 checkout patched with r2 PLUS the stray fork-only shutdown call already removed: 111 files/2 skipped, 1273 passed/4 skipped, 1 failure = updater identity leak (codex-final-upstream-all-server.log); (3) the only change after that run is the GITHUB_REPO string kept as the target's; re-tested in the target checkout with the release-target + tool regression set: 2 files/9 tests passed (updater 5 + tool 4, codex-final-upstream-targeted.log); (4) final clean .76 structural verify exit 0 with raw --logs (reports/codex-final-structure.json). The whole server suite was not repeated after (3)."
+    }
+  },
+  "module": {
+    "dirs": [
+      "server/node/transfer-sync",
+      "src/ts/transfer-sync",
+      "shared/play-set",
+      "android-app",
+      "desktop-transfer",
+      "scripts/android",
+      "scripts/transfer-sync",
+      "docs/transfer-sync"
+    ],
+    "files": [
+      "server/node/nas-route.cjs",
+      "server/node/nas-sync-core.cjs",
+      "server/node/nas-sync-manifest.cjs",
+      "server/node/nas-sync-projection.cjs",
+      "server/node/nas-sync-remote.cjs",
+      "server/node/nas-sync-service.cjs",
+      "server/node/nas-sync-share.cjs",
+      "server/node/nas-sync-store.cjs",
+      "server/node/nas-sync-vault.cjs",
+      "server/node/play-set-archive.cjs",
+      "server/node/play-set-fingerprint.cjs",
+      "server/node/play-set-memory.cjs",
+      "server/node/play-set-relink.cjs",
+      "server/node/play-set-service.cjs",
+      "server/node/transfer-remote.cjs",
+      "server/node/transfer-secrets.cjs",
+      "server/node/transfer-windows.cjs",
+      "server/node/embedded-runtime.cjs",
+      "server/node/embedded-runtime.test.ts",
+      "src/ts/nasSync.ts",
+      "src/ts/nasSyncCoordinator.ts",
+      "src/ts/nasSyncUi.ts",
+      "src/ts/playTransfer.ts",
+      "src/ts/transferNas.ts",
+      "src/ts/transferNative.ts",
+      "src/ts/transferState.ts",
+      "src/ts/transferAssets.ts",
+      "src/ts/risubard/memorySaveCodec.ts",
+      "src/lib/Setting/Pages/TransferPanel.svelte",
+      "src/lib/Setting/Pages/TransferMethodSelect.svelte.test.ts",
+      "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
+      "server/node/nas-route.test.ts",
+      "server/node/nas-sync-core.test.ts",
+      "server/node/nas-sync-dav-fixture.ts",
+      "server/node/nas-sync-http.test.ts",
+      "server/node/nas-sync-packaging.test.ts",
+      "server/node/nas-sync-projection.test.ts",
+      "server/node/nas-sync-remote.test.ts",
+      "server/node/nas-sync-service.test.ts",
+      "server/node/nas-sync-share.test.ts",
+      "server/node/nas-sync-store.test.ts",
+      "server/node/nas-sync-vault.test.ts",
+      "server/node/play-set-archive.test.ts",
+      "server/node/play-set-memory.test.ts",
+      "server/node/play-set-relink.test.ts",
+      "server/node/play-set-service.test.ts",
+      "server/node/play-transfer-http.test.ts",
+      "server/node/transfer-remote.test.ts",
+      "server/node/transfer-windows.test.ts",
+      "server/node/transfer-sync-shims.test.ts",
+      "server/node/queued-save-debounce.test.ts",
+      "src/ts/nasSync.test.ts",
+      "src/ts/nasSyncCoordinator.test.ts",
+      "src/ts/nasSyncUi.test.ts",
+      "src/ts/playTransfer.test.ts",
+      "src/ts/playTransferInbox.test.ts",
+      "src/ts/playTransferInboxPoll.test.ts",
+      "src/ts/transferNative.test.ts",
+      "src/ts/transferAssets.test.ts",
+      "src/ts/transferSyncShims.test.ts",
+      "src/ts/process/sendPreSync.test.ts",
+      "server/node/transfer-sync-check-tool.test.ts",
+      "server/node/nas-sync-reconcile.test.ts",
+      "src/ts/transferSyncPanel.test.ts"
+    ],
+    "hostDependencies": [
+      "server/node/file-store.cjs",
+      "server/node/risubard-memory-save-store.ts",
+      "server/node/risubard-memory-workspace.ts",
+      "src/ts/risubard/sourceProjection.ts",
+      "src/ts/risubard/memorySaveSlots.ts",
+      "packages/risubard-core"
+    ]
+  },
+  "integration": {
+    "patch": "docs/transfer-sync/integration.patch",
+    "files": {
+      "server/node/server.cjs": {
+        "excludeAdded": [
+          "local-ai\\.cjs",
+          "localAI\\.",
+          "^\\s+recoverFailedCanonicalTransaction\\(\\);$"
+        ],
+        "anchors": [
+          "storageWriteContext",
+          "assertWrite",
+          "embedded-runtime",
+          "embedded\\.",
+          "loadPersistedFullDatabase",
+          "transfer-windows\\.cjs",
+          "createPlaySetService",
+          "createTransferSecrets",
+          "createNasRoute",
+          "createRemoteTransfers",
+          "createNasSyncService",
+          "nasSync\\.",
+          "playTransfer\\.",
+          "windowsTransfers",
+          "remoteTransfers",
+          "/api/play-transfer",
+          "restoreMarked",
+          "transferSecrets",
+          "syncSecretsDir",
+          "checkActiveSession\\(req, res\\)\\) return;",
+          "prepareDatabaseWithPersistentChatIds",
+          "decodeDatabaseWithPersistentChatIds",
+          "onDeferred"
+        ],
+        "hooks": [
+          "createPlaySetService\\(",
+          "createTransferSecrets\\(",
+          "createNasRoute\\(",
+          "createRemoteTransfers\\(",
+          "createNasSyncService\\(",
+          "playTransfer\\.assertWrite\\(req\\); nasSync\\.assertWrite\\(req\\)",
+          "nasSync\\.markRestore\\(",
+          "nasSync\\.clearRestore\\(",
+          "async function loadPersistedFullDatabase",
+          "/api/play-transfer/native-rpc",
+          "/api/play-transfer/remote/",
+          "storageWriteContext\\.run",
+          "function prepareDatabaseWithPersistentChatIds",
+          "function decodeDatabaseWithPersistentChatIds",
+          "onDeferred: \\(error, attempt\\)"
+        ],
+        "excludeAddedBlocks": [
+          {
+            "from": "^let pendingCanonicalRecovery = null;",
+            "to": "^\\}\\);$"
+          }
+        ],
+        "rewriteAdded": [
+          [
+            "function queueStorageOperation(operation, recover = true) {",
+            "function queueStorageOperation(operation) {"
+          ],
+          [
+            "        if (recover) recoverFailedCanonicalTransaction(); return operation();",
+            "        return operation();"
+          ],
+          [
+            "const GITHUB_REPO = 'minchopie/RisuBard';",
+            "const GITHUB_REPO = 'rpaddict/RisuBard';"
+          ]
+        ],
+        "note": "The fork's updater identity (GITHUB_REPO → minchopie) is NOT part of the module: the rewrite keeps the target's own repo so updater.cjs/update.sh/release tests stay consistent."
+      },
+      "server/node/risubard-memory-runtime.cjs": {
+        "anchors": [
+          "capturePlaySetMemory",
+          "invalidateTransferCache",
+          "play-set-memory",
+          "renameMemorySave",
+          "serializedMany"
+        ],
+        "hooks": [
+          "capturePlaySetMemory",
+          "invalidateTransferCache",
+          "renameMemorySave: \\(input\\) => serializedMany\\("
+        ]
+      },
+      "src/ts/storage/nodeStorage.ts": {
+        "anchors": [
+          "transferRequest",
+          "syncTransaction",
+          "transferTransaction",
+          "SYNC_BUSY_RETRY_MS",
+          "x-play-transfer-id",
+          "x-nas-sync-transaction",
+          "NAS_SYNC_BUSY",
+          "TRANSFER_BUSY"
+        ],
+        "hooks": [
+          "transferRequest",
+          "syncTransaction",
+          "transferTransaction"
+        ],
+        "excludeAddedBlocks": [
+          {
+            "from": "^\\s{4}async localAIRequest\\(",
+            "to": "^\\s{4}\\}$"
+          }
+        ]
+      },
+      "src/ts/globalApi.svelte.ts": {
+        "anchors": [
+          "NAS 동기화",
+          "canonicalSaveSettled",
+          "chats\\?: \\[string, string\\]\\[\\]",
+          "mirroring",
+          "pendingTrackedChanges",
+          "risubard-chat-opened",
+          "risubard-native-background",
+          "syncActiveBotPresetFromMirror",
+          "syncOwned",
+          "syncSaveHold",
+          "trackedChangesImpl",
+          "transferState"
+        ],
+        "hooks": [
+          "pendingTrackedChanges",
+          "syncSaveHold",
+          "syncOwned",
+          "canonicalSaveSettled",
+          "risubard-chat-opened"
+        ]
+      },
+      "src/ts/bootstrap.ts": {
+        "anchors": [
+          "recoverTransfers",
+          "startTransferInbox",
+          "recoverSync",
+          "startSyncCoordinator",
+          "initializeNativeTransfers",
+          "playTransfer",
+          "nasSync",
+          "transferNative"
+        ],
+        "hooks": [
+          "recoverTransfers",
+          "startTransferInbox",
+          "recoverSync",
+          "startSyncCoordinator",
+          "initializeNativeTransfers"
+        ],
+        "excludeAdded": [
+          "localAI",
+          "local-ai"
+        ]
+      },
+      "src/ts/importSession.ts": {
+        "anchors": [
+          "transferBusy",
+          "transferState"
+        ],
+        "hooks": [
+          "transferBusy"
+        ]
+      },
+      "src/ts/process/index.svelte.ts": {
+        "anchors": [
+          "transferBusy",
+          "syncSaveHold",
+          "preSendSync",
+          "transferState",
+          "nasSyncCoordinator"
+        ],
+        "hooks": [
+          "preSendSync",
+          "syncSaveHold"
+        ]
+      },
+      "src/App.svelte": {
+        "anchors": [
+          "data-sync-status-row",
+          "flex h-full w-full flex-col",
+          "inert",
+          "min-h-0 flex-1",
+          "nasSyncCoordinator",
+          "syncBusyOwned",
+          "syncCoordinator",
+          "transferBusy",
+          "transferState",
+          "transferStatus"
+        ],
+        "hooks": [
+          "data-sync-status-row",
+          "syncBusyOwned",
+          "syncCoordinator",
+          "transferBusy"
+        ]
+      },
+      "src/ts/storage/database.svelte.ts": {
+        "anchors": [
+          "risuTransferMedia"
+        ],
+        "hooks": [
+          "risuTransferMedia"
+        ]
+      },
+      "src/lib/Setting/Pages/SystemBackup.svelte": {
+        "anchors": [
+          "TransferPanel"
+        ],
+        "hooks": [
+          "TransferPanel"
+        ]
+      },
+      "src/lib/ChatScreens/DefaultChatScreen.svelte": {
+        "anchors": [
+          "restoreOpenDeletion",
+          "acceptOpenDeletion",
+          "transferBusy",
+          "syncSaveHold",
+          "risuSyncDeleted",
+          "NAS sync",
+          "nasSync",
+          "transferState"
+        ],
+        "hooks": [
+          "restoreOpenDeletion",
+          "acceptOpenDeletion",
+          "risuSyncDeleted"
+        ],
+        "excludeAdded": [
+          "localAI",
+          "local-ai",
+          "openSettings, SettingsRoute",
+          "src/ts/routing"
+        ],
+        "context": 1
+      },
+      "src/ts/risubard/memorySaveSlots.ts": {
+        "anchors": [
+          "memorySaveCodec",
+          "encodeMemorySaveChat",
+          "decodeMemorySaveChat",
+          "chatPacker",
+          "chatUnpacker",
+          "Packr",
+          "Unpackr"
+        ],
+        "hooks": [
+          "memorySaveCodec"
+        ]
+      },
+      "package.json": {
+        "anchors": [
+          "\"yauzl\"",
+          "\"yazl\""
+        ],
+        "hooks": [
+          "\"yauzl\": \"3\\.4\\.0\"",
+          "\"yazl\": \"3\\.3\\.1\""
+        ]
+      },
+      ".github/workflows/release.yml": {
+        "anchors": [
+          "shared/play-set/",
+          "desktop-transfer",
+          "transfer companion",
+          "platform-tools",
+          "RisuAI-Chat-Transfer",
+          "src/ts/preset/adapter/",
+          "adbTools",
+          "LASTEXITCODE"
+        ],
+        "hooks": [
+          "shared/play-set/",
+          "desktop-transfer"
+        ]
+      },
+      "server/node/risubard-memory-save.ts": {
+        "anchors": [
+          "parseMemorySaveManifest"
+        ],
+        "hooks": [
+          "export function parseMemorySaveManifest"
+        ],
+        "note": "export (renamed from private parseManifest) consumed by play-set-memory.cjs; body unchanged"
+      },
+      "server/node/risubard-source-workspace.ts": {
+        "anchors": [
+          "resolveLegacySourceSnapshotWorkspace"
+        ],
+        "hooks": [
+          "export function resolveLegacySourceSnapshotWorkspace"
+        ],
+        "note": "export of an existing private function consumed by play-set-memory.cjs"
+      },
+      "src/ts/preset/adapter/buildRequest.ts": {
+        "anchors": [
+          "resolveEndpointUrl"
+        ],
+        "hooks": [
+          "export function resolveEndpointUrl"
+        ],
+        "note": "export of an existing private function consumed by nas-sync-vault.cjs"
+      },
+      "server/node/file-kv.cjs": {
+        "anchors": [
+          "kvExportFile"
+        ],
+        "hooks": [
+          "async function kvExportFile\\(key, destination\\)",
+          "kvExportFile,"
+        ],
+        "note": "streaming export of one KV object to a file (play-set/sync media staging); pure addition"
+      },
+      "server/node/queued-save-debounce.cjs": {
+        "anchors": [
+          "deferredByGate",
+          "GATE_CODES",
+          "onDeferred",
+          "started",
+          "arm\\("
+        ],
+        "hooks": [
+          "const deferredByGate = error => error\\?\\.status === 423 && GATE_CODES\\.has\\(error\\?\\.code\\)",
+          "'NAS_SYNC_BUSY', 'TRANSFER_BUSY'",
+          "if \\(started \\|\\| !deferredByGate\\(error\\)\\) \\{ onError\\(error\\); return; \\}",
+          "if \\(timers\\[key\\] !== timer\\) return;\\s+if \\(onDeferred\\) onDeferred\\(error, attempt \\+ 1\\);"
+        ],
+        "note": "a debounced persist refused by the module's write gate (423 NAS_SYNC_BUSY/TRANSFER_BUSY, before persist ran) is rescheduled, not recorded as a persist failure; obsolete timers (flushed/replaced) are dropped; persist errors still reach onError"
+      }
+    },
+    "context": 2
+  },
+  "verify": {
+    "serverTests": [
+      "server/node/embedded-runtime.test.ts",
+      "server/node/nas-route.test.ts",
+      "server/node/nas-sync-",
+      "server/node/play-set-",
+      "server/node/play-transfer-http.test.ts",
+      "server/node/risubard-update-release.test.ts",
+      "server/node/transfer-",
+      "server/node/transfer-sync-check-tool.test.ts",
+      "server/node/transfer-sync-shims.test.ts",
+      "server/node/queued-save-debounce.test.ts",
+      "server/node/nas-sync-reconcile.test.ts"
+    ],
+    "clientTests": [
+      "src/ts/nasSync.test.ts",
+      "src/ts/nasSyncCoordinator.test.ts",
+      "src/ts/nasSyncUi.test.ts",
+      "src/ts/playTransfer.test.ts",
+      "src/ts/playTransferInbox.test.ts",
+      "src/ts/playTransferInboxPoll.test.ts",
+      "src/ts/transferNative.test.ts",
+      "src/ts/transferAssets.test.ts",
+      "src/ts/transferSyncShims.test.ts",
+      "src/ts/process/sendPreSync.test.ts",
+      "src/lib/Setting/Pages/TransferMethodSelect.svelte.test.ts",
+      "src/ts/transferSyncPanel.test.ts"
+    ],
+    "upstreamFeatureProbes": {
+      "src/ts/storage/nodeStorage.ts": [
+        "liveFilesRecoveryPath",
+        "scanCharacterAssets",
+        "fetchChatPreview"
+      ],
+      "src/ts/globalApi.svelte.ts": [
+        "assetFolderScan",
+        "scanCharacterAssetFolder",
+        "applyLiveSnapshotImpl"
+      ]
+    }
+  }
+}

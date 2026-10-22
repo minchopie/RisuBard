@@ -56,7 +56,9 @@ describe('chat gallery connections', () => {
     test('stores a custom gallery title and collections on the bot', () => {
         expect(database).toMatch(/export interface character[\s\S]*?risuBardGallery\?:RisuBardGallery/)
         expect(gallery).toContain('chara.risuBardGallery')
-        expect(gallery).not.toContain('currentChat.risuBardGallery = nextGallery')
+        expect(gallery).toContain('if (receivedGallery && currentChat?.risuTransferMedia && currentChat.risuBardGallery)')
+        expect(gallery).toContain('else chara.risuBardGallery = nextGallery')
+        expect(gallery).toContain('받은 대화 갤러리')
         expect(gallery).toContain('data-gallery-title-edit')
         expect(gallery).toContain('data-gallery-title-input')
         expect(gallery).toContain('galleryDefaultTitle')

@@ -52,6 +52,8 @@ dist.zip
 !/scripts/portable-smoke.cjs
 !/scripts/portable/
 !/scripts/termux/
+!/scripts/android/
+!/scripts/transfer-sync/
 !/scripts/check-help-keys.mjs
 !/scripts/check-public-boundary.mjs
 !/scripts/check-public-boundary.test.ts
@@ -75,3 +77,19 @@ test/fixtures/
 
 # Local scratch output (backups, browser runs, reports); never released
 tmp/
+/.playwright-cli/
+/output/
+
+# Android build outputs and locally provisioned runtime binaries.
+/android-app/.gradle/
+/android-app/local.properties
+/android-app/**/build/
+/android-app/app/src/main/jniLibs/
+/android-app/app/src/main/assets/runtime.zip
+/android-app/app/src/main/assets/runtime.sha256
+/android-app/app/src/main/assets/runtime.properties
+/android-app/app/src/main/assets/runtime-binaries.json
+/android-app/app/src/offline/jniLibs/
+/android-app/app/src/offline/engine-binaries.json
+desktop-transfer/**/bin/
+desktop-transfer/**/obj/

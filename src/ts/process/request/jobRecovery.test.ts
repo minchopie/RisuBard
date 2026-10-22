@@ -255,6 +255,17 @@ describe('recoverTerminalJob', () => {
         expect(claims()).toEqual(['/api/model-jobs/job-1/claim'])
     })
 
+    test.each([false, true])('claims a journal with an SSE error and preserves an existing partial message (%s)', async (hasPartial) => {
+        const { recovery } = await loadModules()
+        const chat = makeChat({ message: hasPartial ? [{ role: 'char', data: 'saved partial', generationInfo: { generationId: 'gen-1' } }] : [] })
+        mocks.db.characters = [makeChar(chat)]
+        const { claims } = setupServer({ journals: { 'job-1': 'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' + 'data: {"error":{"code":500,"message":"engine failed"}}\n\n' } })
+        await recovery.recoverTerminalJob(makeJob() as any)
+        expect(chat.message).toHaveLength(1)
+        expect(chat.message[0].data).toBe(hasPartial ? 'saved partial' : '```risuerror\nengine failed\n```')
+        expect(claims()).toEqual(['/api/model-jobs/job-1/claim'])
+    })
+
     test('failed job with the live message already present adds no error block', async () => {
         const { recovery } = await loadModules()
         const chat = makeChat({ message: [{ role: 'char', data: 'partial', generationInfo: { generationId: 'gen-1' } }] })

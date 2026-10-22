@@ -431,6 +431,11 @@ function extractThoughtSignature(extraContent: unknown): string | undefined {
 // Exported (pure) for job-journal recovery replay (process/request/jobRecovery.ts).
 export function parseChatStreamDelta(raw: unknown): AdapterChatStreamDelta | null {
     if (!isPlainObject(raw)) return null
+    if (raw.error !== undefined && raw.error !== null) {
+        const code = isPlainObject(raw.error) ? raw.error.code : undefined
+        const status = typeof code === 'number' && Number.isInteger(code) && code >= 400 && code < 600 ? code : 500
+        throw normalizeHttpStatus(status, extractErrorMessage(JSON.stringify(raw)) ?? 'Model stream failed')!
+    }
     const choices = raw['choices']
     let textDelta = ''
     let reasoningDelta = ''

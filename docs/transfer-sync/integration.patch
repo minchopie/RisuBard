@@ -1,0 +1,1002 @@
+diff --git a/server/node/server.cjs b/server/node/server.cjs
+--- a/server/node/server.cjs
++++ b/server/node/server.cjs
+@@ -2,4 +2,10 @@ const express = require('express');
+ const { validatePackage, stageWindowsUpdate, restoreEntries } = require('./portable-update.cjs');
+ const app = express();
++const storageWriteContext = new (require('node:async_hooks').AsyncLocalStorage)();
++app.use((req, _res, next) => {
++    req.storageWriteContext = { req, writing: false };
++    storageWriteContext.run(req.storageWriteContext, next);
++});
++const embedded = require('./embedded-runtime.cjs').embeddedRuntime();
+ const http = require('http');
+ const https = require('https');
+@@ -123,6 +129,11 @@ function computeDatabaseEtagFromObject(databaseObject) {
+ 
+ let storageOperationQueue = Promise.resolve();
+-function queueStorageOperation(operation) {
+-    const operationRun = storageOperationQueue.then(operation, operation);
++function queueStorageOperation(operation) {
++    const context = storageWriteContext.getStore();
++    const run = () => {
++        if (context?.writing) { playTransfer.assertWrite(context.req); nasSync.assertWrite(context.req); }
++        return operation();
++    };
++    const operationRun = storageOperationQueue.then(run, run);
+     storageOperationQueue = operationRun.catch(() => {});
+     return operationRun;
+@@ -137,4 +148,8 @@ const scheduleStoragePersist = createQueuedSaveDebounce({
+         recordPersistFailure(error, 'queued-persist');
+     },
++    // The transfer/NAS write gate (queueStorageOperation → assertWrite) refused the queued run: not a persist
++    // failure — the dirty cache stays and the save retries after SAVE_INTERVAL. Logged once per deferred save,
++    // never recorded as a persist warning.
++    onDeferred: (error, attempt) => { if (attempt === 1) logger.info(`[Storage] Queued persist deferred by the write gate (${error.code}); retrying`); },
+ });
+ 
+@@ -373,5 +388,8 @@ async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
+         if (fresh) raw = fresh;
+     }
+-    const dbObj = normalizeJSON(await decodeRisuSave(raw));
++    return prepareDatabaseWithPersistentChatIds(normalizeJSON(await decodeRisuSave(raw)), options);
++}
++
++function prepareDatabaseWithPersistentChatIds(dbObj, { runMaintenance = false, migrationResult = null } = {}) {
+     let needsPersist = false;
+ 
+@@ -627,4 +645,19 @@ async function migrateRemoteBlocksIfNeeded() {
+ }
+ 
++async function loadPersistedFullDatabase(options = {}) {
++    await migrateRemoteBlocksIfNeeded();
++    // Resumed writes and chat reads use the same committed revision as startup.
++    if (canonicalProjectionReady && !externalEditSession.isActive()) {
++        let database;
++        try { database = userDataRepository.exportLegacyDatabase(); }
++        catch (error) {
++            logger.warn('[Read] Canonical hydration unavailable; using compatibility reader', error?.code || error?.name);
++        }
++        if (database) return prepareDatabaseWithPersistentChatIds(normalizeJSON(database), options);
++    }
++    const raw = kvGet('database/database.bin');
++    return raw ? decodeDatabaseWithPersistentChatIds(raw, options) : null;
++}
++
+ /**
+  * Ensure fullChatStore is initialized. Loads from disk if needed.
+@@ -632,16 +665,11 @@ async function migrateRemoteBlocksIfNeeded() {
+ async function ensureChatStore() {
+     if (fullChatStore) return;
+-    // Run remote-block migration first so the decode below sees an inline DB.
+-    // Idempotent — skipped on every subsequent call.
+-    await migrateRemoteBlocksIfNeeded();
+-    const raw = kvGet('database/database.bin');
+-    if (!raw) {
+-        fullChatStore = new Map();
+-        return;
+-    }
+-    const dbObj = await decodeDatabaseWithPersistentChatIds(raw, {
+-        runMaintenance: true,
+-    });
++    const dbObj = await loadPersistedFullDatabase({ runMaintenance: true });
++    // An unqueued statistics read may finish after another request has already accepted a chat.
++    if (fullChatStore) return;
++    if (!dbObj) { fullChatStore = new Map(); return; }
+     initChatStore(dbObj);
++    // Retain the pre-write metadata baseline even when a resumed tab saves before its first read.
++    if (!dbCache[DB_HEX_KEY]) dbCache[DB_HEX_KEY] = normalizeJSON(stripChatsFromDb(dbObj));
+ }
+ 
+@@ -787,5 +815,6 @@ async function persistChatStoreWithoutCache(trigger, observationContext = {}) {
+     try {
+         let phaseStartedAt = performance.now();
+-        const databaseObject = normalizeJSON(await decodeRisuSave(raw));
++        const databaseObject = await loadPersistedFullDatabase();
++        if (!databaseObject) throw new Error('No saved database is available for chat persistence');
+         metrics.decodeMs = elapsedMs(phaseStartedAt);
+         errorStage = 'reassemble';
+@@ -989,5 +1018,5 @@ app.use((req, res, next) => {
+ app.use((req, res, next) => {
+     // Skip express.raw() for backup import — it must stream, not buffer into memory
+-    if (req.path === '/api/backup/import') return next();
++    if (req.path === '/api/backup/import' || req.path === '/api/local-ai/model' || req.path === '/api/play-transfer/incoming') return next();
+     const isChatUpload = req.path.startsWith('/api/chat-content-upload/');
+     // Fixed ceiling admits older in-flight uploads after the app changes its setting.
+@@ -1000,4 +1029,6 @@ app.use((req, res, next) => {
+ });
+ app.use(express.text({ limit: '100mb' }));
++// Body parsers may finish on a different async resource; restore this request's writer context.
++app.use((req, _res, next) => storageWriteContext.run(req.storageWriteContext, next));
+ const {pipeline} = require('stream/promises')
+ const sslPath = path.join(process.cwd(), 'server/node/ssl/certificate');
+@@ -1293,5 +1324,5 @@ externalEditSession = createExternalEditSession({
+ // user changes the path the old directory is left in place (existing backups
+ // stay where they were); only future backups land at the new path.
+-const DEFAULT_BACKUPS_DIR = path.join(process.cwd(), "backups");
++const DEFAULT_BACKUPS_DIR = path.join(embedded.enabled ? savePath : process.cwd(), "backups");
+ const BACKUP_PATH_CONFIG_KEY = 'config/server-backup-path';
+ const MANAGED_BACKUP_PATH_ROOTS = new Set(['server', 'dist', 'scripts', 'bin', 'node_modules', '.update-tmp']);
+@@ -1474,6 +1505,6 @@ function stopTunnel() {
+ 
+ // ── Update check ─────────────────────────────────────────────────────────────
+-const UPDATE_CHECK_DISABLED = process.env.RISU_UPDATE_CHECK === 'false';
+-const GITHUB_REPO = 'rpaddict/RisuBard';
++const UPDATE_CHECK_DISABLED = embedded.enabled || process.env.RISU_UPDATE_CHECK === 'false';
++const GITHUB_REPO = 'rpaddict/RisuBard';
+ const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL || `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+ 
+@@ -1964,4 +1995,8 @@ const sessionLock = createSessionLock();
+ 
+ function checkActiveSession(req, res) {
++    try { playTransfer.assertWrite(req); nasSync.assertWrite(req); }
++    catch (error) { res.status(423).json({ error: error.message, code: error.code, ...(error.transaction ? { transaction: error.transaction } : {}) }); return false; }
++    const context = storageWriteContext.getStore();
++    if (context) context.writing = true;
+     const clientSessionId = req.headers['x-session-id']
+     // The client attaches x-user-active only when a real user gesture happened
+@@ -2716,4 +2751,5 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
+     let canonicalEntriesRestored = 0;
+     let atomicRestorePublished = false;
++    let restoreMarked = null;
+ 
+     function stagingInlayFilePath(id, ext) {
+@@ -2896,4 +2932,11 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
+         }
+         if (onPhase) onPhase('publishing');
++        // NAS sync learns of the restore BEFORE any data changes (durable mark): items absent from the restored state are not
++        // deletions and edits continue from their recorded bases, with the sync identity and lineage left intact.
++        const restoreId = `backup-${nodeCrypto.randomUUID()}`;
++        let restoredLineage = null; // the sync lineage recorded with the backup, when the backup carries one (unknown origin otherwise)
++        try { restoredLineage = JSON.parse(await fs.readFile(path.join(canonicalStagingDir, 'risubard', 'nas-sync', 'lineage.json'), 'utf8')).lineage ?? null; } catch { /* backup predates sync */ }
++        nasSync.markRestore({ source: 'backup-import', restoreId, lineage: restoredLineage });
++        restoreMarked = restoreId;
+         const replacedPrefixes = [
+             'assets/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/',
+@@ -2917,4 +2960,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
+         }
+     } catch (error) {
++        // The atomic publication recovered to the original files: nothing was restored, so the mark is withdrawn. Any other
++        // failure may have changed data already and keeps the mark (harmless over unchanged data).
++        if (restoreMarked && canonicalEntriesRestored > 0 && !atomicRestorePublished) nasSync.clearRestore(restoreMarked);
+         await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+         await fs.rm(backupInlayDir, { recursive: true, force: true }).catch(() => {});
+@@ -4241,4 +4287,5 @@ app.get('/api/remove', async (req, res, next) => {
+         return;
+     }
++    if (!checkActiveSession(req, res)) return;
+     const filePath = req.headers['file-path'];
+     if (!filePath) {
+@@ -4455,4 +4502,90 @@ app.delete('/api/logs', async (req, res, next) => {
+ requestLogs.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
+ const narrativeMemoryService = createRuntimeMemoryService(savePath);
++const windowsTransfers = require('./transfer-windows.cjs').createWindowsTransfers(savePath, path.resolve(__dirname, '../..'));
++const playTransfer = require('./play-set-service.cjs').createPlaySetService({
++    dataRoot: savePath,
++    // NAS sync key sharing rides the native inbox only; `nasSync` is bound below and called at request time.
++    foreignArchive: { detect: file => nasSync.detectShare(file), receive: (file, meta) => nasSync.receiveForeign(file, meta), consumed: id => nasSync.consumed(id), consumedAll: () => nasSync.consumedAll() },
++    readDatabase: () => queueStorageOperation(() => loadPersistedFullDatabase()),
++    memory: narrativeMemoryService,
++    storage: require('./db.cjs'),
++    readInlay: async id => {
++        if (!isSafeInlayId(id)) throw new Error('Invalid inlay identity');
++        const file = await resolveInlayFilePath(id);
++        if (!file) return null;
++        const metadata = await readInlaySidecar(id) || await readInlayLegacyInfo(id);
++        if (!metadata) throw new Error('Missing inlay metadata: ' + id);
++        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(file, { type: getMimeFromExt(metadata.ext) }) };
++    },
++    installInlay: async (entry, staging) => {
++        if (!isSafeInlayId(entry.id)) throw new Error('Invalid inlay identity');
++        await ensureInlayDir();
++        const ext = normalizeInlayExt(entry.metadata.ext);
++        const target = getInlayFilePath(entry.id, ext);
++        if (entry.file) await fs.copyFile(path.join(staging, entry.file), target, require('node:fs').constants.COPYFILE_EXCL);
++        else await fs.writeFile(target, entry.text, { flag: 'wx', mode: 0o600 });
++        await writeInlaySidecar(entry.id, entry.metadata);
++    },
++    removeInlay: deleteInlayFile,
++    nativeInbox: embedded.enabled ? { state: path.join(savePath, '../play-sets/state/inbox.json'), archives: path.join(savePath, '../play-sets/archives') }
++        : process.platform === 'win32' ? { state: path.join(savePath, 'transfer-native/inbox.json'), archives: path.join(savePath, 'transfer-native/archives') } : null,
++});
++playTransfer.registerRoutes(app, { auth: checkAuth, downloadAuth: checkBackupDownloadAuth, activeSession: checkActiveSession });
++app.get('/api/play-transfer/native-capabilities', async (req, res) => {
++    if (!await checkAuth(req, res)) return;
++    res.json({ windows: windowsTransfers.available() });
++});
++app.post('/api/play-transfer/native-rpc', async (req, res) => {
++    if (!await checkAuth(req, res) || !checkActiveSession(req, res)) return;
++    try { res.json({ value: await windowsTransfers.dispatch(req.body.op, req.body.args) }); }
++    catch (error) { res.status(400).json({ error: error.message }); }
++});
++// The device key is consumed by createTransferSecrets; the sync vault master uses the same protector selection on its own file.
++const transferDeviceKey = process.env.RISUBARD_TRANSFER_KEY;
++const transferSecrets = require('./transfer-secrets.cjs').createTransferSecrets(savePath);
++// Home/external NAS route (same account/vault/namespace; internal URL on registered home Wi-Fi or when a wired PC reaches it).
++const nasRoute = require('./nas-route.cjs').createNasRoute({ secrets: transferSecrets, detect: process.platform === 'win32' ? require('./nas-route.cjs').detectWindows : null });
++const remoteTransfers = require('./transfer-remote.cjs').createRemoteTransfers({ secrets: transferSecrets, transfers: playTransfer, route: nasRoute });
++// NAS sync identity sidecar, vault master and device key: outside the data root and outside every backup payload when the host
++// gives a protected place — Android passes its noBackupFilesDir (RISUBARD_NO_BACKUP_DIR), Windows uses local app data keyed by the
++// data root (DPAPI-protected contents). Other hosts keep them beside the data (reported boundary).
++const syncSecretsDir = process.env.RISUBARD_NO_BACKUP_DIR ? path.join(process.env.RISUBARD_NO_BACKUP_DIR, 'nas-sync')
++    : process.platform === 'win32' && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'RisuBard', 'nas-sync', nodeCrypto.createHash('sha256').update(path.resolve(savePath)).digest('hex').slice(0, 16)) : null;
++if (syncSecretsDir) require('node:fs').mkdirSync(syncSecretsDir, { recursive: true, mode: 0o700 });
++// NAS sync: routes + client coordinator (src/ts/nasSyncCoordinator.ts) that runs only after explicit enable.
++const nasSync = require('./nas-sync-service.cjs').createNasSyncService({
++    dataRoot: savePath,
++    identityDir: syncSecretsDir, secretsDir: syncSecretsDir, transfers: playTransfer,
++    readDatabase: () => queueStorageOperation(() => loadPersistedFullDatabase()),
++    memory: narrativeMemoryService,
++    storage: require('./db.cjs'),
++    secrets: transferSecrets, nasRoute,
++    protect: transferDeviceKey ? require('./transfer-secrets.cjs').androidProtector(transferDeviceKey) : process.platform === 'win32' ? require('./transfer-secrets.cjs').dpapi : async () => { throw new Error('Persistent sync vault requires Android Keystore or Windows DPAPI'); },
++    readInlay: async id => {
++        if (!isSafeInlayId(id)) throw new Error('Invalid inlay identity');
++        const file = await resolveInlayFilePath(id);
++        if (!file) return null;
++        const metadata = await readInlaySidecar(id) || await readInlayLegacyInfo(id);
++        if (!metadata) throw new Error('Missing inlay metadata: ' + id);
++        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(file, { type: getMimeFromExt(metadata.ext) }) };
++    },
++    installInlay: async (entry, staging) => {
++        if (!isSafeInlayId(entry.id)) throw new Error('Invalid inlay identity');
++        await ensureInlayDir();
++        const target = getInlayFilePath(entry.id, normalizeInlayExt(entry.metadata.ext));
++        await fs.copyFile(path.join(staging, entry.file), target, require('node:fs').constants.COPYFILE_EXCL);
++        await writeInlaySidecar(entry.id, entry.metadata);
++        // Ownership/timestamps live in the separate `inlay_meta/<id>` KV record (src/ts/process/files/inlayMeta.ts); keep them with the image.
++        if (entry.ownership) kvSet('inlay_meta/' + entry.id, Buffer.from(JSON.stringify(entry.ownership)));
++    },
++    removeInlay: deleteInlayFile,
++    inlayMeta: async id => { if (!isSafeInlayId(id)) return null; const raw = kvGet('inlay_meta/' + id); if (!raw) return null; try { return JSON.parse(Buffer.from(raw).toString('utf8')); } catch { return null; } },
++});
++nasSync.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
++app.post('/api/play-transfer/remote/:kind/:operation', async (req, res) => {
++    if (!await checkAuth(req, res) || !checkActiveSession(req, res)) return;
++    try { res.json(await remoteTransfers.dispatch(req.params.kind, req.params.operation, req.body)); }
++    catch (error) { res.status(400).json({ error: error.message }); }
++});
+ registerRisuBardMemoryRoutes(app, {
+     auth: checkAuth,
+@@ -4746,11 +4879,13 @@ app.post('/api/patch', async (req, res, next) => {
+             // For database.bin, cache holds the STRIPPED version (stubs only)
+             if (!dbCache[filePath]) {
+-                const fileContent = kvGet(decodedKey);
+-                if (fileContent) {
+-                    const decoded = decodedKey === 'database/database.bin'
+-                        ? await decodeDatabaseWithPersistentChatIds(fileContent)
+-                        : normalizeJSON(await decodeRisuSave(fileContent));
++                let decoded;
++                if (decodedKey === 'database/database.bin') decoded = await loadPersistedFullDatabase();
++                else {
++                    const fileContent = kvGet(decodedKey);
++                    decoded = fileContent ? normalizeJSON(await decodeRisuSave(fileContent)) : null;
++                }
++                if (decoded) {
+                     if (decodedKey === 'database/database.bin') {
+-                        initChatStore(decoded);
++                        if (!fullChatStore) initChatStore(decoded);
+                         dbCache[filePath] = normalizeJSON(stripChatsFromDb(decoded));
+                     } else {
+@@ -6839,4 +6974,6 @@ app.post('/api/db/snapshots/restore', async (req, res, next) => {
+             // after kvCopyValue and overwrite the restored snapshot.
+             await flushPendingDbWithinQueue();
++            const restoredAt = parseInt(key.slice(DB_BACKUP_PREFIX.length, -4), 10); // the snapshot's time selects the lineage recorded then
++            nasSync.markRestore({ source: 'db-snapshot', restoreId: `snapshot-${nodeCrypto.randomUUID()}`, at: Number.isFinite(restoredAt) ? restoredAt : null }); // durable before the copy
+             kvCopyValue(key, DB_BLOB_KEY);
+             invalidateDbCache();
+@@ -7047,4 +7184,5 @@ let selfUpdateInProgress = false;
+ 
+ app.post('/api/self-update', async (req, res) => {
++    if (embedded.enabled) return res.status(409).json({ error: 'Android updates must be installed as a signed APK' });
+     if (!await checkAuth(req, res)) return;
+ 
+@@ -7386,4 +7524,5 @@ app.get('/api/tunnel/status', async (req, res) => {
+ 
+ app.post('/api/tunnel/start', async (req, res) => {
++    if (embedded.enabled) return res.status(409).json({ error: 'The embedded Android server is loopback-only' });
+     if (!await checkAuth(req, res)) return;
+     if (TUNNEL_DISABLED) return res.status(403).json({ error: 'Tunnel is disabled via RISU_TUNNEL_DISABLED' });
+@@ -7555,5 +7694,5 @@ async function startServer() {
+             server = https.createServer(httpsOptions, app);
+             setupProxyStreamWebSocket(server);
+-            server.listen(port, () => {
++            server.listen(port, embedded.host, () => {
+                 console.log("[Server] HTTPS server is running.");
+                 const url = `https://localhost:${port}/`;
+@@ -7567,5 +7706,5 @@ async function startServer() {
+             server = http.createServer(app);
+             setupProxyStreamWebSocket(server);
+-            server.listen(port, () => {
++            server.listen(port, embedded.host, () => {
+                 console.log("[Server] HTTP server is running.");
+                 const url = `http://localhost:${port}/`;
+@@ -7579,4 +7718,5 @@ async function startServer() {
+         // take longer than Node's 5-minute default, and waiting is not a failure.
+         server.requestTimeout = 0;
++        server.once('listening', () => embedded.ready(server, savePath));
+         // Written only once bound, so a server that lost the port race keeps the owner's token intact.
+         server.once('listening', () => writeFileSync(localShutdownTokenPath, localShutdownToken, { mode: 0o600 }));
+@@ -7589,5 +7729,5 @@ async function startServer() {
+         // Remove folders older self-updates left in the system temp folder. A
+         // separate low-priority process keeps the deletion off this server.
+-        server.once('listening', () => setTimeout(() => {
++        if (!embedded.enabled) server.once('listening', () => setTimeout(() => {
+             try {
+                 spawn(process.execPath, [path.join(__dirname, 'portable-update.cjs'), '--cleanup'], {
+@@ -7608,13 +7748,39 @@ async function shutdownGracefully(reason) {
+     if (shuttingDown) return;
+     shuttingDown = true;
++    let exitCode = 0;
+     console.log(`[Server] Received ${reason}, flushing pending data...`);
+-    liveFileEvents.close();
+-    stopTunnel();
+-    try { await chatContentUploads.close(); } catch (e) { logger.warn('[ChatContent] Upload cleanup error:', e); }
+-    try { await flushPendingDb(); } catch (e) { logger.error('[Server] Flush error:', e); }
+-    liveCharacterFiles.close();
+-    await saveObservation.flush();
+-    try { unlinkSync(localShutdownTokenPath); } catch {}
+-    process.exit(0);
++    try {
++        try { liveFileEvents.close(); } catch (e) { logger.warn('[Server] File event cleanup error:', e); }
++        try { stopTunnel(); } catch (e) { logger.warn('[Server] Tunnel cleanup error:', e); }
++        try { await chatContentUploads.close(); } catch (e) { logger.warn('[ChatContent] Upload cleanup error:', e); }
++        try {
++            await queueStorageOperation(async () => {
++                try {
++                    await flushPendingDbWithinQueue(embedded.enabled ? { materialize: false, deferCompatibility: true } : {});
++                } catch (e) {
++                    exitCode = 1;
++                    logger.error('[Server] Flush error:', e);
++                }
++                if (liveFilesPendingWrites) {
++                    exitCode = 1;
++                    // Preserve acknowledged edits without overwriting files awaiting external-change review.
++                    const recoveryPath = `trash/shutdown-recovery/${nodeCrypto.randomUUID()}.bin`;
++                    await ensureChatStore();
++                    const base = dbCache[DB_HEX_KEY] || stripChatsFromDb(await loadPersistedFullDatabase());
++                    if (!base) throw new Error('No saved database is available for shutdown recovery');
++                    atomicWriteFile(savePath, recoveryPath, encodeRisuSaveLegacyBuffer(reassembleFullDb(base)));
++                    logger.error(`[Server] Pending edits preserved for manual recovery: ${recoveryPath}`);
++                }
++            }, false); // A failed journal retry must still reach the independent emergency backup.
++        } catch (e) {
++            exitCode = 1;
++            logger.error('[Server] Shutdown recovery error:', e);
++        }
++        try { liveCharacterFiles.close(); } catch (e) { logger.warn('[Server] File watcher cleanup error:', e); }
++        try { await saveObservation.flush(); } catch (e) { logger.warn('[Server] Observation cleanup error:', e); }
++    } finally {
++        try { unlinkSync(localShutdownTokenPath); } catch {}
++        process.exit(exitCode);
++    }
+ }
+ // SIGHUP: on Windows, closing the console window (about 10 seconds before a forced exit).
+@@ -7622,4 +7788,5 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+     process.on(sig, () => shutdownGracefully(sig));
+ }
++embedded.watchOwner(shutdownGracefully);
+ 
+ (async () => {
+
+diff --git a/server/node/risubard-memory-runtime.cjs b/server/node/risubard-memory-runtime.cjs
+--- a/server/node/risubard-memory-runtime.cjs
++++ b/server/node/risubard-memory-runtime.cjs
+@@ -30,4 +30,5 @@ const {
+ const { revealLocalFile } = require('./reveal-local-file.cjs')
+ const { inheritWikiWorkspace, importWikiWorkspace } = require('./risubard-wiki-transfer.ts')
++const { capturePlaySetMemory } = require('./play-set-memory.cjs')
+ 
+ function createRuntimeMemoryService(userDataDirectory, options = {}) {
+@@ -114,4 +115,9 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
+     return {
+         ...memory,
++        invalidateTransferCache: (characterId, chatId) => wiki.invalidateCache(characterId, chatId),
++        capturePlaySetMemory: (input) => scheduled([
++            ...input.chatIds.map(chatId => [input.characterId, chatId]),
++            [input.characterId, SAVE_STORE_LANE],
++        ], [], () => capturePlaySetMemory({ ...input, userDataDirectory })),
+         inheritWiki: (input) => serializedMany([
+             [input.characterId, input.sourceChatId],
+@@ -201,9 +207,8 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
+             () => previewSaveSlot({ userDataDirectory, ...input })
+         ),
+-        renameMemorySave: (input) => serialized(
+-            input.characterId,
+-            memorySaveWorkspaceId(input.saveId),
+-            () => renameSaveSlot({ userDataDirectory, ...input })
+-        ),
++        renameMemorySave: (input) => serializedMany([
++            [input.characterId, memorySaveWorkspaceId(input.saveId)],
++            [input.characterId, SAVE_STORE_LANE],
++        ], () => renameSaveSlot({ userDataDirectory, ...input })),
+         deleteMemorySave: (input) => serializedMany([
+             [input.characterId, memorySaveWorkspaceId(input.saveId)],
+
+diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
+--- a/src/ts/storage/nodeStorage.ts
++++ b/src/ts/storage/nodeStorage.ts
+@@ -228,4 +228,7 @@ export class NodeStorage{
+     private liveSnapshotRequired = false
+     pendingSaveRequests = 0
++    transferTransaction: string | undefined
++    /** Active NAS sync apply transaction; its id travels with every save so the server's sync write gate admits only that save. */
++    syncTransaction: string | undefined
+ 
+     private connectionFetch(path: string, init: RequestInit) {
+@@ -239,9 +242,32 @@ export class NodeStorage{
+         this.pendingSaveRequests++
+         try {
+-            return await this.authFetch(path, init)
++            // Identity of this write: ordinary (no sync transaction) and whatever manual-transfer transaction it started under. A retry
++            // is sent only while both are unchanged, re-checked AFTER each wait and BEFORE retransmitting — authFetch stamps headers from
++            // the live fields, so a transaction that appeared meanwhile would turn stale buffered data into that apply's own save.
++            const identity = () => `${this.syncTransaction ?? ''}\u0000${this.transferTransaction ?? ''}`
++            const until = Date.now() + NodeStorage.SYNC_BUSY_WAIT_MS, started = identity(), ordinary = !this.syncTransaction
++            for (;;) {
++                const response = await this.authFetch(path, init)
++                // 423 NAS_SYNC_BUSY: the server is inside an exclusive sync step (snapshot, bootstrap, plan, resolve…) that must not
++                // interleave with ordinary writes. That is an ordering signal, not a failure: the write waits behind the step and is
++                // sent again unchanged once the gate clears. Bodies here are buffers/strings (re-sendable); a stream cannot be
++                // replayed and keeps the old behaviour. The sync apply's own writes carry x-nas-sync-id and are never answered this way.
++                // Only a request that was ordinary at its first attempt is resent, and only while it is still ordinary: a transaction
++                // header appearing meanwhile would let stale buffered data pass the gate as the new apply's own save.
++                if (response.status !== 423 || !ordinary || identity() !== started || Date.now() >= until || init.body instanceof ReadableStream || !await NodeStorage.isSyncBusy(response)) return response
++                await new Promise(resolve => setTimeout(resolve, NodeStorage.SYNC_BUSY_RETRY_MS))
++                init.signal?.throwIfAborted()
++                if (identity() !== started) return response // changed during the wait: the previous 423 stands, nothing is resent
++            }
+         } finally {
+             this.pendingSaveRequests--
+         }
+     }
++    static SYNC_BUSY_RETRY_MS = 500
++    static SYNC_BUSY_WAIT_MS = 10 * 60 * 1000 // an exclusive sync step is bounded by its own network limits; after this the 423 surfaces as before
++    /** Transient exclusive step (snapshot/bootstrap/plan…): wait. An armed plan (`transaction` present) is settled by recovery, never by waiting. */
++    private static async isSyncBusy(response: Response) {
++        try { const body = await response.clone().json(); return body?.code === 'NAS_SYNC_BUSY' && !body?.transaction } catch { return false }
++    }
+ 
+     async flushDatabase(keepalive = false, canonicalOnly = false, signal?: AbortSignal): Promise<void> {
+@@ -407,4 +433,6 @@ export class NodeStorage{
+         init.signal?.throwIfAborted()
+         headers.set('x-session-id', NodeStorage.sessionId)
++        if (this.transferTransaction) headers.set('x-play-transfer-id', this.transferTransaction)
++        if (this.syncTransaction) headers.set('x-nas-sync-id', this.syncTransaction)
+         if (this.importProgressId) headers.set('x-import-id', this.importProgressId)
+         if (isUserActive()) headers.set('x-user-active', '1')
+@@ -417,5 +445,7 @@ export class NodeStorage{
+ 
+         if (response.status === 423) {
+-            window.dispatchEvent(new CustomEvent('risu-session-deactivated'))
++            const failure = await response.clone().json().catch(() => ({}))
++            // Local transfer/sync write gates answer 423 too; only a real session takeover deactivates this tab.
++            if (!['TRANSFER_BUSY', 'NAS_SYNC_BUSY'].includes(failure.code)) window.dispatchEvent(new CustomEvent('risu-session-deactivated'))
+         }
+ 
+@@ -431,3 +461,13 @@ export class NodeStorage{
+     }
+ 
++
++    async syncRequest(path: string, init: RequestInit = {}): Promise<Response> {
++        if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid sync route')
++        return this.authFetch('/api/nas-sync' + path, init)
++    }
++    async transferRequest(path: string, init: RequestInit = {}): Promise<Response> {
++        if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid transfer route')
++        return this.authFetch('/api/play-transfer' + path, init)
++    }
++
+     async setItem(key:string, value:Uint8Array, etag?:string): Promise<string | null> {
+         const headers: Record<string, string> = {
+diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
+--- a/src/ts/globalApi.svelte.ts
++++ b/src/ts/globalApi.svelte.ts
+@@ -267,4 +267,5 @@ export let requiresFullEncoderReload = $state({
+ 
+ let requestImmediateSaveImpl: ((options?: {
++    chats?: [string, string][]
+     forceFullWrite?: boolean
+     flushServer?: boolean | 'canonical' | 'canonical-background'
+@@ -272,4 +273,5 @@ let requestImmediateSaveImpl: ((options?: {
+     flushSignal?: AbortSignal
+     rejectOnFailure?: boolean
++    syncOwned?: boolean
+ }) => Promise<void> | void) = () => {}
+ let patchSyncBaseline: Database | null = null
+@@ -376,6 +378,10 @@ export function previewPersistFailureToast() {
+ }
+ 
++import { syncSaveHold, canonicalSaveSettled } from './transferState'
+ export function requestImmediateSave(options?: {
++    chats?: [string, string][]
+     forceFullWrite?: boolean
++    /** The NAS sync apply's own save: allowed while syncSaveHold blocks every other save. */
++    syncOwned?: boolean
+     flushServer?: boolean | 'canonical' | 'canonical-background'
+     // Waits for the flush without the write timeout; abort to stop waiting.
+@@ -386,4 +392,10 @@ export function requestImmediateSave(options?: {
+ }
+ 
++let trackedChangesImpl: (() => toSaveType | null) = () => null
++/** Read-only copy of the changes the save runtime has tracked but not yet persisted (null before the runtime starts). */
++export function pendingTrackedChanges(): toSaveType | null {
++    return trackedChangesImpl()
++}
++
+ export function setPatchSyncBaseline(data: Database | null) {
+     patchSyncBaseline = data ? safeStructuredClone(data) as Database : null
+@@ -838,4 +850,5 @@ export async function saveDb() {
+         document.addEventListener('visibilitychange', handleVisibilityFlush);
+         window.addEventListener('pagehide', flushImmediate);
++        if (navigator.userAgent.includes('RisuBardAndroid/')) window.addEventListener('risubard-native-background', flushImmediate);
+ 
+         $effect(() => {
+@@ -848,6 +861,9 @@ export async function saveDb() {
+                 }
+             }
+-            const botPresetMirrored = syncActiveBotPresetFromMirror()
+-            const themePresetMirrored = syncActiveThemePresetFromMirror()
++            // Inside a NAS sync apply (hold on) the planned preset entries must reach the disk verbatim: the server verifies the saved
++            // bytes against the plan, and the mirrors would rewrite the active entries from root values. Ordinary saves keep mirroring.
++            const mirroring = !get(syncSaveHold)
++            const botPresetMirrored = mirroring && syncActiveBotPresetFromMirror()
++            const themePresetMirrored = mirroring && syncActiveThemePresetFromMirror()
+             if (botPresetMirrored) changeTracker.botPreset = true
+             if (!didInitRootEffect) {
+@@ -987,4 +1003,5 @@ export async function saveDb() {
+             document.removeEventListener('visibilitychange', handleVisibilityFlush)
+             window.removeEventListener('pagehide', flushImmediate)
++            window.removeEventListener('risubard-native-background', flushImmediate)
+         }
+     })
+@@ -1506,10 +1523,16 @@ export async function saveDb() {
+         rejectOnFailure?: boolean
+         refresh?: boolean
++        syncOwned?: boolean
+     }) {
+         if (!saveRuntime.isActive()) return
++        // Common save entry (autosave loop, immediate saves, visibility/unload flushes): while a NAS sync apply is unresolved,
++        // only that transaction's own save may persist; everything else waits for recovery to settle the outcome.
++        if (get(syncSaveHold) && !options?.syncOwned) return
+         while (saveInFlight) {
+             try { await saveInFlight } catch {}
+         }
+         if (!saveRuntime.isActive()) return
++        // Re-check after waiting: a save queued before the hold must not resume with its stale admission.
++        if (get(syncSaveHold) && !options?.syncOwned) return
+ 
+         if (gotChannel) {
+@@ -1547,6 +1570,11 @@ export async function saveDb() {
+                 }
+                 if (result === 'saved') {
++                    // Android can kill the embedded server with the UI; finish disk persistence before acknowledging a save.
++                    if (supportsPatchSync && navigator.userAgent.includes('RisuBardAndroid/')) await flushServerDbNow(false, true)
+                     forceFullWriteOnRetry = false
+                     savetrys = 0
++                    // A user save settled: the NAS sync coordinator (if enabled) snapshots after its debounce. The sync apply's own
++                    // save is not a trigger, so a received apply never echoes into a snapshot cycle.
++                    if (!options?.syncOwned) canonicalSaveSettled.set(Date.now())
+                     // Node clients use the server lock. A failed/passive save
+                     // must not kick another tab through a second authority.
+@@ -1611,4 +1639,10 @@ export async function saveDb() {
+             throw new Error(language.sessionSavePausedTitle)
+         }
++        if (get(syncSaveHold) && !options?.syncOwned) throw new Error('NAS 동기화 적용이 끝날 때까지 저장이 잠겨 있어요.')
++        // Imports can append chats without selecting their character in the UI.
++        for (const [id, chatId] of options?.chats ?? []) {
++            if (!changeTracker.character.includes(id)) changeTracker.character.push(id)
++            if (!changeTracker.chat.some(pair => pair[0] === id && pair[1] === chatId)) changeTracker.chat.push([id, chatId])
++        }
+         changed = true
+         await tick()
+@@ -1617,4 +1651,5 @@ export async function saveDb() {
+             rejectOnFailure: options?.rejectOnFailure,
+             refresh: true,
++            syncOwned: options?.syncOwned,
+         })
+         if (options?.flushServer === 'canonical-background' && supportsPatchSync) {
+@@ -1628,6 +1663,7 @@ export async function saveDb() {
+ 
+     let savetrys = 0
++    trackedChangesImpl = () => saveRuntime.isActive() ? safeStructuredClone(changeTracker) : null
+     while (saveRuntime.isActive()) {
+-        if (!changed || gotChannel) {
++        if (!changed || gotChannel || get(syncSaveHold)) {
+             await sleep(200)
+             continue
+@@ -3154,4 +3190,6 @@ export function changeChatTo(IdOrIndex: string | number) {
+     const char = DBState.db.characters[selIdState.selId]
+     char.chatPage = index
++    // A chat was (re)opened by the user: the NAS sync coordinator treats this instant as a safe window for incoming changes to this chat.
++    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('risubard-chat-opened'))
+     const newChat = char.chats[index]
+     if(newChat){
+
+diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
+--- a/src/ts/bootstrap.ts
++++ b/src/ts/bootstrap.ts
+@@ -1,4 +1,8 @@
+ import { changeFullscreen, checkNullish } from "./util"
+ import { installDynamicViewportHeight } from "./viewportHeight"
++import { recoverTransfers, startTransferInbox } from './playTransfer'
++import { recoverSync } from './nasSync'
++import { startSyncCoordinator } from './nasSyncCoordinator'
++import { initializeNativeTransfers } from './transferNative'
+ import { v4 as uuidv4 } from 'uuid';
+ import { get } from "svelte/store";
+@@ -86,4 +90,8 @@ export async function loadData() {
+                 }
+ 
++                await initializeNativeTransfers()
++                await recoverTransfers()
++                // NAS sync apply recovery runs here too: before autosave, plugins and generation, after manual-transfer recovery.
++                await recoverSync()
+                 if (getDatabase().didFirstSetup) {
+                     characterURLImport()
+@@ -175,4 +183,7 @@ export async function loadData() {
+             registerModelDynamic()
+             loadedStore.set(true)
++            startTransferInbox()
++            // NAS sync foreground coordinator: Node/embedded runtime only, and it does nothing until sync was enabled on the server.
++            void startSyncCoordinator().catch(error => console.warn('[NAS sync] coordinator did not start:', String(error?.message ?? error)))
+             saveDb()
+             moduleUpdate()
+
+diff --git a/src/ts/importSession.ts b/src/ts/importSession.ts
+--- a/src/ts/importSession.ts
++++ b/src/ts/importSession.ts
+@@ -7,4 +7,5 @@ import { alertStore } from './stores.svelte'
+ import { ImportCancelled, ImportTransaction, type ImportJournal, type ImportOwner } from './storage/importTransaction'
+ import { startImportProgress, stopImportProgress, beginImportSave, receiveImportProgress, loseImportProgress } from './importProgress'
++import { transferBusy } from './transferState'
+ 
+ const JOURNAL_KEY = 'risubard-pending-import-v1'
+@@ -113,5 +114,5 @@ export async function retryImportRollback() {
+ 
+ export async function runImport<T>(work: (transaction: ImportTransaction) => Promise<T>): Promise<T | null> {
+-    if (active || localStorage.getItem(JOURNAL_KEY)) {
++    if (active || localStorage.getItem(JOURNAL_KEY) || get(transferBusy)) {
+         checkImportRecovery()
+         throw new Error(language.importInstall.busy)
+
+diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
+--- a/src/ts/process/index.svelte.ts
++++ b/src/ts/process/index.svelte.ts
+@@ -1,3 +1,4 @@
+ import { captureGenerationTarget, createGenerationScope, type GenerationTarget } from "./generationTarget";
++import { transferBusy, syncSaveHold } from '../transferState';
+ import { isOocAssistantTurn, isOocToggleActive } from '../risubard/oocTurns'
+ import { captureChatContext } from '../risubard/chatContextCapture'
+@@ -38,4 +39,5 @@ import { forageStorage, readImage, refreshLiveFiles } from "../globalApi.svelte"
+ import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
+ import { waitForSendSync } from './sendPreparation';
++import { preSendSync } from '../nasSyncCoordinator';
+ import {
+     buildBoundedNarrativeInquiryFallback,
+@@ -1180,4 +1182,5 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+     requestSettings?: Database
+ } = {}):Promise<boolean> {
++    if (get(transferBusy) || get(syncSaveHold)) return false
+     const requestSettings = arg.requestSettings ?? { ...DBState.db }
+     const target = arg.target ?? captureGenerationTarget(DBState.db.characters[get(selectedCharID)])
+@@ -1203,5 +1206,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+     chatProcessStage.set(0)
+     const abortSignal = arg.signal ?? (new AbortController()).signal
+-    
++    // NAS sync never delays a send: `preSendSync` only refuses while an apply is left unresolved (hold kept); publish/pull run in the
++    // background after the save settles. The local send preparation above keeps its own unlimited, cancel-only wait.
++    if (!await preSendSync(abortSignal)) { if (!abortSignal.aborted) notifyError(language.chatSendPreparationFailed + ': NAS 동기화 적용이 끝나지 않았어요.'); return false }
++
+     // NOTE: `throwError()` can be called before these are populated (e.g. HypaV3 early validation errors).
+     // Keep them declared up-front to avoid TDZ ReferenceErrors in production builds.
+@@ -1310,4 +1316,5 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+         }
+     }
++    if (get(transferBusy) || get(syncSaveHold)) return false
+     const generationId = v4()
+     startGeneration(genKey, generationId)
+
+diff --git a/src/App.svelte b/src/App.svelte
+--- a/src/App.svelte
++++ b/src/App.svelte
+@@ -2,4 +2,6 @@
+     import { DynamicGUI, settingsOpen, sideBarStore, openPresetList, openModelPresetList, openModelProfileBrowser, openPersonaList, openPersonaManager, personaSelectCallback, openHypaV3PresetList, openThemePresetList, MobileGUI, loadedStore, alertStore, LoadingStatusState, bookmarkListOpen, popupStore, popUpEditorStore, promptAssistantOpen, characterAssistantOpen } from './ts/stores.svelte';
+     import Sidebar from './lib/SideBars/Sidebar.svelte';
++    import { transferBusy, transferStatus, syncBusyOwned } from './ts/transferState';
++    import { syncCoordinator } from './ts/nasSyncCoordinator';
+     import { DBState } from './ts/stores.svelte';
+     import ChatScreen from './lib/ChatScreens/ChatScreen.svelte';
+@@ -82,5 +84,6 @@
+ <!-- svelte-ignore a11y_click_events_have_key_events -->
+ <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+-<main class="flex bg-bgcolor w-full h-full max-w-100vw text-textcolor" ondragover={(e) => {
++<div class="flex h-full w-full flex-col">
++<main inert={$transferBusy} class="flex bg-bgcolor w-full h-full min-h-0 flex-1 max-w-100vw text-textcolor" ondragover={(e) => {
+     const dropEffect = getMainDropEffect(e)
+     e.preventDefault()
+@@ -341,2 +344,21 @@
+     <RequestStatusToaster />
+ </main>
++    {#if $transferBusy && $syncBusyOwned}
++        <!-- Automatic NAS sync (armed apply / startup recovery): an in-flow, non-modal status row that reserves its own space — nothing is
++             covered, not the composer, not the keyboard area. `inert` on <main> still protects the write admission for exactly as long as
++             the armed commit/recovery runs (no duration is promised). -->
++        <div class="shrink-0 flex items-center gap-3 border-t border-darkborderc bg-bgcolor px-3 py-1 text-sm text-textcolor" role="status" aria-live="polite" aria-busy="true" data-sync-status-row>
++            <p class="min-w-0 flex-1 truncate">{$transferStatus || 'NAS 동기화 변경을 저장하는 중…'}</p>
++            <!-- Reachable while the app is inert: pause takes effect once the current (armed) apply settles; the next cycle does not start. -->
++            <button class="shrink-0 rounded-md border border-darkborderc px-2 py-0.5 text-xs" onclick={() => { syncCoordinator().pause(true); transferStatus.set('이번 적용이 끝나면 NAS 동기화를 일시 중지해요. 설정 → NAS 자동 동기화에서 다시 켤 수 있어요.') }}>이번 적용 뒤 일시 중지</button>
++        </div>
++    {/if}
++</div>
++    {#if $transferBusy && !$syncBusyOwned}
++        <!-- Manual transfer (file/USB/Wi-Fi receive or import): the user started it; the modal overlay stays. -->
++        <div class="fixed inset-0 z-[100000] flex items-center justify-center bg-bgcolor/60 p-4" role="alert" aria-busy="true">
++            <div class="rounded-lg bg-bgcolor p-6 text-textcolor flex flex-col gap-3 items-center">
++                <p>{$transferStatus || '받은 자료를 복구하는 중…'}</p>
++            </div>
++        </div>
++    {/if}
+
+diff --git a/src/ts/storage/database.svelte.ts b/src/ts/storage/database.svelte.ts
+--- a/src/ts/storage/database.svelte.ts
++++ b/src/ts/storage/database.svelte.ts
+@@ -2818,4 +2818,5 @@ export function normalizeChat(chat: Partial<Chat>): Chat {
+ 
+ export interface Chat{
++    risuTransferMedia?: { assets?: Record<string, string>; resolvedAssets?: Record<string, string>; inlays?: Record<string, string>; inlayOrigins?: Record<string, string> }
+     bardPainter?: import('../bardPainter/types').PainterChatData
+     message: Message[]
+
+diff --git a/src/lib/Setting/Pages/SystemBackup.svelte b/src/lib/Setting/Pages/SystemBackup.svelte
+--- a/src/lib/Setting/Pages/SystemBackup.svelte
++++ b/src/lib/Setting/Pages/SystemBackup.svelte
+@@ -1,3 +1,4 @@
+ <script lang="ts">
++    import TransferPanel from './TransferPanel.svelte'
+     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
+     import { DownloadIcon, UploadIcon, SettingsIcon } from '@lucide/svelte'
+@@ -43,4 +44,6 @@
+ </script>
+ 
++<TransferPanel />
++
+ <p class="text-textcolor2 text-sm mb-4">{language.backupTabDesc}</p>
+ 
+
+diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/DefaultChatScreen.svelte
+--- a/src/lib/ChatScreens/DefaultChatScreen.svelte
++++ b/src/lib/ChatScreens/DefaultChatScreen.svelte
+@@ -2,2 +2,4 @@
+ 
++    import { restoreOpenDeletion, acceptOpenDeletion } from 'src/ts/nasSync';
++    import { transferBusy, syncSaveHold } from 'src/ts/transferState';
+     import Suggestion from './Suggestion.svelte';
+@@ -1200,3 +1202,12 @@ import { isMobile } from 'src/ts/platform'
+     <main class="relative z-0 h-full min-w-0 flex-1" data-chat-pane use:trackNavigatorViewport>
+-    
++    {#if (currentChatSlot as any)?.risuSyncDeleted && currentCharacter}
++        <!-- NAS sync kept this open chat through a remote deletion: inline restore state, no navigation, no popup. -->
++        <div class="absolute left-2 right-2 top-2 z-30 flex flex-wrap items-center gap-2 rounded-lg border border-darkborderc bg-bgcolor/95 px-3 py-2 text-sm shadow" role="status" aria-live="polite" data-sync-deleted-banner>
++            <span class="min-w-0 flex-1">다른 기기에서 이 대화를 지웠어요. 이 기기에는 그대로 남아 있어요.</span>
++            <!-- Admission is the common helper's (transferUnavailable + busy ownership); the buttons also disable while anything runs. -->
++            <button type="button" class="rounded border border-darkborderc px-2 py-1 disabled:opacity-50" disabled={$transferBusy || $syncSaveHold || currentChatSlot.isStreaming || $doingChat} onclick={() => { void restoreOpenDeletion(currentCharacter.chaId, currentChatSlot.id!).catch(error => alertError(String(error))) }}>되살리기</button>
++            <button type="button" class="rounded border border-darkborderc px-2 py-1 disabled:opacity-50" disabled={$transferBusy || $syncSaveHold || currentChatSlot.isStreaming || $doingChat} onclick={() => { void acceptOpenDeletion(currentCharacter.chaId, currentChatSlot.id!).catch(error => alertError(String(error))) }}>삭제 적용</button>
++        </div>
++    {/if}
++
+     {#if DBState.db.nodeOnlyScrollButtonType !== 'off' && currentChat.length > 0}
+diff --git a/src/ts/risubard/memorySaveSlots.ts b/src/ts/risubard/memorySaveSlots.ts
+--- a/src/ts/risubard/memorySaveSlots.ts
++++ b/src/ts/risubard/memorySaveSlots.ts
+@@ -1,12 +1,8 @@
+ import type { Chat, Message } from '../storage/database.svelte'
+-import { Packr, Unpackr } from 'msgpackr/index-no-eval'
++import { encodeMemorySaveChat, decodeMemorySaveChat } from './memorySaveCodec'
+ import { invokeBrowserFetch } from './browserFetch'
+ import { rebindPainterChatScope } from '../bardPainter/chatScope'
+ 
+-const chatPacker = new Packr({ useRecords: false })
+-const chatUnpacker = new Unpackr({
+-    int64AsType: 'number',
+-    useRecords: false,
+-})
++export { encodeMemorySaveChat, decodeMemorySaveChat } from './memorySaveCodec'
+ const MEMORY_SAVE_REQUEST_TIMEOUT_MS = 10 * 60_000
+ 
+@@ -144,13 +140,5 @@ export function shouldConfirmMemorySaveLoad(
+ }
+ 
+-export function encodeMemorySaveChat(chat: Chat): Uint8Array {
+-    return chatPacker.pack(chat)
+-}
+-
+-export function decodeMemorySaveChat(bytes: Uint8Array): unknown {
+-    return chatUnpacker.unpack(bytes)
+-}
+-
+-function applyMemorySavePromptSettings(chat: Chat, currentChat?: Chat): void {
++export function applyMemorySavePromptSettings(chat: Chat, currentChat?: Chat): void {
+     // Save slots rewind story state, not the current sidebar preferences.
+     for (const key of [
+
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -104,5 +104,7 @@
+     "wavefile": "^11.0.0",
+     "web-streams-polyfill": "^3.3.3",
+-    "ws": "^8.18.3"
++    "ws": "^8.18.3",
++    "yauzl": "3.4.0",
++    "yazl": "3.3.1"
+   },
+   "devDependencies": {
+
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -90,4 +90,9 @@ jobs:
+             packages/risubard-core/
+             src/ts/risubard/
++            src/ts/preset/adapter/buildRequest.ts
++            src/ts/preset/adapter/auth.ts
++            src/ts/preset/adapter/error.ts
++            src/ts/preset/adapter/vertexEndpoint.ts
++            shared/play-set/
+             package.json
+             pnpm-lock.yaml
+@@ -124,4 +129,5 @@ jobs:
+           sparse-checkout: |
+             scripts
++            desktop-transfer
+ 
+       - name: Setup pnpm
+@@ -251,4 +257,14 @@ jobs:
+           rm -f launcher.res icon.ico
+ 
++      - name: Build bundled Windows transfer companion
++        if: matrix.platform == 'win'
++        shell: pwsh
++        run: |
++          $adbTools = Join-Path $env:ANDROID_HOME 'platform-tools'
++          if (!(Test-Path (Join-Path $adbTools 'adb.exe'))) { throw 'Android platform-tools are required for the bundled USB companion' }
++          dotnet publish desktop-transfer/src/RisuAI.ChatTransfer.WinForms/RisuAI.ChatTransfer.WinForms.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true "-p:AdbToolsPath=$adbTools" -o transfer-publish
++          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++          Copy-Item -LiteralPath transfer-publish/RisuAI-Chat-Transfer.exe -Destination portable/RisuAI-Chat-Transfer.exe
++
+       - name: Create macOS app bundle
+         if: matrix.platform == 'macos'
+
+diff --git a/server/node/risubard-memory-save.ts b/server/node/risubard-memory-save.ts
+--- a/server/node/risubard-memory-save.ts
++++ b/server/node/risubard-memory-save.ts
+@@ -83,5 +83,5 @@ function parseEventPreview(value: unknown): MemorySaveEventPreview {
+ }
+ 
+-function parseManifest(value: unknown): StoredMemorySaveManifest {
++export function parseMemorySaveManifest(value: unknown): StoredMemorySaveManifest {
+     if (!isRecord(value)) throw new Error('Invalid memory save manifest')
+     const hasEvent = value.latestEvent !== undefined
+@@ -204,5 +204,5 @@ async function validatedSave(
+     await safeFile(fileSystem, manifestPath, 'Memory save manifest')
+     await safeFile(fileSystem, chatPath, 'Memory save chat')
+-    const manifest = parseManifest(JSON.parse(
++    const manifest = parseMemorySaveManifest(JSON.parse(
+         await fileSystem.readFile(manifestPath, 'utf8')
+     ))
+@@ -374,5 +374,5 @@ export async function listMemorySaveSlots(input: {
+             await safeFile(fileSystem, manifestPath, 'Memory save manifest')
+             await safeFile(fileSystem, chatPath, 'Memory save chat')
+-            const manifest = parseManifest(JSON.parse(
++            const manifest = parseMemorySaveManifest(JSON.parse(
+                 await fileSystem.readFile(manifestPath, 'utf8')
+             ))
+@@ -461,5 +461,5 @@ export async function prepareMemorySaveLoad(input: {
+     await safeFile(fileSystem, manifestPath, 'Memory save manifest')
+     await safeFile(fileSystem, chatPath, 'Memory save chat')
+-    const manifest = parseManifest(JSON.parse(
++    const manifest = parseMemorySaveManifest(JSON.parse(
+         await fileSystem.readFile(manifestPath, 'utf8')
+     ))
+
+diff --git a/server/node/risubard-source-workspace.ts b/server/node/risubard-source-workspace.ts
+--- a/server/node/risubard-source-workspace.ts
++++ b/server/node/risubard-source-workspace.ts
+@@ -56,5 +56,5 @@ export function resolveSourceSnapshotWorkspace(
+ }
+ 
+-function resolveLegacySourceSnapshotWorkspace(
++export function resolveLegacySourceSnapshotWorkspace(
+     userDataDirectory: string,
+     characterId: string,
+
+diff --git a/src/ts/preset/adapter/buildRequest.ts b/src/ts/preset/adapter/buildRequest.ts
+--- a/src/ts/preset/adapter/buildRequest.ts
++++ b/src/ts/preset/adapter/buildRequest.ts
+@@ -91,5 +91,5 @@ function isSchemaValueValid(
+ }
+ 
+-function resolveEndpointUrl(
++export function resolveEndpointUrl(
+     snapshot: ResolvedModelProfileSnapshot,
+     userValues: Record<string, unknown>,
+
+diff --git a/server/node/file-kv.cjs b/server/node/file-kv.cjs
+--- a/server/node/file-kv.cjs
++++ b/server/node/file-kv.cjs
+@@ -244,4 +244,17 @@ function createFileKv(options = {}) {
+     }
+ 
++    async function kvExportFile(key, destination) {
++        const entry = entryOf(key);
++        if (!entry) return false;
++        const source = resolveInside(dataRoot, path.join('kv', 'objects', entry.object));
++        if ((await inspectFileAsync(source)).hash !== entry.object) throw new Error(`Content object checksum mismatch for ${key}`);
++        await fsp.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
++        if ((await inspectFileAsync(destination)).hash !== entry.object) {
++            await fsp.unlink(destination);
++            throw new Error(`Content object changed while exporting ${key}`);
++        }
++        return true;
++    }
++
+     function kvSet(key, value) {
+         const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
+@@ -607,4 +620,5 @@ function createFileKv(options = {}) {
+     return {
+         kvGet,
++        kvExportFile,
+         kvSet,
+         kvSetMany,
+
+diff --git a/server/node/queued-save-debounce.cjs b/server/node/queued-save-debounce.cjs
+--- a/server/node/queued-save-debounce.cjs
++++ b/server/node/queued-save-debounce.cjs
+@@ -1,7 +1,17 @@
+ 'use strict';
+ 
+-function createQueuedSaveDebounce({ timers, queue, delay, onError }) {
+-    return function schedule(key, persist) {
++// The single writer may refuse a queued run before `persist` starts: the transfer/NAS write gate
++// (queueStorageOperation → assertWrite) answers 423 `NAS_SYNC_BUSY` / `TRANSFER_BUSY` while an apply
++// is armed or an exclusive sync step runs. That is a deferral, not a persist failure — the dirty cache
++// is still in memory — so the save is rescheduled instead of being reported through `onError`.
++// Only those gate codes are deferred, and only when `persist` never started; anything `persist` throws
++// (a genuine I/O failure) still goes to `onError`.
++const GATE_CODES = new Set(['NAS_SYNC_BUSY', 'TRANSFER_BUSY']);
++const deferredByGate = error => error?.status === 423 && GATE_CODES.has(error?.code);
++
++function createQueuedSaveDebounce({ timers, queue, delay, onError, onDeferred }) {
++    function arm(key, persist, attempt) {
+         if (timers[key]) clearTimeout(timers[key]);
++        let started = false;
+         const timer = setTimeout(() => {
+             queue(async () => {
+@@ -9,4 +19,5 @@ function createQueuedSaveDebounce({ timers, queue, delay, onError }) {
+                 // waiting for the single writer. Capture the write scope only now.
+                 if (timers[key] !== timer) return;
++                started = true;
+                 try {
+                     await persist();
+@@ -14,8 +25,17 @@ function createQueuedSaveDebounce({ timers, queue, delay, onError }) {
+                     if (timers[key] === timer) delete timers[key];
+                 }
+-            }).catch(onError);
++            }).catch(error => {
++                if (started || !deferredByGate(error)) { onError(error); return; }
++                // Refused before persist began. Retry only while this timer is still the pending save:
++                // a flush, full write or newer timer that superseded it already covers the cache, and a
++                // late gate error about it must neither persist again nor surface a warning.
++                if (timers[key] !== timer) return;
++                if (onDeferred) onDeferred(error, attempt + 1);
++                arm(key, persist, attempt + 1);
++            });
+         }, delay);
+         timers[key] = timer;
+-    };
++    }
++    return function schedule(key, persist) { arm(key, persist, 0); };
+ }
+ 
+

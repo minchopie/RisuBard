@@ -43,7 +43,7 @@ test('send preflight failure is a visible false result before any generation sta
     const dependencies = {
         refreshLiveFiles, notifyError, waitForSendSync, captureGenerationTarget, createGenerationScope,
         DBState: { db: { characters: [{ chaId: 'bot', chatPage: 0, chats: [{ id: 'A' }] }] } },
-        get: () => 0, selectedCharID: {}, language: {}, forageStorage: {},
+        get: () => 0, selectedCharID: {}, language: {}, forageStorage: {}, transferBusy: {}, syncSaveHold: {},
     }
     const run = new Function(...Object.keys(dependencies), `${preflight}; return preflight`)(...Object.values(dependencies))
     await expect(run()).resolves.toBe(false)

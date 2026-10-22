@@ -45,6 +45,7 @@
     import type { character as Character } from 'src/ts/storage/database.svelte'
     import { createRisuTriggerActivation } from './risuTriggerActivation'
     import { Popover } from 'bits-ui'
+    import { isMobile } from 'src/ts/platform'
 
     let viewportWidth = $state(window.innerWidth)
     let mobileActionsOpen = $state(false)
@@ -1621,13 +1622,13 @@
      style={isLastMemory ? `border-top:${DBState.db.memoryLimitThickness}px solid color-mix(in srgb, var(--color-borderc) 70%, transparent);` : ''}
      onpointerdowncapture={buttonTriggerActivation.pointerdown}
      onclickcapture={buttonTriggerActivation.click}>
-    <div class="text-textcolor grow max-w-full sm:px-4 py-4">
+    <div class="text-textcolor grow max-w-full {isMobile ? '' : 'sm:px-4'} py-4">
         {#if !blankMessage}
             {@const nodeOnlyWidthClass =
-                DBState.db.nodeOnlyStandardChatWidth === 'full' ? 'max-w-full' :
+                isMobile || DBState.db.nodeOnlyStandardChatWidth === 'full' ? 'max-w-full' :
                 DBState.db.nodeOnlyStandardChatWidth === 'wide' ? 'max-w-6xl' :
                 'max-w-3xl'}
-            <div class="flex flex-col w-full min-w-0 {nodeOnlyWidthClass} mx-auto py-6 px-4 sm:px-8 bg-bgcolor sm:rounded-lg">
+            <div class="flex flex-col w-full min-w-0 {nodeOnlyWidthClass} mx-auto py-6 px-4 {isMobile ? '' : 'sm:px-8'} bg-bgcolor sm:rounded-lg">
                 <!-- Header: icon + name -->
                 <div class="flex items-center gap-3 mb-4">
                     {@render senderIcon({rounded: DBState.db.roundIcons})}

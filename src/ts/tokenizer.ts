@@ -1,5 +1,6 @@
 import type { Tiktoken } from "@dqbd/tiktoken";
 import type { Tokenizer } from "@mlc-ai/web-tokenizers";
+import { localAI } from './localAI.svelte';
 import { type character, type Chat, getCurrentCharacter, getDatabase } from "./storage/database.svelte";
 import type { MultiModal, OpenAIChat } from "./process/index.svelte";
 import { supportsInlayImage } from "./process/files/inlays";
@@ -72,6 +73,7 @@ export async function encodeWithTokenizer(data: string, tokenizerType: string): 
 }
 
 export async function encode(data:string):Promise<(number[]|Uint32Array|Int32Array)>{
+    if (localAI.available && localAI.enabled) return tokenizeGGUFModel(data);
     const db = getDatabase();
     const modelInfo = getModelInfo(db.aiModel);
     const pluginTokenizer = pluginV2.providerOptions.get(db.currentPluginProvider)?.tokenizer ?? "none";

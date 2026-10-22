@@ -1,4 +1,6 @@
 import { Ollama } from 'ollama/dist/browser.mjs';
+import { localAI, localAIPreset, LOCAL_AI_PRESET } from 'src/ts/localAI.svelte';
+import { localAIFetch } from 'src/ts/localAI';
 import { buildOllamaChatRequest, createOllamaFetch } from './ollamaRequest';
 import { language } from "../../../lang";
 import { globalFetch, fetchNative } from "../../globalApi.svelte";
@@ -178,9 +180,9 @@ export async function requestChatData(arg:RequestDataArgumentExtended, model:Mod
     const retryLimit = normalizeRequestRetryLimit(db.requestRetrys)
     const internalOutput = Boolean(arg.schema) || arg.logSource === 'memory'
     const fallBackModels = createModelAttemptOrder(
-        safeStructuredClone(db?.fallbackModels?.[model] ?? [])
+        localAI.available && localAI.enabled ? [] : safeStructuredClone(db?.fallbackModels?.[model] ?? [])
     )
-    const tools = arg.tools ?? (await getTools())
+    const tools = localAI.available && localAI.enabled ? [] : arg.tools ?? (await getTools())
     let da:requestDataResponse
 
     if(arg.escape){
@@ -449,6 +451,14 @@ export function reformater(formated:OpenAIChat[],modelInfo:LLMModel|LLMFlags[]){
 export async function requestChatDataMain(arg:requestDataArgument, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
     const db = arg.requestSettings ?? getDatabase()
     const targ:RequestDataArgumentExtended = arg
+
+    if (localAI.available && localAI.enabled) {
+        if (arg.formated.some(message => message.multimodals?.length)) return {
+            type: 'fail', noRetry: true, fallbackEligible: false,
+            result: '현재 기기 내 AI는 텍스트 모델을 사용해요. 이미지 첨부를 빼거나 온라인 모드로 전환해 주세요.',
+        }
+        return requestModelPreset(targ, localAIPreset(), abortSignal, model)
+    }
 
     // P4 dual-regime dispatch (plan v6 §7). Resolve the per-chat ModelPreset
     // binding BEFORE any classic model selection so a binding chat never touches
@@ -820,7 +830,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         provider: preset.profileSnapshot.providerBaseId,
         streaming: resolvePresetStreaming(preset, arg),
     })
-    const proxiedFetch = makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route))
+    const onDevice = preset.id === LOCAL_AI_PRESET && localAI.available && localAI.enabled
+    const proxiedFetch = onDevice ? localAIFetch : makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route))
 
     // Tool gating. Three guards:
     //  1) Per-preset opt-in (preset.toolUse, default OFF) — the hard regression
@@ -860,7 +871,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // (chat already generating) surfaces as an error instead, since falling
     // back would double-generate. All defaults off → proxiedFetch →
     // byte-identical to the previous behavior.
-    const useServerJob = getDatabase().nodeOnlyServerSideRequests === true
+    const useServerJob = !onDevice && getDatabase().nodeOnlyServerSideRequests === true
         && !tools && !arg.previewBody
     const transportFetch = useServerJob
         ? makeJobFetch({

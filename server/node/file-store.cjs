@@ -263,6 +263,33 @@ function writeJournal(journalPath, value) {
     replaceAtomic(journalPath, Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'));
 }
 
+function preserveRecoveryRevision(root, journal, entry, target) {
+    if (!fs.existsSync(target)) return;
+    const digest = checksumFile(target);
+    const key = checksum(`${entry.path}\0${digest}`);
+    const directory = resolveInside(root, `trash/transaction-recovery/${journal.id}/${key}`);
+    const destination = path.join(directory, 'original');
+    fs.mkdirSync(directory, { recursive: true });
+    // A restart has no observer. Keep every replaced revision beyond the next .bak rotation.
+    writeJournal(path.join(directory, 'mapping.json'), {
+        source: entry.path, destination: path.relative(root, destination).split(path.sep).join('/'), checksum: digest,
+    });
+    if (fs.existsSync(destination)) {
+        if (!matchesChecksum(destination, digest)) throw new Error(`Recovery copy checksum mismatch: ${entry.path}`);
+    } else {
+        const temp = `${destination}.${crypto.randomUUID()}.tmp`;
+        try {
+            copySynced(target, temp);
+            if (!matchesChecksum(temp, digest)) throw canonicalChangedError(entry.path);
+            fs.renameSync(temp, destination);
+            fsyncDirectory(directory);
+        } finally {
+            fs.rmSync(temp, { force: true });
+        }
+    }
+    if (!matchesChecksum(target, digest)) throw canonicalChangedError(entry.path);
+}
+
 function publishTransaction(root, journal, journalPath, options = {}) {
     let published = 0;
     let skipped = 0;
@@ -330,6 +357,7 @@ function publishTransaction(root, journal, journalPath, options = {}) {
         if (!fs.existsSync(entry.staged)) {
             throw new Error(`Transaction stage is missing for ${entry.path}`);
         }
+        if (options.recovering) preserveRecoveryRevision(root, journal, entry, target);
         preserveBackup(target);
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.renameSync(entry.staged, target);
@@ -412,6 +440,10 @@ function commitTransaction(root, operations, options = {}) {
     if (!Array.isArray(operations) || operations.length === 0) {
         return { committed: 0, published: 0, skipped: 0, stagedBytes: 0 };
     }
+    const journalDir = resolveInside(root, '.journal');
+    if (fs.existsSync(journalDir) && fs.readdirSync(journalDir).some(name => name.endsWith('.json'))) {
+        throw Object.assign(new Error('Recover the pending transaction before committing another save'), { code: 'PENDING_TRANSACTION' });
+    }
     const clearedPaths = [];
     const prepared = operations.map((operation, operationIndex) => {
         reportImportProgress('verify-files', operationIndex, operations.length, operation.path);
@@ -489,7 +521,6 @@ function commitTransaction(root, operations, options = {}) {
             stagedBytes: 0,
         };
     }
-    const journalDir = resolveInside(root, '.journal');
     fs.mkdirSync(journalDir, { recursive: true });
     const id = crypto.randomUUID();
     const stageDir = path.join(journalDir, `${id}.stage`);
@@ -548,13 +579,17 @@ function commitTransaction(root, operations, options = {}) {
 function recoverTransactions(root) {
     const journalDir = resolveInside(root, '.journal');
     if (!fs.existsSync(journalDir)) return { recovered: 0 };
-    const journals = fs.readdirSync(journalDir).filter(name => name.endsWith('.json')).sort();
+    const journals = fs.readdirSync(journalDir).filter(name => name.endsWith('.json')).map(name => ({
+        name, journal: JSON.parse(fs.readFileSync(path.join(journalDir, name), 'utf8')),
+    })).sort((a, b) => (a.journal.createdAt || 0) - (b.journal.createdAt || 0) || a.name.localeCompare(b.name));
     let recovered = 0;
-    for (const name of journals) {
+    for (const { name, journal } of journals) {
         const journalPath = path.join(journalDir, name);
-        const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
         const stageDir = path.join(journalDir, `${journal.id}.stage`);
-        publishTransaction(root, journal, journalPath);
+        // An in-process retry retains its write observer; do not replace a later external edit.
+        assertTargetsUnobserved(root, journal.entries.filter(entry => entry.action !== 'replace'
+            || !matchesChecksum(resolveInside(root, entry.path), entry.checksum)));
+        publishTransaction(root, journal, journalPath, { recovering: true });
         cleanupJournal(journalPath, stageDir);
         recovered += 1;
     }

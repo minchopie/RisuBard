@@ -227,6 +227,9 @@ export class NodeStorage{
     private liveMonitoringGeneration = 0
     private liveSnapshotRequired = false
     pendingSaveRequests = 0
+    transferTransaction: string | undefined
+    /** Active NAS sync apply transaction; its id travels with every save so the server's sync write gate admits only that save. */
+    syncTransaction: string | undefined
 
     private connectionFetch(path: string, init: RequestInit) {
         // No time limit: a busy server answers late, it is not broken.
@@ -238,10 +241,33 @@ export class NodeStorage{
     private async saveRequest(path: string, init: RequestInit) {
         this.pendingSaveRequests++
         try {
-            return await this.authFetch(path, init)
+            // Identity of this write: ordinary (no sync transaction) and whatever manual-transfer transaction it started under. A retry
+            // is sent only while both are unchanged, re-checked AFTER each wait and BEFORE retransmitting — authFetch stamps headers from
+            // the live fields, so a transaction that appeared meanwhile would turn stale buffered data into that apply's own save.
+            const identity = () => `${this.syncTransaction ?? ''}\u0000${this.transferTransaction ?? ''}`
+            const until = Date.now() + NodeStorage.SYNC_BUSY_WAIT_MS, started = identity(), ordinary = !this.syncTransaction
+            for (;;) {
+                const response = await this.authFetch(path, init)
+                // 423 NAS_SYNC_BUSY: the server is inside an exclusive sync step (snapshot, bootstrap, plan, resolve…) that must not
+                // interleave with ordinary writes. That is an ordering signal, not a failure: the write waits behind the step and is
+                // sent again unchanged once the gate clears. Bodies here are buffers/strings (re-sendable); a stream cannot be
+                // replayed and keeps the old behaviour. The sync apply's own writes carry x-nas-sync-id and are never answered this way.
+                // Only a request that was ordinary at its first attempt is resent, and only while it is still ordinary: a transaction
+                // header appearing meanwhile would let stale buffered data pass the gate as the new apply's own save.
+                if (response.status !== 423 || !ordinary || identity() !== started || Date.now() >= until || init.body instanceof ReadableStream || !await NodeStorage.isSyncBusy(response)) return response
+                await new Promise(resolve => setTimeout(resolve, NodeStorage.SYNC_BUSY_RETRY_MS))
+                init.signal?.throwIfAborted()
+                if (identity() !== started) return response // changed during the wait: the previous 423 stands, nothing is resent
+            }
         } finally {
             this.pendingSaveRequests--
         }
+    }
+    static SYNC_BUSY_RETRY_MS = 500
+    static SYNC_BUSY_WAIT_MS = 10 * 60 * 1000 // an exclusive sync step is bounded by its own network limits; after this the 423 surfaces as before
+    /** Transient exclusive step (snapshot/bootstrap/plan…): wait. An armed plan (`transaction` present) is settled by recovery, never by waiting. */
+    private static async isSyncBusy(response: Response) {
+        try { const body = await response.clone().json(); return body?.code === 'NAS_SYNC_BUSY' && !body?.transaction } catch { return false }
     }
 
     async flushDatabase(keepalive = false, canonicalOnly = false, signal?: AbortSignal): Promise<void> {
@@ -254,6 +280,11 @@ export class NodeStorage{
             ? await this.authFetch(path, init)
             : await this.saveRequest(path, init)
         if (!response.ok) throw new Error(`Server database flush failed (${response.status})`)
+        const result = await response.json()
+        if (result.paused) throw new ConflictError(
+            'Server database flush is paused for external file changes',
+            result.etag ?? null, false, !result.externalChangesPending, Boolean(result.externalChangesPending),
+        )
     }
 
     private renewTimer: ReturnType<typeof setTimeout> | undefined
@@ -406,6 +437,8 @@ export class NodeStorage{
         headers.set('risu-auth', await this.createAuth())
         init.signal?.throwIfAborted()
         headers.set('x-session-id', NodeStorage.sessionId)
+        if (this.transferTransaction) headers.set('x-play-transfer-id', this.transferTransaction)
+        if (this.syncTransaction) headers.set('x-nas-sync-id', this.syncTransaction)
         if (this.importProgressId) headers.set('x-import-id', this.importProgressId)
         if (isUserActive()) headers.set('x-user-active', '1')
 
@@ -416,7 +449,9 @@ export class NodeStorage{
         init.signal?.throwIfAborted()
 
         if (response.status === 423) {
-            window.dispatchEvent(new CustomEvent('risu-session-deactivated'))
+            const failure = await response.clone().json().catch(() => ({}))
+            // Local transfer/sync write gates answer 423 too; only a real session takeover deactivates this tab.
+            if (!['TRANSFER_BUSY', 'NAS_SYNC_BUSY'].includes(failure.code)) window.dispatchEvent(new CustomEvent('risu-session-deactivated'))
         }
 
         if(retry && await this.shouldRetryAuth(response)){
@@ -428,6 +463,20 @@ export class NodeStorage{
         }
 
         return response
+    }
+
+    async localAIRequest(path: string, init: RequestInit = {}): Promise<Response> {
+        if (!['', '/model', '/chat/completions', '/tokenize'].includes(path)) throw new Error('Invalid local AI route')
+        return this.authFetch('/api/local-ai' + path, init)
+    }
+
+    async syncRequest(path: string, init: RequestInit = {}): Promise<Response> {
+        if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid sync route')
+        return this.authFetch('/api/nas-sync' + path, init)
+    }
+    async transferRequest(path: string, init: RequestInit = {}): Promise<Response> {
+        if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid transfer route')
+        return this.authFetch('/api/play-transfer' + path, init)
     }
 
     async setItem(key:string, value:Uint8Array, etag?:string): Promise<string | null> {

@@ -55,7 +55,7 @@ export function resolveSourceSnapshotWorkspace(
     }
 }
 
-function resolveLegacySourceSnapshotWorkspace(
+export function resolveLegacySourceSnapshotWorkspace(
     userDataDirectory: string,
     characterId: string,
     chatId: string

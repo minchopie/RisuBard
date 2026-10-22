@@ -7,6 +7,7 @@
         type AISettingsSectionId,
     } from 'src/ts/setting/aiSettingsSections'
     import BotSettings from './Pages/BotSettings.svelte'
+    import LocalAISettings from './Pages/LocalAISettings.svelte'
     import ModelPresetSettings from './Pages/Model/ModelPresetSettings.svelte'
     import OtherBotSettings from './Pages/OtherBotSettings.svelte'
     import SettingsSectionTabs from 'src/lib/UI/GUI/SettingsSectionTabs.svelte'
@@ -39,6 +40,7 @@
         title={language.settingsWorkspace.aiWorkspace.title}
         description={language.settingsWorkspace.aiWorkspace.description}
     >
+        <LocalAISettings />
         <SettingsSectionTabs
             tabs={sectionTabs}
             selected={activeRoute}
