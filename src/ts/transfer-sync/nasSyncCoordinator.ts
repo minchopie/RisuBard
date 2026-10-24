@@ -1,6 +1,6 @@
 import { get, writable, type Unsubscriber } from 'svelte/store'
 import { canonicalSaveSettled, transferStatus, syncSaveHold } from './transferState'
-import { applySync, pullSync, publishSync, snapshotSync, syncStatus, activityBlocksSync, reportSyncNetwork, pendingRootsSync, activeChatSignature, releaseSyncPlan, type SyncApplyGuard } from './nasSync'
+import { applySync, retrySyncApply, pullSync, publishSync, snapshotSync, syncStatus, activityBlocksSync, reportSyncNetwork, pendingRootsSync, activeChatSignature, releaseSyncPlan, type SyncApplyGuard } from './nasSync'
 import { transferUnavailable } from './playTransfer'
 import { isNodeServer } from '../platform'
 import { alertStore, selectedCharID } from '../stores.svelte'
@@ -31,6 +31,7 @@ export interface CoordinatorOptions {
     visible?: () => boolean; online?: () => boolean; supported?: () => boolean
     status?: typeof syncStatus; snapshot?: typeof snapshotSync; publish?: typeof publishSync; pull?: typeof pullSync; apply?: typeof applySync; pendingRoots?: typeof pendingRootsSync; release?: typeof releaseSyncPlan
     network?: (signal?: AbortSignal) => Promise<unknown>
+    retryApply?: typeof retrySyncApply
     /** Manual transfer/import in progress or an unresolved hold: no sync work at all. */
     blocked?: () => boolean
     /** Generation/streaming/import: no snapshot, no apply; publish/pull still run. */
@@ -42,7 +43,7 @@ export interface CoordinatorOptions {
     /** "<character>/<chat>" on screen (for the deferred-chat bookkeeping). */
     activeChat?: () => string
 }
-export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download' }
+export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number }
 export type SafeWindow = { window: SyncApplyGuard['window']; epoch: number }
 const DEFAULT_BACKOFF = [5_000, 15_000, 60_000, 300_000]
 let instance: ReturnType<typeof createSyncCoordinator> | null = null
@@ -58,7 +59,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         // throws "Illegal invocation" (Node and fake timers do not, which hid it).
         setTimer: ((fn: () => void, ms: number) => setTimeout(fn, ms)) as typeof setTimeout, clearTimer: ((t: ReturnType<typeof setTimeout>) => clearTimeout(t)) as typeof clearTimeout,
         visible: () => typeof document === 'undefined' || !document.hidden, online: () => typeof navigator === 'undefined' || navigator.onLine !== false,
-        supported: () => isNodeServer, status: syncStatus, snapshot: snapshotSync, publish: publishSync, pull: pullSync, apply: applySync, pendingRoots: pendingRootsSync, release: releaseSyncPlan, network: reportSyncNetwork,
+        supported: () => isNodeServer, status: syncStatus, snapshot: snapshotSync, publish: publishSync, pull: pullSync, apply: applySync, retryApply: retrySyncApply, pendingRoots: pendingRootsSync, release: releaseSyncPlan, network: reportSyncNetwork,
         // A foreign manual transfer/import or an unresolved hold blocks everything; generation alone does not (handled by `generating`).
         blocked: () => (transferUnavailable() && !activityBlocksSync()) || get(syncSaveHold),
         generating: () => activityBlocksSync(), alerting: () => get(alertStore).type !== 'none',
@@ -96,13 +97,14 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         if (state.running) return 'running'
         if (!o.visible()) { state.lastOutcome = 'hidden'; return 'hidden' } // no background work; the visibility listener resumes
         if (o.blocked()) { state.lastOutcome = 'busy'; schedule(Math.min(o.pollMs, 5_000)); return 'busy' } // manual transfer/import or an unresolved hold: try again shortly
-        if (direction !== 'both' && o.generating()) { state.lastOutcome = 'deferred'; publish(); return 'deferred' } // manual actions must capture settled local edits first
+        if (direction === 'upload' && o.generating()) { state.lastOutcome = 'deferred'; publish(); return 'deferred' } // upload must capture settled local edits first; download can receive and wait
         const generation = state.generation, mine = controller = new AbortController(), signal = mine.signal
         const onExternal = () => mine.abort(new Cancelled('cancelled'))
         if (external) { if (external.aborted) onExternal(); else external.addEventListener('abort', onExternal, { once: true }) }
         // Boundary guard: a late response after disable/pause/stop (new generation) or an abort never proceeds to the next step.
         const boundary = () => { if (generation !== state.generation || !active()) throw new Cancelled('sync cycle invalidated'); if (signal.aborted) throw signal.reason ?? new Error('sync network deadline') }
         const interacted = () => !safe || o.interactions() > safe.epoch
+        let receiveOnly = direction === 'download' && o.generating()
         state.running = true; state.direction = direction; state.lastWindow = safe?.window ?? ''; publish()
         let stage = 'status', deadline: ReturnType<typeof setTimeout> | null = null
         const run = (async () => {
@@ -112,7 +114,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 boundary()
                 const status = await o.status(signal); boundary()
                 if (!status.enabled) { state.enabled = false; stopTimers(); state.lastOutcome = 'disabled'; return 'disabled' }
-                if (direction !== 'both' && o.generating()) { state.lastOutcome = 'deferred'; schedule(o.pollMs); return 'deferred' }
+                if (direction === 'upload' && o.generating()) { state.lastOutcome = 'deferred'; schedule(o.pollMs); return 'deferred' }
+                receiveOnly ||= direction === 'download' && o.generating()
                 // A plan the server still holds: `prepared` means nothing was armed (typically our bounded wait gave up before the /plan answer
                 // arrived) — release it now so snapshot/preview are not wedged; `saving`/`committed` is an ARMED journal that only finish/recovery
                 // may settle — this cycle does no local work and reports it, never a rollback.
@@ -120,6 +123,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     if (status.plan.phase === 'prepared') { stage = 'release'; await o.release(status.plan.transaction, signal); boundary() }
                     else { state.lastOutcome = 'recovery-pending'; state.attention = 'recovery-pending'; state.lastCycleAt = o.now(); if (generation === state.generation) schedule(o.pollMs); return state.lastOutcome }
                 }
+                receiveOnly ||= direction === 'download' && o.generating()
                 // A lost protected master (status.vault.missing) is never worked around: nothing is published until a trusted re-share.
                 const role = status.role ?? null, vaultOrigin = status.vault?.origin ?? null, keyReady = !status.vault?.missing && (role === 'authority' || vaultOrigin === 'shared')
                 let attention = ''
@@ -127,7 +131,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // Settled local edits become causal revisions before anything incoming is applied; the joining device waits for the shared key
                     // before publishing its own encrypted history. The snapshot is skipped (not the publish) while a generation/import runs: the
                     // next settled save schedules it; edits made meanwhile are simply part of that later snapshot.
-                    if (!o.generating()) { stage = 'snapshot'; await o.snapshot(signal); boundary() }
+                    if (!receiveOnly && !o.generating()) { stage = 'snapshot'; await o.snapshot(signal); boundary() }
                     if (direction !== 'download') {
                         stage = 'publish'; const report = await o.publish(signal); boundary()
                         if (report?.rotated) attention = 'rotated'
@@ -151,17 +155,18 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 stage = 'preview'; const preview = await o.pendingRoots(signal); boundary()
                 state.pendingRoots = preview.roots.length + (preview.plan ? 1 : 0)
                 let outcome = 'pulled'
-                if (!state.pendingRoots) { outcome = 'empty'; state.deferredForChat = '' }
+                if (!state.pendingRoots) { outcome = attention.includes('incoming-review') || status.conflicts ? 'review-needed' : 'empty'; state.deferredForChat = '' }
                 else if (!safe) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' } // waits for a lifecycle window (chat open, foreground, manual)
-                else if (o.generating() || o.alerting() || interacted()) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' }
+                else if (receiveOnly || o.generating() || o.alerting() || interacted()) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' }
                 else {
                     stage = 'apply'
                     // Large Wiki plans may take longer without blocking play. Bound client preparation after the server answers.
                     const result = await o.apply(true, signal, { window: safe.window, interacted, planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
                     if (result.state === 'deferred' && signal.aborted && /deadline/i.test(String(signal.reason))) throw signal.reason
                     outcome = result.state
+                    state.pendingReview = result.pending?.length ?? 0; state.keptDeletions = result.keptDeletions?.length ?? 0
                     if (result.state === 'deferred-active-chat') state.deferredForChat = o.activeChat() || '-'
-                    else if (result.state === 'applied' || result.state === 'empty') state.deferredForChat = ''
+                    else if (result.state === 'applied' || result.state === 'applied-pending' || result.state === 'empty') state.deferredForChat = ''
                 }
                 state.lastOutcome = (keyReady ? '' : 'key-pending:') + outcome
                 state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
@@ -194,6 +199,17 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
     const lifecycle = (window: SyncApplyGuard['window'], reason: string) => { if (!active()) return; const safe = openWindow(window); if (state.running) { pendingWindow = pendingWindow ?? safe; return } void cycle(reason, undefined, safe) }
     return {
         state, cycle,
+        /** Explicit retry remains available while paused/held; it only settles the same transaction, never starts a new transfer. */
+        async retryApply() {
+            if (state.running) return 'running'
+            state.running = true; publish()
+            try {
+                const result = await o.retryApply()
+                state.lastOutcome = result.state; state.pendingReview = result.pending?.length ?? 0; state.keptDeletions = result.keptDeletions?.length ?? 0
+                state.lastError = result.error ?? ''; state.lastCycleAt = o.now()
+                return result.state
+            } finally { state.running = false; publish(); schedule(Math.min(o.pollMs, 5_000)) }
+        },
         /** The user (re)opened a chat: a safe window for that chat (and anything else waiting). Wired to `risubard-chat-opened` and character switches. */
         chatOpened() { lifecycle('reopen', 'reopen') },
         /** Idempotent: a second start is a no-op (no timer or listener duplication). A stop during the initial probe wins. */

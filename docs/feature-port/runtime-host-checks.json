@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-17",
+  "baseline": "64ebfb2397188ae30f88dd2e8b25747192ccbb4b",
+  "checks": {
+    "baselineWebBuild": "passed",
+    "embeddedServerTests": 3,
+    "hostAuth": "existing login -> session HttpOnly/SameSite cookie -> test_auth success",
+    "nativeBootstrapWriter": "free",
+    "embeddedSelfUpdate": "409",
+    "embeddedTunnel": "409",
+    "runtimeProbe": [
+      "crypto",
+      "msgpack",
+      "image WASM",
+      "Lua WASM",
+      "streaming",
+      "disk space",
+      "two successive persistence runs"
+    ]
+  },
+  "boundaries": {
+    "apkInstalled": false,
+    "androidRuntimeProbe": false,
+    "fullFeaturePort": false,
+    "realTransfer": false,
+    "elf16k": "prebuilt failed; NDK build running",
+    "release": false
+  }
+}

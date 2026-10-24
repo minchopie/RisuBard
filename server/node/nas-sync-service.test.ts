@@ -957,3 +957,42 @@ test('same messages with two Wiki revisions do not create duplicate chats, expos
     await newcomer.service.resolveConflict({ root: choice.root, keep: choice.variants[0].heads[0] }); await settle(newcomer);
     expect(newcomer.db().characters[0].chats).toHaveLength(1);
 })
+
+
+test('last applied timestamp requires saved data and finished memory, survives reopen, and is not changed by receiving', async t => {
+    const dav = fixtureDav(); await seedTablet(t, dav)
+    const phone = await device(t, dav, 'last-apply', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] })
+    phone.service.enable({ workspaceId: 'ws-fixture' })
+    expect(phone.service.status().lastAppliedAt).toBeNull()
+    await phone.service.pull(); expect(phone.service.status().lastAppliedAt).toBeNull()
+    const plan = await phone.service.plan(), db = applyPlanToDb(phone.db(), plan)
+    await phone.service.arm(plan.transaction, echoOf(plan, db))
+    expect(phone.service.status().lastAppliedAt).toBeNull()
+    phone.save(db); await phone.service.finish(plan.transaction, true)
+    expect(phone.service.status().lastAppliedAt).toBe(clock)
+    await phone.service.pull(); expect(phone.service.status().lastAppliedAt).toBe(clock)
+    expect((await phone.service.finish(plan.transaction, true)).completedAt).toBe(clock)
+    expect(phone.make().status().lastAppliedAt).toBe(clock)
+})
+
+
+test('a lost rollback response has a durable receipt and never clears a newer plan, including orphan journal cleanup', async t => {
+    const dav = fixtureDav(); await seedTablet(t, dav)
+    const phone = await device(t, dav, 'rollback-receipt', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] })
+    phone.service.enable({ workspaceId: 'ws-fixture' }); await phone.service.pull()
+    const plan = await phone.service.plan(), before = JSON.stringify(phone.db())
+    await phone.service.arm(plan.transaction, echoOf(plan, applyPlanToDb(structuredClone(phone.db()), plan)))
+    // Capture the actual journal path through the fixture tree, not a second copy of production path construction.
+    const journal = (await walk(join(phone.dataRoot, 'nas-sync'))).find(p => p.endsWith(plan.transaction + '.json') && !p.includes('recovery'))!
+    expect(journal).toBeTruthy(); const journalBytes = await readFile(journal)
+    expect((await phone.service.finish(plan.transaction, false)).state).toBe('rolled-back') // pretend this reply was lost
+    await writeFile(journal, journalBytes) // crash after durable verdict but before journal cleanup
+    const reopened = phone.make()
+    expect(reopened.status().plan).toBeNull(); expect(existsSync(journal)).toBe(false)
+    expect((await reopened.finish(plan.transaction, false)).state).toBe('rolled-back')
+    expect(reopened.status().lastAppliedAt).toBeNull(); expect(JSON.stringify(phone.db())).toBe(before)
+    const next = await reopened.plan()
+    expect((await reopened.finish(plan.transaction, false)).state).toBe('rolled-back')
+    expect(reopened.status().plan.transaction).toBe(next.transaction)
+    await reopened.finish(next.transaction, false)
+})

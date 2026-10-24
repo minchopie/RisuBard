@@ -1,0 +1,111 @@
+diff --git a/src/ts/parser/hiddenInlay.test.ts b/src/ts/parser/hiddenInlay.test.ts
+--- a/src/ts/parser/hiddenInlay.test.ts
++++ b/src/ts/parser/hiddenInlay.test.ts
+@@ -53,7 +53,7 @@
+     const code = ts.transpileModule(source.slice(start, source.indexOf('// Global resolve queue', start))
+         .replace('export function', 'function'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+     const cache = new Map<string, { type: string, url: string }>()
+-    const context: any = { blobUrlCache: cache, DBState: { db: {} } }
++    const context: any = { blobUrlCache: cache, DBState: { db: {} }, transferMediaScope: () => undefined }
+     runInNewContext(code, context)
+     const text = '{{inlay::scene}} {{inlayed::scene}} {{inlay::other}}'
+     const root = document.createElement('div')
+diff --git a/src/ts/parser/parser.svelte.ts b/src/ts/parser/parser.svelte.ts
+--- a/src/ts/parser/parser.svelte.ts
++++ b/src/ts/parser/parser.svelte.ts
+@@ -1,4 +1,5 @@
+ import DOMPurify from 'dompurify';
++import { resolvePlaySetHtml, transferMediaScope } from '../transferAssets';
+ import markdownit from 'markdown-it'
+ import { appVer, getCurrentCharacter, getDatabase, type Chat, type Database, type character, type customscript, type triggerscript } from '../storage/database.svelte';
+ import { DBState, selIdState } from '../stores.svelte';
+@@ -643,13 +644,14 @@
+     return box
+ }
+ 
+-export function parseInlayAssets(data:string){
++export function parseInlayAssets(data:string, scope = transferMediaScope()){
+     const inlayMatch = data.match(/{{(inlay|inlayed|inlayeddata)::(.+?)}}/g)
+     if(inlayMatch){
+         const occurrences = new Map<string, number>()
+         for(const inlay of inlayMatch){
+             const inlayType = inlay.startsWith('{{inlayed') ? 'inlayed' : 'inlay'
+-            const id = inlay.substring(inlay.indexOf('::') + 2, inlay.length - 2)
++            const sourceId = inlay.substring(inlay.indexOf('::') + 2, inlay.length - 2)
++            const id = typeof scope?.inlays?.[sourceId] === 'string' ? scope.inlays[sourceId] as string : sourceId
+             const occurrence = occurrences.get(id) ?? 0
+             occurrences.set(id, occurrence + 1)
+             const escapedId = id.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+@@ -896,7 +898,8 @@
+         })
+     }
+ 
+-    data = parseInlayAssets(data ?? '')
++    const mediaScope = transferMediaScope(char as character)
++    data = parseInlayAssets(data ?? '', mediaScope)
+ 
+     data = parseThoughtsAndTools(data)
+ 
+@@ -908,7 +911,7 @@
+             return data
+         }
+     }
+-    return trimMarkdown(data)
++    return resolvePlaySetHtml(trimMarkdown(data), mediaScope)
+ }
+ 
+ // LRU cache for DOMPurify + decodeStyle results.
+diff --git a/src/ts/process/lorebook.svelte.ts b/src/ts/process/lorebook.svelte.ts
+--- a/src/ts/process/lorebook.svelte.ts
++++ b/src/ts/process/lorebook.svelte.ts
+@@ -247,7 +247,7 @@
+                 newKeys.push(trimmed)
+             }
+         }
+-        arg.keys = newKeys
++        arg = {...arg, keys: newKeys}
+         let mList:{
+             source:string
+             prompt:string
+diff --git a/src/ts/process/lorebookRecursion.test.ts b/src/ts/process/lorebookRecursion.test.ts
+--- a/src/ts/process/lorebookRecursion.test.ts
++++ b/src/ts/process/lorebookRecursion.test.ts
+@@ -61,6 +61,25 @@
+ }
+ 
+ describe('Grimoire live prompt retrieval', () => {
++    it.each([
++        { key: 'needle', useRegex: false, messages: ['needle', 'middle', 'last'], depth: 4 },
++        { key: '/needle/i', useRegex: true, messages: ['unrelated', 'NEEDLE'], depth: 2 },
++        { key: '/needle/', useRegex: true, messages: ['unrelated', 'needle'], depth: 2 },
++        { key: '/a\\/b/u', useRegex: true, messages: ['unrelated', 'a/b'], depth: 2 },
++    ])('preserves USB search behavior: $key, depth $depth', async ({ key, useRegex, messages, depth }) => {
++        mockModuleSources.length = 0
++        const entry = { ...lore('portable search', key, 'MATCHED FACT'), useRegex }
++        const character = { chaId: 'search', name: 'Search', chatPage: 0, globalLore: [entry],
++            chats: [{ id: 'chat', localLore: [], message: messages.map(data => ({ role: 'user', data })) }] }
++        mockDBState.db = { username: 'user', loreBookDepth: depth, loreBookToken: 8000, characters: [character] }
++        const result = await loadLoreBookV3Prompt()
++        expect(result.actives.map(value => value.prompt)).toContain('MATCHED FACT')
++        expect(entry.key).toBe(key)
++        const repeated = await loadLoreBookV3Prompt()
++        expect(repeated.actives.map(value => value.prompt)).toContain('MATCHED FACT')
++        expect(entry.key).toBe(key)
++    })
++
+     it('keeps A history and local lore while B is selected during prompt retrieval', async () => {
+         mockModuleSources.length = 0
+         const a = { id: 'a', localLore: [lore('A lore', 'A keyword', 'A FACT')], message: [{ role: 'user', data: 'A keyword' }] }
+diff --git a/src/ts/process/scriptings.ts b/src/ts/process/scriptings.ts
+--- a/src/ts/process/scriptings.ts
++++ b/src/ts/process/scriptings.ts
+@@ -1241,7 +1241,8 @@
+ }
+ 
+ async function makeLuaFactory(){
+-    const _luaFactory = new LuaFactory()
++    // Wasmoon's environment bootstrap aborts when the host entrypoint contains Korean characters.
++    const _luaFactory = new LuaFactory(undefined, { _: './risubard' })
+     async function mountFile(name:string){
+         let code = ''
+         for(let i = 0; i < 3; i++){

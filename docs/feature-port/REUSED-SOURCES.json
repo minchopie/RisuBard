@@ -1,0 +1,124 @@
+{
+  "status": "v1 reusable core; not integrated with RisuBard application yet",
+  "files": [
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/protocol.ts",
+      "destination": "shared/play-set/protocol.ts",
+      "sha256": "6ed362f687535425bb73cacdcc42786bd63433a30c395fd11b42e0a1582000e5"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/snapshot.ts",
+      "destination": "shared/play-set/snapshot.ts",
+      "sha256": "e3a89a7634412911b24376684dc3daf517287afaf5f42191e2a68ef47fc684a7"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/apply.ts",
+      "destination": "shared/play-set/apply.ts",
+      "sha256": "d40368b3ede4a4af8454a5f789eb306497080ba04b7e5ef53d5d1aa825dc61ed"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/characterChats.ts",
+      "destination": "shared/play-set/characterChats.ts",
+      "sha256": "211e99fbb44333cb5546251b92c5682da7d4721a29e493ea6bb0fb3389db6d9f"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/importer.ts",
+      "destination": "shared/play-set/importer.ts",
+      "sha256": "04702302019751499d0e7a3b2268f4071b0597741c7251164f3fae0b73732cca"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/protocol.test.ts",
+      "destination": "shared/play-set/protocol.node-test.ts",
+      "sha256": "b45d8af88f9bd7bea6a5c6d173bf0136f574a3153ae6356e46b8ea7f2443e3f8"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/snapshot.test.ts",
+      "destination": "shared/play-set/snapshot.node-test.ts",
+      "sha256": "930c1c59dd4139d8043bdc6d7964deb3fcba2f14717dad274b60ada2d5822d4b"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/apply.test.ts",
+      "destination": "shared/play-set/apply.node-test.ts",
+      "sha256": "4e2edc984f2868cba795b1f5709d2718ba08f5f52940a36d50b73f28a195a024"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "sourceCommit": "0dd5b1d391fed94d8c548ce04edae8b1bcfcaa64",
+      "source": "shared/play-set/characterChats.test.ts",
+      "destination": "shared/play-set/characterChats.node-test.ts",
+      "sha256": "1b2d251e14eb7e346941bb741d50b28363986b34f59117e4ed33e780f7ea2972"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "source": "scripts/private-mobile/risuai-offline-local.patch",
+      "patchMember": "src/ts/process/request/privateMobileGeminiRequest.ts",
+      "destination": "src/ts/process/request/privateMobileGeminiRequest.ts",
+      "sha256": "2dd4e40ceebd10f1ea6b7a40d7654615c6d2f59d2682c7cbb8c29e27d25c8c04",
+      "patchSha256": "2722d3916440100958cc8a09d6fc768151497f127ed18ac5991eb2de2dff6b3f",
+      "sourceCommit": "348561310464fd267f7e858289e71b9dd9e9b542"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "source": "scripts/private-mobile/risuai-offline-local.patch",
+      "patchMember": "src/ts/process/request/privateMobileGeminiRequest.test.ts",
+      "destination": "src/ts/process/request/privateMobileGeminiRequest.test.ts",
+      "sha256": "69e3113fa0cb53f2e2739b8b2472e5a6d6062dbf3686c73be444acbdb0578820",
+      "patchSha256": "2722d3916440100958cc8a09d6fc768151497f127ed18ac5991eb2de2dff6b3f",
+      "sourceCommit": "348561310464fd267f7e858289e71b9dd9e9b542"
+    },
+    {
+      "sourceRepository": "minchopie/RisuAI-Mobile-Private",
+      "source": "scripts/private-mobile/risuai-lore-search.patch",
+      "destination": "src/ts/process/lorebook.svelte.ts",
+      "patchSha256": "da704db274d2a04782655073c942b7d9c30ef33770c00741e644e9c71c5d1427",
+      "note": "Three matching search changes applied; existing Bard logic retained.",
+      "sourceState": "untracked local patch"
+    },
+    {
+      "sourcePatch": "RisuAI-Mobile-Private/scripts/private-mobile/risuai-translation-reliability.patch",
+      "member": "src/ts/translator/privateMobileGoogleTranslate.ts",
+      "target": "src/ts/translator/privateMobileGoogleTranslate.ts",
+      "sha256": "607b11d3d1caf9e8651d1b5177bb6f2f6fdc9d70a1cb10ada36b555ab811539c",
+      "sourcePatchSha256": "aeb379d42fdf14d7be731df961dcc616bad3665b455f723e6d1a26b8c0bab3aa",
+      "sourceCommit": "348561310464fd267f7e858289e71b9dd9e9b542",
+      "reuse": "exact added-file extraction; target call site adapted for Android UA and transient cache handling"
+    },
+    {
+      "sourcePatch": "RisuAI-Mobile-Private/scripts/private-mobile/risuai-translation-reliability.patch",
+      "member": "src/ts/translator/privateMobileGoogleTranslate.test.ts",
+      "target": "src/ts/translator/privateMobileGoogleTranslate.test.ts",
+      "sha256": "8b17f3f31600181ec834a7f2b4c84dce6bd7358457204d6e0cca0d22e5633436",
+      "sourcePatchSha256": "aeb379d42fdf14d7be731df961dcc616bad3665b455f723e6d1a26b8c0bab3aa",
+      "sourceCommit": "348561310464fd267f7e858289e71b9dd9e9b542",
+      "reuse": "exact added-file extraction; target call site adapted for Android UA and transient cache handling"
+    },
+    {
+      "sourcePatch": "RisuAI-Mobile-Private/scripts/private-mobile/risuai-tablet-chat.patch",
+      "member": "src/ts/process/scriptings.ts makeLuaFactory",
+      "target": "src/ts/process/scriptings.ts",
+      "sourcePatchSha256": "9ab13ea12d55c9b382c90e46dbfcd2a7978d25781121a3f4b44d7fba8533ee7d",
+      "reuse": "ASCII Wasmoon bootstrap only; existing upstream VM cache and dynamic hook execution preserved",
+      "evidence": [
+        "tmp/lua-unicode-original.log",
+        "tmp/lua-unicode-ascii.log",
+        "tmp/lua-bootstrap-tests.log"
+      ]
+    }
+  ]
+}

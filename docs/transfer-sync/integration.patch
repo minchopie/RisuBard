@@ -703,7 +703,7 @@ diff --git a/src/App.svelte b/src/App.svelte
 @@ -2,4 +2,6 @@
      import { DynamicGUI, settingsOpen, sideBarStore, openPresetList, openModelPresetList, openModelProfileBrowser, openPersonaList, openPersonaManager, personaSelectCallback, openHypaV3PresetList, openThemePresetList, MobileGUI, loadedStore, alertStore, LoadingStatusState, bookmarkListOpen, popupStore, popUpEditorStore, promptAssistantOpen, characterAssistantOpen } from './ts/stores.svelte';
      import Sidebar from './lib/SideBars/Sidebar.svelte';
-+    import { transferBusy, transferStatus, syncBusyOwned } from './ts/transferState';
++    import { transferBusy, transferStatus, syncBusyOwned, syncApplyRecovery } from './ts/transferState';
 +    import { syncCoordinator } from './ts/nasSyncCoordinator';
      import { DBState } from './ts/stores.svelte';
      import ChatScreen from './lib/ChatScreens/ChatScreen.svelte';
@@ -715,15 +715,18 @@ diff --git a/src/App.svelte b/src/App.svelte
 +<main inert={$transferBusy} class="flex bg-bgcolor w-full h-full min-h-0 flex-1 max-w-100vw text-textcolor" ondragover={(e) => {
      const dropEffect = getMainDropEffect(e)
      e.preventDefault()
-@@ -341,2 +344,21 @@
+@@ -341,2 +344,24 @@
      <RequestStatusToaster />
  </main>
 +    {#if $transferBusy && $syncBusyOwned}
 +        <!-- Automatic NAS sync (armed apply / startup recovery): an in-flow, non-modal status row that reserves its own space — nothing is
 +             covered, not the composer, not the keyboard area. `inert` on <main> still protects the write admission for exactly as long as
 +             the armed commit/recovery runs (no duration is promised). -->
-+        <div class="shrink-0 flex items-center gap-3 border-t border-darkborderc bg-bgcolor px-3 py-1 text-sm text-textcolor" role="status" aria-live="polite" aria-busy="true" data-sync-status-row>
-+            <p class="min-w-0 flex-1 truncate">{$transferStatus || 'NAS 동기화 변경을 저장하는 중…'}</p>
++        <div class="shrink-0 flex flex-wrap items-center gap-3 border-t border-darkborderc bg-bgcolor px-3 py-1 text-sm text-textcolor" role="status" aria-live="polite" aria-busy="true" data-sync-status-row>
++            <p class="min-w-0 flex-1 {$syncApplyRecovery ? 'basis-full' : 'truncate'}">{$transferStatus || 'NAS 동기화 변경을 저장하는 중…'}</p>
++            {#if $syncApplyRecovery}
++                <button class="shrink-0 rounded-md border border-darkborderc px-2 py-0.5 text-xs" disabled={$syncApplyRecovery === 'running'} onclick={() => syncCoordinator().retryApply()}>{$syncApplyRecovery === 'running' ? '확인 중…' : '적용 결과 다시 확인'}</button>
++            {/if}
 +            <!-- Reachable while the app is inert: pause takes effect once the current (armed) apply settles; the next cycle does not start. -->
 +            <button class="shrink-0 rounded-md border border-darkborderc px-2 py-0.5 text-xs" onclick={() => { syncCoordinator().pause(true); transferStatus.set('이번 적용이 끝나면 NAS 동기화를 일시 중지해요. 설정 → NAS 자동 동기화에서 다시 켤 수 있어요.') }}>이번 적용 뒤 일시 중지</button>
 +        </div>

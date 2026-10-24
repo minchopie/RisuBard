@@ -9,7 +9,7 @@ import { transferUnavailable } from './playTransfer'
 import { playNative, androidTransferAvailable } from './transferNative'
 import { doingChat, isAnyGenerating } from '../process/generationState'
 import { importSession } from '../importSession'
-import { transferBusy, transferStatus, syncSaveHold, syncBusyOwned } from './transferState'
+import { transferBusy, transferStatus, syncSaveHold, syncBusyOwned, syncApplyRecovery } from './transferState'
 import { safeStructuredClone } from '../polyfill'
 
 /**
@@ -28,7 +28,7 @@ export interface SyncPlan {
     characters: { chaId: string; fields: Record<string, unknown>; chatIds: string[] }[]; newCharacters: (character & { chatIds?: string[] })[]; chats: SyncPlanChat[]
     modules: any[]; plugins: any[]; deletions: SyncDeletion[]; pending: unknown[]
 }
-export interface SyncApplyOutcome { state: 'busy' | 'empty' | 'applied' | 'review-needed' | 'save-failed' | 'finish-pending' | 'deferred' | 'deferred-active-chat'; transaction?: string; pending?: unknown[]; keptDeletions?: SyncDeletion[]; error?: string; deferred?: string[] }
+export interface SyncApplyOutcome { state: 'busy' | 'empty' | 'applied' | 'applied-pending' | 'review-needed' | 'save-failed' | 'finish-pending' | 'deferred' | 'deferred-active-chat'; transaction?: string; pending?: unknown[]; keptDeletions?: SyncDeletion[]; error?: string; deferred?: string[] }
 /** Work that must not be interrupted by an apply: generation, import, streaming or Wiki reboot. Re-checked after every network wait. */
 export function activityBlocksSync() {
     return get(doingChat) || get(isAnyGenerating) || get(importSession).phase !== 'idle' || getDatabase().characters.some(c => c.chats.some(ch => ch.isStreaming || ch.risuBardWikiReboot))
@@ -216,6 +216,7 @@ function localEditsOverlap(plan: SyncPlan): string[] {
     return [...hits]
 }
 let applying: Promise<SyncApplyOutcome> | null = null
+let unresolvedApply: { transaction: string; before?: ReturnType<typeof captureBefore> } | null = null
 /** Busy state this module set itself; a manual transfer's busy state is never released here. */
 let syncOwnsBusy = false
 /** A busy flag held by someone else (manual transfer, import): never this apply's own hold, which transferUnavailable() counts. */
@@ -284,7 +285,7 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
                 resolved = true; transferStatus.set('적용 중 수정된 항목이 있어 동기화 적용을 미뤘어요. 수정 내용을 먼저 저장합니다.')
                 return { state: 'deferred', transaction: plan!.transaction, deferred: dirty, error: verdict?.state === 'rolled-back' ? undefined : String(verdict?.error ?? 'release unconfirmed') }
             }
-            transferStatus.set('동기화 적용을 미루는 중 서버 확인에 실패했어요. 복구 기록을 보관한 채 다음 시작 때 복구합니다.')
+            transferStatus.set('동기화 적용을 미루는 중 서버 확인에 실패했어요. 아래에서 적용 결과 확인을 다시 시도할 수 있어요.')
             return { state: 'finish-pending', transaction: plan!.transaction, error: String(verdict?.error ?? 'unreachable'), deferred: dirty }
         }
         let dirty = localEditsOverlap(plan!)
@@ -323,8 +324,8 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
         const result = await finishWithRetry(plan!.transaction, saveError === null)
         if (result?.state === 'applied') {
             resolved = true; forageStorage.realStorage.syncTransaction = undefined
-            transferStatus.set(result.pending?.length ? `동기화 적용 완료 · 보류 ${result.pending.length}건` : '동기화 적용 완료')
-            return { state: result.pending?.length ? 'review-needed' : 'applied', transaction: plan!.transaction, pending: result.pending, keptDeletions: result.keptDeletions }
+            transferStatus.set(result.pending?.length || result.keptDeletions?.length ? '일부 적용 완료 · 확인할 변경이 남아 있어요.' : '동기화 적용 완료')
+            return { state: result.pending?.length || result.keptDeletions?.length ? 'applied-pending' : 'applied', transaction: plan!.transaction, pending: result.pending, keptDeletions: result.keptDeletions }
         }
         if (result?.state === 'rolled-back') {
             // Server proved every planned entity untouched: only now is the in-memory rewind safe.
@@ -336,13 +337,13 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
         // Mixed/unknown (partial save, finish unreachable, server error after commit): keep the local state and the journal. The
         // transaction header is dropped so no autosave can pass the server gate, and the local save hold stays until recovery settles it.
         forageStorage.realStorage.syncTransaction = undefined
-        transferStatus.set('동기화 변경의 저장 결과를 확인하지 못했어요. 자료와 복구 기록을 보관한 채 다음 시작 때 복구합니다.')
+        transferStatus.set('동기화 변경의 저장 결과를 확인하지 못했어요. 아래에서 적용 결과 확인을 다시 시도할 수 있어요. 자료와 복구 기록은 보관 중이에요.')
         return { state: 'finish-pending', transaction: plan!.transaction, error: String(saveError ?? result?.error ?? '') }
     } catch (error: any) {
         // Failure before the plan was armed: nothing was mutated, nothing to rewind; the hold is released. A prepared plan is released
         // on the server too (best effort: the next plan call returns the same prepared plan otherwise).
         transferStatus.set(String(error))
-        if (!forageStorage.realStorage.syncTransaction) {
+        if (!tookBusy) {
             resolved = true
             if (error?.code === 'SYNC_RECHECK') { await finishWithRetry(error.transaction, false).catch(() => null); return { state: error.reason === 'active-chat' ? 'deferred-active-chat' : 'deferred', transaction: error.transaction, deferred: [error.reason ?? 'activity'], error: String(error) } }
             if (plan?.transaction && !plan.empty && !tookBusy) await finishWithRetry(plan.transaction, false).catch(() => null)
@@ -350,7 +351,7 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
         else {
             // Armed but the outcome never reached the server verdict path (e.g. the finish call itself threw): keep hold and journal.
             forageStorage.realStorage.syncTransaction = undefined
-            transferStatus.set('동기화 적용 결과를 확인하지 못했어요. 자료와 복구 기록을 보관한 채 다음 시작 때 복구합니다.')
+            transferStatus.set('동기화 적용 결과를 확인하지 못했어요. 아래에서 적용 결과 확인을 다시 시도할 수 있어요. 자료와 복구 기록은 보관 중이에요.')
             return { state: 'finish-pending', transaction: plan?.transaction, error: String(error) }
         }
         throw error
@@ -358,8 +359,38 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
         if (resolved) syncSaveHold.set(false)
         // Busy ownership: only a busy this apply took (at arm) is released or kept here; a foreign transfer that began before arm keeps its own flag.
         syncOwnsBusy = tookBusy && !resolved && !!plan && !plan.empty
+        unresolvedApply = syncOwnsBusy ? { transaction: plan!.transaction, before } : null
+        syncApplyRecovery.set(unresolvedApply ? 'pending' : null)
         if (tookBusy) { transferBusy.set(syncOwnsBusy); syncBusyOwned.set(syncOwnsBusy) }
     }
+}
+/** Retry only this client's unresolved transaction; the server must prove saved or untouched before any hold is released. */
+export function retrySyncApply(): Promise<SyncApplyOutcome> {
+    if (applying || !unresolvedApply || !syncOwnsBusy || !get(syncSaveHold)) return Promise.resolve({ state: 'busy' })
+    const pending = unresolvedApply
+    syncApplyRecovery.set('running')
+    transferStatus.set('이전 동기화 적용 결과를 확인하는 중…')
+    applying = (async (): Promise<SyncApplyOutcome> => {
+        const result = await finishWithRetry(pending.transaction, false)
+        // A lost rollback response leaves no server plan. Only a client that never mutated may safely unlock without a receipt.
+        if (result?.state === 'idle' && !pending.before) result.state = 'rolled-back'
+        if (result?.state !== 'applied' && result?.state !== 'rolled-back') {
+            const error = result?.state === 'idle' ? '앱을 다시 열어 저장된 상태를 확인해 주세요. 현재 자료는 덮어쓰지 않았어요.' : String(result?.error ?? '서버 응답을 확인하지 못했어요.')
+            transferStatus.set(result?.state === 'idle' ? error : '적용 결과 확인 대기 · 자료와 복구 기록은 보관 중이에요. 다시 시도해 주세요.')
+            return { state: 'finish-pending', transaction: pending.transaction, error }
+        }
+        if (result.state === 'rolled-back' && pending.before) restoreBefore(pending.before)
+        forageStorage.realStorage.syncTransaction = undefined
+        unresolvedApply = null; syncOwnsBusy = false
+        syncSaveHold.set(false); transferBusy.set(false); syncBusyOwned.set(false)
+        const state = result.state === 'rolled-back' ? 'save-failed' : result.pending?.length || result.keptDeletions?.length ? 'applied-pending' : 'applied'
+        transferStatus.set(state === 'save-failed' ? '저장되지 않은 변경을 되돌렸어요. 받은 자료는 보관 중이며 다시 다운로드할 수 있어요.' : state === 'applied-pending' ? '일부 적용 완료 · 확인할 변경이 남아 있어요.' : '이 기기에 적용 완료')
+        return { state, transaction: pending.transaction, pending: result.pending, keptDeletions: result.keptDeletions }
+    })().catch((error): SyncApplyOutcome => {
+        transferStatus.set('적용 결과 확인 실패 · 자료와 복구 기록을 보관 중이에요.')
+        return { state: 'finish-pending', transaction: pending.transaction, error: String(error) }
+    }).finally(() => { applying = null; syncApplyRecovery.set(unresolvedApply ? 'pending' : null) })
+    return applying
 }
 /** Ask the server to settle the transaction. Returns the server verdict, or null when it stayed unreachable. */
 async function finishWithRetry(transaction: string, confirmed: boolean) {
@@ -385,7 +416,7 @@ export async function recoverSync() {
             await new Promise(r => setTimeout(r, 300 * (attempt + 1)))
         }
     }
-    if (!pending.length) { syncSaveHold.set(false); if (syncOwnsBusy) { syncOwnsBusy = false; transferBusy.set(false); syncBusyOwned.set(false) } return } // the server completed everything (e.g. a lost finish response); an own busy is released with its owned flag
+    if (!pending.length) { unresolvedApply = null; syncApplyRecovery.set(null); syncSaveHold.set(false); if (syncOwnsBusy) { syncOwnsBusy = false; transferBusy.set(false); syncBusyOwned.set(false) } return } // the server completed everything (e.g. a lost finish response); an own busy is released with its owned flag
     const tookBusy = syncOwnsBusy || !get(transferBusy) // never release a manual transfer's busy state
     if (tookBusy) { transferBusy.set(true); syncOwnsBusy = true; syncBusyOwned.set(true) }
     syncSaveHold.set(true)
@@ -405,6 +436,7 @@ export async function recoverSync() {
                 transferStatus.set('동기화 복구를 보류했어요. 현재 대화와 복구 자료는 그대로 보관돼요.')
             } finally { forageStorage.realStorage.syncTransaction = undefined }
         }
+        unresolvedApply = null; syncApplyRecovery.set(null)
         syncSaveHold.set(false) // every pending plan was finished or explicitly held
     } finally { if (tookBusy) { syncOwnsBusy = false; transferBusy.set(false); syncBusyOwned.set(false) } }
 }

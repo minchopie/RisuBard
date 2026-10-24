@@ -31,7 +31,7 @@ test('state rows report durable states and the coordinator snapshot; the key req
     const rows = syncStateRows(status, { enabled: true, running: false, paused: true, offline: false, failures: 0, lastCycleAt: 0, lastError: '', nextAt: 0, lastOutcome: 'key-pending:empty', generation: 0, attention: 'rotated', probed: true })
     expect(rows[0]).toContain('참여 기기'); expect(rows[1]).toContain('NAS 대기 1건 · NAS 반영 4건 · 받은 변경 적용 대기 2건 · 검토 필요 1건')
     expect(rows[2]).toContain('충돌 2건 · 휴지통 1건'); expect(rows[2]).toContain('반영 예약 1건'); expect(rows[3]).toContain('공유받음 (기기 tablet-d)')
-    expect(rows[4]).toContain('키 대기 · 최신 상태 · 일시 중지 · 주의: rotated')
+    expect(rows[4]).toContain('키 대기 · 새로 적용할 변경 없음 · 일시 중지 · 주의: rotated')
     expect(syncStateRows({ enabled: false }, null)).toEqual([])
     expect(syncStateRows({ enabled: true, role: 'joining', vault: { origin: 'generated', missing: false }, sync: {} }, null)[3]).toBe('동기화 키: 아직 받지 않음 · 권한 기기에서 공유 키를 받아 주세요') // the unused local key is never shown as the workspace key
     expect(syncStateRows({ enabled: true, role: 'authority', vault: { origin: 'generated', missing: false }, sync: {} }, null)[3]).toBe('동기화 키: 이 기기에서 생성')
@@ -74,4 +74,40 @@ test('sync overview names content, explains same-message differences and never c
     expect(SYNC_ITEM_STATE.uploaded).toBe('NAS 업로드 완료'); expect(SYNC_ITEM_STATE.uploaded).not.toContain('다른 기기')
     expect(conflictVariantLabel({ messages: 3, wikiFiles: 2, source: { device: 'opaque', self: false } }, 0)).not.toContain('opaque')
     expect(conflictVariantLabel({ content: { personas: [{ name: '용사' }] } }, 0)).toContain('새 항목은 함께 보존')
+})
+
+test('NAS revision list: same shown minute is one entry, newest five entries kept, undated last, nothing else changed', async () => {
+    const { groupSyncItemsByTime, syncGroupTitles, syncGroupStates } = await import('./nasSyncUi')
+    const t = (iso: string) => Date.parse(iso)
+    const items = [
+        { type: 'group', id: 'collectionOrganizers', nasAt: t('2026-10-20T15:03:10Z'), state: 'recorded' },
+        { type: 'group', id: 'unknown-a', nasAt: t('2026-10-20T15:03:50Z'), state: 'recorded' }, // same Korea minute 00:03 → same entry
+        { type: 'group', id: 'memory', nasAt: t('2026-10-21T03:24:00Z'), state: 'recorded' },
+        { type: 'group', id: 'unknown-b', nasAt: t('2026-10-21T00:22:00Z'), state: 'recorded' },
+        { type: 'chat', title: '마물 · Chat 1', nasAt: t('2026-10-19T01:00:00Z'), state: 'review' },
+        { type: 'group', id: 'theme', nasAt: t('2026-10-18T01:00:00Z'), state: 'recorded' },
+        { type: 'group', id: 'personas', nasAt: t('2026-10-17T01:00:00Z'), state: 'upload-pending' },
+        { type: 'group', id: 'lorebook', nasAt: null, state: 'upload-pending' },
+    ]
+    const r = groupSyncItemsByTime(items)
+    expect(r.groups.map(g => g.label)).toEqual(['2026. 10. 21. 12:24', '2026. 10. 21. 09:22', '2026. 10. 21. 00:03', '2026. 10. 19. 10:00', '2026. 10. 18. 10:00'])
+    expect(r.groups[2].items).toHaveLength(2)
+    expect(syncGroupTitles(r.groups[2].items)).toBe('앱 설정 ×2')
+    expect({ hiddenGroups: r.hiddenGroups, hiddenItems: r.hiddenItems, hiddenAttention: r.hiddenAttention }).toEqual({ hiddenGroups: 2, hiddenItems: 2, hiddenAttention: 2 })
+    expect(groupSyncItemsByTime(items, 20).groups.at(-1)).toMatchObject({ key: 'undated', label: '날짜 기록 없음', at: null })
+    expect(syncGroupStates([items[0], items[4], items[1]])).toBe('NAS에 기록된 판본 · 차이 확인 필요')
+    expect(syncGroupTitles([{ character: '캐릭', name: '대화' }, { type: 'group', id: 'memory' }])).toBe('캐릭 · 대화 · 기억 설정')
+    expect(groupSyncItemsByTime(undefined)).toEqual({ groups: [], hiddenGroups: 0, hiddenItems: 0, hiddenAttention: 0 })
+    expect(items).toHaveLength(8) // input untouched
+})
+
+
+test('completion labels distinguish receipt, partial apply and the persisted last application time', async () => {
+    const { syncOutcomeText, OUTCOME_LABEL } = await import('./nasSyncUi')
+    expect(syncOutcomeText('applied-pending', { pendingReview: 2, keptDeletions: 1 })).toBe('일부 적용 완료 · 차이 확인 2건 · 삭제 보류 1건')
+    expect(OUTCOME_LABEL['recovery-pending']).toContain('적용 결과 확인 대기')
+    expect(OUTCOME_LABEL.empty).not.toContain('최신')
+    expect(OUTCOME_LABEL.deferred).not.toContain('다운로드')
+    expect(SYNC_ITEM_STATE.pending).not.toContain('다운로드 완료')
+    expect(syncStateRows({ enabled: true, lastAppliedAt: Date.parse('2026-10-24T01:23:00Z') }, null).at(-1)).toBe('이 기기 마지막 적용 완료: 2026. 10. 24. 10:23')
 })

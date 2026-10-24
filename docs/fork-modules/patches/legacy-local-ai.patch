@@ -1,0 +1,38 @@
+diff --git a/src/lib/Setting/AISettingsWorkspace.svelte b/src/lib/Setting/AISettingsWorkspace.svelte
+index f095860..ff5e153 100644
+--- a/src/lib/Setting/AISettingsWorkspace.svelte
++++ b/src/lib/Setting/AISettingsWorkspace.svelte
+@@ -7,6 +7,7 @@
+         type AISettingsSectionId,
+     } from 'src/ts/setting/aiSettingsSections'
+     import BotSettings from './Pages/BotSettings.svelte'
++    import LocalAISettings from './Pages/LocalAISettings.svelte'
+     import ModelPresetSettings from './Pages/Model/ModelPresetSettings.svelte'
+     import OtherBotSettings from './Pages/OtherBotSettings.svelte'
+     import SettingsSectionTabs from 'src/lib/UI/GUI/SettingsSectionTabs.svelte'
+@@ -39,6 +40,7 @@
+         title={language.settingsWorkspace.aiWorkspace.title}
+         description={language.settingsWorkspace.aiWorkspace.description}
+     >
++        <LocalAISettings />
+         <SettingsSectionTabs
+             tabs={sectionTabs}
+             selected={activeRoute}
+diff --git a/src/ts/process/models/local.ts b/src/ts/process/models/local.ts
+index 5c8ec84..bb2fd4a 100644
+--- a/src/ts/process/models/local.ts
++++ b/src/ts/process/models/local.ts
+@@ -1,3 +1,11 @@
+-export async function tokenizeGGUFModel(prompt:string):Promise<number[]> {
+-    throw new Error('Local GGUF model tokenization is not supported in this version')
++import { localAIRequest } from '../../localAI'
++
++export async function tokenizeGGUFModel(prompt: string): Promise<number[]> {
++    const response = await localAIRequest('/tokenize', {
++        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: prompt }),
++    })
++    const result = await response.json()
++    if (!response.ok) throw new Error(result.error ?? '기기 내 AI 토큰 계산 실패')
++    if (!Array.isArray(result.tokens) || result.tokens.some((token: unknown) => !Number.isInteger(token))) throw new Error('잘못된 토큰 계산 응답')
++    return result.tokens
+ }

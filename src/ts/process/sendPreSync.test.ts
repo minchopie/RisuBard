@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import { expect, it, vi } from 'vitest'
 import { writable, get } from 'svelte/store'
-vi.mock('../transfer-sync/nasSync', () => ({ activityBlocksSync: () => false, applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), reportSyncNetwork: vi.fn(), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => '' }))
+vi.mock('../transfer-sync/nasSync', () => ({ activityBlocksSync: () => false, retrySyncApply: vi.fn(), applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), reportSyncNetwork: vi.fn(), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => '' }))
 vi.mock('../transfer-sync/playTransfer', () => ({ transferUnavailable: () => false }))
 vi.mock('../platform', () => ({ isNodeServer: true }))
 vi.mock('../stores.svelte', () => ({ alertStore: writable({ type: 'none' }), selectedCharID: writable(0) }))

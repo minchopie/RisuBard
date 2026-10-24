@@ -8,7 +8,7 @@ import { get, writable } from 'svelte/store'
 import { readFileSync } from 'node:fs'
 const f = vi.hoisted(() => ({ unavailable: vi.fn(() => false), activity: vi.fn(() => false), alert: { type: 'none' }, chat: 'card/chat', selected: null as any }))
 vi.mock('./transfer-sync/playTransfer', () => ({ transferUnavailable: () => f.unavailable() }))
-vi.mock('./transfer-sync/nasSync', () => ({ activityBlocksSync: () => f.activity(), applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), reportSyncNetwork: vi.fn(async () => {}), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => f.chat }))
+vi.mock('./transfer-sync/nasSync', () => ({ activityBlocksSync: () => f.activity(), retrySyncApply: vi.fn(), applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), reportSyncNetwork: vi.fn(async () => {}), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => f.chat }))
 vi.mock('./platform', () => ({ isNodeServer: true }))
 vi.mock('./stores.svelte', () => { const selectedCharID = writable(0); f.selected = selectedCharID; return { alertStore: writable(f.alert), selectedCharID } })
 import { createSyncCoordinator } from './nasSyncCoordinator'
@@ -96,7 +96,8 @@ test('a hydration deadline returned as deferred uses the same honest pending sta
 test('direction buttons use the same running lane as automatic sync and do nothing during generation or pause', async () => {
     const h = harness(); await h.c.start(); h.calls.length = 0
     f.activity.mockReturnValue(true)
-    expect(await h.c.uploadNow()).toBe('deferred'); expect(await h.c.downloadNow()).toBe('deferred'); expect(h.calls).toEqual([])
+    expect(await h.c.uploadNow()).toBe('deferred'); expect(h.calls).toEqual([])
+    h.setPending(1); expect(await h.c.downloadNow()).toBe('pulled'); expect(h.calls).toEqual(['status', 'pull', 'preview']); h.calls.length = 0
     f.activity.mockReturnValue(false)
     h.c.pause(true); expect(await h.c.downloadNow()).toBe('idle'); expect(h.calls).toEqual([])
     h.c.pause(false)
@@ -285,7 +286,7 @@ test('failures back off 5/15/60 s capped at 5 min and clear on success; publish 
     await vi.advanceTimersByTimeAsync(30_000); await flush(); expect(c.state).toMatchObject({ lastOutcome: 'publish-failed', failures: 1 })
     h.io.publish.mockResolvedValueOnce({ stored: [{ sequence: 3 }], failed: [], rotated: { from: 'a', to: 'b' } }); h.io.pull.mockResolvedValueOnce({ admitted: [], held: [{ sequence: 9 }], quarantined: [] })
     await vi.advanceTimersByTimeAsync(5_000); await flush()
-    expect(c.state).toMatchObject({ lastOutcome: 'empty', failures: 0, attention: 'rotated,incoming-review' })
+    expect(c.state).toMatchObject({ lastOutcome: 'review-needed', failures: 0, attention: 'rotated,incoming-review' })
     c.stop()
 })
 
@@ -404,4 +405,68 @@ test('late prepared plan: the bounded pre-arm wait gives up before /plan answers
     expect(h.calls).toEqual(['status']); expect(release).toHaveBeenCalledTimes(1); expect(c.state).toMatchObject({ lastOutcome: 'recovery-pending', attention: 'recovery-pending', failures: 0 }) // armed: only finish/recovery may settle it
     planPhase = null; h.calls.length = 0; await vi.advanceTimersByTimeAsync(30_000); await flush(); expect(h.calls.slice(0, 2)).toEqual(['status', 'snapshot']) // settled elsewhere: normal cycles resume
     c.stop()
+})
+
+
+test('manual receive during generation stays receive-only even if generation ends during the pull', async () => {
+    f.activity.mockReturnValue(true)
+    const h = harness(); await h.c.start(); h.calls.length = 0; h.setPending(1)
+    h.io.pull.mockImplementation(async () => { h.calls.push('pull'); f.activity.mockReturnValue(false); return { admitted: [] } })
+    expect(await h.c.downloadNow()).toBe('pulled')
+    expect(h.calls).toEqual(['status', 'pull', 'preview'])
+    h.calls.length = 0
+    expect(await h.c.downloadNow()).toBe('applied')
+    expect(h.calls).toEqual(['status', 'snapshot', 'pull', 'preview', 'apply'])
+    h.c.stop()
+})
+
+test('partial apply counts survive the coordinator, held receipts never say no changes, and retry never starts a transfer', async () => {
+    const retryApply = vi.fn(async () => ({ state: 'applied-pending' as const, pending: [{}], keptDeletions: [{ kind: 'chat' as const, id: 'kept' }] }))
+    const h = harness({ retryApply }); await h.c.start(); h.calls.length = 0
+    h.io.pull.mockResolvedValueOnce({ held: [{}] } as any)
+    expect(await h.c.downloadNow()).toBe('review-needed')
+    h.setPending(1); h.io.apply.mockResolvedValueOnce({ state: 'applied-pending', pending: [{}, {}], keptDeletions: [{ kind: 'chat', id: 'kept' }] } as any)
+    expect(await h.c.downloadNow()).toBe('applied-pending')
+    expect(h.c.state).toMatchObject({ pendingReview: 2, keptDeletions: 1 })
+    h.c.pause(true); h.calls.length = 0; syncSaveHold.set(true)
+    expect(await h.c.retryApply()).toBe('applied-pending'); expect(h.calls).toEqual([])
+    expect(h.c.state).toMatchObject({ pendingReview: 1, keptDeletions: 1, paused: true, running: false })
+    h.c.stop()
+})
+
+
+test('a queued lifecycle cycle does not erase the completed manual partial-apply counts before the UI reads them', async () => {
+    const h = harness(); await h.c.start(); h.setPending(1)
+    let statuses = 0
+    h.io.status.mockImplementation(async (signal?: AbortSignal) => {
+        if (++statuses > 1) await new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)))
+        return STATUS()
+    })
+    h.io.apply.mockImplementationOnce(async () => {
+        h.c.chatOpened()
+        return { state: 'applied-pending', pending: [{}, {}], keptDeletions: [{ kind: 'chat', id: 'kept' }] } as any
+    })
+    expect(await h.c.downloadNow()).toBe('applied-pending')
+    expect(h.c.state).toMatchObject({ pendingReview: 2, keptDeletions: 1 })
+    h.c.stop(); await flush()
+})
+
+
+test('a receive-only manual download never snapshots if generation ends while status is awaited', async () => {
+    const h = harness(); await h.c.start(); h.calls.length = 0; h.setPending(1); f.activity.mockReturnValue(true)
+    h.io.status.mockImplementation(async () => { h.calls.push('status'); f.activity.mockReturnValue(false); return STATUS() })
+    expect(await h.c.downloadNow()).toBe('pulled')
+    expect(h.calls).toEqual(['status', 'pull', 'preview'])
+    h.c.stop()
+})
+
+test('recovery completion restarts the automatic timer consumed during a slow explicit retry', async () => {
+    const retryApply = vi.fn(async () => { await new Promise(r => setTimeout(r, 6_000)); return { state: 'applied' as const } })
+    const h = harness({ retryApply }); await h.c.start(); h.calls.length = 0
+    const retry = h.c.retryApply()
+    await vi.advanceTimersByTimeAsync(6_000); expect(await retry).toBe('applied')
+    expect(h.calls).toEqual([])
+    await vi.advanceTimersByTimeAsync(5_000); await flush()
+    expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview'])
+    h.c.stop()
 })

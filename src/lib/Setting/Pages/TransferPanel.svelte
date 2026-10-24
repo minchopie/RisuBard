@@ -10,11 +10,12 @@
     import { isNodeServer } from 'src/ts/platform'
     import { syncStatus, syncOverview, enableSync, disableSync, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
-    import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, OUTCOME_LABEL } from 'src/ts/nasSyncUi'
+    import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText } from 'src/ts/nasSyncUi'
     let selected = $state<string[]>([])
     let compatibility = $state(false)
     let result = $state<any>(null)
     let working = $state(false)
+    let syncActionResult = $state('')
     let manualOpen = $state(false)
     let method = $state<'file' | 'nas' | 'github' | 'wifi' | 'share' | 'usb'>('file')
     let devices = $state<{ id: string; name: string; registered: boolean }[]>([])
@@ -74,10 +75,12 @@
     async function runSync(direction: 'upload' | 'download') {
         await run(async () => {
             const label = direction === 'upload' ? '업로드' : '다운로드'
+            syncActionResult = ''
             transferStatus.set(`${label} 중…`)
             const outcome = await (direction === 'upload' ? coordinator().uploadNow() : coordinator().downloadNow())
+            syncActionResult = `${label}: ${syncOutcomeText(outcome, coordinator().state)}`
+            transferStatus.set(syncActionResult)
             await refreshSync()
-            transferStatus.set(`${label}: ${OUTCOME_LABEL[outcome.replace(/^key-pending:/, '')] ?? outcome}${outcome.startsWith('key-pending:') ? ' · 동기화 키 대기' : ''}`)
         })
     }
     /** One scoped status poll (10 s, visible only, while enabled) + the coordinator's reactive snapshot; user edits of role/workspace are never overwritten while disabled. */
@@ -126,24 +129,36 @@
             <ShButton onclick={() => run(async () => { sync = await enableSync(syncWorkspace.trim() || 'risubard', syncRole); coordinator().enabled(true); await refreshSync(); transferStatus.set(syncRole === 'authority' ? '자동 동기화를 켰어요. 다른 기기에서 참여 기기로 켜고 키를 요청해 주세요.' : '자동 동기화를 켰어요. 아래에서 키 요청을 준비해 보내 주세요.') })}>자동 동기화 켜기</ShButton>
         {:else}
 {#if syncRoute}<p>{routeLabel(syncRoute)}</p>{/if}
-            {#each [syncRows[1], syncRows[4]].filter(Boolean) as row}<p>{row}</p>{/each}
+            {#each [syncRows[1], syncRows[4], syncRows[5]].filter(Boolean) as row}<p>{row}</p>{/each}
             <details><summary>연결·복구 상세</summary>{#each [syncRows[0], syncRows[2], syncRows[3]].filter(Boolean) as row}<p>{row}</p>{/each}</details>
-            <p>업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기. 자동 동기화는 기존 설정대로 계속돼요.</p>
-            <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload')}>{$coordinatorState?.running && $coordinatorState.direction === 'upload' ? '업로드 중…' : '업로드'}</ShButton>
-            <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '다운로드'}</ShButton>
+            <p>업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기에 바로 적용. 파일 저장이나 가져오기는 필요 없어요. 자동 동기화는 기존 설정대로 계속돼요.</p>
+            <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload')}>{$coordinatorState?.running && $coordinatorState.direction === 'upload' ? '업로드 중…' : 'NAS에 업로드'}</ShButton>
+            <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '이 기기에 다운로드'}</ShButton>
+            {#if working || syncActionResult}<p role="status" aria-live="polite">{working ? $transferStatus : syncActionResult}</p>{/if}
             {#if $coordinatorState?.paused}<p>전송하려면 자동 동기화를 재개해 주세요.</p>{/if}
             <ShButton variant="outline" onclick={() => coordinator().pause(!($coordinatorState?.paused ?? false))}>{$coordinatorState?.paused ? '자동 동기화 재개' : '잠시 중지'}</ShButton>
             <ShButton variant="outline" onclick={() => run(async () => { if (!await alertConfirm('자동 동기화를 끌까요? 대화·설정과 NAS에 올린 자료는 그대로 남고, 다시 켜면 이어서 동기화돼요.')) return; coordinator().enabled(false); sync = await disableSync(); await refreshSync(); transferStatus.set('자동 동기화를 껐어요.') })}>자동 동기화 끄기</ShButton>
             {#if syncOverviewState}
                 {#each syncOverviewState.localIssues ?? [] as issue}
-                    <p role="status">페르소나 「{issue.name}」의 현재 표시값과 저장된 내용이 달라서 받기를 기다려요. 페르소나 편집 화면에서 이 항목의 이름·그림·설명·메모를 확인하고 저장해 주세요. 그 뒤 「다운로드」를 누르면 다시 확인해요. 현재 값과 받은 원본은 덮어쓰지 않았어요.</p>
+                    <p role="status">페르소나 「{issue.name}」의 현재 표시값과 저장된 내용이 달라서 받기를 기다려요. 페르소나 편집 화면에서 이 항목의 이름·그림·설명·메모를 확인하고 저장해 주세요. 그 뒤 「이 기기에 다운로드」를 누르면 다시 확인해요. 현재 값과 받은 원본은 덮어쓰지 않았어요.</p>
                 {/each}
-                <p>마지막 동기화 기록이에요. NAS 업로드 완료와 다른 기기의 적용 완료는 달라요. 다른 기기의 적용 여부는 아직 확인되지 않았어요.</p>
+                <p>마지막으로 확인한 NAS 판본과 이 기기의 적용 기록이에요. NAS 업로드 완료와 다른 기기의 적용 완료는 달라요. 다른 기기의 적용 여부는 아직 확인되지 않았어요.</p>
                 <p>페르소나 {syncOverviewState.personas.length}개: {syncOverviewState.personas.map((p: any) => p.name).join(', ')}</p>
-                <p>최근 전송으로 확인한 NAS 최신판 · 한국시간. 날짜는 표시용이며, 내용이 다른 자료를 날짜만 보고 덮어쓰지 않아요.</p>
-                {#each syncOverviewState.items ?? syncOverviewState.chats as item}
-                    <div class="remote-file"><strong>{item.type ? syncItemTitle(item) : `${item.character} · ${item.name}`}</strong><span>NAS 최신판: {syncRevisionTime(item.nasAt)}{item.nasTimeKind === 'uploaded' ? ' (업로드 확인)' : ''}</span><span>{SYNC_ITEM_STATE[item.state] ?? '확인 중'}</span>{#if item.wikiFiles !== undefined}<span>이 기기에 반영된 기록: Wiki·기억 {item.wikiFiles}파일 · 저장 슬롯 {item.slots}개 · 참조 페이지 {item.pages}개</span>{/if}</div>
-                {/each}
+                {@const timeline = groupSyncItemsByTime(syncOverviewState.items ?? syncOverviewState.chats)}
+                <details class="sync-timeline">
+                    <summary>NAS 최신판 기록 · 최근 {timeline.groups.length}개 시각{timeline.groups[0] ? ` · 마지막 ${timeline.groups[0].label}` : ''}</summary>
+                    <p>최근 전송으로 확인한 NAS 최신판 · 한국시간. 같은 시각(분)에 올라간 자료는 한 항목으로 묶어 최근 5개 시각만 보여 줘요. 날짜는 표시용이며, 내용이 다른 자료를 날짜만 보고 덮어쓰지 않아요.</p>
+                    {#each timeline.groups as group (group.key)}
+                        <div class="remote-file"><strong>{group.label}</strong><span>{group.items.length}개 자료: {syncGroupTitles(group.items)}</span><span>{syncGroupStates(group.items)}</span>
+                            <details><summary>자료별로 보기</summary>
+                                {#each group.items as item}
+                                    <div class="remote-file"><strong>{item.type ? syncItemTitle(item) : `${item.character} · ${item.name}`}</strong><span>NAS 최신판: {syncRevisionTime(item.nasAt)}{item.nasTimeKind === 'uploaded' ? ' (업로드 확인)' : ''}</span><span>{SYNC_ITEM_STATE[item.state] ?? '확인 중'}</span>{#if item.wikiFiles !== undefined}<span>이 기기에 반영된 기록: Wiki·기억 {item.wikiFiles}파일 · 저장 슬롯 {item.slots}개 · 참조 페이지 {item.pages}개</span>{/if}</div>
+                                {/each}
+                            </details>
+                        </div>
+                    {/each}
+                    {#if timeline.hiddenGroups}<p>이전 기록 {timeline.hiddenGroups}개 시각 · 자료 {timeline.hiddenItems}개는 목록에서만 생략했어요{timeline.hiddenAttention ? ` (그중 업로드 대기·확인 필요 ${timeline.hiddenAttention}개)` : ''}. NAS와 이 기기의 자료는 그대로예요.</p>{/if}
+                </details>
             {/if}
             {#if keyRequestNeeded(sync)}
                 <p>{sync.vault?.missing ? '이 기기의 동기화 키가 없어요. 이 작업공간의 키를 아직 가진 다른 기기(권한 기기 등)에서 받아야 하며, 새 키를 만들지는 않아요.' : '동기화 키가 아직 없어요.'} 키 요청을 준비한 뒤 등록된 Wi-Fi 기기 또는 USB로 보내 주세요. Wi-Fi 등록 기기는 키를 자동으로 돌려보내고, USB로 받은 기기는 그 기기의 전송 화면에서 「동기화 키」를 USB로 다시 보내야 해요.</p>
@@ -343,4 +358,6 @@
     input:not([type=checkbox]), select { border: 1px solid var(--color-darkborderc); background: var(--color-bgcolor); color: var(--color-textcolor); border-radius: .4rem; padding: .6rem; min-width: 0; max-width: 100%; }
     p, strong, span { overflow-wrap: anywhere; }
     .error { color: var(--color-draculared); }
+    .sync-timeline summary { cursor: pointer; }
+    .sync-timeline .remote-file .remote-file { padding-left: 1rem; }
 </style>

@@ -1,0 +1,10 @@
+{
+  "session": 200,
+  "cookieAuth": "success",
+  "writer": {
+    "state": "free"
+  },
+  "rootOutsideRepository": true,
+  "startLogs": "[Server] HTTP server is running.\n[Server] http://localhost:0/\nNo auth header\n",
+  "stderr": ""
+}

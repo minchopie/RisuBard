@@ -296,7 +296,9 @@
           "data-sync-status-row",
           "syncBusyOwned",
           "syncCoordinator",
-          "transferBusy"
+          "transferBusy",
+          "syncApplyRecovery",
+          "retryApply"
         ]
       },
       "src/ts/storage/database.svelte.ts": {

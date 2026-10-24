@@ -88,7 +88,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
     const writePlan = plan => atomicWriteJson(root, planPath(plan.transaction), plan);
     // The journal is always written before the pointer, so on open the journal's phase is authoritative for the write gate.
     // Orphan journals (crash between journal and pointer writes) are adopted unless they belong to a finished or held plan.
-    const completed = new Set(service().applied.map(a => a.transaction)), held = new Set(service().retained.map(r => r.transaction));
+    const completed = new Set([...service().applied, ...(service().rolledBack ?? [])].map(a => a.transaction)), held = new Set(service().retained.map(r => r.transaction));
     for (const name of fs.readdirSync(join(root, 'apply'))) {
         const m = /^([0-9a-f-]{36})\.json$/.exec(name); if (!m) continue;
         if (completed.has(m[1])) { fs.rmSync(file(planPath(m[1])), { force: true }); fs.rmSync(join(root, 'apply', m[1]), { recursive: true, force: true }); continue; } // leftover of a finished plan
@@ -132,6 +132,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
     // `workspaceId`/`role` are reported even while disabled so a reopened panel resumes the saved setup instead of defaults.
     const status = () => ({ enabled: service().enabled, role: service().role ?? null, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
         vault: { origin: service().vaultOrigin ?? null, sharedFrom: service().vaultSharedFrom ?? null, missing: !fs.existsSync(masterFile()) && (service().vaultOrigin === 'shared' || (service().enabled && (Object.keys(service().lineage).length > 0))), pendingGrant: service().pendingGrant ? { from: service().pendingGrant.from, reason: service().pendingGrant.reason } : null }, shares: (service().shares ?? []).map(({ id, kind, to, via, at }) => ({ id, kind, to, via, at })),
+        lastAppliedAt: service().applied.at(-1)?.at ?? null,
         localApply: (service().localApply ?? []).length, ...(service().enabled ? { sync: openTransport().status(), conflicts: conflictCount(openStore()) } : {}) });
     // ------------------------------------------------------------------ key sharing ------------------------------------------------------------------
     const publicShare = r => ({ id: r.id, kind: r.kind, to: r.to ?? null, via: r.via ?? null, at: r.at });
@@ -956,6 +957,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
         // The durable completion record answers retries whose response was lost after the final manifest write; a newer plan is untouched.
         const done = service().applied.find(a => a.transaction === transaction);
         if (done) return { state: 'applied', transaction, commits: done.commits, chats: done.chats ?? 0, pending: done.pending ?? [], keptDeletions: done.keptDeletions ?? [], completedAt: done.at };
+        if ((service().rolledBack ?? []).some(a => a.transaction === transaction)) return { state: 'rolled-back', transaction };
         const current = pointer?.transaction === transaction ? readPlan(transaction) : null;
         if (!current) { if (confirmed) throw new Error('No sync apply is pending'); return { state: 'idle' }; }
         // Finishing a persisted plan is local recovery of this device's own saved state: it does not depend on the auto-sync
@@ -971,7 +973,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
                 const untouched = current.phase === 'prepared' || (current.baseline && canonical(entityHashes(current, db), true) === canonical(current.baseline, true));
                 if (!untouched) throw Object.assign(new Error('Part of the sync apply may have been saved; recovery retained'), { code: 'NAS_SYNC_PARTIAL' });
                 for (const item of current.media) if (item.installed) { if (item.kind === 'inlay') await removeInlay(item.id).catch(() => {}); else storage.kvDel(item.key); }
-                manifest.transact(x => { x.plan = null; });
+                manifest.transact(x => { x.plan = null; (x.rolledBack ??= []).push({ transaction, at: now() }); });
                 await fsp.rm(file(planPath(transaction)), { force: true }); await fsp.rm(staging, { recursive: true, force: true });
                 return { state: 'rolled-back', transaction };
             }

@@ -8,9 +8,9 @@ vi.mock('./alert', () => ({ alertConfirm: (...args: any[]) => f.confirm(...args)
 vi.mock('./transfer-sync/playTransfer', () => ({ transferUnavailable: () => f.unavailable() }))
 vi.mock('./stores.svelte', () => ({ selectedCharID: writable(0) }))
 vi.mock('./polyfill', async () => { const rfdc = (await import('rfdc')).default({ circles: true }); return { safeStructuredClone: (v: any) => { try { return structuredClone(v) } catch { return rfdc(v) } } } })
-import { applySync, recoverSync, restoreOpenDeletion, acceptOpenDeletion } from './nasSync'
+import { applySync, retrySyncApply, recoverSync, restoreOpenDeletion, acceptOpenDeletion } from './nasSync'
 import { selectedCharID } from './stores.svelte'
-import { transferBusy, syncSaveHold, syncBusyOwned } from './transferState'
+import { transferBusy, transferStatus, syncSaveHold, syncBusyOwned, syncApplyRecovery } from './transferState'
 const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
 const chatA = () => ({ id: 'A', name: 'A', message: [{ role: 'char', data: 'a' }], scriptstate: { n: 1 } }), chatB = () => ({ id: 'B', name: 'B', message: [{ role: 'char', data: 'b' }] })
 function basePlan(overrides: any = {}) {
@@ -43,7 +43,7 @@ test('a generic hydration failure releases only its known pre-arm plan, preservi
 test('a lost arm response never uses generic pre-arm cleanup to discard a possibly armed plan', async () => {
     const before = JSON.stringify(f.db), finish = vi.fn((_init?: RequestInit) => reply({ state: 'rolled-back' }))
     script({ '/plan': () => reply(basePlan()), '/arm': () => { throw new Error('arm response lost') }, '/finish': finish })
-    await expect(applySync()).rejects.toThrow('arm response lost')
+    expect((await applySync()).state).toBe('finish-pending'); expect(get(syncSaveHold)).toBe(true)
     expect(finish).not.toHaveBeenCalled(); expect(JSON.stringify(f.db)).toBe(before)
 })
 
@@ -122,7 +122,8 @@ test('the currently open chat is never removed by a remote deletion: it keeps it
     let armed: any
     script({ '/plan': () => reply(basePlan({ chats: [], characters: [], deletions: [{ kind: 'chat', characterId: 'card', id: 'A' }, { kind: 'chat', characterId: 'card', id: 'B' }] })), '/arm': init => { armed = JSON.parse(init!.body as string); return reply({ ready: true }) }, '/finish': () => reply({ state: 'applied', pending: [], keptDeletions: armed.keptDeletions }) })
     const result = await applySync()
-    expect(result.state).toBe('applied')
+    expect(result.state).toBe('applied-pending')
+    expect(get(transferStatus)).toBe('일부 적용 완료 · 확인할 변경이 남아 있어요.')
     expect(armed.keptDeletions).toEqual([{ kind: 'chat', characterId: 'card', id: 'A' }])
     expect(f.db.characters[0].chats.map((c: any) => c.id)).toEqual(['A'])
     expect(f.db.characters[0].chats[0].risuSyncDeleted).toEqual({ transaction: 'tx', restorable: true })
@@ -382,4 +383,51 @@ test('a deadline while hydrating releases the prepared plan and returns deferred
     expect(f.request.mock.calls.some(([p]) => p === '/arm')).toBe(false)
     expect(JSON.stringify(f.db)).toBe(before)
     expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+})
+
+
+test('in-app retry verifies the same unfinished save, keeps partial outcomes held, and never opens a dialog or reimports', async () => {
+    script({ '/plan': () => reply(basePlan()), '/arm': () => reply({ ready: true }), '/finish': () => reply({ error: 'partial', code: 'NAS_SYNC_PARTIAL' }, 400) })
+    expect((await applySync()).state).toBe('finish-pending')
+    const appliedDb = JSON.stringify(f.db), saveCalls = f.save.mock.calls.length
+    expect(get(syncApplyRecovery)).toBe('pending')
+    expect((await retrySyncApply()).state).toBe('finish-pending')
+    expect(get(syncSaveHold)).toBe(true); expect(get(transferBusy)).toBe(true); expect(JSON.stringify(f.db)).toBe(appliedDb)
+    let finish!: (value: Response) => void
+    script({ '/finish': init => { expect(JSON.parse(init!.body as string)).toEqual({ transaction: 'tx', confirmed: false }); return new Promise(r => { finish = r }) } })
+    const first = retrySyncApply()
+    while (!finish) await Promise.resolve()
+    expect(get(syncApplyRecovery)).toBe('running'); expect((await retrySyncApply()).state).toBe('busy')
+    finish(reply({ state: 'applied', pending: [{}], keptDeletions: [] }))
+    expect((await first).state).toBe('applied-pending')
+    expect(get(syncApplyRecovery)).toBeNull(); expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+    expect(f.save).toHaveBeenCalledTimes(saveCalls); expect(f.confirm).not.toHaveBeenCalled(); expect(JSON.stringify(f.db)).toBe(appliedDb)
+})
+
+test('retry restores this client snapshot only on a proven rollback, including a lost arm response with no mutation', async () => {
+    const before = JSON.stringify(f.db)
+    for (const lostArm of [false, true]) {
+        script({ '/plan': () => reply(basePlan()), '/arm': () => { if (lostArm) throw new Error('lost arm'); return reply({ ready: true }) }, '/finish': () => reply({ error: 'partial', code: 'NAS_SYNC_PARTIAL' }, 400) })
+        expect((await applySync()).state).toBe('finish-pending')
+        script({ '/finish': () => reply({ state: 'rolled-back' }) })
+        expect((await retrySyncApply()).state).toBe('save-failed')
+        expect(JSON.stringify(f.db)).toBe(before); expect(get(syncSaveHold)).toBe(false); expect(get(syncApplyRecovery)).toBeNull()
+    }
+    expect(f.confirm).not.toHaveBeenCalled()
+})
+
+
+test('a lost rollback receipt unlocks only a client that never mutated; mutated state requires canonical startup recovery', async () => {
+    const before = JSON.stringify(f.db)
+    script({ '/plan': () => reply(basePlan()), '/arm': () => { throw new Error('lost arm') } })
+    expect((await applySync()).state).toBe('finish-pending')
+    script({ '/finish': () => reply({ state: 'idle' }) })
+    expect((await retrySyncApply()).state).toBe('save-failed')
+    expect(get(syncSaveHold)).toBe(false); expect(JSON.stringify(f.db)).toBe(before)
+    script({ '/plan': () => reply(basePlan()), '/arm': () => reply({ ready: true }), '/finish': () => reply({ state: 'idle' }) })
+    expect((await applySync()).state).toBe('finish-pending')
+    const mutated = JSON.stringify(f.db)
+    const retry = await retrySyncApply()
+    expect(retry.state).toBe('finish-pending'); expect(retry.error).toContain('앱을 다시 열어')
+    expect(get(syncSaveHold)).toBe(true); expect(JSON.stringify(f.db)).toBe(mutated); expect(f.confirm).not.toHaveBeenCalled()
 })

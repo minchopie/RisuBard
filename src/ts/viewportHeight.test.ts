@@ -10,9 +10,9 @@ it.each([
 ])('keeps the composer in the visible viewport for %s', (_name, userAgent, tagName, expected) => {
     const setProperty = vi.fn()
     const viewport = { height: 555, scale: 1, addEventListener: vi.fn() }
-    vi.stubGlobal('window', { visualViewport: viewport })
+    vi.stubGlobal('window', { visualViewport: viewport, innerHeight: 1100, addEventListener: vi.fn() })
     vi.stubGlobal('navigator', { userAgent })
-    vi.stubGlobal('document', { activeElement: { tagName }, documentElement: { style: { setProperty } } })
+    vi.stubGlobal('document', { activeElement: { tagName }, documentElement: { style: { setProperty } }, addEventListener: vi.fn() })
     installDynamicViewportHeight()
     expect(setProperty).toHaveBeenCalledTimes(expected)
     if (expected) expect(setProperty).toHaveBeenCalledWith('--risu-height-size', '555px')

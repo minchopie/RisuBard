@@ -1,0 +1,53 @@
+# Fable 5.1 xhigh · 실제 5차 검수
+
+실제 CLI 종료0/is_error=false, 모델 claude-fable-5-1. 검토 범위는 아래 원문과 같다.
+
+# Fifth-round review — R4 A/B fixes, durability ordering, preservation, streaming/journal/fallback
+
+Scope: the supplied source, tests and evidence only. Internal offline implementation; not a port/release opinion. Physical hardware remains untested and I do not approve it.
+
+## What the supplied code and tests prove
+
+**A — superseded model reclaimed after a durable commit.** `persist()` now does tmp write → `handle.sync()` → `rename` → `syncDirectory()`. Everything after the rename is non-throwing (`config = next` then a `try/catch` around the directory sync that returns `false` and sets the warning), so the only way `importModel` reaches its `!committed` cleanup is a failure *before* the settings rename, i.e. while the on-disk settings still reference the old model. `committed = true` is set only after `persist` resolves; the old file is removed only when `durable && previous`. The two Linux node:test cases inject the failure on exactly the second directory open (the post-settings-rename sync; the first is the post-GGUF-rename sync), assert the warning, assert two `.gguf` on disk, then restart against either the old or the new settings and assert the referenced file is the only survivor and byte-identical. The Windows test "successful replacement reclaims…" proves the happy path leaves exactly one `.gguf` and the restart still resolves the new hash. This closes R4-A without weakening the R3 ordering: at deletion time both the new GGUF (file+dir synced before trial start) and the new settings (file+dir synced) are durable.
+
+**B — corrupt settings no longer a dead end.** `settings()` no longer checks any unreadable flag; `idle()` only blocks on `initializationError`, `closed`, or busy state. In the bad-record subcase `config` is first assigned the validated limits with `model: null`, so `enabled/context/output` survive (test asserts `enabled:false, context:2048, output:32, model:null`). The catch sets `preserveUnlinkedModels = true`; `persist()` writes it; the next boot reads it and GC skips `.gguf` (test asserts the old file still equals the uploaded bytes after two restarts). `importModel` passes `false`, clearing the marker. No path sets `enabled` without a user PUT.
+
+**Mode PUT directory sync / UI precedence / enabled=false hint.** `settings()` → `persist()` → `syncDirectory()`. `configure()` and `importModel()` both do `message = result.error || …`; `settings()` clears `lastError` before persisting, `start()` clears it on success, so `result.error` after a 200 is either empty or the sync warning — precedence works. The `result.enabled ? … : '… 기기 내 AI 사용을 누르면 …'` branch is present. (The UI test does not exercise the warning branch; this is code-verified only.)
+
+**C — streaming/journal/no-fallback.** `parseChatStreamDelta` throws for non-null `error`; the 400/500 test asserts message and status propagate through `streamChatRequest`'s `instanceof` passthrough. `decodeStreamingJournalDetailed` shares the parser; `readJobResult` catches it into `{ok:false}`; `recoverTerminalJob` then either inserts the error block (no existing message) or leaves the existing partial untouched, and `needsSave(…, existingIdx)` + `claimJob` runs in both cases — the new test asserts both and the single claim, so no boot-loop. `requestChatData` builds `['']` as the attempt list when local is active (`hasNextModelAttempt(0,1)` is false; blank-response fallback is also skipped) and drops tools; `requestChatDataMain` returns `requestModelPreset(…, localAIPreset())` before any binding/classic resolution regardless of `staticModel`; `onDevice` selects `localAIFetch`, which rejects any URL other than the local completions path. Retries for `failByServerError` re-hit the local relay, which is retry, not fallback.
+
+**D — harness.** `listenForFetch` probes the real listener and retries only on `cause.message === 'bad port'`, max 3, logging base + cause otherwise. Three tests use it. Product code untouched (it uses UNIX sockets/named pipes, not ports).
+
+**Counts match evidence:** 10 vitest server tests exist and 10 passed; 2 node:test cases, 0 skipped on Linux; 136 client tests across 5 files.
+
+## Confirmed problems (precise trigger)
+
+**1. Startup GC failure is fatal and permanent.** In `initialized`, the `fs.rm` inside the readdir loop is outside the inner try; any rejection (e.g. a *directory* named `<uuid>.gguf` or `<uuid>.part` → `ERR_FS_EISDIR` even with `force:true`; `EBUSY/EPERM` on a locked file on Windows) rejects the whole IIFE → `initializationError` → `relay`, `settings`, `importModel` all throw 503 on every subsequent boot, since the entry persists. Low probability on Android's private directory, but the consequence is total loss of chat with no in-app recovery. Per-entry `try/catch` (log and continue) removes the failure mode at no cost.
+
+**2. An initialization error blocks a *manual* switch to online, not just the automatic one.** Trigger: `fs.access(executable)`, `fs.mkdir`, `fs.readdir` or (1) fails. `config` stays at the default `enabled:true`, status reports `enabled:true` so the client routes every request to the relay, the relay throws the init error, and PUT is rejected by `idle()`. The test "startup file errors … do not restore online mode" enshrines this. This exceeds the stated MUST (no *automatic* fallback). Either accept and document it as intentional fail-closed behaviour, or allow a session-only mode change when persistence is unavailable. Not a code bug; a decision that should be explicit.
+
+**3. Orphan model after corrupt-settings recovery is unreclaimable without a new import.** After B, `preserveUnlinkedModels:true` is cleared only by a successful `importModel`. A user who recovers by switching to online and never imports again keeps one full model file forever, with no UI to see or delete it. Minor, but it is the same storage class as R4-A on a phone.
+
+**4. Residual from A in the non-durable case.** When the post-settings sync fails, both files are kept and the warning asks the user to re-apply; a subsequent Apply (`settings()`) re-syncs but never deletes the superseded file — only a process restart's GC does. The warning text ("이전 모델 파일을 보존했어요") is also shown verbatim for mode/limits PUTs where no model was involved. Cosmetic.
+
+## Observed in the evidence, cause not established
+
+- `apk25-final-chat.json`, Turn 4 ("Write a long numbered list from 1 to 100") is the only non-error turn with an **empty assistant bubble**. It is also the only prompt likely to hit the 512-token output cap, i.e. the `finish_reason: length` → `ModelOutputError('truncated')` → partial-text path in the pump. This may be a dump artifact, but it is exactly the path the SSE/partial-text work touches and it is unexplained in the report.
+- Turn 9 (synthetic error) leaves an empty `char` message in the chat after the error dialog. Whether the live path is expected to remove the pre-pushed empty message on failure is not in the supplied source.
+- "BardWiki 의미 분석" routed to the local model and failed 422 "모델 문맥을 넘었어요" with an estimated 4,785-token input against a 4,096 context. The client's aux-prompt budget evidently does not respect `localAI.context`; with the default context this feature will fail on every invocation on that model. Whether it runs automatically per turn is not shown.
+- The on-device SSE error was injected (`intercepted.count: 1`); no real mid-stream error from the bundled `libllama-server.so` was captured.
+
+## Unverified boundaries (not provable from supplied files)
+
+- **Real engine error wire format.** The parser handles `data: {"error":…}`. Older llama-server builds emitted streaming errors as an `error:` SSE field, which a spec-compliant `parseSseStream` (not supplied) would drop as an unknown field — reproducing the original silent-empty-success symptom. One captured real frame from the bundled binary would settle this.
+- `normalizeHttpStatus(status, …)!` assumes a `ModelPresetAdapterError` for every 400–599; `deriveHttpError` uses `?? new …('unknown')`, implying it can return `undefined`. An unmapped code would `throw undefined` and surface as the generic "AI 스트리밍 응답이 중단되었습니다"/"undefined". Only 400 and 500 are tested.
+- Whether the chat write path consumes `getPartialPresetStreamText` to keep partial text on a live stream error (the pump stores it; the consumer is not supplied).
+- `fetchImpl = proxiedFetch` wiring between request.ts lines 849–1038 and the boot-time `refreshLocalAI()` call site are not shown; the client default `enabled: true` on offline builds until the first refresh means early requests go local (fail-closed; they 409 if the server is actually online-mode).
+- Neither the immediate unlink nor the startup-GC unlink is followed by a directory sync. After a `durable=false` import, the next boot's GC deletes the previous file against a settings.json whose rename was never confirmed; consistency then relies on the filesystem persisting that rename before the later unlink. A `syncDirectory()` before the GC loop would close this cheaply. Android/f2fs power-cut semantics are already disclaimed.
+- Local generations have no job journal (`localAIFetch` bypasses `makeProxiedFetch`), so a WebView renderer death mid-generation — the ART-metrics crash just reproduced in the control app — loses the in-flight output; the relay aborts the engine on socket close. Consistent with design, but worth stating given the crash is environmental and may recur on devices with the same WebView/ART.
+- Engine left running after an import while `enabled:false`; memory release depends on llama-server's idle-sleep behaviour. 180 s start not cancellable by client abort. Both unchanged from prior rounds.
+- The WebView control comparison is sound within the emulator (14/14 identical frames, forced sampling explains the earlier non-reproduction) and says nothing about ARM64 devices; the report does not claim otherwise.
+
+## Verdict (this scope only)
+
+R4-A and R4-B are implemented as described and proven by tests that inject the relevant failures; neither reduces data safety — no path deletes a referenced model, the settings rename is never followed by a throwing step, chats are untouched, and the client still cannot reach an online preset while local is active. Items 1–2 should be either fixed (1, one try/catch) or explicitly accepted (2) before this scope is called closed; 3–4 are minor. The three evidence anomalies (Turn 4, the retained empty turn, the aux over-context failure) and the real-engine SSE error format need one short follow-up each. Install/release HOLD stands; nothing here supports a hardware stability claim.

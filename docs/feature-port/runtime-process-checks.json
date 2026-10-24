@@ -1,0 +1,31 @@
+{
+  "apkSha256": "377d681ead3c09841bbcba1bc44a734dcf96450d86cb319f458ee202a96d5f8e",
+  "checks": [
+    {
+      "serial": "HA28ZBM5",
+      "uid": "10263",
+      "afterStop": [],
+      "afterTwoLaunches": [
+        "10263 29305  1867 app.risubard.personal.debug\r",
+        "10263 29414 29305 libnode.so\r"
+      ],
+      "ready": {
+        "pid": 29414,
+        "port": 34897
+      }
+    },
+    {
+      "serial": "R3CY20CLF0P",
+      "uid": "10159",
+      "afterStop": [],
+      "afterTwoLaunches": [
+        "10159 23986  7656 app.risubard.personal.debug\r",
+        "10159 24101 23986 libnode.so\r"
+      ],
+      "ready": {
+        "pid": 24101,
+        "port": 41319
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-17",
+  "apkSha256": "8146e121f697f0d1279ee6107838c1e68964edfa3400b1ecf70ba1b355a0bb95",
+  "applicationId": "app.risubard.personal.debug",
+  "node": "24.21.0",
+  "devices": [
+    "TB710FU",
+    "SM-S938N"
+  ],
+  "androidVersion": 16,
+  "pageSize": 4096,
+  "checks": {
+    "install": "passed side-by-side",
+    "runtime": [
+      "server",
+      "cookie/JWT auth",
+      "writer lock not claimed by native",
+      "AES-GCM",
+      "msgpack",
+      "image WASM",
+      "Lua WASM",
+      "streaming",
+      "disk space"
+    ],
+    "credentialRecovery": "Keystore key deleted and recreated; running server restarted; data marker preserved",
+    "forceStopRestart": "persistedRuns incremented from 1 to 2 on both"
+  },
+  "warnings": [
+    "wasm-vips clips default threads to 1"
+  ],
+  "notVerified": [
+    "WebView UI interaction",
+    "actual chat/database persistence",
+    "BardWiki/save slots",
+    "transfers",
+    "16KiB APK",
+    "release artifacts"
+  ]
+}

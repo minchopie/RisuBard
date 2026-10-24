@@ -1,0 +1,357 @@
+diff --git a/server/node/server.cjs b/server/node/server.cjs
+--- a/server/node/server.cjs
++++ b/server/node/server.cjs
+@@ -47,7 +47,7 @@
+ const { createSaveObservation } = require('./save-observation.cjs');
+ const { createProjectionShadow } = require('./projection-shadow.cjs');
+ const { generateStorageDiagnosticReport } = require('./storage-diagnostic-report.cjs');
+-const { commitTransaction, moveToTrash, observeWrites } = require('./file-store.cjs');
++const { atomicWriteFile, commitTransaction, moveToTrash, observeWrites } = require('./file-store.cjs');
+ const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs');
+ const { openServerBrowser } = require('./open-server-browser.cjs');
+ const { releaseToUpdateInfo } = require('./release-update.cjs');
+@@ -131,11 +131,23 @@
+ }
+ 
+ let storageOperationQueue = Promise.resolve();
+-function queueStorageOperation(operation) {
++let pendingCanonicalRecovery = null;
++function recoverFailedCanonicalTransaction() {
++    if (!pendingCanonicalRecovery) return;
++    const save = pendingCanonicalRecovery;
++    observeWrites(save, () => userDataRepository.recoverPendingTransactions());
++    save.settle();
++    pendingCanonicalRecovery = null;
++}
++compatibilityCache.setRecoveryHandler(() => {
++    if (pendingCanonicalRecovery) recoverFailedCanonicalTransaction();
++    else userDataRepository.recoverPendingTransactions();
++});
++function queueStorageOperation(operation, recover = true) {
+     const context = storageWriteContext.getStore();
+     const run = () => {
+         if (context?.writing) { playTransfer.assertWrite(context.req); nasSync.assertWrite(context.req); }
+-        return operation();
++        if (recover) recoverFailedCanonicalTransaction(); return operation();
+     };
+     const operationRun = storageOperationQueue.then(run, run);
+     storageOperationQueue = operationRun.catch(() => {});
+@@ -303,7 +315,8 @@
+     if (options.adoptExternal !== true && externalChangesAwaitingReview()) return;
+     if (await adoptSettledExternalProjection()) return;
+     const trigger = options.deferCompatibility === true ? 'canonical-flush' : 'flush';
+-    if (saveTimers[DB_HEX_KEY]) {
++    // Failed debounced writes lose their timer but retain the acknowledged dirty cache.
++    if (saveTimers[DB_HEX_KEY] || liveFilesPendingWrites) {
+         clearTimeout(saveTimers[DB_HEX_KEY]);
+         delete saveTimers[DB_HEX_KEY];
+         if (dbCache[DB_HEX_KEY]) {
+@@ -315,6 +328,7 @@
+             // No stripped cache but chat store has data — merge and persist directly
+             await persistChatStoreWithoutCache(trigger, { directCollection: directWriteTracker.take(DB_HEX_KEY) });
+         }
++        clearPersistFailure();
+         maybeCollectUnreferencedObjects();
+     }
+     if (options.materialize !== false) {
+@@ -382,7 +396,6 @@
+ }
+ 
+ async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
+-    const { runMaintenance = false, migrationResult = null } = options;
+     // Convert legacy REMOTE-block layouts to inline format before decoding.
+     // If migration ran it overwrote database.bin, so the caller's `raw` is
+     // stale and we re-read from KV. Idempotent on the no-op path.
+@@ -873,8 +886,6 @@
+ }
+ 
+ async function persistChatStoreWithoutCache(trigger, observationContext = {}) {
+-    const raw = kvGet('database/database.bin');
+-    if (!raw) return;
+     const operationId = nodeCrypto.randomUUID();
+     const startedAt = performance.now();
+     const overlappingPersists = activeCompatibilityPersists;
+@@ -1277,11 +1288,17 @@
+             trigger,
+             plannedFiles: result.files,
+         })
+-        return result
++        return { ...result, acceptedRevision }
+     } catch (error) {
++        if (save && errorStage === 'transaction') {
++            // Finish the prepared journal before another save inspects partially published directories.
++            pendingCanonicalRecovery = save;
++            try { recoverFailedCanonicalTransaction() } catch {}
++        }
+         // A file changed by another program stopped the save. Accept what this
+         // save already wrote and leave that file pending, so the review opens.
+-        if (error?.code === 'CANONICAL_FILES_CHANGED' && errorStage === 'transaction' && save) {
++        if (save && ((error?.code === 'CANONICAL_FILES_CHANGED' && errorStage === 'transaction')
++            || ['character-assets', 'revision-accept'].includes(errorStage))) {
+             try { save.settle() } catch {}
+         }
+         const writeMeta = error?.canonicalWriteMeta
+@@ -1335,12 +1352,14 @@
+     } else if (fresh) {
+         liveFilesAdoption.changed = fresh
+         liveFilesAdoption.readyDb = null
++        liveFilesAdoption.readyRevision = null
+     }
+     if (!liveFilesAdoption.changed) {
+         liveFilesAdoption.changed = { database: userDataRepository.exportLegacyDatabase(), revision: userDataRepository.getProjectionRevision() }
+     }
+     const { changed, pending, baseline } = liveFilesAdoption
+     let fullDb = liveFilesAdoption.readyDb || normalizeJSON(changed.database)
++    let acceptedRevision = liveFilesAdoption.readyRevision || changed.revision
+     if (!liveFilesAdoption.readyDb && pending && baseline) {
+         const conflicts = []
+         fullDb = mergePendingLiveDatabase(pending, baseline, fullDb, conflicts)
+@@ -1348,12 +1367,25 @@
+             liveFilesAdoption.recovery = preserveLiveFileRecovery({ pending, baseline, conflicts, externalRevision: changed.revision })
+             liveFilesAdoption.recoverySaved = true
+         }
+-        persistCanonicalProjection(fullDb, { trigger: 'live-files-merge', externalRevision: changed.revision, adoptingLiveFiles: true })
++        const saved = persistCanonicalProjection(fullDb, { trigger: 'live-files-merge', externalRevision: changed.revision, adoptingLiveFiles: true })
++        acceptedRevision = saved.acceptedRevision
++        if (!acceptedRevision) {
++            const error = new Error('Canonical files changed during live file adoption')
++            error.code = 'CANONICAL_FILES_CHANGED'
++            throw error
++        }
+     } else if (!liveFilesAdoption.readyDb && liveFilesAdoption.reviewMerge) {
+         fullDb = liveFilesAdoption.reviewMerge
+-        persistCanonicalProjection(fullDb, { trigger: 'live-files-merge', externalRevision: changed.revision, adoptingLiveFiles: true })
++        const saved = persistCanonicalProjection(fullDb, { trigger: 'live-files-merge', externalRevision: changed.revision, adoptingLiveFiles: true })
++        acceptedRevision = saved.acceptedRevision
++        if (!acceptedRevision) {
++            const error = new Error('Canonical files changed during live file adoption')
++            error.code = 'CANONICAL_FILES_CHANGED'
++            throw error
++        }
+     }
+     liveFilesAdoption.readyDb = fullDb
++    liveFilesAdoption.readyRevision = acceptedRevision
+     if (saveTimers[DB_HEX_KEY]) {
+         clearTimeout(saveTimers[DB_HEX_KEY])
+         delete saveTimers[DB_HEX_KEY]
+@@ -1366,8 +1398,9 @@
+     dbCache[DB_HEX_KEY] = stripped
+     dbEtag = computeBufferEtag(encodeRisuSaveLegacyBuffer(stripped))
+     externallyAdoptedDbEtag = dbEtag
+-    canonicalProjectionSync.accept()
+-    liveCharacterFiles.accept(fullDb)
++    // Accept only the version loaded or saved above; later edits remain pending.
++    canonicalProjectionSync.accept(acceptedRevision)
++    liveCharacterFiles.accept(fullDb, acceptedRevision)
+     liveFileRecovery.complete()
+     liveFilesRecovery = liveFilesAdoption.recovery || null
+     // The next page load tells the user where the app state was kept.
+@@ -1588,7 +1621,7 @@
+ 
+ // ── Update check ─────────────────────────────────────────────────────────────
+ const UPDATE_CHECK_DISABLED = embedded.enabled || process.env.RISU_UPDATE_CHECK === 'false';
+-const GITHUB_REPO = 'rpaddict/RisuBard';
++const GITHUB_REPO = 'minchopie/RisuBard';
+ const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL || `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+ 
+ // Re-read on each call so non-portable updates (docker/git pull) without a
+@@ -3115,7 +3148,7 @@
+                 manifestBytes: preparedKv.manifestBytes,
+                 retiredBytes: preparedKv.retiredBytes,
+                 store: { reloadManifest },
+-                restoreId: `backup-${nodeCrypto.randomUUID()}`,
++                restoreId,
+             });
+             atomicRestorePublished = true;
+         } else {
+@@ -4715,6 +4748,8 @@
+ // Registered with the same auth the /api/logs
+ // endpoints use.
+ const requestLogs = createRequestLogs({ saveDir: savePath });
++const localAI = require('./local-ai.cjs').createLocalAI({ dataRoot: savePath });
++localAI.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
+ requestLogs.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
+ const narrativeMemoryService = createRuntimeMemoryService(savePath);
+ const windowsTransfers = require('./transfer-windows.cjs').createWindowsTransfers(savePath, path.resolve(__dirname, '../..'));
+@@ -4949,6 +4984,12 @@
+                     phaseStartedAt = performance.now();
+                     initChatStore(fullDb);
+                     metrics.refreshMs = elapsedMs(phaseStartedAt);
++                    // A failed disk write must retry this full state, never the previous stripped cache.
++                    dbCache[DB_HEX_KEY] = normalizeJSON(stripChatsFromDb(fullDb));
++                    dbEtag = computeBufferEtag(fileContent);
++                    liveFilesPendingWrites = true;
++                    directWriteTracker.observe(DB_HEX_KEY, []);
++                    compatibilityCache.setVerified(false);
+                     errorStage = 'kv-write';
+                     phaseStartedAt = performance.now();
+                     kvSet(key, mergedContent);
+@@ -4969,6 +5010,7 @@
+                         overlappingPersists, ...metrics,
+                     });
+                     logger.error('[Write] Failed to merge chats into database.bin:', e.message);
++                    recordPersistFailure(e, '/api/write');
+                     // Do NOT write stubs-only to disk — that would permanently
+                     // destroy existing full chat data. Preserve disk as-is.
+                     res.status(500).json({ error: 'Database merge failed' });
+@@ -4980,9 +5022,10 @@
+                 kvSet(key, fileContent);
+             }
+ 
+-            // Update ETag, backup, and invalidate cache after database.bin write
++            // Retain the merged cache as the baseline for a later external-file review.
+             if (key === 'database/database.bin') {
+-                delete dbCache[DB_HEX_KEY];
++                directWriteTracker.clear(DB_HEX_KEY);
++                clearPersistFailure();
+                 if (saveTimers[DB_HEX_KEY]) {
+                     clearTimeout(saveTimers[DB_HEX_KEY]);
+                     delete saveTimers[DB_HEX_KEY];
+@@ -6521,7 +6564,7 @@
+         // Recheck writer ownership and canonical conflicts at commit time.
+         return saveChatContentHandler(req, res, next);
+     } catch (error) {
+-        if (error.status) return res.status(error.status).json({ error: error.message });
++        if (error.status) return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}), ...(error.transaction ? { transaction: error.transaction } : {}) }); // write-gate errors thrown inside a queued storage operation keep their code/transaction
+         next(error);
+     }
+ });
+@@ -6531,7 +6574,7 @@
+         await chatContentUploads.abort(req);
+         res.json({ success: true });
+     } catch (error) {
+-        if (error.status) return res.status(error.status).json({ error: error.message });
++        if (error.status) return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}), ...(error.transaction ? { transaction: error.transaction } : {}) }); // write-gate errors thrown inside a queued storage operation keep their code/transaction
+         next(error);
+     }
+ });
+@@ -8045,10 +8088,9 @@
+ app.use(expressErrorMiddleware);
+ app.use((err, req, res, next) => {
+     if (res.headersSent) return next(err);
+-    // Body parsers reject an oversized body with type 'entity.too.large'; keep
+-    // its 413 so the client can show the size message instead of a generic one.
+-    const status = err?.type === 'entity.too.large' ? 413 : 500;
+-    res.status(status).json({ error: err?.message || 'internal server error' });
++    // Keep upstream body-size errors and the existing transfer write-gate response.
++    const status = err?.type === 'entity.too.large' ? 413 : err?.code === 'TRANSFER_BUSY' ? 423 : 500;
++    res.status(status).json({ error: err?.message || 'internal server error', ...(err?.code === 'TRANSFER_BUSY' ? { code: err.code } : {}) });
+ });
+ 
+ // ─────────────────────────────────────────────────────────────────────────────
+@@ -8151,11 +8193,13 @@
+     console.log(`[Server] Received ${reason}, flushing pending data...`);
+     try {
+         try { liveFileEvents.close(); } catch (e) { logger.warn('[Server] File event cleanup error:', e); }
++        try { await localAI.close(); } catch (e) { logger.warn('[Server] Local model cleanup error:', e); }
+         try { stopTunnel(); } catch (e) { logger.warn('[Server] Tunnel cleanup error:', e); }
+         try { await chatContentUploads.close(); } catch (e) { logger.warn('[ChatContent] Upload cleanup error:', e); }
+         try {
+             await queueStorageOperation(async () => {
+                 try {
++                    recoverFailedCanonicalTransaction();
+                     await flushPendingDbWithinQueue(embedded.enabled ? { materialize: false, deferCompatibility: true } : {});
+                 } catch (e) {
+                     exitCode = 1;
+diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/DefaultChatScreen.svelte
+--- a/src/lib/ChatScreens/DefaultChatScreen.svelte
++++ b/src/lib/ChatScreens/DefaultChatScreen.svelte
+@@ -3,6 +3,8 @@
+     import { restoreOpenDeletion, acceptOpenDeletion } from 'src/ts/nasSync';
+     import { transferBusy, syncSaveHold } from 'src/ts/transferState';
+     import Suggestion from './Suggestion.svelte';
++    import { localAI } from 'src/ts/localAI.svelte';
++    import { openSettings, SettingsRoute } from 'src/ts/routing';
+     import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, FileTextIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, BookOpenIcon, WandSparklesIcon, Undo2Icon, LoaderCircleIcon } from "@lucide/svelte";
+     import { runInputAssistant } from "src/ts/risubard/inputAssistantRunner";
+     import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte';
+@@ -1102,11 +1104,11 @@
+     let inputTranslateHeight = $state("44px")
+     let inputTranslateEle:HTMLTextAreaElement = $state()
+ 
+-    // Standard theme: composer width follows the configured chat width (matches message cards).
++    // Mobile/tablet uses the full chat pane; desktop follows the configured message width.
+     // Other themes: no width limit (original full-width behavior).
+     let isStandardTheme = $derived(DBState.db.theme === '')
+     let composerWidthClass = $derived(
+-        !isStandardTheme ? '' :
++        !isStandardTheme || isMobile ? '' :
+         DBState.db.nodeOnlyStandardChatWidth === 'full' ? 'max-w-full' :
+         DBState.db.nodeOnlyStandardChatWidth === 'wide' ? 'max-w-6xl' :
+         'max-w-3xl'
+@@ -1432,6 +1434,12 @@
+                     style="{DBState.db.fixedChatTextarea ? 'z-index:29;' : ''}"
+             >
+               <div class="mx-auto w-full {composerWidthClass} px-2">
++                {#if localAI.available && localAI.enabled}
++                    <button type="button" data-local-ai-status class="mb-2 w-full break-words text-left text-sm text-textcolor2 underline"
++                        onclick={() => openSettings(SettingsRoute.ModelPreset)}>
++                        기기 내 AI · {localAI.model?.name ?? 'AI 설정에서 GGUF 모델을 선택해 주세요'}
++                    </button>
++                {/if}
+                 {#if currentCharacter?.chaId
+                     && currentCharacter.chaId !== '§playground'
+                     && !$chatDeselected
+diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
+--- a/src/ts/bootstrap.ts
++++ b/src/ts/bootstrap.ts
+@@ -1,5 +1,7 @@
+ import { changeFullscreen, checkNullish } from "./util"
+ import { installDynamicViewportHeight } from "./viewportHeight"
++import { isOfflineBuild, localAI } from './localAI.svelte'
++import { refreshLocalAI } from './localAI'
+ import { recoverTransfers, startTransferInbox } from './playTransfer'
+ import { recoverSync } from './nasSync'
+ import { startSyncCoordinator } from './nasSyncCoordinator'
+@@ -65,6 +67,7 @@
+             {
+                 await stage(language.startupLoading.storage)
+                 await forageStorage.Init()
++                if (isOfflineBuild) await refreshLocalAI().catch(error => { localAI.error = String(error) })
+ 
+                 await stage(language.startupLoading.localSave)
+                 let gotStorage: Uint8Array = await forageStorage.getItem('database/database.bin') as unknown as Uint8Array
+diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
+--- a/src/ts/globalApi.svelte.ts
++++ b/src/ts/globalApi.svelte.ts
+@@ -907,10 +907,13 @@
+                 saveTimeout = null;
+             }
+             changed = true;
+-            void triggerSave({
++            const pending = triggerSave({
+                 skipBroadcast: true,
+             })
+             void flushServerDbKeepalive()
++            if (navigator.userAgent.includes('RisuBardAndroid/')) {
++                void pending.then(flushServerDbKeepalive, () => {})
++            }
+         }
+         const handleVisibilityFlush = () => {
+             if (document.visibilityState === 'hidden') flushImmediate();
+diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
+--- a/src/ts/storage/nodeStorage.ts
++++ b/src/ts/storage/nodeStorage.ts
+@@ -339,6 +339,11 @@
+             ? await this.authFetch(path, init)
+             : await this.saveRequest(path, init)
+         if (!response.ok) throw new Error(`Server database flush failed (${response.status})`)
++        const result = await response.json()
++        if (result.paused) throw new ConflictError(
++            'Server database flush is paused for external file changes',
++            result.etag ?? null, false, !result.externalChangesPending, Boolean(result.externalChangesPending),
++        )
+     }
+ 
+     private renewTimer: ReturnType<typeof setTimeout> | undefined
+@@ -519,6 +524,10 @@
+         return response
+     }
+ 
++    async localAIRequest(path: string, init: RequestInit = {}): Promise<Response> {
++        if (!['', '/model', '/chat/completions', '/tokenize'].includes(path)) throw new Error('Invalid local AI route')
++        return this.authFetch('/api/local-ai' + path, init)
++    }
+ 
+     async syncRequest(path: string, init: RequestInit = {}): Promise<Response> {
+         if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid sync route')

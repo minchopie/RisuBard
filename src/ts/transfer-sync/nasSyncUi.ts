@@ -44,20 +44,59 @@ export function syncDifference(item: any): string {
     const labels: Record<string, string> = { messages: '대화 본문', wiki: 'Wiki·기억', slots: '저장 슬롯', settings: '페르소나·모듈·프리셋 연결', media: '이미지·삽입 자료', state: '변수·플레이 상태' };
     return (item?.sameMessages ? '대화 본문은 같아요. ' : '') + '다른 항목: ' + (item?.differs ?? []).map((k: string) => labels[k] ?? '연결 자료').join(', ');
 }
-export const SYNC_ITEM_STATE: Record<string, string> = { 'local-changes': '새 대화 내용 업로드 대기', uncaptured: '아직 동기화 기록 없음', pending: '다운로드 완료 · 반영 대기', review: '차이 확인 필요', uploaded: 'NAS 업로드 완료', 'upload-pending': 'NAS 업로드 대기', applied: '받아서 이 기기에 적용 완료', recorded: 'NAS에 기록된 판본', deleted: '삭제 기록' };
+export const SYNC_ITEM_STATE: Record<string, string> = { 'local-changes': '새 대화 내용 업로드 대기', uncaptured: '아직 동기화 기록 없음', pending: '받은 자료 보관 중 · 적용 대기', review: '차이 확인 필요', uploaded: 'NAS 업로드 완료', 'upload-pending': 'NAS 업로드 대기', applied: '받아서 이 기기에 적용 완료', recorded: 'NAS에 기록된 판본', deleted: '삭제 기록' };
 export function syncRevisionTime(at: unknown): string {
     if (typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0 || at > 8640000000000000) return '날짜 기록 없음'
     return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at)
 }
 
-export const OUTCOME_LABEL: Record<string, string> = { uploaded: 'NAS 업로드 완료', 'upload-pending': '아직 업로드할 변경이 남아 있어요', 'review-needed': '받은 변경 확인 필요', empty: '최신 상태', applied: '적용 완료', deferred: '수정 중이어서 미룸', busy: '다른 작업 중', offline: '연결 안 됨 · 재시도 예정', error: '오류 · 재시도 예정', 'publish-failed': 'NAS 업로드 실패 · 재시도 예정', 'repair-failed': 'NAS 자료 다시 받기 실패 · 재시도 예정', hidden: '화면이 보일 때 재시도', 'deferred-active-chat': '받은 변경 보관 중 · 열어 둔 대화를 다시 열면 적용', 'pulled': '받기 완료 · 한가할 때 적용', cancelled: '취소됨', disabled: '꺼짐', 'finish-pending': '적용 결과 확인 대기 · 복구 보관', 'save-failed': '저장 실패 · 되돌림', running: '진행 중', idle: '대기' }
+/** One row of the NAS revision list: every item whose NAS time shows the same Korea-time minute is one entry. */
+export type SyncTimeGroup = { key: string; label: string; at: number | null; items: any[] }
+const ATTENTION_STATES = new Set(['local-changes', 'uncaptured', 'pending', 'review', 'upload-pending'])
+/**
+ * Display-only shaping of the NAS revision list: items with the same shown time (minute, Korea time) form one entry, newest first;
+ * items without a valid date form one last entry. Only the newest `limit` entries are kept for display — nothing is deleted.
+ * The hidden counts let the panel say what was left out (attention = states the user may still need to act on).
+ */
+export function groupSyncItemsByTime(items: any[] | null | undefined, limit = 5): { groups: SyncTimeGroup[]; hiddenGroups: number; hiddenItems: number; hiddenAttention: number } {
+    const byKey = new Map<string, SyncTimeGroup>()
+    for (const item of items ?? []) {
+        const label = syncRevisionTime(item?.nasAt), dated = label !== '날짜 기록 없음'
+        const key = dated ? label : 'undated'
+        if (!byKey.has(key)) byKey.set(key, { key, label, at: dated ? item.nasAt : null, items: [] })
+        const group = byKey.get(key)!
+        group.items.push(item)
+        if (dated && item.nasAt > (group.at ?? 0)) group.at = item.nasAt
+    }
+    const sorted = [...byKey.values()].sort((a, b) => (b.at ?? -1) - (a.at ?? -1))
+    const max = Math.max(0, Math.floor(limit)), shown = sorted.slice(0, max), hidden = sorted.slice(max)
+    const hiddenItems = hidden.flatMap(g => g.items)
+    return { groups: shown, hiddenGroups: hidden.length, hiddenItems: hiddenItems.length, hiddenAttention: hiddenItems.filter(i => ATTENTION_STATES.has(i?.state)).length }
+}
+/** Names in one time entry, repeated names counted once ("앱 설정 ×14 · 기억 설정"), in first-seen order. */
+export function syncGroupTitles(items: any[]): string {
+    const counts = new Map<string, number>()
+    for (const item of items) { const title = item?.type ? syncItemTitle(item) : `${item?.character} · ${item?.name}`; counts.set(title, (counts.get(title) ?? 0) + 1) }
+    return [...counts].map(([title, n]) => n > 1 ? `${title} ×${n}` : title).join(' · ')
+}
+/** Distinct state labels in one time entry, in first-seen order. */
+export function syncGroupStates(items: any[]): string {
+    return [...new Set(items.map(i => SYNC_ITEM_STATE[i?.state] ?? '확인 중'))].join(' · ')
+}
+
+export const OUTCOME_LABEL: Record<string, string> = { uploaded: 'NAS 업로드 완료', 'upload-pending': '아직 업로드할 변경이 남아 있어요', 'review-needed': '받은 변경 확인 필요', empty: '새로 적용할 변경 없음', applied: '이 기기에 적용 완료', 'applied-pending': '일부 적용 완료', deferred: '사용 중이어서 미룸 · 작업을 마친 뒤 다시 시도해 주세요', busy: '다른 작업 중', offline: '연결 안 됨 · 재시도 예정', error: '오류 · 재시도 예정', 'publish-failed': 'NAS 업로드 실패 · 재시도 예정', 'repair-failed': 'NAS 자료 다시 받기 실패 · 재시도 예정', hidden: '화면이 보일 때 재시도', 'deferred-active-chat': '받은 변경 보관 중 · 열어 둔 대화를 다시 열면 적용', 'pulled': '받은 자료 보관 중 · 작업을 마친 뒤 다운로드하거나 대화를 다시 열면 적용', cancelled: '취소됨', disabled: '꺼짐', 'recovery-pending': '이전 적용 결과 확인 대기 · 복구 기록 보관', 'finish-pending': '적용 결과 확인 대기 · 아래에서 다시 확인할 수 있어요', 'save-failed': '저장 실패 · 되돌림', running: '진행 중', idle: '대기' }
+/** Shared by the operation result and last-cycle row so partial applies retain their pending counts. */
+export function syncOutcomeText(outcome: string, details?: Pick<CoordinatorState, 'pendingReview' | 'keptDeletions'> | null): string {
+    const bare = outcome.replace(/^key-pending:/, '')
+    return (outcome.startsWith('key-pending:') ? '키 대기 · ' : '') + (OUTCOME_LABEL[bare] ?? (bare || '아직 실행 전'))
+        + (bare === 'applied-pending' ? ` · 차이 확인 ${details?.pendingReview ?? 0}건 · 삭제 보류 ${details?.keptDeletions ?? 0}건` : '')
+}
 /** Durable states for the compact status area: local save → NAS → peers, conflicts/trash/recovery, key, last cycle. */
 export function syncStateRows(status: any, c: CoordinatorState | null): string[] {
     if (!status?.enabled) return []
     const s = status.sync ?? {}, incoming = Object.values(s.incoming ?? {}) as any[]
     const pendingApply = incoming.reduce((n, p) => n + (p.pendingApply ?? 0), 0), review = incoming.reduce((n, p) => n + (p.held ?? 0) + (p.quarantined ?? 0), 0)
-    const raw = c?.lastOutcome ?? '', keyPending = raw.startsWith('key-pending:'), bare = raw.replace(/^key-pending:/, '')
-    const outcome = (keyPending ? '키 대기 · ' : '') + (OUTCOME_LABEL[bare] ?? (bare || '아직 실행 전'))
+    const outcome = syncOutcomeText(c?.lastOutcome ?? '', c)
     // A joining device opens its vault (pull/plan) before any grant and so holds a locally generated key that is never used to
     // publish (the coordinator gates on the shared key); showing it as "generated" next to the key-request button misleads.
     const key = status.vault?.missing ? '없음 · 이 작업공간의 키를 가진 다른 기기에서 다시 받아야 해요' : status.vault?.origin === 'shared' ? `공유받음${status.vault?.sharedFrom ? ` (기기 ${String(status.vault.sharedFrom).slice(0, 8)})` : ''}` : status.role === 'joining' ? '아직 받지 않음 · 권한 기기에서 공유 키를 받아 주세요' : status.vault?.origin === 'generated' ? '이 기기에서 생성' : '설치됨'
@@ -67,6 +106,7 @@ export function syncStateRows(status: any, c: CoordinatorState | null): string[]
         `충돌 ${status.conflicts ?? 0}건 · 휴지통 ${s.trash ?? 0}건 · 복구 대기 ${status.plan ? 1 : 0}건${status.pendingRestore ? ' · 복원 반영 대기' : ''}${status.localApply ? ` · 반영 예약 ${status.localApply}건` : ''}`,
         `동기화 키: ${key}${status.vault?.pendingGrant ? ' · 받은 키가 기존 키와 달라 확인 대기' : ''}`,
         `마지막 주기: ${outcome}${c?.paused ? ' · 일시 중지' : ''}${c?.lastError ? ` · ${c.lastError}` : ''}${c?.attention ? ` · 주의: ${c.attention}` : ''}`,
+        `이 기기 마지막 적용 완료: ${status.lastAppliedAt ? syncRevisionTime(status.lastAppliedAt) : '기록 없음'}`,
     ]
 }
 /**

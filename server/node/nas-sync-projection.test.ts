@@ -34,8 +34,8 @@ test('ownership is disjoint and total over the real Database interface; the pres
     expect(classified.filter(([, o]) => o === 'collection').map(([k]) => k).sort()).toEqual(['characters', 'modules', 'plugins'])
     // Listed owners must be real keys (typo guard): every grouped/local key appears in the interface or is a known mirror/dynamic key.
     // Legacy keys: removed from the Database interface upstream (v0.9.76 dropped the Bard-chan toggles) but still owned, so values
-    // already stored on devices keep syncing instead of becoming unowned optional keys. Documented here; never silently widened.
-    const LEGACY_OWNED = ['risuBardBardChanEnabled', 'risuBardBardChanModelMode']
+    // v0.9.81 also removed personaNote. Values already stored on devices keep syncing instead of becoming unowned optional keys. Documented here; never silently widened.
+    const LEGACY_OWNED = ['risuBardBardChanEnabled', 'risuBardBardChanModelMode', 'personaNote']
     for (const key of LEGACY_OWNED) expect(ownerOf(key), `${key} must stay owned by a settings group`).toMatch(/^settings:/)
     const known = new Set([...keys, ...MIRROR, ...LEGACY_OWNED, 'risuPlaySets', 'formatversion', 'personaEnabledModules', 'hypaV3Settings', 'pluginDevelopMode'])
     const stale = [...Object.values(SETTINGS_GROUPS).flat(), ...DEVICE_LOCAL].filter(k => !known.has(k))
