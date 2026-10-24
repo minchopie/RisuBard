@@ -1,7 +1,7 @@
 # Fable 5.1 xhigh 실행 기반 4차 검수
 
 <tool name="Edit">
-<parameter name="file_path">C:\Users\lattegun\.claude\plans\actual-fable-review-4-adaptive-codd.md</parameter>
+<parameter name="file_path"><user-home>\.claude\plans\actual-fable-review-4-adaptive-codd.md</parameter>
 <parameter name="old_str">- 재진입: `shuttingDown` 가드로 EOF→flush 진행 중 5s 뒤 SIGTERM은 no-op, 7s 뒤 SIGKILL.</parameter>
 <parameter name="new_str">- 재진입: `shuttingDown` 가드로 EOF→flush 진행 중 5s 뒤 SIGTERM은 no-op, 7s 뒤 SIGKILL. 락과의 상호작용: 락의 `once` 핸들러는 서버 핸들러가 남아 있어 반환하고, `process.exit(0)`의 `exit` 리스너가 락을 해제 → 정상.
 - **R4-2 (확정 구조, 트리거 미재현, 낮음)**: `liveFileEvents.close()`, `stopTunnel()`, `liveCharacterFiles.close()`, `await saveObservation.flush()`가 try 밖. 하나라도 throw/reject하면 `process.exit(0)` 미도달. `process.on(sig, () => shutdownGracefully(sig))`가 Promise를 버리므로 unhandled rejection. (a) `unhandledRejection` 로깅 핸들러가 있으면 프로세스가 `shuttingDown=true`로 남아 이후 SIGTERM/EOF 전부 무시 → `stop()` 경로는 7s 뒤 SIGKILL로 끝나지만 Java 사망(EOF) 경로는 영구 잔존 → 다음 기동 `DATA_ROOT_IN_USE` → force-stop까지 복구 불가. (b) 핸들러가 없으면 크래시 종료(락은 해제)되나 throw가 `flushPendingDb` 앞이면 flush 생략. PC도 동일(두 번째 Ctrl+C 무시).
