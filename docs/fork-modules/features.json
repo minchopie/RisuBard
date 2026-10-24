@@ -530,7 +530,8 @@
         "server/node/app-update/runtime.json",
         "server/node/app-update.test.ts",
         "scripts/app-update.mjs",
-        "docs/app-update/MODULE.md"
+        "docs/app-update/MODULE.md",
+        "docs/app-update/CROSSOVER-20261024.md"
       ]
     }
   ],

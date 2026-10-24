@@ -3638,6 +3638,14 @@
       "sha256": "80013f51d6cfd2db2446c66026a8ad27bc3a95e8a828ac23ea74993b25a1aefa",
       "contentSha256": "80013f51d6cfd2db2446c66026a8ad27bc3a95e8a828ac23ea74993b25a1aefa",
       "bytes": 4957
+    },
+    {
+      "path": "docs/app-update/CROSSOVER-20261024.md",
+      "module": "app-update",
+      "kind": "files",
+      "sha256": "9ffa8224632d75fd88128b728dd1d288a0c4a41ae5ad274ce62c79e3da9a6669",
+      "contentSha256": "9ffa8224632d75fd88128b728dd1d288a0c4a41ae5ad274ce62c79e3da9a6669",
+      "bytes": 7554
     }
   ],
   "modules": [
@@ -4197,7 +4205,8 @@
         "server/node/app-update/runtime.json",
         "server/node/app-update.test.ts",
         "scripts/app-update.mjs",
-        "docs/app-update/MODULE.md"
+        "docs/app-update/MODULE.md",
+        "docs/app-update/CROSSOVER-20261024.md"
       ],
       "patch": null
     }
@@ -4213,7 +4222,7 @@
     },
     {
       "path": "docs/fork-modules/README.md",
-      "sha256": "2bb3fb8646083c24da050d4a7005c7f0b1d34d15c47207856871fdc2822a8844"
+      "sha256": "3a52e2cccf8efb0d3c9678acec36fa9cd2fbe24c24bf99a153ac32018eefff8b"
     },
     {
       "path": "docs/fork-modules/CROSSOVER-20261024.md",
@@ -4221,7 +4230,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "303b88db76877ba5cf6b357ed575215ecf0db4be279c8964d4210fed57da5f98"
+      "sha256": "a235bce697fac5e9f2e3ed2292b1945287ca4e4e684230c7904c4268b068dba5"
     }
   ],
   "compatibility": [

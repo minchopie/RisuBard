@@ -20,10 +20,12 @@ node scripts/fork-modules/module-stack.mjs verify --target v0.9.81 --full --logs
 
 `--full`은 고정 lockfile 설치(`--frozen-lockfile`), Node 전용 검사(플레이 세트·Android 도구·기존 로컬 AI 모의 검사 포함), Vitest 전체 검사, 타입·공개 경계·웹 빌드를 수행한다. report.json에 입력 manifest 해시, 선택 패치/해시, Node/pnpm 버전과 실행 시각을 남긴다. 최신 원작 호스트는 의도적으로 바이트가 다르므로 패치 범위·호스트 훅·원작 기능 probe·전체 검사로 검증한다. 기준판만 호스트 재구성 동일성을 비교한다.
 
-이 도구는 기존 개인 포크 소스와 기준 Git 커밋이 있는 작업 트리에서 실행한다. 새 clone의 Git 줄끝 설정이 다르면 원본 바이트 해시가 달라 검사가 중단될 수 있다. 변경을 확인한 뒤 `generate`로 해당 clone의 manifest를 다시 만들고 검사한다. 해시를 무시하거나 앱 파일을 원작 위에 통째로 복사하지 않는다. 조립 결과의 0.9.88은 개발 소스 번호로, 새 공개 업데이트나 설치 승인 표시는 아니다.
+이 도구는 기존 개인 포크 소스와 기준 Git 커밋이 있는 작업 트리에서 실행한다. 새 clone의 Git 줄끝 설정이 다르면 원본 바이트 해시가 달라 검사가 중단될 수 있다. 변경을 확인한 뒤 `generate`로 해당 clone의 manifest를 다시 만들고 검사한다. 해시를 무시하거나 앱 파일을 원작 위에 통째로 복사하지 않는다. 현재 조립 대상은 개인판 0.9.90이다. 공개 릴리즈와 실제 기기 설치 결과는 구분해서 확인한다.
 
 기존 Local AI 파일은 기존 기능 보존을 위해 남긴다. 기능을 활성화하거나 모델을 내려받는 작업은 하지 않는다. `history-docs`는 기존 문서/판본 이력이며 앱의 동작 모듈과 구분한다.
 
 현재 검증과 인계는 [크로스오버](CROSSOVER-20261024.md)를 따른다.
 
 새 clone은 `git -c core.autocrlf=false clone <개인 포크 URL>`처럼 패치 파일의 LF를 유지해서 준비한다. 이미 CRLF로 바뀐 호환 패치는 검수한 LF 원본으로 복원한 뒤 generate/verify를 실행한다. 전역 Git 설정을 바꿀 필요는 없다.
+
+0.9.90의 열 번째 모듈 `app-update`와 Windows 로그 수정의 검수·보존·배포 경계는 [NAS 앱 패치 크로스오버](../app-update/CROSSOVER-20261024.md)를 따른다.
