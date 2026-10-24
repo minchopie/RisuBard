@@ -3643,9 +3643,9 @@
       "path": "docs/app-update/CROSSOVER-20261024.md",
       "module": "app-update",
       "kind": "files",
-      "sha256": "9ffa8224632d75fd88128b728dd1d288a0c4a41ae5ad274ce62c79e3da9a6669",
-      "contentSha256": "9ffa8224632d75fd88128b728dd1d288a0c4a41ae5ad274ce62c79e3da9a6669",
-      "bytes": 7554
+      "sha256": "2bc0452d69b65348de84cc41d4407e2ebe10d61a5a870e556f01105f05fad6cf",
+      "contentSha256": "2bc0452d69b65348de84cc41d4407e2ebe10d61a5a870e556f01105f05fad6cf",
+      "bytes": 7501
     }
   ],
   "modules": [
@@ -4222,7 +4222,7 @@
     },
     {
       "path": "docs/fork-modules/README.md",
-      "sha256": "3a52e2cccf8efb0d3c9678acec36fa9cd2fbe24c24bf99a153ac32018eefff8b"
+      "sha256": "bff696fd980a35418e082e435e032531f52a51af235f60f5dc8be9d2475229fb"
     },
     {
       "path": "docs/fork-modules/CROSSOVER-20261024.md",
