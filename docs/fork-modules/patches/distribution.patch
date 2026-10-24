@@ -60,7 +60,7 @@ index f62d88a..216d141 100644
 +included in the packaged runtime. Model weights are selected by the user and
 +are not included in the APK; their own licenses apply.
 diff --git a/package.json b/package.json
-index 2ec83a4..5eac60f 100644
+index 2ec83a4..ae7ce12 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,7 +1,7 @@
@@ -68,10 +68,19 @@ index 2ec83a4..5eac60f 100644
    "name": "risubard",
    "private": true,
 -  "version": "0.9.71",
-+  "version": "0.9.89",
++  "version": "0.9.90",
    "license": "GPL-3.0-only",
    "packageManager": "pnpm@10.34.1",
    "engines": {
+@@ -13,7 +13,7 @@
+     "dev:server": "node --watch-path=server/node --watch-preserve-output server/node/server.cjs",
+     "convert:v2-to-v1": "node scripts/convert-v2-to-v0925.cjs",
+     "inspect:backup": "node server/node/inspect-backup.cjs",
+-    "build": "vite build --sourcemap",
++    "build": "node scripts/app-update.mjs fingerprint && vite build --sourcemap",
+     "preview": "vite preview",
+     "check": "svelte-check --tsconfig ./tsconfig.json",
+     "check:public-boundary": "node scripts/check-public-boundary.mjs",
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
 index 9f22d68..10d3a4b 100644
 --- a/pnpm-lock.yaml
@@ -155,6 +164,19 @@ index 9f22d68..10d3a4b 100644
 +      buffer-crc32: 1.0.0
 +
    zimmerframe@1.1.4: {}
+diff --git a/scripts/portable-smoke.cjs b/scripts/portable-smoke.cjs
+index 130433e..f5e7b8a 100644
+--- a/scripts/portable-smoke.cjs
++++ b/scripts/portable-smoke.cjs
+@@ -15,7 +15,7 @@ async function main() {
+     try {
+         const child = await startAndVerify(root, {
+             ...process.env, PORT: '0', RISUBARD_DATA_ROOT: data,
+-            RISU_UPDATE_CHECK: 'false', OPEN_BROWSER: '0', NODE_PATH: '', NODE_OPTIONS: '',
++            RISU_UPDATE_CHECK: 'false', OPEN_BROWSER: '0', NODE_PATH: '', NODE_OPTIONS: '', RISUBARD_APP_UPDATE: '0',
+         }, 60000, console.log);
+         const exited = once(child, 'close');
+         child.kill();
 diff --git a/scripts/release.mjs b/scripts/release.mjs
 index 785b57d..8192959 100644
 --- a/scripts/release.mjs
@@ -181,6 +203,19 @@ index a9e9751..9d0eca7 100644
  const ROOT = path.resolve(__dirname, '..');
  
  const isWin = process.platform === 'win32';
+diff --git a/server/node/portable-update.cjs b/server/node/portable-update.cjs
+index dc96159..0f1fc01 100644
+--- a/server/node/portable-update.cjs
++++ b/server/node/portable-update.cjs
+@@ -68,7 +68,7 @@ function startAndVerify(root, env = process.env, timeoutMs = 60000, log = () =>
+     return new Promise((resolve, reject) => {
+         const node = path.join(root, 'bin', process.platform === 'win32' ? 'node.exe' : 'node');
+         const child = spawn(node, ['server/node/server.cjs'], {
+-            cwd: root, env: { ...env, OPEN_BROWSER: '0' },
++            cwd: root, env: { ...env, OPEN_BROWSER: '0', RISUBARD_APP_UPDATE: '0' },
+             detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+         });
+         let settled = false, output = '';
 diff --git a/server/node/release-update.test.ts b/server/node/release-update.test.ts
 index 2a00acd..24be8aa 100644
 --- a/server/node/release-update.test.ts

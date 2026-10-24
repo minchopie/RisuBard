@@ -1,7 +1,8 @@
 diff --git a/src/ts/parser/hiddenInlay.test.ts b/src/ts/parser/hiddenInlay.test.ts
+index 58c48aa..4c350ab 100644
 --- a/src/ts/parser/hiddenInlay.test.ts
 +++ b/src/ts/parser/hiddenInlay.test.ts
-@@ -53,7 +53,7 @@
+@@ -53,7 +53,7 @@ test('cached and pending inlays carry identical IDs and occurrence indices for t
      const code = ts.transpileModule(source.slice(start, source.indexOf('// Global resolve queue', start))
          .replace('export function', 'function'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
      const cache = new Map<string, { type: string, url: string }>()
@@ -11,6 +12,7 @@ diff --git a/src/ts/parser/hiddenInlay.test.ts b/src/ts/parser/hiddenInlay.test.
      const text = '{{inlay::scene}} {{inlayed::scene}} {{inlay::other}}'
      const root = document.createElement('div')
 diff --git a/src/ts/parser/parser.svelte.ts b/src/ts/parser/parser.svelte.ts
+index 1084255..801cc32 100644
 --- a/src/ts/parser/parser.svelte.ts
 +++ b/src/ts/parser/parser.svelte.ts
 @@ -1,4 +1,5 @@
@@ -19,7 +21,7 @@ diff --git a/src/ts/parser/parser.svelte.ts b/src/ts/parser/parser.svelte.ts
  import markdownit from 'markdown-it'
  import { appVer, getCurrentCharacter, getDatabase, type Chat, type Database, type character, type customscript, type triggerscript } from '../storage/database.svelte';
  import { DBState, selIdState } from '../stores.svelte';
-@@ -643,13 +644,14 @@
+@@ -643,13 +644,14 @@ function createMissingInlayPlaceholder(id: string): HTMLDivElement {
      return box
  }
  
@@ -36,7 +38,7 @@ diff --git a/src/ts/parser/parser.svelte.ts b/src/ts/parser/parser.svelte.ts
              const occurrence = occurrences.get(id) ?? 0
              occurrences.set(id, occurrence + 1)
              const escapedId = id.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-@@ -896,7 +898,8 @@
+@@ -896,7 +898,8 @@ export async function ParseMarkdown(
          })
      }
  
@@ -46,7 +48,7 @@ diff --git a/src/ts/parser/parser.svelte.ts b/src/ts/parser/parser.svelte.ts
  
      data = parseThoughtsAndTools(data)
  
-@@ -908,7 +911,7 @@
+@@ -908,7 +911,7 @@ export async function ParseMarkdown(
              return data
          }
      }
@@ -56,9 +58,10 @@ diff --git a/src/ts/parser/parser.svelte.ts b/src/ts/parser/parser.svelte.ts
  
  // LRU cache for DOMPurify + decodeStyle results.
 diff --git a/src/ts/process/lorebook.svelte.ts b/src/ts/process/lorebook.svelte.ts
+index 95c3b07..4ec8a31 100644
 --- a/src/ts/process/lorebook.svelte.ts
 +++ b/src/ts/process/lorebook.svelte.ts
-@@ -247,7 +247,7 @@
+@@ -247,7 +247,7 @@ export async function loadLoreBookV3Prompt(options?: (ChatContext & { renderedFi
                  newKeys.push(trimmed)
              }
          }
@@ -68,9 +71,10 @@ diff --git a/src/ts/process/lorebook.svelte.ts b/src/ts/process/lorebook.svelte.
              source:string
              prompt:string
 diff --git a/src/ts/process/lorebookRecursion.test.ts b/src/ts/process/lorebookRecursion.test.ts
+index 1fcede8..a66d2b1 100644
 --- a/src/ts/process/lorebookRecursion.test.ts
 +++ b/src/ts/process/lorebookRecursion.test.ts
-@@ -61,6 +61,25 @@
+@@ -61,6 +61,25 @@ function lore(comment: string, key: string, content: string) {
  }
  
  describe('Grimoire live prompt retrieval', () => {
@@ -97,9 +101,10 @@ diff --git a/src/ts/process/lorebookRecursion.test.ts b/src/ts/process/lorebookR
          mockModuleSources.length = 0
          const a = { id: 'a', localLore: [lore('A lore', 'A keyword', 'A FACT')], message: [{ role: 'user', data: 'A keyword' }] }
 diff --git a/src/ts/process/scriptings.ts b/src/ts/process/scriptings.ts
+index 1088b2c..5bbc461 100644
 --- a/src/ts/process/scriptings.ts
 +++ b/src/ts/process/scriptings.ts
-@@ -1241,7 +1241,8 @@
+@@ -1241,7 +1241,8 @@ export async function runScripted(code:string, arg:{
  }
  
  async function makeLuaFactory(){

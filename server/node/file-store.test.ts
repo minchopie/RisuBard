@@ -34,6 +34,39 @@ afterEach(() => {
     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
+describe('Windows atomic replacement contention', () => {
+    it.runIf(process.platform === 'win32')('retries transient sharing failures for data, backup and checksum', () => {
+        const root = tempRoot()
+        atomicWriteJson(root, 'state.json', { nextId: 1 })
+        const rename = fs.renameSync
+        const attempts = new Map<string, number>()
+        vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+            const key = String(to)
+            const count = attempts.get(key) ?? 0
+            attempts.set(key, count + 1)
+            if (count < 2) throw Object.assign(new Error('sharing violation'), { code: count ? 'EACCES' : 'EPERM' })
+            return rename(from, to)
+        })
+        atomicWriteJson(root, 'state.json', { nextId: 2 })
+        expect(readVerifiedJson(root, 'state.json')).toEqual({ nextId: 2 })
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'state.json.bak'), 'utf8'))).toEqual({ nextId: 1 })
+        expect([...attempts.values()]).toEqual([3, 3, 3])
+    })
+
+    it('preserves the destination and reports a permanent replacement error', () => {
+        const root = tempRoot()
+        atomicWriteFile(root, 'system.jsonl', 'original\n')
+        const rename = fs.renameSync
+        vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+            if (String(to) === path.join(root, 'system.jsonl')) throw Object.assign(new Error('permanent denial'), { code: 'EPERM' })
+            return rename(from, to)
+        })
+        expect(() => atomicWriteFile(root, 'system.jsonl', 'replacement\n')).toThrow('permanent denial')
+        expect(fs.readFileSync(path.join(root, 'system.jsonl'), 'utf8')).toBe('original\n')
+        expect(fs.readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([])
+    })
+})
+
 describe('resolveDataRoot', () => {
     it('uses an explicit absolute user-data root independently from the app directory', () => {
         const root = path.resolve(tempRoot(), 'user-data')

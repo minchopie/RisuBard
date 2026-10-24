@@ -266,7 +266,8 @@
         "src/ts/process/request/modelPresetBinding.ts",
         "src/ts/process/request/request.ts",
         "src/ts/tokenizer.ts",
-        "src/ts/translator/translator.ts"
+        "src/ts/translator/translator.ts",
+        "server/node/logs.test.ts"
       ],
       "files": [
         "src/ts/process/request/googleAndroidRequest.test.ts",
@@ -364,7 +365,9 @@
         "scripts/updater.cjs",
         "server/node/release-update.test.ts",
         "server/node/risubard-update-release.test.ts",
-        "update.sh"
+        "update.sh",
+        "server/node/portable-update.cjs",
+        "scripts/portable-smoke.cjs"
       ],
       "files": []
     },
@@ -512,7 +515,22 @@
         "patchnote/0.9.86.md",
         "patchnote/0.9.87.md",
         "patchnote/0.9.88.md",
-        "patchnote/0.9.89.md"
+        "patchnote/0.9.89.md",
+        "patchnote/0.9.90.md"
+      ]
+    },
+    {
+      "id": "app-update",
+      "name": "NAS 앱 코드 자동 패치",
+      "hosts": [],
+      "files": [
+        "server/node/app-update/bootstrap.cjs",
+        "server/node/app-update/core.cjs",
+        "server/node/app-update/remote.cjs",
+        "server/node/app-update/runtime.json",
+        "server/node/app-update.test.ts",
+        "scripts/app-update.mjs",
+        "docs/app-update/MODULE.md"
       ]
     }
   ],
@@ -547,17 +565,17 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "fa8058583799fe2c5d6e67b7d2f3e60293e62e3b0dcbd113e35544a8c8de1ed7"
+          "sourceSha256": "c039c811953dda5e37577263b8a6256043ccd5cd9caac810210bde1705c4a18c"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "7db8108747cc6bcebb4c53dd405bbe9dfcf346a5a2de950ff8c5125c2be2e4c7"
+          "sourceSha256": "114bc6fda56cecec8581d58514f636276c5d6cb51d6b31418febfb4378a21116"
         },
         {
           "module": "storage-recovery",
           "path": "docs/fork-modules/compat/v0.9.81/storage-recovery.patch",
-          "sourceSha256": "dc5c847b64cdf783edbf373e397538f49ca3bf2d85b300a8551e751e9ad962d8"
+          "sourceSha256": "9d6b60266cf4c984ddbb6683d2e5a9c59b1add4a5331dbf619aca74efea45953"
         }
       ],
       "payloadTargets": {

@@ -141,9 +141,10 @@ class MainActivity : Activity() {
         if (connecting) return
         connecting = true; retry.isEnabled = false
         message.text = "RisuBard를 시작하고 있어요…"; panel.visibility = android.view.View.VISIBLE
+        val startupNetwork = NativeNetwork(this).also { it.start() }
         worker.execute {
             try {
-                val session = EmbeddedServer.start(applicationContext)
+                val session = EmbeddedServer.start(applicationContext) { startupNetwork.info() }
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     connecting = false; retry.isEnabled = true
@@ -162,7 +163,7 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) { runOnUiThread {
                 if (!isDestroyed) { connecting = false; retry.isEnabled = true; message.text = error.message ?: "시작 실패" }
-            } }
+            } } finally { startupNetwork.stop() }
         }
     }
     private fun recoveryFiles(): List<File> {

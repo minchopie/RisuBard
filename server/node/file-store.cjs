@@ -124,13 +124,29 @@ function copySynced(source, destination) {
     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
+const renameWait = new Int32Array(new SharedArrayBuffer(4));
+function retryWindowsSharing(operation) {
+    const deadline = Date.now() + 1000;
+    let delay = 10;
+    for (;;) {
+        try { return operation(); }
+        catch (error) {
+            if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error?.code) || Date.now() >= deadline) throw error;
+            // Windows sharing handles can briefly block replacement; never unlink the good destination.
+            Atomics.wait(renameWait, 0, 0, Math.min(delay, deadline - Date.now()));
+            delay = Math.min(delay * 2, 50);
+        }
+    }
+}
+function renameAtomic(source, destination) { return retryWindowsSharing(() => fs.renameSync(source, destination)); }
+
 function replaceAtomic(target, data) {
     const directory = path.dirname(target);
     fs.mkdirSync(directory, { recursive: true });
     const temp = path.join(directory, `.${path.basename(target)}.${crypto.randomUUID()}.tmp`);
     writeSynced(temp, data);
     try {
-        fs.renameSync(temp, target);
+        renameAtomic(temp, target);
         fsyncDirectory(directory);
     } catch (error) {
         try { fs.unlinkSync(temp); } catch {}
@@ -146,8 +162,9 @@ function preserveBackup(target) {
     // A copied package may have a sidecar for the previous backup revision.
     // Backups are historical bytes, not a checksummed canonical write. Never
     // leave that old checksum attached to the replacement backup.
-    fs.rmSync(`${backup}.sha256`, { force: true });
-    fs.renameSync(temp, backup);
+    retryWindowsSharing(() => fs.rmSync(`${backup}.sha256`, { force: true }));
+    try { renameAtomic(temp, backup); }
+    catch (error) { try { fs.unlinkSync(temp); } catch {} throw error; }
     fsyncDirectory(path.dirname(backup));
 }
 
@@ -171,7 +188,7 @@ function atomicWriteFile(root, relativePath, value, options = {}) {
 
     try {
         preserveBackup(target);
-        fs.renameSync(temp, target);
+        renameAtomic(temp, target);
         replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
         fsyncDirectory(directory);
         noteWrite(root, target);
@@ -216,7 +233,7 @@ function atomicWriteFileChunks(root, relativePath, produce, options = {}) {
 
     try {
         if (options.backup !== false) preserveBackup(target);
-        fs.renameSync(temp, target);
+        renameAtomic(temp, target);
         replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
         fsyncDirectory(directory);
         noteWrite(root, target);
@@ -281,7 +298,7 @@ function preserveRecoveryRevision(root, journal, entry, target) {
         try {
             copySynced(target, temp);
             if (!matchesChecksum(temp, digest)) throw canonicalChangedError(entry.path);
-            fs.renameSync(temp, destination);
+            renameAtomic(temp, destination);
             fsyncDirectory(directory);
         } finally {
             fs.rmSync(temp, { force: true });
@@ -331,7 +348,7 @@ function publishTransaction(root, journal, journalPath, options = {}) {
                 continue;
             }
             fs.mkdirSync(path.dirname(destination), { recursive: true });
-            fs.renameSync(source, destination);
+            renameAtomic(source, destination);
             fsyncDirectory(path.dirname(source));
             fsyncDirectory(path.dirname(destination));
             noteTree(root, source);
@@ -360,7 +377,7 @@ function publishTransaction(root, journal, journalPath, options = {}) {
         if (options.recovering) preserveRecoveryRevision(root, journal, entry, target);
         preserveBackup(target);
         fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.renameSync(entry.staged, target);
+        renameAtomic(entry.staged, target);
         replaceAtomic(`${target}.sha256`, Buffer.from(`${entry.checksum}\n`, 'utf8'));
         fsyncDirectory(path.dirname(target));
         noteWrite(root, target);
@@ -602,9 +619,9 @@ function moveToTrash(root, relativePath) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const destination = resolveInside(root, path.join('trash', stamp, relativePath));
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.renameSync(source, destination);
+    renameAtomic(source, destination);
     for (const suffix of ['.sha256', '.bak']) {
-        if (fs.existsSync(`${source}${suffix}`)) fs.renameSync(`${source}${suffix}`, `${destination}${suffix}`);
+        if (fs.existsSync(`${source}${suffix}`)) renameAtomic(`${source}${suffix}`, `${destination}${suffix}`);
     }
     noteTree(root, source);
     fsyncDirectory(path.dirname(source));
@@ -613,6 +630,7 @@ function moveToTrash(root, relativePath) {
 }
 
 module.exports = {
+    retryWindowsSharing,
     atomicWriteFile,
     atomicWriteFileChunks,
     atomicWriteJson,

@@ -1,7 +1,22 @@
 diff --git a/server/node/server.cjs b/server/node/server.cjs
+index 6e3035d..58cd1df 100644
 --- a/server/node/server.cjs
 +++ b/server/node/server.cjs
-@@ -47,7 +47,7 @@
+@@ -1,3 +1,4 @@
++if (require('./app-update/bootstrap.cjs').start(__filename)) return;
+ const express = require('express');
+ const { validatePackage, stageWindowsUpdate, restoreEntries } = require('./portable-update.cjs');
+ const app = express();
+@@ -23,7 +24,7 @@ const Vips = require('wasm-vips')
+ const { resolveDataRoot } = require('./data-root.cjs');
+ const { acquireDataRootLock } = require('./data-root-lock.cjs');
+ const processDataRoot = resolveDataRoot();
+-acquireDataRootLock(processDataRoot);
++if (!require('./app-update/bootstrap.cjs').ownsDataRoot(processDataRoot)) acquireDataRootLock(processDataRoot);
+ let _vipsPromise = null
+ const getVips = () => {
+     if (!_vipsPromise) {
+@@ -47,7 +48,7 @@ const upstreamPluginStorage = require('./upstream-plugin-storage.cjs');
  const { createSaveObservation } = require('./save-observation.cjs');
  const { createProjectionShadow } = require('./projection-shadow.cjs');
  const { generateStorageDiagnosticReport } = require('./storage-diagnostic-report.cjs');
@@ -10,7 +25,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs');
  const { openServerBrowser } = require('./open-server-browser.cjs');
  const { releaseToUpdateInfo } = require('./release-update.cjs');
-@@ -131,11 +131,23 @@
+@@ -131,11 +132,23 @@ function computeDatabaseEtagFromObject(databaseObject) {
  }
  
  let storageOperationQueue = Promise.resolve();
@@ -36,7 +51,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      };
      const operationRun = storageOperationQueue.then(run, run);
      storageOperationQueue = operationRun.catch(() => {});
-@@ -303,7 +315,8 @@
+@@ -303,7 +316,8 @@ async function flushPendingDbWithinQueue(options = {}) {
      if (options.adoptExternal !== true && externalChangesAwaitingReview()) return;
      if (await adoptSettledExternalProjection()) return;
      const trigger = options.deferCompatibility === true ? 'canonical-flush' : 'flush';
@@ -46,7 +61,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
          clearTimeout(saveTimers[DB_HEX_KEY]);
          delete saveTimers[DB_HEX_KEY];
          if (dbCache[DB_HEX_KEY]) {
-@@ -315,6 +328,7 @@
+@@ -315,6 +329,7 @@ async function flushPendingDbWithinQueue(options = {}) {
              // No stripped cache but chat store has data — merge and persist directly
              await persistChatStoreWithoutCache(trigger, { directCollection: directWriteTracker.take(DB_HEX_KEY) });
          }
@@ -54,7 +69,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
          maybeCollectUnreferencedObjects();
      }
      if (options.materialize !== false) {
-@@ -382,7 +396,6 @@
+@@ -382,7 +397,6 @@ function normalizeOrphanFolderIds(dbObj) {
  }
  
  async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
@@ -62,7 +77,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      // Convert legacy REMOTE-block layouts to inline format before decoding.
      // If migration ran it overwrote database.bin, so the caller's `raw` is
      // stale and we re-read from KV. Idempotent on the no-op path.
-@@ -873,8 +886,6 @@
+@@ -873,8 +887,6 @@ function elapsedMs(startedAt) {
  }
  
  async function persistChatStoreWithoutCache(trigger, observationContext = {}) {
@@ -71,7 +86,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      const operationId = nodeCrypto.randomUUID();
      const startedAt = performance.now();
      const overlappingPersists = activeCompatibilityPersists;
-@@ -1277,11 +1288,17 @@
+@@ -1277,11 +1289,17 @@ function persistCanonicalProjection(databaseObject, observationContext = {}) {
              trigger,
              plannedFiles: result.files,
          })
@@ -91,7 +106,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
              try { save.settle() } catch {}
          }
          const writeMeta = error?.canonicalWriteMeta
-@@ -1335,12 +1352,14 @@
+@@ -1335,12 +1353,14 @@ function adoptExternallyChangedCanonicalProjection(liveOnly = false, scanned = n
      } else if (fresh) {
          liveFilesAdoption.changed = fresh
          liveFilesAdoption.readyDb = null
@@ -106,7 +121,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      if (!liveFilesAdoption.readyDb && pending && baseline) {
          const conflicts = []
          fullDb = mergePendingLiveDatabase(pending, baseline, fullDb, conflicts)
-@@ -1348,12 +1367,25 @@
+@@ -1348,12 +1368,25 @@ function adoptExternallyChangedCanonicalProjection(liveOnly = false, scanned = n
              liveFilesAdoption.recovery = preserveLiveFileRecovery({ pending, baseline, conflicts, externalRevision: changed.revision })
              liveFilesAdoption.recoverySaved = true
          }
@@ -134,7 +149,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      if (saveTimers[DB_HEX_KEY]) {
          clearTimeout(saveTimers[DB_HEX_KEY])
          delete saveTimers[DB_HEX_KEY]
-@@ -1366,8 +1398,9 @@
+@@ -1366,8 +1399,9 @@ function adoptExternallyChangedCanonicalProjection(liveOnly = false, scanned = n
      dbCache[DB_HEX_KEY] = stripped
      dbEtag = computeBufferEtag(encodeRisuSaveLegacyBuffer(stripped))
      externallyAdoptedDbEtag = dbEtag
@@ -146,7 +161,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      liveFileRecovery.complete()
      liveFilesRecovery = liveFilesAdoption.recovery || null
      // The next page load tells the user where the app state was kept.
-@@ -1588,7 +1621,7 @@
+@@ -1588,7 +1622,7 @@ function stopTunnel() {
  
  // ── Update check ─────────────────────────────────────────────────────────────
  const UPDATE_CHECK_DISABLED = embedded.enabled || process.env.RISU_UPDATE_CHECK === 'false';
@@ -155,7 +170,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL || `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
  
  // Re-read on each call so non-portable updates (docker/git pull) without a
-@@ -3115,7 +3148,7 @@
+@@ -3115,7 +3149,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                  manifestBytes: preparedKv.manifestBytes,
                  retiredBytes: preparedKv.retiredBytes,
                  store: { reloadManifest },
@@ -164,7 +179,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
              });
              atomicRestorePublished = true;
          } else {
-@@ -4715,6 +4748,8 @@
+@@ -4715,6 +4749,8 @@ app.delete('/api/logs', async (req, res, next) => {
  // Registered with the same auth the /api/logs
  // endpoints use.
  const requestLogs = createRequestLogs({ saveDir: savePath });
@@ -173,7 +188,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  requestLogs.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
  const narrativeMemoryService = createRuntimeMemoryService(savePath);
  const windowsTransfers = require('./transfer-windows.cjs').createWindowsTransfers(savePath, path.resolve(__dirname, '../..'));
-@@ -4949,6 +4984,12 @@
+@@ -4949,6 +4985,12 @@ app.post('/api/write', async (req, res, next) => {
                      phaseStartedAt = performance.now();
                      initChatStore(fullDb);
                      metrics.refreshMs = elapsedMs(phaseStartedAt);
@@ -186,7 +201,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
                      errorStage = 'kv-write';
                      phaseStartedAt = performance.now();
                      kvSet(key, mergedContent);
-@@ -4969,6 +5010,7 @@
+@@ -4969,6 +5011,7 @@ app.post('/api/write', async (req, res, next) => {
                          overlappingPersists, ...metrics,
                      });
                      logger.error('[Write] Failed to merge chats into database.bin:', e.message);
@@ -194,7 +209,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
                      // Do NOT write stubs-only to disk — that would permanently
                      // destroy existing full chat data. Preserve disk as-is.
                      res.status(500).json({ error: 'Database merge failed' });
-@@ -4980,9 +5022,10 @@
+@@ -4980,9 +5023,10 @@ app.post('/api/write', async (req, res, next) => {
                  kvSet(key, fileContent);
              }
  
@@ -207,7 +222,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
                  if (saveTimers[DB_HEX_KEY]) {
                      clearTimeout(saveTimers[DB_HEX_KEY]);
                      delete saveTimers[DB_HEX_KEY];
-@@ -6521,7 +6564,7 @@
+@@ -6521,7 +6565,7 @@ app.post('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next) =>
          // Recheck writer ownership and canonical conflicts at commit time.
          return saveChatContentHandler(req, res, next);
      } catch (error) {
@@ -216,7 +231,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
          next(error);
      }
  });
-@@ -6531,7 +6574,7 @@
+@@ -6531,7 +6575,7 @@ app.delete('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next)
          await chatContentUploads.abort(req);
          res.json({ success: true });
      } catch (error) {
@@ -225,7 +240,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
          next(error);
      }
  });
-@@ -8045,10 +8088,9 @@
+@@ -8045,10 +8089,9 @@ app.post('/api/local-shutdown', (req, res) => {
  app.use(expressErrorMiddleware);
  app.use((err, req, res, next) => {
      if (res.headersSent) return next(err);
@@ -239,7 +254,16 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  });
  
  // ─────────────────────────────────────────────────────────────────────────────
-@@ -8151,11 +8193,13 @@
+@@ -8117,7 +8160,7 @@ async function startServer() {
+         // No time limit for receiving a request: large bot saves on a busy disk can
+         // take longer than Node's 5-minute default, and waiting is not a failure.
+         server.requestTimeout = 0;
+-        server.once('listening', () => embedded.ready(server, savePath));
++        server.once('listening', () => { require('./app-update/bootstrap.cjs').ready(); embedded.ready(server, savePath); });
+         // Written only once bound, so a server that lost the port race keeps the owner's token intact.
+         server.once('listening', () => writeFileSync(localShutdownTokenPath, localShutdownToken, { mode: 0o600 }));
+         // Move BardWiki vectors out of the KV in the background once serving.
+@@ -8151,11 +8194,13 @@ async function shutdownGracefully(reason) {
      console.log(`[Server] Received ${reason}, flushing pending data...`);
      try {
          try { liveFileEvents.close(); } catch (e) { logger.warn('[Server] File event cleanup error:', e); }
@@ -254,6 +278,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
                  } catch (e) {
                      exitCode = 1;
 diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/DefaultChatScreen.svelte
+index 3a9aa1c..6cdb611 100644
 --- a/src/lib/ChatScreens/DefaultChatScreen.svelte
 +++ b/src/lib/ChatScreens/DefaultChatScreen.svelte
 @@ -3,6 +3,8 @@
@@ -265,7 +290,7 @@ diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/
      import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, FileTextIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, BookOpenIcon, WandSparklesIcon, Undo2Icon, LoaderCircleIcon } from "@lucide/svelte";
      import { runInputAssistant } from "src/ts/risubard/inputAssistantRunner";
      import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte';
-@@ -1102,11 +1104,11 @@
+@@ -1102,11 +1104,11 @@ import { isMobile } from 'src/ts/platform'
      let inputTranslateHeight = $state("44px")
      let inputTranslateEle:HTMLTextAreaElement = $state()
  
@@ -279,7 +304,7 @@ diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/
          DBState.db.nodeOnlyStandardChatWidth === 'full' ? 'max-w-full' :
          DBState.db.nodeOnlyStandardChatWidth === 'wide' ? 'max-w-6xl' :
          'max-w-3xl'
-@@ -1432,6 +1434,12 @@
+@@ -1432,6 +1434,12 @@ import { isMobile } from 'src/ts/platform'
                      style="{DBState.db.fixedChatTextarea ? 'z-index:29;' : ''}"
              >
                <div class="mx-auto w-full {composerWidthClass} px-2">
@@ -293,6 +318,7 @@ diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/
                      && currentCharacter.chaId !== '§playground'
                      && !$chatDeselected
 diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
+index 7af9c72..f685e6d 100644
 --- a/src/ts/bootstrap.ts
 +++ b/src/ts/bootstrap.ts
 @@ -1,5 +1,7 @@
@@ -303,7 +329,7 @@ diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
  import { recoverTransfers, startTransferInbox } from './playTransfer'
  import { recoverSync } from './nasSync'
  import { startSyncCoordinator } from './nasSyncCoordinator'
-@@ -65,6 +67,7 @@
+@@ -65,6 +67,7 @@ export async function loadData() {
              {
                  await stage(language.startupLoading.storage)
                  await forageStorage.Init()
@@ -312,9 +338,10 @@ diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
                  await stage(language.startupLoading.localSave)
                  let gotStorage: Uint8Array = await forageStorage.getItem('database/database.bin') as unknown as Uint8Array
 diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
+index e056492..d0d00c0 100644
 --- a/src/ts/globalApi.svelte.ts
 +++ b/src/ts/globalApi.svelte.ts
-@@ -907,10 +907,13 @@
+@@ -907,10 +907,13 @@ export async function saveDb() {
                  saveTimeout = null;
              }
              changed = true;
@@ -330,9 +357,10 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
          const handleVisibilityFlush = () => {
              if (document.visibilityState === 'hidden') flushImmediate();
 diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
+index 45965e4..57d4a56 100644
 --- a/src/ts/storage/nodeStorage.ts
 +++ b/src/ts/storage/nodeStorage.ts
-@@ -339,6 +339,11 @@
+@@ -339,6 +339,11 @@ export class NodeStorage{
              ? await this.authFetch(path, init)
              : await this.saveRequest(path, init)
          if (!response.ok) throw new Error(`Server database flush failed (${response.status})`)
@@ -344,7 +372,7 @@ diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
      }
  
      private renewTimer: ReturnType<typeof setTimeout> | undefined
-@@ -519,6 +524,10 @@
+@@ -519,6 +524,10 @@ export class NodeStorage{
          return response
      }
  

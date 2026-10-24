@@ -48,10 +48,10 @@ function certHost(value) {
 /** TLS server name for the NAS endpoint `url`: the saved certificate name of that side (home/external), '' = the URL's own host. */
 function nasServername(c, url) { return (c?.homeUrl && url === folder(c.homeUrl) ? c.homeCertHost : c?.certHost) || ''; }
 /** `servername`: TLS SNI + certificate validation name + Host header when the URL's host is a literal IP; validation is never relaxed. */
-function request(url, { method = 'GET', headers = {}, body, servername = '' } = {}) {
+function request(url, { method = 'GET', headers = {}, body, servername = '', signal } = {}) {
     const target = new URL(url);
     if (target.protocol !== 'https:') throw new Error('HTTPS required');
-    const options = { method, headers };
+    const options = { method, headers, signal };
     if (servername) { options.servername = certHost(servername); options.headers = { Host: options.servername + (target.port ? ':' + target.port : ''), ...headers }; }
     return new Promise((resolve, reject) => {
         let connecting;

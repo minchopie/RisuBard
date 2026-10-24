@@ -19,7 +19,7 @@ internal object EmbeddedServer {
     private var origin: String? = null
     private val http = OkHttpClient.Builder().connectTimeout(2, TimeUnit.SECONDS).readTimeout(5, TimeUnit.SECONDS).build()
 
-    @Synchronized fun start(context: Context): Session {
+    @Synchronized fun start(context: Context, networkInfo: (() -> JSONObject)? = null): Session {
         val app = context.applicationContext
         val data = File(app.filesDir, "user-data").apply { mkdirs() }
         val secret = InstallCredential(app).getOrCreate()
@@ -41,6 +41,7 @@ internal object EmbeddedServer {
             builder.environment().apply {
                 put("RISUBARD_DATA_ROOT", data.absolutePath)
                 put("RISUBARD_EMBEDDED_ANDROID", "1")
+                runCatching { networkInfo?.invoke() }.getOrNull()?.let { put("RISUBARD_START_NETWORK", it.toString()) }
                 put("RISUBARD_NO_BACKUP_DIR", app.noBackupFilesDir.absolutePath) // NAS sync identity/vault/device key: never in any backup
                 runCatching { TransferCredential.key(app) }.onSuccess { put("RISUBARD_TRANSFER_KEY", it) }
                 if (BuildConfig.LOCAL_AI) put("RISUBARD_LOCAL_ENGINE", File(app.applicationInfo.nativeLibraryDir, "libllama-server.so").absolutePath)

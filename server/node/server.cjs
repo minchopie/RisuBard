@@ -1,3 +1,4 @@
+if (require('./app-update/bootstrap.cjs').start(__filename)) return;
 const express = require('express');
 const { validatePackage, stageWindowsUpdate, restoreEntries } = require('./portable-update.cjs');
 const app = express();
@@ -23,7 +24,7 @@ const Vips = require('wasm-vips')
 const { resolveDataRoot } = require('./data-root.cjs');
 const { acquireDataRootLock } = require('./data-root-lock.cjs');
 const processDataRoot = resolveDataRoot();
-acquireDataRootLock(processDataRoot);
+if (!require('./app-update/bootstrap.cjs').ownsDataRoot(processDataRoot)) acquireDataRootLock(processDataRoot);
 let _vipsPromise = null
 const getVips = () => {
     if (!_vipsPromise) {
@@ -7754,7 +7755,7 @@ async function startServer() {
         // No time limit for receiving a request: large bot saves on a busy disk can
         // take longer than Node's 5-minute default, and waiting is not a failure.
         server.requestTimeout = 0;
-        server.once('listening', () => embedded.ready(server, savePath));
+        server.once('listening', () => { require('./app-update/bootstrap.cjs').ready(); embedded.ready(server, savePath); });
         // Written only once bound, so a server that lost the port race keeps the owner's token intact.
         server.once('listening', () => writeFileSync(localShutdownTokenPath, localShutdownToken, { mode: 0o600 }));
         // Move BardWiki vectors out of the KV in the background once serving.

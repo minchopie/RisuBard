@@ -207,10 +207,71 @@ index 459ed8f..7932e26 100644
          const root = tempRoot()
          const result = spawnSync(process.execPath, ['-e', `
 diff --git a/server/node/file-store.cjs b/server/node/file-store.cjs
-index fc6e1b3..8e9e5f4 100644
+index fc6e1b3..2f767f0 100644
 --- a/server/node/file-store.cjs
 +++ b/server/node/file-store.cjs
-@@ -263,6 +263,33 @@ function writeJournal(journalPath, value) {
+@@ -124,13 +124,29 @@ function copySynced(source, destination) {
+     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+ }
+ 
++const renameWait = new Int32Array(new SharedArrayBuffer(4));
++function retryWindowsSharing(operation) {
++    const deadline = Date.now() + 1000;
++    let delay = 10;
++    for (;;) {
++        try { return operation(); }
++        catch (error) {
++            if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error?.code) || Date.now() >= deadline) throw error;
++            // Windows sharing handles can briefly block replacement; never unlink the good destination.
++            Atomics.wait(renameWait, 0, 0, Math.min(delay, deadline - Date.now()));
++            delay = Math.min(delay * 2, 50);
++        }
++    }
++}
++function renameAtomic(source, destination) { return retryWindowsSharing(() => fs.renameSync(source, destination)); }
++
+ function replaceAtomic(target, data) {
+     const directory = path.dirname(target);
+     fs.mkdirSync(directory, { recursive: true });
+     const temp = path.join(directory, `.${path.basename(target)}.${crypto.randomUUID()}.tmp`);
+     writeSynced(temp, data);
+     try {
+-        fs.renameSync(temp, target);
++        renameAtomic(temp, target);
+         fsyncDirectory(directory);
+     } catch (error) {
+         try { fs.unlinkSync(temp); } catch {}
+@@ -146,8 +162,9 @@ function preserveBackup(target) {
+     // A copied package may have a sidecar for the previous backup revision.
+     // Backups are historical bytes, not a checksummed canonical write. Never
+     // leave that old checksum attached to the replacement backup.
+-    fs.rmSync(`${backup}.sha256`, { force: true });
+-    fs.renameSync(temp, backup);
++    retryWindowsSharing(() => fs.rmSync(`${backup}.sha256`, { force: true }));
++    try { renameAtomic(temp, backup); }
++    catch (error) { try { fs.unlinkSync(temp); } catch {} throw error; }
+     fsyncDirectory(path.dirname(backup));
+ }
+ 
+@@ -171,7 +188,7 @@ function atomicWriteFile(root, relativePath, value, options = {}) {
+ 
+     try {
+         preserveBackup(target);
+-        fs.renameSync(temp, target);
++        renameAtomic(temp, target);
+         replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
+         fsyncDirectory(directory);
+         noteWrite(root, target);
+@@ -216,7 +233,7 @@ function atomicWriteFileChunks(root, relativePath, produce, options = {}) {
+ 
+     try {
+         if (options.backup !== false) preserveBackup(target);
+-        fs.renameSync(temp, target);
++        renameAtomic(temp, target);
+         replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
+         fsyncDirectory(directory);
+         noteWrite(root, target);
+@@ -263,6 +280,33 @@ function writeJournal(journalPath, value) {
      replaceAtomic(journalPath, Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'));
  }
  
@@ -232,7 +293,7 @@ index fc6e1b3..8e9e5f4 100644
 +        try {
 +            copySynced(target, temp);
 +            if (!matchesChecksum(temp, digest)) throw canonicalChangedError(entry.path);
-+            fs.renameSync(temp, destination);
++            renameAtomic(temp, destination);
 +            fsyncDirectory(directory);
 +        } finally {
 +            fs.rmSync(temp, { force: true });
@@ -244,15 +305,28 @@ index fc6e1b3..8e9e5f4 100644
  function publishTransaction(root, journal, journalPath, options = {}) {
      let published = 0;
      let skipped = 0;
-@@ -330,6 +357,7 @@ function publishTransaction(root, journal, journalPath, options = {}) {
+@@ -304,7 +348,7 @@ function publishTransaction(root, journal, journalPath, options = {}) {
+                 continue;
+             }
+             fs.mkdirSync(path.dirname(destination), { recursive: true });
+-            fs.renameSync(source, destination);
++            renameAtomic(source, destination);
+             fsyncDirectory(path.dirname(source));
+             fsyncDirectory(path.dirname(destination));
+             noteTree(root, source);
+@@ -330,9 +374,10 @@ function publishTransaction(root, journal, journalPath, options = {}) {
          if (!fs.existsSync(entry.staged)) {
              throw new Error(`Transaction stage is missing for ${entry.path}`);
          }
 +        if (options.recovering) preserveRecoveryRevision(root, journal, entry, target);
          preserveBackup(target);
          fs.mkdirSync(path.dirname(target), { recursive: true });
-         fs.renameSync(entry.staged, target);
-@@ -412,6 +440,10 @@ function commitTransaction(root, operations, options = {}) {
+-        fs.renameSync(entry.staged, target);
++        renameAtomic(entry.staged, target);
+         replaceAtomic(`${target}.sha256`, Buffer.from(`${entry.checksum}\n`, 'utf8'));
+         fsyncDirectory(path.dirname(target));
+         noteWrite(root, target);
+@@ -412,6 +457,10 @@ function commitTransaction(root, operations, options = {}) {
      if (!Array.isArray(operations) || operations.length === 0) {
          return { committed: 0, published: 0, skipped: 0, stagedBytes: 0 };
      }
@@ -263,7 +337,7 @@ index fc6e1b3..8e9e5f4 100644
      const clearedPaths = [];
      const prepared = operations.map((operation, operationIndex) => {
          reportImportProgress('verify-files', operationIndex, operations.length, operation.path);
-@@ -489,7 +521,6 @@ function commitTransaction(root, operations, options = {}) {
+@@ -489,7 +538,6 @@ function commitTransaction(root, operations, options = {}) {
              stagedBytes: 0,
          };
      }
@@ -271,7 +345,7 @@ index fc6e1b3..8e9e5f4 100644
      fs.mkdirSync(journalDir, { recursive: true });
      const id = crypto.randomUUID();
      const stageDir = path.join(journalDir, `${id}.stage`);
-@@ -548,13 +579,17 @@ function commitTransaction(root, operations, options = {}) {
+@@ -548,13 +596,17 @@ function commitTransaction(root, operations, options = {}) {
  function recoverTransactions(root) {
      const journalDir = resolveInside(root, '.journal');
      if (!fs.existsSync(journalDir)) return { recovered: 0 };
@@ -293,11 +367,71 @@ index fc6e1b3..8e9e5f4 100644
          cleanupJournal(journalPath, stageDir);
          recovered += 1;
      }
+@@ -567,9 +619,9 @@ function moveToTrash(root, relativePath) {
+     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+     const destination = resolveInside(root, path.join('trash', stamp, relativePath));
+     fs.mkdirSync(path.dirname(destination), { recursive: true });
+-    fs.renameSync(source, destination);
++    renameAtomic(source, destination);
+     for (const suffix of ['.sha256', '.bak']) {
+-        if (fs.existsSync(`${source}${suffix}`)) fs.renameSync(`${source}${suffix}`, `${destination}${suffix}`);
++        if (fs.existsSync(`${source}${suffix}`)) renameAtomic(`${source}${suffix}`, `${destination}${suffix}`);
+     }
+     noteTree(root, source);
+     fsyncDirectory(path.dirname(source));
+@@ -578,6 +630,7 @@ function moveToTrash(root, relativePath) {
+ }
+ 
+ module.exports = {
++    retryWindowsSharing,
+     atomicWriteFile,
+     atomicWriteFileChunks,
+     atomicWriteJson,
 diff --git a/server/node/file-store.test.ts b/server/node/file-store.test.ts
-index e474f01..1450317 100644
+index e474f01..a63627a 100644
 --- a/server/node/file-store.test.ts
 +++ b/server/node/file-store.test.ts
-@@ -50,6 +50,88 @@ describe('resolveDataRoot', () => {
+@@ -34,6 +34,39 @@ afterEach(() => {
+     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
+ })
+ 
++describe('Windows atomic replacement contention', () => {
++    it.runIf(process.platform === 'win32')('retries transient sharing failures for data, backup and checksum', () => {
++        const root = tempRoot()
++        atomicWriteJson(root, 'state.json', { nextId: 1 })
++        const rename = fs.renameSync
++        const attempts = new Map<string, number>()
++        vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
++            const key = String(to)
++            const count = attempts.get(key) ?? 0
++            attempts.set(key, count + 1)
++            if (count < 2) throw Object.assign(new Error('sharing violation'), { code: count ? 'EACCES' : 'EPERM' })
++            return rename(from, to)
++        })
++        atomicWriteJson(root, 'state.json', { nextId: 2 })
++        expect(readVerifiedJson(root, 'state.json')).toEqual({ nextId: 2 })
++        expect(JSON.parse(fs.readFileSync(path.join(root, 'state.json.bak'), 'utf8'))).toEqual({ nextId: 1 })
++        expect([...attempts.values()]).toEqual([3, 3, 3])
++    })
++
++    it('preserves the destination and reports a permanent replacement error', () => {
++        const root = tempRoot()
++        atomicWriteFile(root, 'system.jsonl', 'original\n')
++        const rename = fs.renameSync
++        vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
++            if (String(to) === path.join(root, 'system.jsonl')) throw Object.assign(new Error('permanent denial'), { code: 'EPERM' })
++            return rename(from, to)
++        })
++        expect(() => atomicWriteFile(root, 'system.jsonl', 'replacement\n')).toThrow('permanent denial')
++        expect(fs.readFileSync(path.join(root, 'system.jsonl'), 'utf8')).toBe('original\n')
++        expect(fs.readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([])
++    })
++})
++
+ describe('resolveDataRoot', () => {
+     it('uses an explicit absolute user-data root independently from the app directory', () => {
+         const root = path.resolve(tempRoot(), 'user-data')
+@@ -50,6 +83,88 @@ describe('resolveDataRoot', () => {
  })
  
  describe('crash-safe canonical writes', () => {
@@ -387,7 +521,7 @@ index e474f01..1450317 100644
          const root = tempRoot()
          const chunks = function* () { yield Buffer.from('한글'); yield Buffer.from('😀\n'); }
 diff --git a/server/node/live-files-stability.test.ts b/server/node/live-files-stability.test.ts
-index 9e6a185..20f63f8 100644
+index 76e1108..a05ef6e 100644
 --- a/server/node/live-files-stability.test.ts
 +++ b/server/node/live-files-stability.test.ts
 @@ -154,6 +154,7 @@ test.each(['before-publication', 'after-publication'])('failed adoption retries
@@ -398,6 +532,15 @@ index 9e6a185..20f63f8 100644
          },
          saveTimers: {}, directWriteTracker: { clear: () => {} }, encodeRisuSaveLegacyBuffer: JSON.stringify,
          kvSet: () => {}, initChatStore: () => {}, computeBufferEtag: () => 'etag', nodeCrypto: { randomUUID: () => 'new' }, logger: { info: () => {} },
+@@ -188,7 +189,7 @@ test.each([
+             applyExternal: (db: any) => ({ ...db, characters: db.characters.map((character: any) => ({ ...character, desc: 'External edit' })) }),
+         },
+         preserveLiveFileRecovery: (record: any) => { archives.push(structuredClone(record)); return { path: 'trash/live-files-recovery/r.json', conflicts: 0 } },
+-        persistCanonicalProjection: (db: any) => persisted.push(db),
++        persistCanonicalProjection: (db: any) => { persisted.push(db); return { acceptedRevision: 'external' } },
+         normalizeJSON: (x: any) => structuredClone(x), reassembleFullDb: (x: any) => x, stripChatsFromDb: (x: any) => x,
+         dbCache: cache, DB_HEX_KEY: 'db', saveTimers: timers,
+         directWriteTracker: { clear: () => {} }, clearTimeout: () => {},
 diff --git a/server/node/painter-save-flush.test.ts b/server/node/painter-save-flush.test.ts
 index bd081a7..83609b4 100644
 --- a/server/node/painter-save-flush.test.ts
@@ -535,7 +678,7 @@ index adfa39f..807ffd6 100644
 +    expect(replacementWrite).toHaveBeenCalledTimes(1); expect(write).not.toHaveBeenCalled(); expect(timers.db).toBeUndefined()
 +})
 diff --git a/src/lib/Others/RisuBardMemoryWiki.test.ts b/src/lib/Others/RisuBardMemoryWiki.test.ts
-index 1c48082..1884d46 100644
+index 91423e6..1de19b5 100644
 --- a/src/lib/Others/RisuBardMemoryWiki.test.ts
 +++ b/src/lib/Others/RisuBardMemoryWiki.test.ts
 @@ -157,6 +157,7 @@ vi.mock('src/ts/storage/chatStorage', () => ({
@@ -826,15 +969,3 @@ index 8b0de8b..d1accab 100644
 +    vi.stubGlobal('fetch', async () => Response.json({ success: true, paused: true, externalChangesPending: pending, etag: 'revision' }))
 +    await expect(flush(false, true)).rejects.toMatchObject({ name: 'ConflictError', currentEtag: 'revision', externalEditMode: !pending, externalChangesPending: pending })
 +})
-diff --git a/server/node/live-files-stability.test.ts b/server/node/live-files-stability.test.ts
---- a/server/node/live-files-stability.test.ts
-+++ b/server/node/live-files-stability.test.ts
-@@ -189,7 +189,7 @@
-             applyExternal: (db: any) => ({ ...db, characters: db.characters.map((character: any) => ({ ...character, desc: 'External edit' })) }),
-         },
-         preserveLiveFileRecovery: (record: any) => { archives.push(structuredClone(record)); return { path: 'trash/live-files-recovery/r.json', conflicts: 0 } },
--        persistCanonicalProjection: (db: any) => persisted.push(db),
-+        persistCanonicalProjection: (db: any) => { persisted.push(db); return { acceptedRevision: 'external' } },
-         normalizeJSON: (x: any) => structuredClone(x), reassembleFullDb: (x: any) => x, stripChatsFromDb: (x: any) => x,
-         dbCache: cache, DB_HEX_KEY: 'db', saveTimers: timers,
-         directWriteTracker: { clear: () => {} }, clearTimeout: () => {},

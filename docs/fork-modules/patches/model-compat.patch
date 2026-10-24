@@ -1,8 +1,17 @@
 diff --git a/server/node/logs.cjs b/server/node/logs.cjs
-index 55a08a3..56642d1 100644
+index 55a08a3..7f2c380 100644
 --- a/server/node/logs.cjs
 +++ b/server/node/logs.cjs
-@@ -17,7 +17,8 @@ const logFile = path.join(logRoot, 'system.jsonl');
+@@ -3,7 +3,7 @@
+ const path = require('path');
+ const fs = require('fs');
+ const os = require('os');
+-const { atomicWriteFile, atomicWriteJson, readVerifiedJson } = require('./file-store.cjs');
++const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
+ const { resolveDataRoot } = require('./data-root.cjs');
+ 
+ const MAX_ROWS = 5000;
+@@ -17,19 +17,21 @@ const logFile = path.join(logRoot, 'system.jsonl');
  const stateFile = path.join(logRoot, 'state.json');
  const writeLockFile = path.join(logRoot, '.write.lock');
  const LOCK_WAIT_MS = 5;
@@ -10,9 +19,54 @@ index 55a08a3..56642d1 100644
 +// Several processes can queue fsynced writes on a slow Windows disk.
 +const LOCK_TIMEOUT_MS = 30000;
  const LOCK_OWNER_GRACE_MS = 100;
- const LOCK_STALE_MS = 30000;
+-const LOCK_STALE_MS = 30000;
  const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
-@@ -177,7 +178,13 @@ const MASK_PATTERNS = [
++let holdingWriteLock = false;
+ fs.mkdirSync(logRoot, { recursive: true });
+ 
+ function processIsAlive(pid) {
+     if (!Number.isInteger(pid) || pid < 1) return false;
++    if (pid === process.pid) return holdingWriteLock;
+     try {
+         process.kill(pid, 0);
+         return true;
+     } catch (error) {
+-        return error?.code !== 'ESRCH';
++        return error?.code !== 'ESRCH' && !(process.env.RISUBARD_EMBEDDED_ANDROID === '1' && error?.code === 'EPERM');
+     }
+ }
+ 
+@@ -39,7 +41,7 @@ function removeStaleWriteLock() {
+         const pid = Number.parseInt(fs.readFileSync(writeLockFile, 'utf8'), 10);
+         const age = Date.now() - stat.mtimeMs;
+         if (!Number.isInteger(pid) && age < LOCK_OWNER_GRACE_MS) return false;
+-        if (processIsAlive(pid) && age < LOCK_STALE_MS) return false;
++        if (processIsAlive(pid)) return false;
+         fs.unlinkSync(writeLockFile);
+         return true;
+     } catch (error) {
+@@ -52,7 +54,9 @@ function acquireWriteLock() {
+     while (Date.now() - startedAt < LOCK_TIMEOUT_MS) {
+         try {
+             const fd = fs.openSync(writeLockFile, 'wx', 0o600);
+-            fs.writeFileSync(fd, String(process.pid), 'utf8');
++            try { fs.writeFileSync(fd, String(process.pid), 'utf8'); }
++            catch (error) { fs.closeSync(fd); throw error; }
++            holdingWriteLock = true;
+             return fd;
+         } catch (error) {
+             const isWindowsLockContention = process.platform === 'win32'
+@@ -71,7 +75,8 @@ function withWriteLock(action) {
+         return action();
+     } finally {
+         try { fs.closeSync(fd); } catch {}
+-        try { fs.unlinkSync(writeLockFile); } catch {}
++        holdingWriteLock = false;
++        retryWindowsSharing(() => { try { fs.unlinkSync(writeLockFile); } catch (error) { if (error?.code !== 'ENOENT') throw error; } });
+     }
+ }
+ 
+@@ -177,7 +182,13 @@ const MASK_PATTERNS = [
  
  function maskSensitive(value) {
      if (typeof value !== 'string') return value;
@@ -27,6 +81,54 @@ index 55a08a3..56642d1 100644
      for (const { re, replacement } of MASK_PATTERNS) {
          out = out.replace(re, replacement);
      }
+diff --git a/server/node/logs.test.ts b/server/node/logs.test.ts
+index 3ef5c95..5f51b76 100644
+--- a/server/node/logs.test.ts
++++ b/server/node/logs.test.ts
+@@ -40,6 +40,43 @@ afterEach(() => {
+ })
+ 
+ describe('file-native system logs', () => {
++    test('recovers its own abandoned lock and retries Windows lock release', () => {
++        const root = tempRoot()
++        const result = spawnSync(process.execPath, ['-e', `
++            const fs=require('node:fs'), path=require('node:path');
++            const lock=path.join(process.env.RISUBARD_DATA_ROOT,'logs','.write.lock');
++            fs.writeFileSync(lock,String(process.pid));
++            const logs=require(${JSON.stringify(logsModule)});
++            const unlink=fs.unlinkSync; let failures=0;
++            fs.unlinkSync=function(file){if(process.platform==='win32' && file===lock && failures++===0)throw Object.assign(Error('sharing'),{code:'EPERM'}); return unlink(file)};
++            logs.addLog({level:'info',message:'first'}); logs.addLog({level:'info',message:'second'});
++            if(fs.existsSync(lock))throw Error('left locked');
++        `], { env: { ...process.env, RISUBARD_DATA_ROOT: root }, encoding: 'utf8', timeout: 5000 })
++        expect(result.status, result.stderr).toBe(0)
++        expect(readFileSync(join(root, 'logs/system.jsonl'), 'utf8').trim().split('\n')).toHaveLength(2)
++    })
++    test('does not steal an old lock from a still-running owner', async () => {
++        const root = tempRoot()
++        const lockPath = join(root, 'logs', '.write.lock')
++        writeFileSync(lockPath, String(process.pid))
++        const old = new Date(Date.now() - 60_000)
++        utimesSync(lockPath, old, old)
++        const worker = fork(logsModule, [], {
++            env: { ...process.env, RISUBARD_DATA_ROOT: root },
++            stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
++        })
++        const exited = new Promise<number | null>(resolveExit => worker.once('exit', resolveExit))
++        try {
++            await new Promise(resolveWait => setTimeout(resolveWait, 600))
++            expect(existsSync(lockPath)).toBe(true)
++            expect(worker.exitCode).toBeNull()
++            expect(readFileSync(lockPath, 'utf8')).toBe(String(process.pid))
++        } finally {
++            if (existsSync(lockPath)) unlinkSync(lockPath)
++            await exited
++        }
++    })
++
+     test('repairs a valid log state checksum mismatch when the store opens', () => {
+         const root = tempRoot()
+         const statePath = join(root, 'logs', 'state.json')
 diff --git a/server/node/request-logs.test.ts b/server/node/request-logs.test.ts
 index 5b0b3a2..c4d6022 100644
 --- a/server/node/request-logs.test.ts
