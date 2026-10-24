@@ -27,7 +27,7 @@ function personaMirrorsMatch(db) {
     const p = db.personas?.[db.selectedPersona ?? 0];
     if (!p) return true;
     return Object.entries({ username: p.name ?? '', userIcon: p.icon ?? '', personaPrompt: p.personaPrompt ?? '', userNote: p.note ?? '' })
-        .every(([k, value]) => !own(db, k) || equal(db[k], value));
+        .every(([k, value]) => !own(db, k) || equal(db[k] ?? '', value));
 }
 function personaMirrorIssue(db) {
     if (personaMirrorsMatch(db)) return null;

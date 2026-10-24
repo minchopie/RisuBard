@@ -154,6 +154,26 @@ test('busy or unhydrated chats make the projection fail instead of being sanitiz
     expect(missing.missing.map((m: any) => m.reason).sort()).toEqual(expect.arrayContaining(['Missing asset: assets/icon.png', 'Missing inlay: actual-inlay', 'Missing inlay: draw1']))
 })
 
+test('cold storage projects the same chat without mutating saved data or timestamps', async t => {
+    const f = await fixture(t), vault = createVault(master), original = f.database()
+    const normal = await projectDatabase({ database: original, vault, ...f.readers })
+    const archived = structuredClone(original), chat = archived.characters[0].chats[0]
+    const full = structuredClone(chat)
+    chat.message = [{ role: 'char', data: '\uEF01COLDSTORAGE\uEF01key' }] as any
+    chat.scriptstate = { day: 0 }
+    const before = JSON.stringify(archived)
+    const restored = await projectDatabase({ database: archived, vault, ...f.readers, readColdChat: async (key: string) => { expect(key).toBe('key'); return full } })
+    expect(restored.desired).toEqual(normal.desired)
+    expect(JSON.stringify(archived)).toBe(before)
+    const legacy = structuredClone(original); legacy.characters[0].chats[0].message = chat.message
+    expect((await projectDatabase({ database: legacy, vault, ...f.readers, readColdChat: async () => full.message })).desired).toEqual(normal.desired)
+    expect((await projectDatabase({ database: legacy, vault, ...f.readers, readColdChat: async () => ({ message: full.message, scriptstate: null, localLore: null }) })).desired).toEqual(normal.desired)
+    for (const cold of [null, {}, { message: chat.message }, { message: [null] }, { message: [{}] }, { _stub: true, message: full.message }])
+        await expect(projectDatabase({ database: archived, vault, ...f.readers, readColdChat: async () => cold })).rejects.toMatchObject({ code: 'CHAT_NOT_HYDRATED', characterId: 'card', chatId: 'chat' })
+    archived.characters[0].chats[0].message.push({ role: 'char', data: 'keep me' } as any)
+    await expect(projectDatabase({ database: archived, vault, ...f.readers, readColdChat: async () => full })).rejects.toMatchObject({ code: 'CHAT_NOT_HYDRATED' })
+})
+
 test('diffProjection continues each item lineage: equal head skips, linear edit, sibling branch keeps its root, diverged without lineage is reported', async t => {
     const f = await fixture(t), vault = createVault(master), graph = createGraph()
     const db = f.database()

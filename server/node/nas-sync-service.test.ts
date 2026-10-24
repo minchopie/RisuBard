@@ -112,6 +112,46 @@ test('overview lists local and remote-only materials with NAS dates, and keeps o
     expect(phone.db().characters).toEqual([]) // a list refresh never applies data
 })
 
+test('archived chat sync survives service restart, transfers Wiki, and does not rewrite the source', async t => {
+    const dav = fixtureDav()
+    const full = { message: [{ role: 'char', data: 'archived message', chatId: 'm1' }], scriptstate: { day: 7 }, localLore: [] }
+    const database = { personas: [], characters: [{ chaId: 'card', type: 'character', name: 'card', chats: [{ id: 'chat', name: 'chat', lastDate: 123,
+        message: [{ role: 'char', data: '\uEF01COLDSTORAGE\uEF01key' }] }] }] }
+    const source = await device(t, dav, 'cold-source', database, MASTER, { readColdChat: async (key: string) => key === 'key' ? full : null })
+    await source.memory.saveMarkdownWikiTurn({ characterId: 'card', chatId: 'chat', sourceMessageIds: ['m1'], markdown: '## 기억\n\n보관 채팅의 기억' })
+    source.service.enable({ workspaceId: 'ws-fixture' })
+    const before = source.db()
+    await source.service.snapshot(); await source.service.publish()
+    expect(source.db()).toEqual(before)
+    const restarted = source.make()
+    expect((await restarted.snapshot()).committed).toBeNull()
+    const target = await device(t, dav, 'cold-target', { characters: [], personas: [] })
+    target.service.enable({ workspaceId: 'ws-fixture' }); await target.service.pull()
+    const plan = await settle(target)
+    expect(plan.pending).toEqual([])
+    expect(target.db().characters[0].chats[0]).toMatchObject({ id: 'chat', lastDate: 123, ...full })
+    const wiki = await walk(join(resolveMemoryWorkspace(target.dataRoot, 'card', 'chat').directory, 'wiki'))
+    expect((await Promise.all(wiki.filter(f => f.endsWith('.md')).map(f => readFile(f, 'utf8')))).join('\n')).toContain('보관 채팅의 기억')
+    expect((await target.service.snapshot()).committed).toBeNull()
+    expect(source.db()).toEqual(before)
+    const edited = target.db(); edited.characters[0].chats[0].message.push({ role: 'user', data: 'return update' }); target.save(edited)
+    await target.service.snapshot(); await target.service.publish(); await restarted.pull()
+    const received = await settle({ ...source, service: restarted })
+    expect(received.pending).toEqual([])
+    expect(source.db().characters[0].chats[0].message.at(-1).data).toBe('return update')
+})
+
+test('unresolved stored stub never commits a partial snapshot or deletion', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const db = tablet.db(); db.characters[0].chats[0] = { id: 'chat', name: '현재', _stub: true }
+    tablet.save(db)
+    const before = tablet.db()
+    await expect(tablet.service.snapshot()).rejects.toMatchObject({ code: 'CHAT_NOT_HYDRATED', characterId: 'card', chatId: 'chat' })
+    expect(tablet.db()).toEqual(before)
+    // A restarted reader must report the same problem rather than publishing an empty replacement.
+    await expect(tablet.make().snapshot()).rejects.toMatchObject({ code: 'CHAT_NOT_HYDRATED' })
+})
+
 test('a plan finishing after status was read defers a queued snapshot without dropping the plan or touching user data', async t => {
     const dav = fixtureDav(), tablet = await seedTablet(t, dav)
     const phone = await device(t, dav, 'snapshot-race', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] })

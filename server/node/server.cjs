@@ -4586,6 +4586,7 @@ if (syncSecretsDir) require('node:fs').mkdirSync(syncSecretsDir, { recursive: tr
 const nasSync = require('./nas-sync-service.cjs').createNasSyncService({
     dataRoot: savePath,
     identityDir: syncSecretsDir, secretsDir: syncSecretsDir, transfers: playTransfer,
+    readColdChat: key => readColdStorageJsonEntry(key)?.coldData ?? null,
     readDatabase: () => queueStorageOperation(() => loadPersistedFullDatabase()),
     memory: narrativeMemoryService,
     storage: require('./db.cjs'),

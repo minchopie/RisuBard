@@ -188,6 +188,14 @@ index 6e3035d..58cd1df 100644
  requestLogs.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
  const narrativeMemoryService = createRuntimeMemoryService(savePath);
  const windowsTransfers = require('./transfer-windows.cjs').createWindowsTransfers(savePath, path.resolve(__dirname, '../..'));
+@@ -4772,6 +4808,7 @@
+ const nasSync = require('./nas-sync-service.cjs').createNasSyncService({
+     dataRoot: savePath,
+     identityDir: syncSecretsDir, secretsDir: syncSecretsDir, transfers: playTransfer,
++    readColdChat: key => readColdStorageJsonEntry(key)?.coldData ?? null,
+     readDatabase: () => queueStorageOperation(() => loadPersistedFullDatabase()),
+     memory: narrativeMemoryService,
+     storage: require('./db.cjs'),
 @@ -4949,6 +4985,12 @@ app.post('/api/write', async (req, res, next) => {
                      phaseStartedAt = performance.now();
                      initChatStore(fullDb);

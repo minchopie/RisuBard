@@ -516,7 +516,8 @@
         "patchnote/0.9.87.md",
         "patchnote/0.9.88.md",
         "patchnote/0.9.89.md",
-        "patchnote/0.9.90.md"
+        "patchnote/0.9.90.md",
+        "patchnote/0.9.91.md"
       ]
     },
     {
@@ -566,12 +567,12 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "c039c811953dda5e37577263b8a6256043ccd5cd9caac810210bde1705c4a18c"
+          "sourceSha256": "47181ae47cd6821d5398931d6d7bee62b95c1954e9426d94284d6b51531eb3c0"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "114bc6fda56cecec8581d58514f636276c5d6cb51d6b31418febfb4378a21116"
+          "sourceSha256": "363e942cd3b81ddd2d5b0b05cfec25b02984a9a8490a9be572daebf14e595cdc"
         },
         {
           "module": "storage-recovery",

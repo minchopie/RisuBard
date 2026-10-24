@@ -54,7 +54,7 @@ async function safeParents(root, path) {
 async function syncDir(path) { let fd; try { fd = await fsp.open(path, 'r'); await fd.sync(); } catch (error) { if (process.platform !== 'win32') throw error; } finally { await fd?.close(); } }
 async function hashFile(path) { const digest = createHash('sha256'); for await (const chunk of fs.createReadStream(path)) digest.update(chunk); return digest.digest('hex'); }
 
-function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInlay = async () => null, installInlay = async () => {}, removeInlay = async () => {}, inlayMeta = async () => null, secrets, fetch, protect, nasRoute = null, identityDir = null, secretsDir = null, transfers = null, now = Date.now, hooks = {} }) {
+function createNasSyncService({ dataRoot, readDatabase, memory, storage, readColdChat = async () => null, readInlay = async () => null, installInlay = async () => {}, removeInlay = async () => {}, inlayMeta = async () => null, secrets, fetch, protect, nasRoute = null, identityDir = null, secretsDir = null, transfers = null, now = Date.now, hooks = {} }) {
     const root = join(dataRoot, 'nas-sync');
     fs.mkdirSync(join(root, 'apply'), { recursive: true, mode: 0o700 });
     const file = name => resolveInside(root, name);
@@ -534,7 +534,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, service().branches, work);
-            const projection = await projectDatabase({ database: db, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const projection = await projectDatabase({ database: db, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
             if (projection.missing.length) throw Object.assign(new Error('Snapshot is missing referenced material: ' + projection.missing.map(m => m.reason).join('; ')), { code: 'SNAPSHOT_MISSING', missing: projection.missing });
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
@@ -888,7 +888,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readInl
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, branches, work);
-            const projection = await projectDatabase({ database: db, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const projection = await projectDatabase({ database: db, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
             const diff = diffProjection(s.graph, projection.desired.filter(d => known.includes(d.key)), lineage);
             for (const r of diff.revisions) edited.add(`${r.domain}\n${r.type}\n${r.root}`);
             for (const k of diff.diverged) edited.add(k.split('#')[0]);

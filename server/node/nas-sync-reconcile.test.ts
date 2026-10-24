@@ -67,3 +67,13 @@ test('a persona mirror mismatch has an actionable named explanation', () => {
     expect(personaMirrorIssue({ personas: [person('a')], selectedPersona: 0, userIcon: 'other.png' })).toEqual({ name: 'a', reason: 'local-persona-edit' })
     expect(personaMirrorIssue({ personas: [person('a')], selectedPersona: 0, userIcon: '' })).toBeNull()
 })
+
+test('optional empty persona mirrors are equivalent without masking real edits', () => {
+    const { personaMirrorsMatch } = require('./transfer-sync/nas-sync-reconcile.cjs')
+    for (const value of [undefined, null, '']) {
+        const db = { personas: [{ id: 'a', name: 'a' }], selectedPersona: 0, username: 'a', userNote: value, userIcon: value, personaPrompt: value }
+        expect(personaMirrorsMatch(db)).toBe(true)
+        for (const key of ['userNote', 'userIcon', 'personaPrompt']) expect(personaMirrorsMatch({ ...db, [key]: 'actual edit' })).toBe(false)
+    }
+    expect(personaMirrorsMatch({ personas: [{ id: 'a', name: 'a', note: 'saved note' }], userNote: null })).toBe(false)
+})

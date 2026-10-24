@@ -16,6 +16,29 @@ const { REFS } = require('./nas-sync-vault.cjs');
 const { PERSONA_MIRRORS, personaWireContent } = require('./nas-sync-reconcile.cjs');
 
 const split = text => text.trim().split(/\s+/);
+const COLD_STORAGE_HEADER = '\uEF01COLDSTORAGE\uEF01';
+function hydrationError(character, chat, reason) {
+    return Object.assign(new Error(`대화 본문을 확인하지 못해 동기화를 보류했어요: ${character.name || character.chaId} / ${chat.name || chat.id} (${reason}; ${chat.id}). 원본은 변경하지 않았어요.`),
+        { code: 'CHAT_NOT_HYDRATED', characterId: character.chaId, chatId: chat.id, reason });
+}
+async function hydrateSyncChat(character, chat, readColdChat) {
+    if (chat._stub || chat._placeholder) throw hydrationError(character, chat, chat._stub ? '저장된 본문 연결 필요' : '임시 대화 표시가 남아 있음');
+    const pointers = (chat.message ?? []).filter(m => typeof m?.data === 'string' && m.data.startsWith(COLD_STORAGE_HEADER));
+    if (!pointers.length) return chat;
+    // Resolve only the legacy single-pointer format; never replace a mixed or incomplete conversation.
+    if (chat.message.length !== 1) throw hydrationError(character, chat, '본문과 보관 참조가 섞여 있음');
+    let cold;
+    try { cold = await readColdChat(pointers[0].data.slice(COLD_STORAGE_HEADER.length)); }
+    catch { throw hydrationError(character, chat, '보관 본문 읽기 실패'); }
+    const messages = Array.isArray(cold) ? cold : cold?.message;
+    if (cold?._stub || cold?._placeholder || !Array.isArray(messages) || messages.some(m => !m || typeof m !== 'object' || typeof m.data !== 'string' || m.data.startsWith(COLD_STORAGE_HEADER)))
+        throw hydrationError(character, chat, '보관 본문이 없거나 불완전함');
+    const restored = { ...chat, message: clone(messages) };
+    // Match the app's cold-chat fields without its lastDate mutation or any writes to storage.
+    if (!Array.isArray(cold)) for (const key of ['hypaV3Data', 'scriptstate', 'localLore'])
+        if (cold[key]) restored[key] = clone(cold[key]);
+    return restored;
+}
 /** The DB mirror of the active bot preset (saveCurrentPreset mapping) is one unit with botPresets + botPresetsId. */
 const MIRROR = new Set([...presetFields, ...memoryFields]);
 const group = text => split(text).filter(key => !MIRROR.has(key)); // mirror keys have exactly one owner: prompt-presets
@@ -148,7 +171,15 @@ const envelopeIdentity = env => hashJson({ epoch: env.epoch, slot: env.slot, ver
  * - `readAsset(path)` → {path, hash} | null; `readInlay(id)` → {metadata, data: Buffer|string|{path,hash}} | null; `inlayMeta(id)` → ownership | null.
  * Busy chats (streaming, Wiki rebuild, live import context) and unhydrated chats make the projection fail; they are never sanitized away.
  */
-async function projectDatabase({ database, vault, captures = new Map(), materials = null, branches = {}, readAsset = async () => null, readInlay = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
+async function projectDatabase({ database, vault, captures = new Map(), materials = null, branches = {}, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
+    // Hydrate before vault projection so restored data follows the same credential/material handling.
+    const characters = [];
+    for (const character of database.characters ?? []) {
+        const chats = [];
+        for (const chat of character.chats ?? []) chats.push(await hydrateSyncChat(character, chat, readColdChat));
+        characters.push({ ...character, chats });
+    }
+    database = { ...database, characters };
     const { public: pub, envelopes } = vault.project(database);
     const blobs = new Map(), out = [], excluded = [], missing = [], envelopeMap = new Map();
     const addBytes = (bytes, label) => { const hash = sha256(bytes); if (!blobs.has(hash)) blobs.set(hash, { bytes, label }); return hash; };
@@ -188,7 +219,6 @@ async function projectDatabase({ database, vault, captures = new Map(), material
         for (const chat of character.chats ?? []) {
             if (!chat || typeof chat.id !== 'string') throw new Error('Chat without stable id: ' + chaId);
             const owner = `characters/${chaId}/chats/${chat.id}`;
-            if (chat._stub || chat._placeholder || (chat.message ?? []).some(m => typeof m?.data === 'string' && m.data.startsWith('COLDSTORAGE'))) throw Object.assign(new Error('Hydrate chat before snapshot: ' + chat.id), { code: 'CHAT_NOT_HYDRATED' });
             if (chat.isStreaming || chat.risuBardWikiReboot || chat.risuPlayContext) throw Object.assign(new Error('Chat is busy (generation, Wiki rebuild or import in progress): ' + chat.id), { code: 'CHAT_BUSY' });
             const value = clone(chat), scope = object(chat.risuTransferMedia);
             for (const key of CHAT_DISPLAY) delete value[key];
