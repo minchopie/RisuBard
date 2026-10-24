@@ -41,3 +41,12 @@ Codex가 최종 소스에서 패치를 별도 파일로 다시 생성해 동일 
 ## 미실행 범위
 
 이번 모듈화판의 APK·Windows 설치 패키지 새 빌드, 기기 설치, 실제 NAS/USB/Wi-Fi 전송·UI 플레이는 실행하지 않았다. 현재 PC·태블릿·스마트폰 설치본과 NAS 자료를 변경하지 않았다.
+
+
+## 0.9.93 — card-only NAS upload (2026-10-24)
+
+The per-character `cardOnlyUploads` preference is device-local and defaults off. It uploads the card and card materials without hydrating excluded chats. Existing character membership and known chat lineage stay present, so exclusion does not emit deletions or replace any chat with an empty one. Existing incoming chat changes are held until the option is unchecked; the panel and overview explain that state.
+
+Codex validation: 46 server tests, 38 client tests, type check 0 errors/8 existing warnings, web build. Tests cover a new stub-only card round trip, unchanged input, persistent preference, ordinary hydration errors for other cards, full chat upload after disabling, and retention of existing NAS chat heads/Wiki references and recipient chats. Two module structural reapplications passed; full reconstructed-tree runtime suites were not repeated.
+
+Independent Claude Fable 5.1 high source review: approved, no blockers (session 90aa3b93-b00a-47ec-8e3c-ca6dd6cfd46d). Claude did not run device tests. Android APK and Windows packaging, installation and real-device NAS behavior are separate release evidence.

@@ -1036,3 +1036,52 @@ test('a lost rollback response has a durable receipt and never clears a newer pl
     expect(reopened.status().plan.transaction).toBe(next.transaction)
     await reopened.finish(next.transaction, false)
 })
+
+
+test('card-only upload publishes a downloaded card without hydrating its stub and keeps the preference after restart', async t => {
+    const dav = fixtureDav()
+    const input: any = { characters: [{ chaId: 'downloaded', name: 'Downloaded card', type: 'character', description: 'card prompt', chats: [{ id: 'not-started', name: 'Chat 1', _stub: true }] }] }
+    const before = structuredClone(input)
+    const sender = await device(t, dav, 'card-only', { characters: [] }, MASTER, { readDatabase: async () => structuredClone(input) })
+    sender.service.enable({ workspaceId: 'card-only-ws' })
+    await expect(sender.service.snapshot()).rejects.toMatchObject({ code: 'CHAT_NOT_HYDRATED' })
+    await sender.service.setCardOnlyUpload({ characterId: 'downloaded', enabled: true })
+    expect(sender.make().status().cardOnlyUploads).toEqual(['downloaded'])
+    expect((await sender.service.overview()).chats[0].state).toBe('card-only')
+    await sender.service.snapshot(); await sender.service.publish()
+    expect(input).toEqual(before)
+    expect(sender.service.store().graph.classify('play\nchat\nnot-started').state).toBe('absent')
+    const receiver = await device(t, dav, 'card-only-receiver', { characters: [] })
+    receiver.service.enable({ workspaceId: 'card-only-ws' }); await receiver.service.pull(); await settle(receiver)
+    expect(receiver.db().characters[0]).toMatchObject({ chaId: 'downloaded', description: 'card prompt', chats: [] })
+    // A different unresolved character remains an error, not a silently omitted conversation.
+    input.characters.push({ chaId: 'other', chats: [{ id: 'other-chat', _stub: true }] })
+    await expect(sender.service.snapshot()).rejects.toMatchObject({ code: 'CHAT_NOT_HYDRATED' })
+    input.characters.pop()
+    await sender.service.setCardOnlyUpload({ characterId: 'downloaded', enabled: false })
+    await expect(sender.service.snapshot()).rejects.toMatchObject({ code: 'CHAT_NOT_HYDRATED' })
+    input.characters[0].chats = [{ id: 'not-started', name: 'Chat 1', message: [{ role: 'user', data: 'Started playing' }] }]
+    await sender.service.snapshot(); await sender.service.publish(); await receiver.service.pull(); await settle(receiver)
+    expect(receiver.db().characters[0].chats[0].message[0].data).toBe('Started playing')
+})
+
+test('card-only updates preserve published chat membership, history and Wiki instead of emitting deletions', async t => {
+    const dav = fixtureDav(), sender = await seedTablet(t, dav)
+    const graph = sender.service.store().graph, key = 'play\nchat\nchat'
+    const heads = [...graph.classify(key).liveHeads]
+    const receiver = await device(t, dav, 'card-history-receiver', { characters: [] })
+    receiver.service.enable({ workspaceId: 'ws-fixture' }); await receiver.service.pull(); await settle(receiver)
+    const receivedChats = structuredClone(receiver.db().characters[0].chats)
+    await sender.service.setCardOnlyUpload({ characterId: 'card', enabled: true })
+    const edited = sender.db(); edited.characters[0].description = 'new card description'; edited.characters[0].chats = []
+    sender.save(edited)
+    await sender.service.snapshot(); await sender.service.publish()
+    expect(graph.classify(key).liveHeads).toEqual(heads)
+    expect(graph.classify(key).tombstoneHeads).toEqual([])
+    const ck = 'library\ncharacter\ncard'
+    expect(graph.get(graph.classify(ck).liveHeads[0]).content.chatIds).toContain('chat')
+    await receiver.service.pull(); await settle(receiver)
+    expect(receiver.db().characters[0].description).toBe('new card description')
+    expect(receiver.db().characters[0].chats).toEqual(receivedChats)
+    expect(Object.keys(graph.get(heads[0]).dependencies).some(k => k.startsWith('bard:'))).toBe(true)
+})

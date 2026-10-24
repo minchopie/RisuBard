@@ -44,7 +44,7 @@ export function syncDifference(item: any): string {
     const labels: Record<string, string> = { messages: '대화 본문', wiki: 'Wiki·기억', slots: '저장 슬롯', settings: '페르소나·모듈·프리셋 연결', media: '이미지·삽입 자료', state: '변수·플레이 상태' };
     return (item?.sameMessages ? '대화 본문은 같아요. ' : '') + '다른 항목: ' + (item?.differs ?? []).map((k: string) => labels[k] ?? '연결 자료').join(', ');
 }
-export const SYNC_ITEM_STATE: Record<string, string> = { 'local-changes': '새 대화 내용 업로드 대기', uncaptured: '아직 동기화 기록 없음', pending: '받은 자료 보관 중 · 적용 대기', review: '차이 확인 필요', uploaded: 'NAS 업로드 완료', 'upload-pending': 'NAS 업로드 대기', applied: '받아서 이 기기에 적용 완료', recorded: 'NAS에 기록된 판본', deleted: '삭제 기록' };
+export const SYNC_ITEM_STATE: Record<string, string> = { 'card-only': '카드만 업로드 설정 · 대화 보존', 'local-changes': '새 대화 내용 업로드 대기', uncaptured: '아직 동기화 기록 없음', pending: '받은 자료 보관 중 · 적용 대기', review: '차이 확인 필요', uploaded: 'NAS 업로드 완료', 'upload-pending': 'NAS 업로드 대기', applied: '받아서 이 기기에 적용 완료', recorded: 'NAS에 기록된 판본', deleted: '삭제 기록' };
 export function syncRevisionTime(at: unknown): string {
     if (typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0 || at > 8640000000000000) return '날짜 기록 없음'
     return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at)

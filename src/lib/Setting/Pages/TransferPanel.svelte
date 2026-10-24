@@ -8,7 +8,7 @@
     import { playSetAvailable, androidTransferAvailable, playNative, sendNative, nativeSend } from 'src/ts/transferNative'
     import { transferBusy, transferStatus, transferQueue, refreshTransfers, queueTransferFile, exportTransfer, receiveTransfer, cancelTransfer, transferRequest, uploadLegacyChat } from 'src/ts/playTransfer'
     import { isNodeServer } from 'src/ts/platform'
-    import { syncStatus, syncOverview, enableSync, disableSync, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork } from 'src/ts/nasSync'
+    import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText } from 'src/ts/nasSyncUi'
     let selected = $state<string[]>([])
@@ -131,6 +131,14 @@
 {#if syncRoute}<p>{routeLabel(syncRoute)}</p>{/if}
             {#each [syncRows[1], syncRows[4], syncRows[5]].filter(Boolean) as row}<p>{row}</p>{/each}
             <details><summary>연결·복구 상세</summary>{#each [syncRows[0], syncRows[2], syncRows[3]].filter(Boolean) as row}<p>{row}</p>{/each}</details>
+            {#if character?.chaId}
+                <label>
+                    <input type="checkbox" checked={sync.cardOnlyUploads?.includes(character.chaId) ?? false}
+                        onchange={(event) => { const enabled = event.currentTarget.checked; void run(async () => { sync = await setCardOnlyUpload(character.chaId, enabled); await refreshSync(); }) }} />
+                    「{character.name}」 카드만 업로드
+                </label>
+                <p>이 기기에서 선택한 캐릭터의 카드와 카드 자료만 올려요. 기존 대화·Wiki는 삭제하지 않고, 기존 대화에 받은 변경도 보류해요. 대화 동기화를 재개하려면 체크를 해제해 주세요.</p>
+            {/if}
             <p>업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기에 바로 적용. 파일 저장이나 가져오기는 필요 없어요. 자동 동기화는 기존 설정대로 계속돼요.</p>
             <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload')}>{$coordinatorState?.running && $coordinatorState.direction === 'upload' ? '업로드 중…' : 'NAS에 업로드'}</ShButton>
             <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '이 기기에 다운로드'}</ShButton>

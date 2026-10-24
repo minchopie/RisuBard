@@ -46,6 +46,7 @@ const post = async (path: string, body: unknown = {}, signal?: AbortSignal) => (
 export const syncStatus = async (signal?: AbortSignal) => (await syncRequest('/status', { signal })).json()
 export const enableSync = (workspaceId: string, role: 'authority' | 'joining' = 'authority') => post('/enable', { workspaceId, role })
 export const disableSync = () => post('/disable')
+export const setCardOnlyUpload = (characterId: string, enabled: boolean) => post('/card-only-upload', { characterId, enabled })
 export const snapshotSync = (signal?: AbortSignal) => post('/snapshot', {}, signal)
 export const publishSync = (signal?: AbortSignal) => post('/publish', {}, signal)
 export const pullSync = (signal?: AbortSignal) => post('/pull', {}, signal)

@@ -130,7 +130,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     const branchesPreserved = (s, key, c) => key.startsWith('play\nchat\n') && c.state === 'diverged' && !chatDifference(c.liveHeads.map(id => s.graph.get(id))).sameMessages && c.variants.every(ids => ids.some(id => Object.values(service().lineage).includes(id)));
     const conflictCount = s => s.graph.rootKeys().filter(k => { if (k === 'settings\ngroup\nuserNote') return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
     // `workspaceId`/`role` are reported even while disabled so a reopened panel resumes the saved setup instead of defaults.
-    const status = () => ({ enabled: service().enabled, role: service().role ?? null, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
+    const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], enabled: service().enabled, role: service().role ?? null, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
         vault: { origin: service().vaultOrigin ?? null, sharedFrom: service().vaultSharedFrom ?? null, missing: !fs.existsSync(masterFile()) && (service().vaultOrigin === 'shared' || (service().enabled && (Object.keys(service().lineage).length > 0))), pendingGrant: service().pendingGrant ? { from: service().pendingGrant.from, reason: service().pendingGrant.reason } : null }, shares: (service().shares ?? []).map(({ id, kind, to, via, at }) => ({ id, kind, to, via, at })),
         lastAppliedAt: service().applied.at(-1)?.at ?? null,
         localApply: (service().localApply ?? []).length, ...(service().enabled ? { sync: openTransport().status(), conflicts: conflictCount(openStore()) } : {}) });
@@ -281,7 +281,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const isCurrent = rev && c.liveHeads.some(id => { const h = s.graph.get(id); return h.contentHash === rev.contentHash && h.dependencyHash === rev.dependencyHash; });
             const deps = Object.keys(rev?.dependencies ?? {});
             rows.push({ root: key, character: character.name || '이름 없는 캐릭터', name: chat.name || '이름 없는 대화',
-                state: !rev ? 'uncaptured' : localChanges ? 'local-changes' : c.state === 'diverged' && !branchesPreserved(s, key, c) ? 'review' : !isCurrent ? 'pending' : own.length ? (own.some(x => x.published) ? 'uploaded' : 'upload-pending') : 'applied',
+                state: (service().cardOnlyUploads ?? []).includes(character.chaId) ? 'card-only' : !rev ? 'uncaptured' : localChanges ? 'local-changes' : c.state === 'diverged' && !branchesPreserved(s, key, c) ? 'review' : !isCurrent ? 'pending' : own.length ? (own.some(x => x.published) ? 'uploaded' : 'upload-pending') : 'applied',
                 wikiFiles: deps.filter(k => k.startsWith('bard:')).length,
                 slots: new Set(deps.filter(k => k.startsWith('slot:')).map(k => k.split(':')[1])).size,
                 pages: deps.filter(k => k.startsWith('page:')).length });
@@ -519,12 +519,37 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             }
         }
     }
+    async function setCardOnlyUpload({ characterId, enabled } = {}) {
+        requireEnabled();
+        if (service().plan) throw new Error('진행 중인 동기화 적용이 끝난 뒤 설정해 주세요.');
+        if (typeof characterId !== 'string' || typeof enabled !== 'boolean') throw new Error('캐릭터와 업로드 설정이 필요해요.');
+        const db = await readDatabase();
+        if (!db?.characters?.some(c => c.chaId === characterId)) throw new Error('캐릭터를 찾지 못했어요.');
+        manifest.transact(x => { x.cardOnlyUploads = [...new Set([...(x.cardOnlyUploads ?? []).filter(id => id !== characterId), ...(enabled ? [characterId] : [])])]; });
+        return status();
+    }
+    // Omitting chat bodies is an upload preference, never a deletion or an empty-chat replacement.
+    function cardOnlyProjection(db, s) {
+        const memberships = new Map(), preserved = new Set();
+        const characters = (db.characters ?? []).map(c => {
+            if (!(service().cardOnlyUploads ?? []).includes(c.chaId)) return c;
+            const key = `library\ncharacter\n${c.chaId}`, known = service().lineage[key + '#' + c.chaId];
+            const ids = new Set([...(known ? s.graph.get(known)?.content?.chatIds ?? [] : []),
+                ...s.graph.classify(key).liveHeads.flatMap(id => s.graph.get(id)?.content?.chatIds ?? [])]);
+            memberships.set(c.chaId, [...ids]);
+            for (const chat of c.chats ?? []) ids.add(service().branches[chat.id]?.root ?? chat.id);
+            for (const id of ids) preserved.add(`play\nchat\n${id}`);
+            return { ...c, chats: [] };
+        });
+        return { database: { ...db, characters }, memberships, preserved };
+    }
     /** Snapshot: hydrated canonical DB → changed revisions committed with their blobs. Rejects while a plan is active. */
     async function snapshot() {
         const s = requireEnabled(), v = await openVault();
         if (service().plan) throw Object.assign(new Error('Finish the pending sync apply before taking a snapshot'), { code: 'NAS_SYNC_PLAN_PENDING' });
-        const db = await readDatabase();
-        if (!db) throw new Error('Database unavailable');
+        const original = await readDatabase();
+        if (!original) throw new Error('Database unavailable');
+        const { database: db, memberships, preserved } = cardOnlyProjection(original, s);
         const work = await fsp.mkdtemp(join(root, 'snapshot-')), captures = new Map(), cleanups = [];
         try {
             for (const character of db.characters ?? []) {
@@ -534,7 +559,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, service().branches, work);
-            const projection = await projectDatabase({ database: db, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
             if (projection.missing.length) throw Object.assign(new Error('Snapshot is missing referenced material: ' + projection.missing.map(m => m.reason).join('; ')), { code: 'SNAPSHOT_MISSING', missing: projection.missing });
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
@@ -549,7 +574,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             // A restored backup (store rotated its incarnation because the protected sidecar was missing) is a snapshot of an older
             // state: items absent from it are NOT deletions; their lineage is dropped and the recorded bases keep edits causal.
             if (diff.diverged.length) throw Object.assign(new Error('Local items lost their lineage; resolve before snapshot: ' + diff.diverged.join(', ')), { code: 'LINEAGE_LOST', diverged: diff.diverged });
-            const present = new Set(projection.desired.map(d => d.lineageKey)), operation = `snapshot-${randomUUID()}`, tombstones = new Map();
+            const present = new Set([...projection.desired.map(d => d.lineageKey), ...Object.keys(lineage).filter(k => preserved.has(k.split('#')[0]))]), operation = `snapshot-${randomUUID()}`, tombstones = new Map();
             const vanished = restored ? [] : Object.entries(lineage).filter(([k, head]) => !present.has(k) && s.graph.get(head) && !s.graph.get(head).tombstone && !k.startsWith('settings\n'));
             const dropped = restored ? Object.keys(lineage).filter(k => !present.has(k)) : [];
             const tombstoneOf = (key, observed) => {
@@ -876,6 +901,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
      *  restricted to the touched chats' Bard material. A diverged (lineage-lost) item counts as edited. */
     async function unsnapshottedRoots(s, v, db, touched) {
         const edited = new Set(), lineage = service().lineage, branches = service().branches;
+        const scoped = cardOnlyProjection(db, s), memberships = scoped.memberships;
+        db = scoped.database;
+        // An excluded local conversation has not been compared; do not overwrite it during a download.
+        for (const key of touched.keys()) if (scoped.preserved.has(key)) edited.add(key);
         const known = [...touched.keys()].filter(key => Object.keys(lineage).some(k => k.startsWith(key + '#')));
         if (!known.length) return edited;
         const work = await fsp.mkdtemp(join(root, 'plan-check-')), captures = new Map(), cleanups = [];
@@ -888,7 +917,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, branches, work);
-            const projection = await projectDatabase({ database: db, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
             const diff = diffProjection(s.graph, projection.desired.filter(d => known.includes(d.key)), lineage);
             for (const r of diff.revisions) edited.add(`${r.domain}\n${r.type}\n${r.root}`);
             for (const k of diff.diverged) edited.add(k.split('#')[0]);
@@ -1073,6 +1102,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('get', '/recovery', () => recovery());
         route('post', '/enable', req => enable(req.body));
         route('post', '/disable', () => disable());
+        route('post', '/card-only-upload', req => exclusive(() => setCardOnlyUpload(req.body)));
         route('post', '/snapshot', () => exclusive(snapshot));
         route('post', '/bootstrap', req => exclusive(() => bootstrap(req.body)));
         route('post', '/publish', () => publish());
@@ -1094,7 +1124,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/open-deletion/restore', req => exclusive(() => restoreOpenDeletion(req.body)));
         route('post', '/open-deletion/accept', req => exclusive(() => acceptOpenDeletion(req.body)));
     }
-    return { assertWrite, status, pendingRoots, enable, disable, markRestore, clearRestore, shareRequest: () => exclusive(shareRequest), detectShare, consumed, consumedAll, receiveForeign: (...a) => exclusive(() => receiveForeign(...a)), acceptPendingGrant: (...a) => exclusive(() => acceptPendingGrant(...a)), discardShare, sweepShares,
+    return { assertWrite, status, pendingRoots, enable, disable, setCardOnlyUpload: input => exclusive(() => setCardOnlyUpload(input)), markRestore, clearRestore, shareRequest: () => exclusive(shareRequest), detectShare, consumed, consumedAll, receiveForeign: (...a) => exclusive(() => receiveForeign(...a)), acceptPendingGrant: (...a) => exclusive(() => acceptPendingGrant(...a)), discardShare, sweepShares,
         conflicts, overview, resolveConflict: (...a) => exclusive(() => resolveConflict(...a)), restoreRevision: (...a) => exclusive(() => restoreRevision(...a)), trashList, restoreTrash: (...a) => exclusive(() => restoreTrash(...a)), restoreOpenDeletion: (...a) => exclusive(() => restoreOpenDeletion(...a)), acceptOpenDeletion, snapshot: () => exclusive(snapshot), bootstrap: (...a) => exclusive(() => bootstrap(...a)), plan: () => exclusive(plan), currentPlan: () => exclusive(currentPlan), arm: (...a) => exclusive(() => arm(...a)), finish: (...a) => exclusive(() => finish(...a)), hold: (...a) => exclusive(() => hold(...a)), recovery, publish, pull, registerRoutes,
         store: () => openStore(), transport: () => openTransport(), vault: () => openVault(), state: () => manifest.view() };
 }

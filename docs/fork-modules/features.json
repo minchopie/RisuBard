@@ -369,7 +369,9 @@
         "server/node/portable-update.cjs",
         "scripts/portable-smoke.cjs"
       ],
-      "files": []
+      "files": [
+        "patchnote/0.9.93.md"
+      ]
     },
     {
       "id": "host-bridges",
@@ -585,7 +587,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "49e3967d74e3ea32919bc5ce7822f5fb530cb985b81e44a3b8890dbef191d391"
+          "sourceSha256": "90ff643c80ba5fac19ab52d15d3e2cc1036b27693678adb7dcb55b91a2c5712d"
         },
         {
           "module": "host-bridges",

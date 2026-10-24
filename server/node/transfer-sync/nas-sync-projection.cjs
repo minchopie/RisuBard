@@ -171,7 +171,7 @@ const envelopeIdentity = env => hashJson({ epoch: env.epoch, slot: env.slot, ver
  * - `readAsset(path)` → {path, hash} | null; `readInlay(id)` → {metadata, data: Buffer|string|{path,hash}} | null; `inlayMeta(id)` → ownership | null.
  * Busy chats (streaming, Wiki rebuild, live import context) and unhydrated chats make the projection fail; they are never sanitized away.
  */
-async function projectDatabase({ database, vault, captures = new Map(), materials = null, branches = {}, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
+async function projectDatabase({ database, cardOnlyMemberships = new Map(), vault, captures = new Map(), materials = null, branches = {}, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
     // Hydrate before vault projection so restored data follows the same credential/material handling.
     const characters = [];
     for (const character of database.characters ?? []) {
@@ -244,7 +244,7 @@ async function projectDatabase({ database, vault, captures = new Map(), material
             put('play', 'chat', root, chat.id, value, deps, refsOf(`/characters/${chaId}/chats/${chat.id}`));
         }
         const meta = clone(character); delete meta.chats; for (const key of CHARACTER_LOCAL) delete meta[key];
-        meta.chatIds = [...new Set(chatIds.map(id => branches[id]?.root ?? id))]; // membership/order per root (sibling branches share one root); bodies are their own roots
+        meta.chatIds = cardOnlyMemberships.get(chaId) ?? [...new Set(chatIds.map(id => branches[id]?.root ?? id))]; // membership/order per root (sibling branches share one root); bodies are their own roots
         put('library', 'character', chaId, chaId, meta, await mediaDeps(collectReferences(meta, 'character'), {}, `characters/${chaId}`), refsOf(`/characters/${chaId}`).filter(r => !r.path.includes('/chats/')));
     }
     for (const [key, type] of Object.entries(COLLECTIONS)) if (key !== 'characters') for (const item of pub[key] ?? []) {
