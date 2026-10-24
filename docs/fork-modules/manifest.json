@@ -1027,9 +1027,9 @@
       "path": "server/node/nas-sync-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "83ae54d392f246ea87ba46d0703f2aca98fa01a1a73744be07868957c4272346",
-      "contentSha256": "83ae54d392f246ea87ba46d0703f2aca98fa01a1a73744be07868957c4272346",
-      "bytes": 111621
+      "sha256": "ca41e415c636445e76cfcb145f8ee3b5c5ad3cef06142eb4657477f7222c4ea7",
+      "contentSha256": "ca41e415c636445e76cfcb145f8ee3b5c5ad3cef06142eb4657477f7222c4ea7",
+      "bytes": 114079
     },
     {
       "path": "server/node/nas-sync-share.cjs",
@@ -1251,9 +1251,9 @@
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "b184b82aa58955944603ebdc45a90eb3d934442cb8614275162887f7c6a1e240",
-      "contentSha256": "b184b82aa58955944603ebdc45a90eb3d934442cb8614275162887f7c6a1e240",
-      "bytes": 120323
+      "sha256": "b6d3af13c4e8fdef6702f02f1f7727dbbf9b71ee19e855bfc4560db298685c86",
+      "contentSha256": "b6d3af13c4e8fdef6702f02f1f7727dbbf9b71ee19e855bfc4560db298685c86",
+      "bytes": 120959
     },
     {
       "path": "server/node/transfer-sync/nas-sync-share.cjs",
@@ -1718,6 +1718,14 @@
       "sha256": "ff5267b446a80bcd5413d2c89a519a327fcd8a77b3b034d7847a1ca95f0a750a",
       "contentSha256": "ff5267b446a80bcd5413d2c89a519a327fcd8a77b3b034d7847a1ca95f0a750a",
       "bytes": 3598
+    },
+    {
+      "path": "shared/play-set/characterOrder.ts",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "b4f2f891b15a9f07649df822603e033b92fa2116601e48ec01e73b214e2b1153",
+      "contentSha256": "b4f2f891b15a9f07649df822603e033b92fa2116601e48ec01e73b214e2b1153",
+      "bytes": 1852
     },
     {
       "path": "index.html",
@@ -2443,8 +2451,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "4b2a971c3a8bda071fcac6c3e34000bebb98a309c907da775492d90948efed93",
-      "contentSha256": "4b2a971c3a8bda071fcac6c3e34000bebb98a309c907da775492d90948efed93",
+      "sha256": "54b8ff26730edf07b76601f45d678d105e9cfe39158163d2bf3f316d4286ff06",
+      "contentSha256": "54b8ff26730edf07b76601f45d678d105e9cfe39158163d2bf3f316d4286ff06",
       "bytes": 6471
     },
     {
@@ -2520,6 +2528,14 @@
       "bytes": 922
     },
     {
+      "path": "patchnote/0.9.94.md",
+      "module": "distribution",
+      "kind": "files",
+      "sha256": "db7b69f51b9e6727b5febe3cb79f680dc4a2636b765d892beb9f1968577240ab",
+      "contentSha256": "db7b69f51b9e6727b5febe3cb79f680dc4a2636b765d892beb9f1968577240ab",
+      "bytes": 683
+    },
+    {
       "path": "server/node/server.cjs",
       "module": "host-bridges",
       "kind": "hosts",
@@ -2547,9 +2563,9 @@
       "path": "src/ts/globalApi.svelte.ts",
       "module": "host-bridges",
       "kind": "hosts",
-      "sha256": "e2e70b47e81d335d9b68ff4a09023d89c19cf237d0bbf1690edbfe72aa792541",
-      "contentSha256": "e2e70b47e81d335d9b68ff4a09023d89c19cf237d0bbf1690edbfe72aa792541",
-      "bytes": 127151
+      "sha256": "58ecfe3e169e226f75d679b3a2856aae67e6a833c173c6a3e1fd880708f1b22c",
+      "contentSha256": "58ecfe3e169e226f75d679b3a2856aae67e6a833c173c6a3e1fd880708f1b22c",
+      "bytes": 125636
     },
     {
       "path": "src/ts/storage/nodeStorage.ts",
@@ -3964,7 +3980,8 @@
         "src/ts/transferNative.ts",
         "src/ts/transferState.ts",
         "src/ts/transferSyncPanel.test.ts",
-        "src/ts/transferSyncShims.test.ts"
+        "src/ts/transferSyncShims.test.ts",
+        "shared/play-set/characterOrder.ts"
       ],
       "patch": null
     },
@@ -4132,11 +4149,12 @@
         "scripts/portable-smoke.cjs"
       ],
       "files": [
-        "patchnote/0.9.93.md"
+        "patchnote/0.9.93.md",
+        "patchnote/0.9.94.md"
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "90ff643c80ba5fac19ab52d15d3e2cc1036b27693678adb7dcb55b91a2c5712d"
+        "sha256": "dae7b9dc93b6f7bf336e2146c61cebe4e3ccb7e832cadb80216e617ed3a21af8"
       }
     },
     {
@@ -4152,7 +4170,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/host-bridges.patch",
-        "sha256": "5248343aba53bfb1d0ae9152c72ca2afc804a2aa681cc6f2fa57afd10843bd3f"
+        "sha256": "6333375882a1dbef4339fd654c71e1ae66eefaee8b0e606b199c4765c13029d4"
       }
     },
     {
@@ -4347,11 +4365,11 @@
     },
     {
       "path": "docs/fork-modules/CROSSOVER-20261024.md",
-      "sha256": "c6e816e13f2077f6b99121ef9785628b9f141c59be66943d501c21b2c35c6c16"
+      "sha256": "5c7b43907a206c470e2e721fefac08d6514af58a143d84f0c6272a9e3e84b51b"
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "0271e4ae8a4e95ca02f0dbd0c061f63928842f25eede63ea537225fdc43b1ed9"
+      "sha256": "d275551d3d26f3d1a503e619743a095110127708f1659badcca1ee5f68a298a5"
     }
   ],
   "compatibility": [
@@ -4380,14 +4398,14 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "90ff643c80ba5fac19ab52d15d3e2cc1036b27693678adb7dcb55b91a2c5712d",
-          "sha256": "972f24154b6dc1bc3d850bc50e0adfd77b0e5e73ca2f29de46c1fcfe54957875"
+          "sourceSha256": "dae7b9dc93b6f7bf336e2146c61cebe4e3ccb7e832cadb80216e617ed3a21af8",
+          "sha256": "bca024283f35290e6986f4e97740a61de8f6f16609a1da0feec0dbf612c1cd79"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "5248343aba53bfb1d0ae9152c72ca2afc804a2aa681cc6f2fa57afd10843bd3f",
-          "sha256": "c2d1ca418dbc7041578dca3f88d8da8c0192183b0f9c3b91a45a7a774b29567f"
+          "sourceSha256": "6333375882a1dbef4339fd654c71e1ae66eefaee8b0e606b199c4765c13029d4",
+          "sha256": "0cab00b2d3ee0c340aec22472147f5b7bcf9cfc408718e7542835a0707a724b4"
         },
         {
           "module": "storage-recovery",

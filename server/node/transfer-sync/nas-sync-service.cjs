@@ -28,6 +28,7 @@ const { playSetMemoryMaterials } = require('./play-set-memory.cjs');
 const { relinkWorkspace, sourceIdentityMap } = require('./play-set-relink.cjs');
 const { remapBardChat } = require('../../../shared/play-set/bardIdentity.ts');
 const { sanitizeTransferMessages } = require('../../../shared/play-set/snapshot.ts');
+const { checkCharacterOrder } = require('../../../shared/play-set/characterOrder.ts');
 const { resolveMemoryWorkspace } = require('../risubard-memory-workspace.ts');
 const { saveStoreDirectory } = require('../risubard-memory-save-store.ts');
 const { memorySaveWorkspaceId } = require('../risubard-memory-save.ts');
@@ -972,7 +973,15 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const e = current.expected; if (!e) return false;
         const chatOf = (characterId, chatId) => (db.characters ?? []).find(c => c.chaId === characterId)?.chats?.find(ch => ch.id === chatId);
         const chats = e.chats.every(x => { const chat = chatOf(x.characterId, x.chatId); return chat && !x.fields.some(f => chat[f] === undefined) && localHash(Object.fromEntries(x.fields.map(f => [f, chat[f]]))) === x.hash; });
-        const settings = Object.entries(e.settings).every(([k, h]) => h === null ? (current.settings[k] === null ? !(k in db) : false) : localHash(k in db ? db[k] : null) === h);
+        const settings = Object.entries(e.settings).every(([k, h]) => {
+            if (h === null) return current.settings[k] === null && !(k in db);
+            if (localHash(k in db ? db[k] : null) === h) return true;
+            // Retained local cards are appended by the client; accept only that exact existing normalization, including old pending plans.
+            if (k !== 'characterOrder' || localHash(current.settings[k]) !== h) return false;
+            const normalized = { characters: db.characters ?? [], characterOrder: clone(current.settings[k]) };
+            checkCharacterOrder(normalized);
+            return localHash(k in db ? db[k] : null) === localHash(normalized.characterOrder);
+        });
         const characters = e.characters.every(x => { const c = (db.characters ?? []).find(y => y.chaId === x.chaId); return c && localHash(Object.fromEntries(x.fields.map(f => [f, c[f]]))) === x.hash; });
         const modules = e.modules.every(x => { const m = (db.modules ?? []).find(y => y.id === x.id); return m && localHash(m) === x.hash; });
         const plugins = e.plugins.every(x => { const p = (db.plugins ?? []).find(y => y.name === x.name); return p && localHash(p) === x.hash; });

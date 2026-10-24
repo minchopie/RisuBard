@@ -1085,3 +1085,40 @@ test('card-only updates preserve published chat membership, history and Wiki ins
     expect(receiver.db().characters[0].chats).toEqual(receivedChats)
     expect(Object.keys(graph.get(heads[0]).dependencies).some(k => k.startsWith('bard:'))).toBe(true)
 })
+
+
+for (const corrupted of [false, true]) test(`character order normalization ${corrupted ? 'rejects a different reorder' : 'finishes a saved legacy-client plan after restart'}`, async t => {
+    const dav = fixtureDav(), sender = await seedTablet(t, dav)
+    const source = sender.db(); source.characterOrder = ['card']; sender.save(source)
+    await sender.service.snapshot(); await sender.service.publish()
+    const receiver = await device(t, dav, 'order-normalization-' + corrupted, { characters: [{ chaId: 'local-card', name: 'Local', type: 'character', chats: [] }], characterOrder: ['local-card'] })
+    receiver.service.enable({ workspaceId: 'ws-fixture' }); await receiver.service.pull()
+    const plan = await receiver.service.plan(), db = applyPlanToDb(receiver.db(), plan)
+    expect(plan.settings.characterOrder).toEqual(['card'])
+    await receiver.service.arm(plan.transaction, echoOf(plan, db))
+    // The real client's checkCharOrder appends retained local cards after arming.
+    db.characterOrder = corrupted ? ['local-card', 'card'] : ['card', 'local-card']
+    receiver.save(db)
+    const reopened = receiver.make()
+    if (corrupted) {
+        await expect(reopened.finish(plan.transaction, true)).rejects.toThrow('Saved state does not match')
+        expect(reopened.status().plan.phase).toBe('saving')
+    } else {
+        expect((await reopened.finish(plan.transaction, true)).state).toBe('applied')
+        expect(reopened.status().plan).toBeNull()
+        expect(receiver.db().characterOrder).toEqual(['card', 'local-card'])
+        expect(receiver.db().characters.find((c: any) => c.chaId === 'local-card')).toBeTruthy()
+    }
+})
+
+
+test('shared character order keeps folder metadata and array identity while removing stale IDs and appending retained cards', () => {
+    const { checkCharacterOrder } = require('../../shared/play-set/characterOrder.ts')
+    const folder = { name: 'Folder', color: 'blue', data: ['first', 'stale', 'trashed'] }
+    const order: any[] = [folder, null, 'missing']
+    const db = { characterOrder: order, characters: [{ chaId: 'first' }, { chaId: 'local' }, { chaId: '§temp' }, { chaId: '§playground' }, { chaId: 'trashed', trashTime: 1 }] }
+    checkCharacterOrder(db)
+    expect(db.characterOrder).toBe(order)
+    expect(db.characterOrder).toEqual([{ name: 'Folder', color: 'blue', data: ['first'] }, 'local'])
+    expect(db.characterOrder[0]).toBe(folder)
+})

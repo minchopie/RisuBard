@@ -223,7 +223,8 @@
         "src/ts/transferNative.ts",
         "src/ts/transferState.ts",
         "src/ts/transferSyncPanel.test.ts",
-        "src/ts/transferSyncShims.test.ts"
+        "src/ts/transferSyncShims.test.ts",
+        "shared/play-set/characterOrder.ts"
       ]
     },
     {
@@ -370,7 +371,8 @@
         "scripts/portable-smoke.cjs"
       ],
       "files": [
-        "patchnote/0.9.93.md"
+        "patchnote/0.9.93.md",
+        "patchnote/0.9.94.md"
       ]
     },
     {
@@ -587,12 +589,12 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "90ff643c80ba5fac19ab52d15d3e2cc1036b27693678adb7dcb55b91a2c5712d"
+          "sourceSha256": "dae7b9dc93b6f7bf336e2146c61cebe4e3ccb7e832cadb80216e617ed3a21af8"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "5248343aba53bfb1d0ae9152c72ca2afc804a2aa681cc6f2fa57afd10843bd3f"
+          "sourceSha256": "6333375882a1dbef4339fd654c71e1ae66eefaee8b0e606b199c4765c13029d4"
         },
         {
           "module": "storage-recovery",
