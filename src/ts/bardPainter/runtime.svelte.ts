@@ -1,7 +1,7 @@
 import { v4 } from 'uuid'
 import { unzip } from 'fflate'
 import { DBState, ReloadChatPointer } from '../stores.svelte'
-import { forageStorage, globalFetch, requestImmediateSave } from '../globalApi.svelte'
+import { downloadFile, forageStorage, globalFetch, requestImmediateSave } from '../globalApi.svelte'
 import { requestChatData } from '../process/request/request'
 import { collectLoreBuilderSources, matchLoreBuilderCharacterLorebook } from '../loreBuilder'
 import { loadNarrativeMemoryWiki } from '../risubard/memoryWiki'
@@ -820,9 +820,7 @@ export class PainterSession {
             const stored = !pending && result ? await getInlayAssetBlob(result.assetId) : null
             const blob = pending ? new Blob([new Uint8Array(pending.png)], { type: 'image/png' }) : stored?.data
             if (!blob) throw new Error('내려받을 생성 원본이 없습니다.')
-            const url = URL.createObjectURL(blob)
-            const link = document.createElement('a'); link.href = url; link.download = 'bard-painter-original.png'; link.click()
-            setTimeout(() => URL.revokeObjectURL(url), 1000)
+            await downloadFile('bard-painter-original.png', await blob.arrayBuffer())
         })
     }
 

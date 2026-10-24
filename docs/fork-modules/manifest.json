@@ -83,17 +83,17 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/MainActivity.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "2cdbde65c1b7371dded79625cd2efaeec3d2321a8f45c3037d4eaf7b9cdf3712",
-      "contentSha256": "2cdbde65c1b7371dded79625cd2efaeec3d2321a8f45c3037d4eaf7b9cdf3712",
-      "bytes": 17386
+      "sha256": "c547583f123c3fac9305ad80536b38ffbd47c900a13453c8c372518b1b4f8177",
+      "contentSha256": "c547583f123c3fac9305ad80536b38ffbd47c900a13453c8c372518b1b4f8177",
+      "bytes": 18211
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/NativeDownload.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "102b2612ccd76cd7a664ba3c048a43e7699811da70bfd89399b4b6e78aba0c11",
-      "contentSha256": "102b2612ccd76cd7a664ba3c048a43e7699811da70bfd89399b4b6e78aba0c11",
-      "bytes": 3993
+      "sha256": "c6d3df3ecf00f5eaf6db4f28a67680740629a757fa612fc935c9110d751bd36b",
+      "contentSha256": "c6d3df3ecf00f5eaf6db4f28a67680740629a757fa612fc935c9110d751bd36b",
+      "bytes": 6728
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/NativeNetwork.kt",
@@ -115,9 +115,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetController.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "b3c1291250731c5febfd611306ec8266d0e918b394fccf578a699ac818780d64",
-      "contentSha256": "b3c1291250731c5febfd611306ec8266d0e918b394fccf578a699ac818780d64",
-      "bytes": 24763
+      "sha256": "880fdebdc80b5df4d2b83c5c4f6339559e9f0231412d736d33bc005dfe43363f",
+      "contentSha256": "880fdebdc80b5df4d2b83c5c4f6339559e9f0231412d736d33bc005dfe43363f",
+      "bytes": 25341
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetNetwork.kt",
@@ -2443,8 +2443,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "3b62d0179c21a4bf369c641c02b605952676e945e84640948a0e3d47fe91d07c",
-      "contentSha256": "3b62d0179c21a4bf369c641c02b605952676e945e84640948a0e3d47fe91d07c",
+      "sha256": "4b4de54dceb2534d41d3d42c23d28dc7e182f981d1fecd24da2ce59c7c252b81",
+      "contentSha256": "4b4de54dceb2534d41d3d42c23d28dc7e182f981d1fecd24da2ce59c7c252b81",
       "bytes": 6471
     },
     {
@@ -2539,9 +2539,9 @@
       "path": "src/ts/globalApi.svelte.ts",
       "module": "host-bridges",
       "kind": "hosts",
-      "sha256": "37dded0bd7f593557a8d5d69969c69e2eaa55b884cba3bab7d0dacda43c55e1c",
-      "contentSha256": "37dded0bd7f593557a8d5d69969c69e2eaa55b884cba3bab7d0dacda43c55e1c",
-      "bytes": 126618
+      "sha256": "e2e70b47e81d335d9b68ff4a09023d89c19cf237d0bbf1690edbfe72aa792541",
+      "contentSha256": "e2e70b47e81d335d9b68ff4a09023d89c19cf237d0bbf1690edbfe72aa792541",
+      "bytes": 127151
     },
     {
       "path": "src/ts/storage/nodeStorage.ts",
@@ -3592,6 +3592,14 @@
       "bytes": 554
     },
     {
+      "path": "patchnote/0.9.92.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "1cdda3583821cc2dc84a8e2e4795a9b71a74fd8766a7c3d6b97c81cb9b5d74c0",
+      "contentSha256": "1cdda3583821cc2dc84a8e2e4795a9b71a74fd8766a7c3d6b97c81cb9b5d74c0",
+      "bytes": 425
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -3654,6 +3662,78 @@
       "sha256": "2bc0452d69b65348de84cc41d4407e2ebe10d61a5a870e556f01105f05fad6cf",
       "contentSha256": "2bc0452d69b65348de84cc41d4407e2ebe10d61a5a870e556f01105f05fad6cf",
       "bytes": 7501
+    },
+    {
+      "path": "src/ts/observer.svelte.ts",
+      "module": "file-export",
+      "kind": "hosts",
+      "sha256": "687af02f2bd1e88be70b396217cdabb4835be24f887ef7096b096477d280448a",
+      "contentSha256": "687af02f2bd1e88be70b396217cdabb4835be24f887ef7096b096477d280448a",
+      "bytes": 6164
+    },
+    {
+      "path": "src/ts/bardPainter/runtime.svelte.ts",
+      "module": "file-export",
+      "kind": "hosts",
+      "sha256": "f70402daa9438bb502443f6246494e97b0c2c41ae92c9047984edf7c98eaa71c",
+      "contentSha256": "f70402daa9438bb502443f6246494e97b0c2c41ae92c9047984edf7c98eaa71c",
+      "bytes": 78027
+    },
+    {
+      "path": "src/lib/SideBars/Scripts/TriggerV2List.svelte",
+      "module": "file-export",
+      "kind": "hosts",
+      "sha256": "159981b322f4d489423573997ee5d504220d05afa2f54afcf5ea1972825f8ab2",
+      "contentSha256": "159981b322f4d489423573997ee5d504220d05afa2f54afcf5ea1972825f8ab2",
+      "bytes": 207558
+    },
+    {
+      "path": "src/lib/Setting/Pages/PluginSettings.svelte",
+      "module": "file-export",
+      "kind": "hosts",
+      "sha256": "73966b056549c188d255288382e254ce56b2836ddbd5885644030196dca433df",
+      "contentSha256": "73966b056549c188d255288382e254ce56b2836ddbd5885644030196dca433df",
+      "bytes": 30306
+    },
+    {
+      "path": "src/ts/transfer-sync/nativeDownload.ts",
+      "module": "file-export",
+      "kind": "files",
+      "sha256": "0e7e3da7876f02d8b441e29f78896a61a226ac2a35a22beda3083d83af63d256",
+      "contentSha256": "0e7e3da7876f02d8b441e29f78896a61a226ac2a35a22beda3083d83af63d256",
+      "bytes": 1276
+    },
+    {
+      "path": "src/ts/transfer-sync/nativeDownload.test.ts",
+      "module": "file-export",
+      "kind": "files",
+      "sha256": "ea16af3d7b6707decdfed66f5bfe5dcab0fae1f3d1c418f5192a6c9c0d7c0000",
+      "contentSha256": "ea16af3d7b6707decdfed66f5bfe5dcab0fae1f3d1c418f5192a6c9c0d7c0000",
+      "bytes": 2754
+    },
+    {
+      "path": "android-app/app/src/test/java/app/risubard/personal/NativeDownloadStagingTest.kt",
+      "module": "file-export",
+      "kind": "files",
+      "sha256": "1bd77187a9b094672468c66b9161801b1c83160ea3d8f630ff44809b8fa870f4",
+      "contentSha256": "1bd77187a9b094672468c66b9161801b1c83160ea3d8f630ff44809b8fa870f4",
+      "bytes": 4185
+    },
+    {
+      "path": "src/ts/transfer-sync/downloadRouting.test.ts",
+      "module": "file-export",
+      "kind": "files",
+      "sha256": "d53712013ba4a543a3d29c54cb6ff6c73397f06d2702d3ad43777569c78aa3c1",
+      "contentSha256": "d53712013ba4a543a3d29c54cb6ff6c73397f06d2702d3ad43777569c78aa3c1",
+      "bytes": 6251
+    },
+    {
+      "path": "docs/transfer-sync/ANDROID-FILE-EXPORT-20261024.md",
+      "module": "file-export",
+      "kind": "files",
+      "sha256": "fc0d181a1caf3f959ceca84f9b553926385b2d354d5f790c2a9e880b747ea7ed",
+      "contentSha256": "fc0d181a1caf3f959ceca84f9b553926385b2d354d5f790c2a9e880b747ea7ed",
+      "bytes": 4629
     }
   ],
   "modules": [
@@ -4046,7 +4126,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "47181ae47cd6821d5398931d6d7bee62b95c1954e9426d94284d6b51531eb3c0"
+        "sha256": "49e3967d74e3ea32919bc5ce7822f5fb530cb985b81e44a3b8890dbef191d391"
       }
     },
     {
@@ -4062,7 +4142,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/host-bridges.patch",
-        "sha256": "363e942cd3b81ddd2d5b0b05cfec25b02984a9a8490a9be572daebf14e595cdc"
+        "sha256": "5248343aba53bfb1d0ae9152c72ca2afc804a2aa681cc6f2fa57afd10843bd3f"
       }
     },
     {
@@ -4199,7 +4279,8 @@
         "patchnote/0.9.88.md",
         "patchnote/0.9.89.md",
         "patchnote/0.9.90.md",
-        "patchnote/0.9.91.md"
+        "patchnote/0.9.91.md",
+        "patchnote/0.9.92.md"
       ],
       "patch": null
     },
@@ -4218,6 +4299,27 @@
         "docs/app-update/CROSSOVER-20261024.md"
       ],
       "patch": null
+    },
+    {
+      "id": "file-export",
+      "name": "Android 파일 내보내기",
+      "hosts": [
+        "src/ts/observer.svelte.ts",
+        "src/ts/bardPainter/runtime.svelte.ts",
+        "src/lib/SideBars/Scripts/TriggerV2List.svelte",
+        "src/lib/Setting/Pages/PluginSettings.svelte"
+      ],
+      "files": [
+        "src/ts/transfer-sync/nativeDownload.ts",
+        "src/ts/transfer-sync/nativeDownload.test.ts",
+        "android-app/app/src/test/java/app/risubard/personal/NativeDownloadStagingTest.kt",
+        "src/ts/transfer-sync/downloadRouting.test.ts",
+        "docs/transfer-sync/ANDROID-FILE-EXPORT-20261024.md"
+      ],
+      "patch": {
+        "path": "docs/fork-modules/patches/file-export.patch",
+        "sha256": "353f0ca7403d9bc5e522753ed3dd9097ef339f9a66c9988717bb16082aa3bc5b"
+      }
     }
   ],
   "tooling": [
@@ -4239,7 +4341,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "c9cfdb809f1b16929cea89dde9aa1f6ff7da45feb77bfaa1fc42d0f2481bbf5d"
+      "sha256": "5a1bb1f7a13bf93ab482fe981a276406c94656c49da5e9ecbaac6644c9fee1a9"
     }
   ],
   "compatibility": [
@@ -4268,14 +4370,14 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "47181ae47cd6821d5398931d6d7bee62b95c1954e9426d94284d6b51531eb3c0",
-          "sha256": "f214654b3840a1659179810053b44d9b8164af47017a47bf39789e975d6db93b"
+          "sourceSha256": "49e3967d74e3ea32919bc5ce7822f5fb530cb985b81e44a3b8890dbef191d391",
+          "sha256": "f5a556f51e20912a640ae07f333194217cc8fed1f73badd7c1b93517cd8ec0d9"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "363e942cd3b81ddd2d5b0b05cfec25b02984a9a8490a9be572daebf14e595cdc",
-          "sha256": "a212e48f7b30badde3db575d0254bd6a35eb9531fdb2fea90928fc9de71dea3f"
+          "sourceSha256": "5248343aba53bfb1d0ae9152c72ca2afc804a2aa681cc6f2fa57afd10843bd3f",
+          "sha256": "c2d1ca418dbc7041578dca3f88d8da8c0192183b0f9c3b91a45a7a774b29567f"
         },
         {
           "module": "storage-recovery",

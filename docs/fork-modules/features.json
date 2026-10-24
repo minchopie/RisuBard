@@ -517,7 +517,8 @@
         "patchnote/0.9.88.md",
         "patchnote/0.9.89.md",
         "patchnote/0.9.90.md",
-        "patchnote/0.9.91.md"
+        "patchnote/0.9.91.md",
+        "patchnote/0.9.92.md"
       ]
     },
     {
@@ -533,6 +534,23 @@
         "scripts/app-update.mjs",
         "docs/app-update/MODULE.md",
         "docs/app-update/CROSSOVER-20261024.md"
+      ]
+    },
+    {
+      "id": "file-export",
+      "name": "Android 파일 내보내기",
+      "hosts": [
+        "src/ts/observer.svelte.ts",
+        "src/ts/bardPainter/runtime.svelte.ts",
+        "src/lib/SideBars/Scripts/TriggerV2List.svelte",
+        "src/lib/Setting/Pages/PluginSettings.svelte"
+      ],
+      "files": [
+        "src/ts/transfer-sync/nativeDownload.ts",
+        "src/ts/transfer-sync/nativeDownload.test.ts",
+        "android-app/app/src/test/java/app/risubard/personal/NativeDownloadStagingTest.kt",
+        "src/ts/transfer-sync/downloadRouting.test.ts",
+        "docs/transfer-sync/ANDROID-FILE-EXPORT-20261024.md"
       ]
     }
   ],
@@ -567,12 +585,12 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "47181ae47cd6821d5398931d6d7bee62b95c1954e9426d94284d6b51531eb3c0"
+          "sourceSha256": "49e3967d74e3ea32919bc5ce7822f5fb530cb985b81e44a3b8890dbef191d391"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "363e942cd3b81ddd2d5b0b05cfec25b02984a9a8490a9be572daebf14e595cdc"
+          "sourceSha256": "5248343aba53bfb1d0ae9152c72ca2afc804a2aa681cc6f2fa57afd10843bd3f"
         },
         {
           "module": "storage-recovery",

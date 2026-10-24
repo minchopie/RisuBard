@@ -57,6 +57,15 @@ export async function downloadFile(name: string, dat: Uint8Array | ArrayBuffer |
         dat = Buffer.from(dat, 'utf-8')
     }
     const data = new Uint8Array(dat)
+    if ((globalThis as any).RisuPlay) {
+        try {
+            const { nativeDownloadStream } = await import('./transfer-sync/nativeDownload')
+            const writer = (await nativeDownloadStream(name)).getWriter()
+            await writer.write(data)
+            await writer.close()
+        } catch (error) { notifyError(String(error)); throw error }
+        return
+    }
     const downloadURL = (data: string, fileName: string) => {
         const a = document.createElement('a')
         a.href = data
@@ -2153,7 +2162,9 @@ export class LocalWriter {
      * @returns {Promise<boolean>} - A promise that resolves to a boolean indicating success.
      */
     async init(name = 'Binary', ext = ['bin']): Promise<boolean> {
-        const writableStream = streamSaver.createWriteStream(name + '.' + ext[0])
+        const writableStream = (globalThis as any).RisuPlay
+            ? await (await import('./transfer-sync/nativeDownload')).nativeDownloadStream(name + '.' + ext[0])
+            : streamSaver.createWriteStream(name + '.' + ext[0])
         this.writer = writableStream.getWriter()
         return true
     }

@@ -12,6 +12,48 @@ import java.util.concurrent.TimeUnit
  * streamed into a document the user picked. Plain JVM code so it is unit-tested without a device.
  */
 object NativeDownload {
+    private val recoveredDownloads = mutableSetOf<String>()
+    /** Temporary bytes only; user data is never opened through this store. */
+    class Staging(private val root: java.io.File, preserve: Target? = null) {
+        init {
+            check(root.isDirectory || root.mkdirs())
+            // Recover abandoned exports once per process, never an active/recreated picker's file.
+            synchronized(recoveredDownloads) {
+                if (recoveredDownloads.add(root.canonicalPath)) {
+                    val keep = preserve?.url?.removePrefix("risubard-export:")
+                    root.listFiles()?.filter { it.name.matches(Regex("[a-f0-9-]{36}")) && it.name != keep }
+                        ?.forEach { java.nio.file.Files.deleteIfExists(it.toPath()) }
+                }
+            }
+        }
+        private fun file(handle: String): java.io.File {
+            require(java.util.UUID.fromString(handle).toString() == handle)
+            return java.io.File(root, handle)
+        }
+        @Synchronized fun begin(): String = java.util.UUID.randomUUID().toString().also {
+            check(file(it).createNewFile())
+        }
+        @Synchronized fun append(handle: String, offset: Long, encoded: String) {
+            require(encoded.length <= 349528)
+            val bytes = java.util.Base64.getDecoder().decode(encoded)
+            val target = file(handle)
+            require(target.isFile && offset == target.length()) { "파일 저장 순서가 바뀌었어요. 다시 시도해 주세요." }
+            require(bytes.size <= 256 * 1024 && bytes.size.toLong() <= root.usableSpace) { "저장 공간이 부족하거나 파일 조각이 너무 커요." }
+            target.appendBytes(bytes)
+        }
+        @Synchronized fun target(handle: String, name: String, bytes: Long): Target {
+            require(file(handle).isFile && file(handle).length() == bytes) { "저장할 파일이 완성되지 않았어요." }
+            val cleanName = name.replace(Regex("[\\\\/\\u0000-\\u001f]"), "_").ifBlank { "RisuBard-export.bin" }
+            return Target("risubard-export:$handle", cleanName, "application/x-risubard-export")
+        }
+        fun owns(target: Target) = target.url.startsWith("risubard-export:")
+        fun copy(target: Target, output: () -> OutputStream): Long {
+            require(owns(target))
+            return file(target.url.removePrefix("risubard-export:")).inputStream().use { input -> output().use { input.copyTo(it) } }
+        }
+        @Synchronized fun discard(handle: String) { java.nio.file.Files.deleteIfExists(file(handle).toPath()) }
+        fun discard(target: Target?) { if (target != null && owns(target)) discard(target.url.removePrefix("risubard-export:")) }
+    }
     /** The two routes that send `Content-Disposition: attachment` (server.cjs backup export / server backup download). */
     private val ROUTES = listOf(Regex("/api/backup/export"), Regex("/api/backup/server/download/[^/]+"))
     class Target(val url: String, val fileName: String, val mimeType: String)

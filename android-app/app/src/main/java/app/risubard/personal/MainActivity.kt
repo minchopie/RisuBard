@@ -38,6 +38,7 @@ class MainActivity : Activity() {
     private var connecting = false
     private var rendererGone = false
     private var origin: String? = null
+    private lateinit var stagedDownloads: NativeDownload.Staging
     private var chooser: ValueCallback<Array<Uri>>? = null
     private var transfers: PlaySetController? = null
     private var receivedIntent: Intent? = null
@@ -60,6 +61,7 @@ class MainActivity : Activity() {
         layout.addView(recovery)
         recoveryExport = savedInstanceState?.getString("recoveryExport")?.let { name -> recoveryFiles().find { it.name == name } }
         downloads.restore(savedInstanceState?.getStringArray("pendingDownload")?.takeIf { it.size == 3 }?.let { NativeDownload.Target(it[0], it[1], it[2]) })
+        stagedDownloads = NativeDownload.Staging(File(cacheDir, "downloads"), downloads.saved())
         webView = WebView(this)
         layout.addView(webView, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(layout)
@@ -112,15 +114,8 @@ class MainActivity : Activity() {
         // Backup downloads: the page clicks an `<a download>`; without this listener the WebView drops it silently.
         webView.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
             val target = NativeDownload.plan(origin, url, contentDisposition, mimeType) ?: return@setDownloadListener
-            if (!downloads.request(target)) { Toast.makeText(this, "이미 저장 중인 파일이 있어요. 끝난 뒤 다시 시도해 주세요.", Toast.LENGTH_LONG).show(); return@setDownloadListener }
-            try {
-                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE); type = target.mimeType; putExtra(Intent.EXTRA_TITLE, target.fileName)
-                }, 103)
-            } catch (_: ActivityNotFoundException) {
-                downloads.pickerAnswered()
-                Toast.makeText(this, "파일 저장 앱을 열 수 없어요.", Toast.LENGTH_LONG).show()
-            }
+            try { requestDownload(target) }
+            catch (error: Exception) { Toast.makeText(this, error.message, Toast.LENGTH_LONG).show() }
         }
         webView.webChromeClient = object : WebChromeClient() {
             // Upstream scripts may log chat text; keep that output out of Android's system log.
@@ -151,7 +146,7 @@ class MainActivity : Activity() {
                     origin = session.origin
                     transfers?.removeBridge(); transfers?.destroy()
                     transferPageLocal = false
-                    transfers = PlaySetController(this, webView, session.origin) { transferPageLocal }.also { it.configure() }
+                    transfers = PlaySetController(this, webView, session.origin, { transferPageLocal }, stagedDownloads, ::requestDownload).also { it.configure() }
                     refreshRecovery()
                     CookieManager.getInstance().setCookie(session.origin, session.cookie) { accepted ->
                         if (isDestroyed) return@setCookie
@@ -164,6 +159,20 @@ class MainActivity : Activity() {
             } catch (error: Exception) { runOnUiThread {
                 if (!isDestroyed) { connecting = false; retry.isEnabled = true; message.text = error.message ?: "시작 실패" }
             } } finally { startupNetwork.stop() }
+        }
+    }
+    private fun requestDownload(target: NativeDownload.Target) {
+        check(downloads.request(target)) { "이미 저장 중인 파일이 있어요. 끝난 뒤 다시 시도해 주세요." }
+        try {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = if (stagedDownloads.owns(target)) android.webkit.MimeTypeMap.getSingleton()
+                    .getMimeTypeFromExtension(target.fileName.substringAfterLast('.', "").lowercase()) ?: target.mimeType else target.mimeType
+                putExtra(Intent.EXTRA_TITLE, target.fileName)
+            }, 103)
+        } catch (error: Exception) {
+            downloads.pickerAnswered(); stagedDownloads.discard(target)
+            throw IllegalStateException("파일 저장 앱을 열 수 없어요.", error)
         }
     }
     private fun recoveryFiles(): List<File> {
@@ -215,24 +224,25 @@ class MainActivity : Activity() {
         if (requestCode == 103) {
             val pending = downloads.pickerAnswered()
             val destination = data?.data
-            if (resultCode != RESULT_OK || destination == null) return
+            if (resultCode != RESULT_OK || destination == null) { stagedDownloads.discard(pending); return }
             // The activity may have been recreated (and the server restarted on another port) since the picker opened:
             // the saved URL must still be this origin's own route, or the empty document is removed and nothing is fetched.
-            val target = pending?.let { NativeDownload.plan(origin, it.url, "attachment; filename=\"${it.fileName}\"", it.mimeType) }
+            val target = pending?.let { if (stagedDownloads.owns(it)) it else NativeDownload.plan(origin, it.url, "attachment; filename=\"${it.fileName}\"", it.mimeType) }
             if (target == null) {
                 runCatching { DocumentsContract.deleteDocument(contentResolver, destination) }
                 Toast.makeText(this, "내부 서버 주소가 바뀌어 저장을 취소했어요. 다시 시도해 주세요.", Toast.LENGTH_LONG).show(); return
             }
-            val cookie = CookieManager.getInstance().getCookie(target.url) // same origin only (checked above); never logged
+            val cookie = if (stagedDownloads.owns(target)) null else CookieManager.getInstance().getCookie(target.url) // same origin only (checked above); never logged
             downloads.copyStarted()
             worker.execute {
                 val result = runCatching {
-                    NativeDownload.copy(NativeDownload.client(), target, cookie) {
-                        checkNotNull(contentResolver.openOutputStream(destination, "wt")) { "저장 위치를 열 수 없어요." }
-                    }
+                    val output = { checkNotNull(contentResolver.openOutputStream(destination, "wt")) { "저장 위치를 열 수 없어요." } }
+                    if (stagedDownloads.owns(target)) stagedDownloads.copy(target, output)
+                    else NativeDownload.copy(NativeDownload.client(), target, cookie, output)
                 }
                 // A failed or partial download must not leave a misleading file: the picker created this document for us.
                 if (result.isFailure) runCatching { DocumentsContract.deleteDocument(contentResolver, destination) }
+                runCatching { stagedDownloads.discard(target) }
                 downloads.copyFinished()
                 runOnUiThread {
                     if (!isDestroyed) Toast.makeText(this,

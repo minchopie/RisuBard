@@ -1,4 +1,4 @@
-import { globalFetch } from "./globalApi.svelte";
+import { downloadFile, globalFetch } from "./globalApi.svelte";
 
 let bgmElement:HTMLAudioElement|null = null;
 let domObserver: MutationObserver | null = null;
@@ -35,11 +35,9 @@ function nodeObserve(node:HTMLElement){
             const downloadOption = document.createElement('div');
             downloadOption.textContent = 'Download';
             downloadOption.setAttribute('class', 'px-4 py-2 text-sm text-textcolor hover:bg-darkbutton cursor-pointer')
-            downloadOption.addEventListener('click', ()=>{
-                const a = document.createElement('a')
-                a.href = URL.createObjectURL(new Blob([node.textContent ?? ''], {type: 'text/plain'}))
-                a.download = 'code.' + hlLang
-                a.click()
+            downloadOption.addEventListener('click', async ()=>{
+                try { await downloadFile('code.' + hlLang, node.textContent ?? '') }
+                catch (error) { if (!(globalThis as any).RisuPlay) (await import('./alert')).alertError(String(error)) }
                 menu.remove()
             })
 

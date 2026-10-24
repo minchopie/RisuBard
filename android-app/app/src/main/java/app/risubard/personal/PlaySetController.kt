@@ -18,7 +18,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 /** Local-origin RPC. Archive reader/writer handles use one worker; independent receive streams use UUID files. */
-class PlaySetController(private val activity: Activity, private val webView: android.webkit.WebView, private val allowedOrigin: String, private val local: () -> Boolean) {
+class PlaySetController(private val activity: Activity, private val webView: android.webkit.WebView, private val allowedOrigin: String, private val local: () -> Boolean, private val downloads: NativeDownload.Staging, private val saveDownload: (NativeDownload.Target) -> Unit) {
     private val main = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor()
     private val networkExecutor = Executors.newFixedThreadPool(2)
@@ -208,6 +208,14 @@ class PlaySetController(private val activity: Activity, private val webView: and
         }
     }
     private fun command(op: String, a: JSONObject): Any? = when (op) {
+        "download.begin" -> downloads.begin()
+        "download.append" -> { downloads.append(a.getString("handle"), a.getLong("offset"), a.getString("data")); null }
+        "download.abort" -> { downloads.discard(a.getString("handle")); null }
+        "download.save" -> {
+            val target = downloads.target(a.getString("handle"), a.getString("name"), a.getLong("bytes"))
+            openPicker { saveDownload(target) }
+            "save-picker-opened"
+        }
         "bard.export" -> {
             val id = a.getString("id"); require(UUID.fromString(id).toString() == id)
             val base = File(activity.filesDir, "user-data/play-transfer").canonicalFile
