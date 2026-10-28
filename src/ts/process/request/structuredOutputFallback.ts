@@ -35,14 +35,21 @@ export function createStructuredOutputFallbackMessage(
 
 // Prefix caches (e.g. Gemini implicit caching) reuse only a byte-identical
 // leading prompt, and Gemini hoists every system message ahead of contents.
-// Append the schema instruction to the final user message when there is one so
-// the shared leading prompt stays stable; callers keep it first otherwise.
-function appendToFinalUserMessage(
+// BardWiki shared-evidence requests (see memoryAnalysisClient) open their
+// final user message with the confirmed evidence block; for those, the schema
+// instruction is appended after it so the shared prefix stays stable. Every
+// other request keeps the schema first.
+export const SHARED_EVIDENCE_USER_PREFIX = '<confirmedMessages>\n'
+
+function appendToSharedEvidenceRequest(
     messages: AdapterChatOptions['messages'],
     instruction: string
 ): AdapterChatOptions['messages'] | null {
     const last = messages.at(-1)
-    if (last?.role !== 'user' || typeof last.content !== 'string') return null
+    if (last?.role !== 'user'
+        || !last.content.startsWith(SHARED_EVIDENCE_USER_PREFIX)) {
+        return null
+    }
     return [
         ...messages.slice(0, -1),
         { ...last, content: `${last.content}\n\n${instruction}` },
@@ -80,7 +87,7 @@ export async function sendWithStructuredOutputFallback<T>(
         return send({
             ...options,
             responseSchema: undefined,
-            messages: appendToFinalUserMessage(
+            messages: appendToSharedEvidenceRequest(
                 options.messages,
                 fallbackMessage.content
             ) ?? [fallbackMessage, ...options.messages],
