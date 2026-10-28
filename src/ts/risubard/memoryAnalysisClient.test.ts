@@ -9,6 +9,7 @@ import {
     type MemoryAnalysisModelCall,
     type MemoryAnalysisModelResponse,
 } from './memoryAnalysisClient'
+import { SHARED_EVIDENCE_USER_PREFIX } from '../process/request/structuredOutputFallback'
 
 // Requests carrying confirmedMessages use the shared-evidence layout: one
 // fixed system message, then evidence, request instructions and request data
@@ -2186,6 +2187,8 @@ describe('stored response memory analysis', () => {
         })
         const [system, user] = buildMemoryAnalysisMessages('TASK RULES', input)
         expect(system).toEqual({ role: 'system', content: BARDWIKI_SHARED_SYSTEM })
+        // The structured-output fallback recognises this layout by its opening.
+        expect(user.content.startsWith(SHARED_EVIDENCE_USER_PREFIX)).toBe(true)
         expect(user.role).toBe('user')
         expect(user.content).toBe([
             '<confirmedMessages>', JSON.stringify(confirmedMessages), '</confirmedMessages>', '',
