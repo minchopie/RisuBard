@@ -1035,9 +1035,9 @@
       "path": "server/node/nas-sync-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "7b18a2960c7c2127137dc302548743c3093a1f1c1ce315ab696af730b59bffce",
-      "contentSha256": "7b18a2960c7c2127137dc302548743c3093a1f1c1ce315ab696af730b59bffce",
-      "bytes": 153002
+      "sha256": "cddb97d5d6803b833d0c9384d4482f399b8048c6fb76b9874b535488096d2f7a",
+      "contentSha256": "cddb97d5d6803b833d0c9384d4482f399b8048c6fb76b9874b535488096d2f7a",
+      "bytes": 153943
     },
     {
       "path": "server/node/nas-sync-share.cjs",
@@ -1259,9 +1259,9 @@
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "d13ac8efd42530971eb0d18c39256e8d9b9e24e4a8cdfe3838889c8982cf6526",
-      "contentSha256": "d13ac8efd42530971eb0d18c39256e8d9b9e24e4a8cdfe3838889c8982cf6526",
-      "bytes": 129671
+      "sha256": "9f333c86fe5190f2cabcde907b103e7f9fd50c26d60adfc459bcb0df29b97b35",
+      "contentSha256": "9f333c86fe5190f2cabcde907b103e7f9fd50c26d60adfc459bcb0df29b97b35",
+      "bytes": 130111
     },
     {
       "path": "server/node/transfer-sync/nas-sync-share.cjs",
@@ -1491,9 +1491,9 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "96523b1112c4451391b23bf720bed429264350282617b12a679803e5e3648b4a",
-      "contentSha256": "96523b1112c4451391b23bf720bed429264350282617b12a679803e5e3648b4a",
-      "bytes": 41658
+      "sha256": "2b34caf7f0df17f2311459f2b0ae553b0783491fd566075db345b79d14816e42",
+      "contentSha256": "2b34caf7f0df17f2311459f2b0ae553b0783491fd566075db345b79d14816e42",
+      "bytes": 41755
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -1539,9 +1539,9 @@
       "path": "src/ts/nasSyncUi.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "392ee22879e6f0092bf8d9feb134f453ca765708ccb64cd0650f5baa8569ced3",
-      "contentSha256": "392ee22879e6f0092bf8d9feb134f453ca765708ccb64cd0650f5baa8569ced3",
-      "bytes": 16660
+      "sha256": "7703d5d84c6b485c20ffe98ce60e7dd506e026a8bb67d5f1727d09bc5271404a",
+      "contentSha256": "7703d5d84c6b485c20ffe98ce60e7dd506e026a8bb67d5f1727d09bc5271404a",
+      "bytes": 17533
     },
     {
       "path": "src/ts/nasSyncUi.ts",
@@ -1619,9 +1619,9 @@
       "path": "src/ts/transfer-sync/nasSyncUi.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "055d1f3f0ef052a7617fb369e4864054accafe44060b50a560234b9ab290e94e",
-      "contentSha256": "055d1f3f0ef052a7617fb369e4864054accafe44060b50a560234b9ab290e94e",
-      "bytes": 20452
+      "sha256": "acdd04a6ec4ebae42d4cdf631403be049ccc5e29e25bc8faaf38ad579200785b",
+      "contentSha256": "acdd04a6ec4ebae42d4cdf631403be049ccc5e29e25bc8faaf38ad579200785b",
+      "bytes": 20868
     },
     {
       "path": "src/ts/transfer-sync/playTransfer.ts",
