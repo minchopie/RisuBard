@@ -69,7 +69,7 @@ index 2c62e8d..c883824 100644
    "name": "risubard",
    "private": true,
 -  "version": "0.9.81",
-+  "version": "0.9.99",
++  "version": "0.9.100",
    "license": "GPL-3.0-only",
    "packageManager": "pnpm@10.34.1",
    "engines": {

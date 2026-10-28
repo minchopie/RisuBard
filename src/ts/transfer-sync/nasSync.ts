@@ -77,6 +77,8 @@ export const syncConflicts = async () => (await syncRequest('/conflicts')).json(
 export const syncOverview = async () => (await syncRequest('/overview')).json()
 export const resolveSyncConflict = (root: string, keep: string) => post('/resolve', { root, keep })
 export const syncTrash = async () => (await syncRequest('/trash')).json()
+/** Tells the service which kind of device this is so other devices can label it (display only). */
+export const reportSyncProfile = (profile: { kind: 'pc' | 'tablet' | 'phone'; name?: string }) => post('/profile', profile)
 export const restoreSyncTrash = (id: string) => post('/trash/restore', { id })
 /** The chat kept open through a remote deletion: restore it (its state is published first) or accept the deletion locally. */
 /** Both actions mutate the open chat across awaits: they are admitted only when nothing else is running (generation, import,

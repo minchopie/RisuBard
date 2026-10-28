@@ -371,10 +371,20 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             throw error;
         }
     }
-    function trashList() { const s = requireEnabled(); return s.trash().map(t => { const r = s.graph.get(t.id); return { ...t, domain: r.domain, type: r.type, operation: r.tombstone.operation, cohort: s.graph.revisions().filter(x => x.tombstone?.operation === r.tombstone.operation).length }; }); }
-    /** Restores the exact deletion cohort (core restore) and queues the roots for local materialization. */
+    /** Readable name of a deleted item: the name its last live state carried (chats also show their character). */
+    function deletedTitle(s, r) {
+        const base = r.tombstone?.base ? s.graph.get(r.tombstone.base) : null, name = base?.content?.name;
+        if (r.type !== 'chat') return name || null;
+        const owner = s.graph.revisions().find(x => x.type === 'character' && x.content?.chatIds?.includes(r.root));
+        return [owner?.content?.name, name || '이름 없는 대화'].filter(Boolean).join(' · ');
+    }
+    function trashList() { const s = requireEnabled(); return s.trash().map(t => { const r = s.graph.get(t.id); return { ...t, domain: r.domain, type: r.type, title: deletedTitle(s, r), operation: r.tombstone.operation, cohort: s.graph.revisions().filter(x => x.tombstone?.operation === r.tombstone.operation).length }; }); }
+    /** Restores the exact deletion cohort (core restore) and queues the roots for local materialization. Only deletions still offered
+     *  in the trash list (the newest few operations) can be restored. */
     async function restoreTrash({ id }) {
-        const s = requireEnabled(), batch = s.graph.restore(id);
+        const s = requireEnabled();
+        if (!s.trash().some(t => t.id === id)) throw new Error('This deletion is no longer in the trash');
+        const batch = s.graph.restore(id);
         await commitWithIntent(s, batch, batch.map(r => `${r.domain}\n${r.type}\n${r.root}`));
         return { restored: batch.map(r => ({ root: r.root, type: r.type, revision: r.id })) };
     }
@@ -1198,6 +1208,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/resolve', req => exclusive(() => resolveConflict(req.body)));
         route('post', '/restore-revision', req => exclusive(() => restoreRevision(req.body)));
         route('get', '/trash', () => trashList());
+        // Display-only: the client reports what kind of device this is (PC / tablet / phone) for labels on other devices.
+        route('post', '/profile', req => service().enabled ? exclusive(() => openStore().setProfile(req.body ?? {})) : null);
         route('post', '/trash/restore', req => exclusive(() => restoreTrash(req.body)));
         route('post', '/open-deletion/restore', req => exclusive(() => restoreOpenDeletion(req.body)));
         route('post', '/open-deletion/accept', req => exclusive(() => acceptOpenDeletion(req.body)));

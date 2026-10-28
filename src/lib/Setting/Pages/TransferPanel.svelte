@@ -8,9 +8,9 @@
     import { playSetAvailable, androidTransferAvailable, playNative, sendNative, nativeSend } from 'src/ts/transferNative'
     import { transferBusy, transferStatus, transferQueue, refreshTransfers, queueTransferFile, exportTransfer, receiveTransfer, cancelTransfer, requestRemoteTransfer, uploadLegacyChat } from 'src/ts/playTransfer'
     import { isNodeServer } from 'src/ts/platform'
-    import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork } from 'src/ts/nasSync'
+    import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
-    import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText } from 'src/ts/nasSyncUi'
+    import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
     let selected = $state<string[]>([])
     let compatibility = $state(false)
     let result = $state<any>(null)
@@ -71,6 +71,7 @@
     let syncWorkspace = $state('risubard')
     let syncAuthorityPick = $state('')
     let syncFormHydrated = false
+    let profileReported = false
     const syncSupported = isNodeServer
     const coordinator = () => syncCoordinator()
     async function runSync(direction: 'upload' | 'download') {
@@ -93,6 +94,12 @@
         // The saved workspace/role fill the form once (disabled or enabled); later polls never overwrite the user's edits.
         const hydrated = hydrateSyncForm(next, { workspace: syncWorkspace, role: syncRole }, syncFormHydrated)
         if (hydrated.hydrated && !syncFormHydrated) { syncWorkspace = hydrated.form.workspace; syncRole = hydrated.form.role; syncFormHydrated = true }
+        if (next?.enabled && !profileReported) {
+            // Display only: tell the service whether this is the PC app, a tablet or a phone so other devices can name it.
+            profileReported = true
+            const kind = detectDeviceKind(navigator.userAgent, window.screen)
+            if (next.sync?.profile?.kind !== kind) await reportSyncProfile({ kind }).then(() => syncStatus()).then(s => { sync = s }).catch(() => { profileReported = false })
+        }
         if (next?.enabled) { syncConflictList = await syncConflicts(); syncTrashList = await syncTrash(); syncOverviewState = await syncOverview() }
         else { syncConflictList = []; syncTrashList = []; syncOverviewState = null }
     }
@@ -129,45 +136,23 @@
             <label>이 기기의 역할<select bind:value={syncRole}><option value="authority">권한 기기 · 이 기기의 자료를 기준으로 시작</option><option value="joining">참여 기기 · 권한 기기의 키를 받아 합류</option></select></label>
             <ShButton onclick={() => run(async () => { sync = await enableSync(syncWorkspace.trim() || 'risubard', syncRole); coordinator().enabled(true); await refreshSync(); transferStatus.set(syncRole === 'authority' ? '자동 동기화를 켰어요. 다른 기기에서 참여 기기로 켜고 키를 요청해 주세요.' : '자동 동기화를 켰어요. 아래에서 키 요청을 준비해 보내 주세요.') })}>자동 동기화 켜기</ShButton>
         {:else}
-{#if syncRoute}<p>{routeLabel(syncRoute)}</p>{/if}
-            {#each [syncRows[1], syncRows[4], syncRows[5]].filter(Boolean) as row}<p>{row}</p>{/each}
-            <details><summary>연결·복구 상세</summary>{#each [syncRows[0], syncRows[2], syncRows[3]].filter(Boolean) as row}<p>{row}</p>{/each}</details>
-            {#if character?.chaId}
-                <label>
-                    <input type="checkbox" checked={sync.cardOnlyUploads?.includes(character.chaId) ?? false}
-                        onchange={(event) => { const enabled = event.currentTarget.checked; void run(async () => { sync = await setCardOnlyUpload(character.chaId, enabled); await refreshSync(); }) }} />
-                    「{character.name}」 카드만 업로드
-                </label>
-                <p>이 기기에서 선택한 캐릭터의 카드와 카드 자료만 올려요. 기존 대화·Wiki는 삭제하지 않고, 기존 대화에 받은 변경도 보류해요. 대화 동기화를 재개하려면 체크를 해제해 주세요.</p>
-            {/if}
-            <p>업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기에 바로 적용. 파일 저장이나 가져오기는 필요 없어요. 자동 동기화는 기존 설정대로 계속돼요.</p>
-            <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload')}>{$coordinatorState?.running && $coordinatorState.direction === 'upload' ? '업로드 중…' : 'NAS에 업로드'}</ShButton>
-            <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '이 기기에 다운로드'}</ShButton>
+            {@const headline = syncHeadline(sync, syncConflictList, $coordinatorState)}
+            <div class="sync-headline" data-tone={headline.tone}>
+                <strong>{headline.tone === 'ok' ? '✓ ' : '! '}{headline.title}</strong>
+                <span>{headline.detail}</span>
+            </div>
+            <div class="transfer-actions">
+                <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload')}>{$coordinatorState?.running && $coordinatorState.direction === 'upload' ? '업로드 중…' : 'NAS에 업로드'}</ShButton>
+                <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '이 기기에 다운로드'}</ShButton>
+                <ShButton variant="outline" onclick={() => coordinator().pause(!($coordinatorState?.paused ?? false))}>{$coordinatorState?.paused ? '자동 동기화 재개' : '잠시 중지'}</ShButton>
+            </div>
+            <p class="hint">업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기에 바로 적용. 자동 동기화는 그대로 계속돼요.</p>
             {#if working || syncActionResult}<p role="status" aria-live="polite">{working ? $transferStatus : syncActionResult}</p>{/if}
             {#if $coordinatorState?.paused}<p>전송하려면 자동 동기화를 재개해 주세요.</p>{/if}
-            <ShButton variant="outline" onclick={() => coordinator().pause(!($coordinatorState?.paused ?? false))}>{$coordinatorState?.paused ? '자동 동기화 재개' : '잠시 중지'}</ShButton>
-            <ShButton variant="outline" onclick={() => run(async () => { if (!await alertConfirm('자동 동기화를 끌까요? 대화·설정과 NAS에 올린 자료는 그대로 남고, 다시 켜면 이어서 동기화돼요.')) return; coordinator().enabled(false); sync = await disableSync(); await refreshSync(); transferStatus.set('자동 동기화를 껐어요.') })}>자동 동기화 끄기</ShButton>
             {#if syncOverviewState}
                 {#each syncOverviewState.localIssues ?? [] as issue}
                     <p role="status">페르소나 「{issue.name}」의 현재 표시값과 저장된 내용이 달라서 받기를 기다려요. 페르소나 편집 화면에서 이 항목의 이름·그림·설명·메모를 확인하고 저장해 주세요. 그 뒤 「이 기기에 다운로드」를 누르면 다시 확인해요. 현재 값과 받은 원본은 덮어쓰지 않았어요.</p>
                 {/each}
-                <p>마지막으로 확인한 NAS 판본과 이 기기의 적용 기록이에요. NAS 업로드 완료와 다른 기기의 적용 완료는 달라요. 다른 기기의 적용 여부는 아직 확인되지 않았어요.</p>
-                <p>페르소나 {syncOverviewState.personas.length}개: {syncOverviewState.personas.map((p: any) => p.name).join(', ')}</p>
-                {@const timeline = groupSyncItemsByTime(syncOverviewState.items ?? syncOverviewState.chats)}
-                <details class="sync-timeline">
-                    <summary>NAS 최신판 기록 · 최근 {timeline.groups.length}개 시각{timeline.groups[0] ? ` · 마지막 ${timeline.groups[0].label}` : ''}</summary>
-                    <p>최근 전송으로 확인한 NAS 최신판 · 한국시간. 같은 시각(분)에 올라간 자료는 한 항목으로 묶어 최근 5개 시각만 보여 줘요. 날짜는 표시용이며, 내용이 다른 자료를 날짜만 보고 덮어쓰지 않아요.</p>
-                    {#each timeline.groups as group (group.key)}
-                        <div class="remote-file"><strong>{group.label}</strong><span>{group.items.length}개 자료: {syncGroupTitles(group.items)}</span><span>{syncGroupStates(group.items)}</span>
-                            <details><summary>자료별로 보기</summary>
-                                {#each group.items as item}
-                                    <div class="remote-file"><strong>{item.type ? syncItemTitle(item) : `${item.character} · ${item.name}`}</strong><span>NAS 최신판: {syncRevisionTime(item.nasAt)}{item.nasTimeKind === 'uploaded' ? ' (업로드 확인)' : ''}</span><span>{SYNC_ITEM_STATE[item.state] ?? '확인 중'}</span>{#if item.wikiFiles !== undefined}<span>이 기기에 반영된 기록: Wiki·기억 {item.wikiFiles}파일 · 저장 슬롯 {item.slots}개 · 참조 페이지 {item.pages}개</span>{/if}</div>
-                                {/each}
-                            </details>
-                        </div>
-                    {/each}
-                    {#if timeline.hiddenGroups}<p>이전 기록 {timeline.hiddenGroups}개 시각 · 자료 {timeline.hiddenItems}개는 목록에서만 생략했어요{timeline.hiddenAttention ? ` (그중 업로드 대기·확인 필요 ${timeline.hiddenAttention}개)` : ''}. NAS와 이 기기의 자료는 그대로예요.</p>{/if}
-                </details>
             {/if}
             {#if keyRequestNeeded(sync)}
                 <p>{sync.vault?.missing ? '이 기기의 동기화 키가 없어요. 이 작업공간의 키를 아직 가진 다른 기기(권한 기기 등)에서 받아야 하며, 새 키를 만들지는 않아요.' : '동기화 키가 아직 없어요.'} 키 요청을 준비한 뒤 등록된 Wi-Fi 기기 또는 USB로 보내 주세요. Wi-Fi 등록 기기는 키를 자동으로 돌려보내고, USB로 받은 기기는 그 기기의 전송 화면에서 「동기화 키」를 USB로 다시 보내야 해요.</p>
@@ -178,43 +163,96 @@
                 <ShButton onclick={() => run(async () => { await acceptSharedKey(); await refreshSync(); transferStatus.set('공유받은 동기화 키로 바꿨어요.') })}>받은 키로 바꾸기</ShButton>
             {/if}
             {#each sync.shares ?? [] as share (share.id)}
-                <div class="remote-file"><span>{share.kind === 'grant' ? `동기화 키 (받는 기기 ${String(share.to ?? '').slice(0, 8)}${share.via === 'usb:adb' ? ' · USB로 보내 주세요' : ''})` : '동기화 키 요청'} · {new Date(share.at).toLocaleTimeString()}</span>
+                <div class="remote-file"><span>{share.kind === 'grant' ? `동기화 키 (받는 기기: ${syncDeviceName(sync, share.to)}${share.via === 'usb:adb' ? ' · USB로 보내 주세요' : ''})` : '동기화 키 요청'} · {new Date(share.at).toLocaleTimeString()}</span>
                     <ShButton variant="outline" onclick={() => pickShareTarget(share.id, share.kind === 'grant' ? '동기화 키' : '동기화 키 요청')}>보낼 기기 선택</ShButton>
                     <ShButton variant="outline" onclick={() => run(async () => { await discardShareSync(share.id); await refreshSync() })}>버리기</ShButton>
                 </div>
             {/each}
-            {#if sync.role === 'joining' && sync.conflicts}
-                {@const authority = bootstrapAuthority(sync)}
-                <p>처음 합류할 때 설정이 겹치면 {authority ? `키를 보내준 기기 ${authority.device.slice(0, 8)}` : '선택한 기기'}의 값으로 맞출 수 있어요. 이 기기의 원래 값은 복구 기록에 보관돼요.</p>
-                {#if !authority}<label>기준 기기<select bind:value={syncAuthorityPick}><option value="">선택…</option>{#each incomingPeers(sync) as peer (peer.device + peer.incarnation)}<option value={peer.device}>{peer.label}</option>{/each}</select></label>{/if}
-                <ShButton variant="outline" disabled={!authority && !syncAuthorityPick} onclick={() => run(async () => { const device = authority?.device ?? syncAuthorityPick; const r = await bootstrapSync(device); await refreshSync(); transferStatus.set(`기기 ${device.slice(0, 8)} 기준으로 ${r.resolved}개 항목을 맞췄어요. 원래 값은 복구 기록에 있어요.`) })}>기준 기기 값으로 맞추기</ShButton>
-            {/if}
-            {#each syncConflictList as conflict (conflict.root)}
-                <div class="remote-file"><strong>{syncItemTitle(conflict)}</strong>
-                    {#if conflict.state === 'diverged'}
-                        <span>{conflict.type === 'chat' ? syncDifference(conflict) : conflict.id === 'personas' ? '같은 페르소나의 수정이 겹쳤어요. 새로 추가한 항목은 양쪽 모두 보존해요.' : '설정 내용이 달라요. 적용할 내용을 골라 주세요.'}</span>
-                        {#if conflict.type !== 'chat' || conflict.sameMessages}
-                        {#each conflict.variants as variant, i (variant.heads[0])}
-                            {#if variant.resolvable === false}<span>이 판본은 식별자·이미지·보호된 자료를 먼저 확인해야 해요. 원본은 보존돼요.</span>
-                            {:else}<ShButton variant="outline" onclick={() => run(async () => { await resolveSyncConflict(conflict.root, variant.heads[0]); await refreshSync(); transferStatus.set('선택한 쪽으로 정했어요. 다음 동기화 때 반영돼요.') })}>{conflictVariantLabel(variant, i, conflict.variants.filter((v: any) => v !== variant))}</ShButton>{/if}
+            {@const choices = syncConflictList.filter(c => c.state === 'diverged')}
+            {@const kept = syncConflictList.filter(c => c.state !== 'diverged')}
+            {#if choices.length}
+                <div class="sync-card">
+                    <strong>기기 간 차이 {choices.length}건</strong>
+                    {#if sync.role === 'joining' && sync.conflicts}
+                        {@const authority = bootstrapAuthority(sync)}
+                        <span>{authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')}(기준 기기)` : '고른 기기'}의 값으로 한 번에 맞출 수 있어요. 이 기기의 원래 값은 복구 기록에 보관돼요.</span>
+                        {#if !authority}<label>기준 기기<select bind:value={syncAuthorityPick}><option value="">선택…</option>{#each incomingPeers(sync) as peer (peer.device + peer.incarnation)}<option value={peer.device}>{syncDeviceName(sync, peer.device)} · {peer.label}</option>{/each}</select></label>{/if}
+                        <ShButton disabled={!authority && !syncAuthorityPick} onclick={() => run(async () => { const device = authority?.device ?? syncAuthorityPick; const r = await bootstrapSync(device); await refreshSync(); transferStatus.set(`${syncDeviceName(sync, device)} 기준으로 ${r.resolved}개 항목을 맞췄어요. 원래 값은 복구 기록에 있어요.`) })}>{authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')} 값으로 모두 맞추기` : '고른 기기 값으로 모두 맞추기'}</ShButton>
+                    {/if}
+                    <details><summary>하나씩 골라서 맞추기</summary>
+                        {#each choices as conflict (conflict.root)}
+                            <div class="remote-file"><strong>{syncItemTitle(conflict)}</strong>
+                                <span>{conflict.type === 'chat' ? syncDifference(conflict) : conflict.id === 'personas' ? '같은 페르소나의 수정이 겹쳤어요. 새로 추가한 항목은 양쪽 모두 보존해요.' : '설정 내용이 달라요. 남길 쪽을 골라 주세요.'}</span>
+                                {#if conflict.type !== 'chat' || conflict.sameMessages}
+                                {#each conflict.variants as variant, i (variant.heads[0])}
+                                    {#if variant.resolvable === false}<span>이 판본은 식별자·이미지·보호된 자료를 먼저 확인해야 해요. 원본은 보존돼요.</span>
+                                    {:else}<ShButton variant="outline" onclick={() => run(async () => { await resolveSyncConflict(conflict.root, variant.heads[0]); await refreshSync(); transferStatus.set('선택한 쪽으로 정했어요. 다음 동기화 때 반영돼요.') })}>{conflictVariantLabel(variant, i, conflict.variants.filter((v: any) => v !== variant), sync)}</ShButton>{/if}
+                                {/each}
+                                {:else}<span>다르게 진행된 대화는 각각의 갈래로 보존해요.</span>{/if}
+                                <details><summary>진단용 식별자</summary><code>{conflict.root}</code></details>
+                            </div>
                         {/each}
-                        {:else}<span>다르게 진행된 대화는 각각의 갈래로 보존해요.</span>{/if}
-                    {:else if conflict.state === 'branches-preserved'}<span>서로 다르게 진행한 대화를 각각 보존했어요.</span>
-                    {:else}<span>다른 기기에서 지웠지만 이 기기에 새 변경이 있어요. 양쪽 모두 보존됐어요.</span>{/if}
-                    <details><summary>진단용 식별자</summary><code>{conflict.root}</code></details>
+                    </details>
                 </div>
-            {/each}
-            {#each syncTrashList as item (item.id)}
-                <div class="remote-file"><span>휴지통: {item.type} {item.root} · {new Date(item.deletedAt).toLocaleDateString()} 삭제 · {new Date(item.recoverableUntil).toLocaleDateString()}까지 복원 가능{item.cohort > 1 ? ` · 함께 지운 ${item.cohort}개` : ''}</span>
-                    <ShButton variant="outline" disabled={item.expired} onclick={() => run(async () => { await restoreSyncTrash(item.id); await refreshSync(); transferStatus.set('복원을 예약했어요. 다음 동기화 때 되살아나요.') })}>복원</ShButton>
-                </div>
-            {/each}
+            {/if}
+            {#if kept.length}
+                <details class="sync-card"><summary>양쪽 모두 보존한 대화 {kept.length}건 · 할 일 없음</summary>
+                    <p>한 기기에서 지웠거나 서로 다르게 진행한 대화를 지우지 않고 모두 남겨 뒀어요.</p>
+                    {#each kept as conflict (conflict.root)}
+                        <div class="remote-file"><strong>{syncItemTitle(conflict)}</strong><span>{conflict.state === 'branches-preserved' ? '서로 다르게 진행한 대화를 각각 보존했어요.' : '다른 기기에서 지웠지만 이 기기에 새 변경이 있어요. 양쪽 모두 보존됐어요.'}</span>
+                            <details><summary>진단용 식별자</summary><code>{conflict.root}</code></details>
+                        </div>
+                    {/each}
+                </details>
+            {/if}
             {#each syncDeletedOpen as chat (chat.id)}
                 <div class="remote-file"><span>열려 있던 대화 「{chat.name}」를 다른 기기에서 지웠어요. 이 기기에는 그대로 있어요.</span>
                     <ShButton variant="outline" disabled={$transferBusy} onclick={() => run(async () => { await restoreOpenDeletion(character.chaId, chat.id); await refreshSync(); transferStatus.set('대화를 되살렸어요.') })}>되살리기</ShButton>
                     <ShButton variant="outline" disabled={$transferBusy} onclick={() => run(async () => { await acceptOpenDeletion(character.chaId, chat.id); await refreshSync(); transferStatus.set('삭제를 받아들였어요.') })}>삭제 적용</ShButton>
                 </div>
             {/each}
+            {@const trashRows = groupSyncTrash(syncTrashList)}
+            {#if trashRows.length}
+                <details class="sync-card"><summary>휴지통 · 최근 {trashRows.length}건 (최신 3건만 보관)</summary>
+                    {#each trashRows as row (row.id)}
+                        <div class="remote-file"><span>{row.title} · {syncRevisionTime(row.deletedAt)} 삭제{row.expired ? ' · 복원 기간 지남' : ''}</span>
+                            <ShButton variant="outline" disabled={row.expired} onclick={() => run(async () => { await restoreSyncTrash(row.id); await refreshSync(); transferStatus.set('복원을 예약했어요. 다음 동기화 때 되살아나요.') })}>복원</ShButton>
+                        </div>
+                    {/each}
+                </details>
+            {/if}
+            <details><summary>자세히 · 연결·복구·기록</summary>
+                {#if syncRoute}<p>{routeLabel(syncRoute)}</p>{/if}
+                {#each syncRows as row}<p>{row}</p>{/each}
+                {#if syncOverviewState}
+                    <p>마지막으로 확인한 NAS 판본과 이 기기의 적용 기록이에요. NAS 업로드 완료와 다른 기기의 적용 완료는 달라요. 다른 기기의 적용 여부는 아직 확인되지 않았어요.</p>
+                    <p>페르소나 {syncOverviewState.personas.length}개: {syncOverviewState.personas.map((p: any) => p.name).join(', ')}</p>
+                    {@const timeline = groupSyncItemsByTime(syncOverviewState.items ?? syncOverviewState.chats)}
+                    <details class="sync-timeline">
+                        <summary>NAS 최신판 기록 · 최근 {timeline.groups.length}개 시각{timeline.groups[0] ? ` · 마지막 ${timeline.groups[0].label}` : ''}</summary>
+                        <p>최근 전송으로 확인한 NAS 최신판 · 한국시간. 같은 시각(분)에 올라간 자료는 한 항목으로 묶어 최근 5개 시각만 보여 줘요. 날짜는 표시용이며, 내용이 다른 자료를 날짜만 보고 덮어쓰지 않아요.</p>
+                        {#each timeline.groups as group (group.key)}
+                            <div class="remote-file"><strong>{group.label}</strong><span>{group.items.length}개 자료: {syncGroupTitles(group.items)}</span><span>{syncGroupStates(group.items)}</span>
+                                <details><summary>자료별로 보기</summary>
+                                    {#each group.items as item}
+                                        <div class="remote-file"><strong>{item.type ? syncItemTitle(item) : `${item.character} · ${item.name}`}</strong><span>NAS 최신판: {syncRevisionTime(item.nasAt)}{item.nasTimeKind === 'uploaded' ? ' (업로드 확인)' : ''}</span><span>{SYNC_ITEM_STATE[item.state] ?? '확인 중'}</span>{#if item.wikiFiles !== undefined}<span>이 기기에 반영된 기록: Wiki·기억 {item.wikiFiles}파일 · 저장 슬롯 {item.slots}개 · 참조 페이지 {item.pages}개</span>{/if}</div>
+                                    {/each}
+                                </details>
+                            </div>
+                        {/each}
+                        {#if timeline.hiddenGroups}<p>이전 기록 {timeline.hiddenGroups}개 시각 · 자료 {timeline.hiddenItems}개는 목록에서만 생략했어요{timeline.hiddenAttention ? ` (그중 업로드 대기·확인 필요 ${timeline.hiddenAttention}개)` : ''}. NAS와 이 기기의 자료는 그대로예요.</p>{/if}
+                    </details>
+                {/if}
+                {#if character?.chaId}
+                    <label>
+                        <input type="checkbox" checked={sync.cardOnlyUploads?.includes(character.chaId) ?? false}
+                            onchange={(event) => { const enabled = event.currentTarget.checked; void run(async () => { sync = await setCardOnlyUpload(character.chaId, enabled); await refreshSync(); }) }} />
+                        「{character.name}」 카드만 업로드
+                    </label>
+                    <p>이 기기에서 선택한 캐릭터의 카드와 카드 자료만 올려요. 기존 대화·Wiki는 삭제하지 않고, 기존 대화에 받은 변경도 보류해요. 대화 동기화를 재개하려면 체크를 해제해 주세요.</p>
+                {/if}
+                <ShButton variant="outline" onclick={() => run(async () => { if (!await alertConfirm('자동 동기화를 끌까요? 대화·설정과 NAS에 올린 자료는 그대로 남고, 다시 켜면 이어서 동기화돼요.')) return; coordinator().enabled(false); sync = await disableSync(); await refreshSync(); transferStatus.set('자동 동기화를 껐어요.') })}>자동 동기화 끄기</ShButton>
+            </details>
         {/if}
     </fieldset>
     {/if}
@@ -368,5 +406,12 @@
     p, strong, span { overflow-wrap: anywhere; }
     .error { color: var(--color-draculared); }
     .sync-timeline summary { cursor: pointer; }
+    .sync-headline { width: 100%; display: grid; gap: .25rem; padding: .75rem 1rem; border-radius: .5rem; border: 1px solid var(--color-darkborderc); }
+    .sync-headline[data-tone='ok'] strong { color: var(--color-draculagreen, inherit); }
+    .sync-headline[data-tone='attention'] strong { color: var(--color-draculaorange, inherit); }
+    .sync-card { width: 100%; display: grid; gap: .5rem; padding: .75rem 1rem; border-radius: .5rem; border: 1px solid var(--color-darkborderc); }
+    .sync-card summary, details > summary { cursor: pointer; }
+    .transfer-actions { width: 100%; display: flex; flex-wrap: wrap; gap: .5rem; }
+    .hint { opacity: .8; font-size: .9em; }
     .sync-timeline .remote-file .remote-file { padding-left: 1rem; }
 </style>
