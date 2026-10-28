@@ -175,9 +175,9 @@
                     <strong>기기 간 차이 {choices.length}건</strong>
                     {#if sync.role === 'joining' && sync.conflicts}
                         {@const authority = bootstrapAuthority(sync)}
-                        <span>처음 합류할 때 겹친 앱 설정은 {authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')}(기준 기기)` : '고른 기기'}의 값으로 한 번에 맞출 수 있어요. 대화·페르소나와 합류 뒤에 고친 설정은 아래에서 하나씩 골라 주세요. 이 기기의 원래 값은 복구 기록에 보관돼요.</span>
+                        <span>처음 합류할 때 겹친 캐릭터 카드·모듈·플러그인과 앱 설정은 {authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')}(기준 기기)` : '고른 기기'}의 값으로 한 번에 맞출 수 있어요. 대화·페르소나와 합류 뒤에 고친 항목은 아래에서 하나씩 골라 주세요. 이 기기의 원래 값은 복구 기록에 보관돼요.</span>
                         {#if !authority}<label>기준 기기<select bind:value={syncAuthorityPick}><option value="">선택…</option>{#each incomingPeers(sync) as peer (peer.device + peer.incarnation)}<option value={peer.device}>{syncDeviceName(sync, peer.device)} · {peer.label}</option>{/each}</select></label>{/if}
-                        <ShButton disabled={!authority && !syncAuthorityPick} onclick={() => run(async () => { const device = authority?.device ?? syncAuthorityPick; const r = await bootstrapSync(device); await refreshSync(); transferStatus.set(r.resolved ? `${syncDeviceName(sync, device)} 기준으로 초기 설정 ${r.resolved}개를 맞췄어요. 원래 값은 복구 기록에 있어요.` : '한 번에 맞출 초기 설정 차이가 없어요. 남은 항목은 아래에서 하나씩 골라 주세요.') })}>{authority ? `초기 설정을 ${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')} 값으로 맞추기` : '초기 설정을 고른 기기 값으로 맞추기'}</ShButton>
+                        <ShButton disabled={!authority && !syncAuthorityPick} onclick={() => run(async () => { const device = authority?.device ?? syncAuthorityPick; const r = await bootstrapSync(device); await refreshSync(); transferStatus.set(r.resolved ? `${syncDeviceName(sync, device)} 기준으로 카드·모듈·설정 ${r.resolved}개를 맞췄어요. 원래 값은 복구 기록에 있어요.` : '한 번에 맞출 처음 겹친 항목이 없어요. 남은 항목은 아래에서 하나씩 골라 주세요.') })}>{authority ? `처음 겹친 카드·모듈·설정을 ${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')} 값으로 맞추기` : '처음 겹친 카드·모듈·설정을 고른 기기 값으로 맞추기'}</ShButton>
                     {/if}
                     <details><summary>하나씩 골라서 맞추기</summary>
                         {#each choices as conflict (conflict.root)}

@@ -82,7 +82,7 @@ export function syncHeadline(status: any, conflicts: any[] = [], c: CoordinatorS
     if (!status?.enabled) return { tone: 'off', title: '자동 동기화 꺼짐', detail: '' }
     const choices = conflicts.filter(x => x?.state === 'diverged').length
     const s = status.sync ?? {}, pending = (s.outbox?.pending?.length ?? 0), incoming = Object.values(s.incoming ?? {}) as any[]
-    const pendingApply = incoming.reduce((n, p) => n + (p?.pendingApply ?? 0), 0), review = incoming.reduce((n, p) => n + (p?.held ?? 0) + (p?.quarantined ?? 0), 0)
+    const pendingApply = incoming.reduce((n, p) => n + (p?.pendingApply ?? 0), 0), arriving = incoming.reduce((n, p) => n + (p?.waiting ?? 0), 0), review = incoming.reduce((n, p) => n + (p?.held ?? 0) + (p?.quarantined ?? 0), 0)
     const outcome = String(c?.lastOutcome ?? '').replace(/^key-pending:/, '')
     const attention = choices + review + (status.vault?.pendingGrant ? 1 : 0) + (keyRequestNeeded(status) ? 1 : 0)
     const problem = c?.offline ? '연결 안 됨 · 재시도 예정' : PROBLEM_OUTCOMES.has(outcome) || c?.lastError ? `${OUTCOME_LABEL[outcome] ?? '오류 · 재시도 예정'}` : ''
@@ -91,15 +91,17 @@ export function syncHeadline(status: any, conflicts: any[] = [], c: CoordinatorS
     const reference = status.role === 'authority' ? '이 기기' : status.vault?.sharedFrom ? syncDeviceName(status, status.vault.sharedFrom).replace(/ · 기준$/, '') : '아직 없음'
     const last = status.lastAppliedAt ? syncRevisionTime(status.lastAppliedAt) : '기록 없음'
     const waitingApply = pendingApply + (status.localApply ?? 0)
+    // A pause stops retries, so while paused an error is shown as part of the pause instead of a retry that is not scheduled.
     const title = attention ? `확인이 필요한 항목 ${attention}건`
+        : c?.paused ? `잠시 중지됨${problem ? ` · ${problem.replace(/ · 재시도 예정$/, '')}` : recovery ? ' · 이전 적용 결과 확인 대기' : ''}`
         : problem ? problem
         : recovery ? '이전 적용 결과 확인 대기 · 아래 「자세히」에서 확인'
-        : c?.paused ? '잠시 중지됨'
         : waitingApply ? `받은 변경 ${waitingApply}건 적용 대기`
+        : arriving ? `받은 변경 ${arriving}건 · 나머지 자료 도착 대기`
         : pending ? `NAS에 올릴 변경 ${pending}건 대기`
         : c?.running ? '동기화 중…'
         : '최신 상태예요'
-    const tone = attention || problem || recovery ? 'attention' : c?.paused || waitingApply || pending || c?.running ? 'waiting' : 'ok'
+    const tone = attention || problem || recovery ? 'attention' : c?.paused || waitingApply || arriving || pending || c?.running ? 'waiting' : 'ok'
     return { tone, title, detail: `${me} · 기준 기기: ${reference} · 마지막 적용: ${last}` }
 }
 export function syncItemTitle(item: any): string {

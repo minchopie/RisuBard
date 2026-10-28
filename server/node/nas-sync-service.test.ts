@@ -1528,3 +1528,11 @@ test('the trash lists the newest three deletions by name and refuses to restore 
     expect(d.service.store().trash().map((x: any) => x.root)).not.toContain('card1')
     await expect(d.service.restoreTrash({ id: oldest })).rejects.toThrow(/no longer in the trash/)
 })
+
+test('a chat deleted in the same snapshot as its character rename is listed under the new character name', async t => {
+    const card = { chaId: 'card5', type: 'character', name: '옛이름', chatPage: 0, chats: [{ id: 'chat5', name: '대화5', note: '', localLore: [], scriptstate: {}, message: [{ role: 'char', data: '본문' }] }, { id: 'chat6', name: '대화6', note: '', localLore: [], scriptstate: {}, message: [{ role: 'char', data: '본문6' }] }] }
+    const d = await device(t, fixtureDav(), 'trash-rename', baseDb({ characters: [card] }))
+    d.service.enable({ workspaceId: 'ws-trash-rename' }); await d.service.snapshot()
+    clock += 1000; const db = d.db(); db.characters[0].name = '새이름'; db.characters[0].chats = db.characters[0].chats.filter((c: any) => c.id !== 'chat5'); d.save(db); await d.service.snapshot()
+    expect(d.service.trashList().map((x: any) => x.title)).toEqual(['새이름 · 대화5'])
+})

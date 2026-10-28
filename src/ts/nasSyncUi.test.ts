@@ -148,4 +148,8 @@ test('the trash shows one named row per deletion, newest first; the headline sum
     expect(syncHeadline({ ...status, plan: { phase: 'saving' } }, [], { lastOutcome: 'recovery-pending' } as any).tone).toBe('attention')
     expect(syncHeadline({ ...status, sync: { ...status.sync, incoming: { 'tablet-device/i': { held: 1 } } } }, []).title).toBe('확인이 필요한 항목 1건')
     expect(syncHeadline(status, [], { paused: true } as any)).toMatchObject({ tone: 'waiting', title: '잠시 중지됨' })
+    // Commits still waiting for their parents or blobs are not "최신 상태"; a pause after an error does not promise a retry.
+    expect(syncHeadline({ ...status, sync: { ...status.sync, incoming: { 'tablet-device/i': { waiting: 1, pendingApply: 0, held: 0, quarantined: 0 } } } }, [], { lastOutcome: 'empty', lastError: '', offline: false } as any)).toMatchObject({ tone: 'waiting', title: '받은 변경 1건 · 나머지 자료 도착 대기' })
+    expect(syncHeadline(status, [], { paused: true, offline: true, lastOutcome: 'offline', lastError: 'network fetch failed' } as any)).toMatchObject({ tone: 'attention', title: '잠시 중지됨 · 연결 안 됨' })
+    expect(syncHeadline({ ...status, plan: { phase: 'saving' } }, [], { paused: true } as any)).toMatchObject({ tone: 'attention', title: '잠시 중지됨 · 이전 적용 결과 확인 대기' })
 })

@@ -375,9 +375,12 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     function deletedTitle(s, r) {
         const base = r.tombstone?.base ? s.graph.get(r.tombstone.base) : null, name = base?.content?.name;
         if (r.type !== 'chat') return name || null;
+        // The owner is found through past membership; its name is read from that character's current head (a deleted character's
+        // last name is its tombstone base), so a rename recorded together with the chat deletion still shows the new name.
         const owners = s.graph.revisions().filter(x => x.type === 'character' && x.content?.chatIds?.includes(r.root));
-        const owner = owners.find(x => s.graph.heads(`${x.domain}\n${x.type}\n${x.root}`).includes(x.id)) ?? owners.at(-1);
-        return [owner?.content?.name, name || '이름 없는 대화'].filter(Boolean).join(' · ');
+        const nameAt = id => { const h = s.graph.get(id); return (h?.tombstone ? s.graph.get(h.tombstone.base) : h)?.content?.name; };
+        const ownerName = [...new Set(owners.map(x => `${x.domain}\n${x.type}\n${x.root}`))].flatMap(k => s.graph.heads(k)).map(nameAt).find(Boolean) ?? owners.at(-1)?.content?.name;
+        return [ownerName, name || '이름 없는 대화'].filter(Boolean).join(' · ');
     }
     function trashList() { const s = requireEnabled(); return s.trash().map(t => { const r = s.graph.get(t.id); return { ...t, domain: r.domain, type: r.type, title: deletedTitle(s, r), operation: r.tombstone.operation, cohort: s.graph.revisions().filter(x => x.tombstone?.operation === r.tombstone.operation).length }; }); }
     /** Restores the exact deletion cohort (core restore) and queues the roots for local materialization. Only deletions still offered
