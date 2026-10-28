@@ -643,7 +643,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "6cc21f2f33b449f8595a3d7c87e15999331676b88a238b2664c0736f008cd434"
+          "sourceSha256": "9b1e21abc22b1e48ef09566fd191a710ced4c8ef273910b2007b35a9cdb4283a"
         },
         {
           "module": "host-bridges",
@@ -722,7 +722,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "6cc21f2f33b449f8595a3d7c87e15999331676b88a238b2664c0736f008cd434"
+          "sourceSha256": "9b1e21abc22b1e48ef09566fd191a710ced4c8ef273910b2007b35a9cdb4283a"
         },
         {
           "module": "lore-lua",
