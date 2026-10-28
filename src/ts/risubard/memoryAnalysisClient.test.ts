@@ -1,12 +1,42 @@
 import { describe, expect, test, vi } from 'vitest'
 import { get_encoding } from '@dqbd/tiktoken'
 import {
+    BARDWIKI_SHARED_SYSTEM,
     buildBoundedNarrativeInquiryFallback,
+    buildMemoryAnalysisMessages,
     createStoredResponseMemoryAnalysis,
     projectRecentMemoryMessages,
     type MemoryAnalysisModelCall,
     type MemoryAnalysisModelResponse,
 } from './memoryAnalysisClient'
+
+// Requests carrying confirmedMessages use the shared-evidence layout: one
+// fixed system message, then evidence, request instructions and request data
+// inside the user message.
+const requestPromptText = (call: MemoryAnalysisModelCall) =>
+    call.formated.map((message) => message.content).join('\n')
+/** Everything a prefix cache can reuse: system plus the evidence block. */
+const sharedPrefix = (call: MemoryAnalysisModelCall) => {
+    const content = call.formated[1].content
+    const end = content.indexOf('\n</confirmedMessages>\n')
+    expect(call.formated[0].content).toBe(BARDWIKI_SHARED_SYSTEM)
+    expect(content.startsWith('<confirmedMessages>\n[')).toBe(true)
+    expect(end).toBeGreaterThan(0)
+    return `${call.formated[0].content}\u0000${content.slice(0, end)}`
+}
+const requestDataJson = (call: MemoryAnalysisModelCall) => {
+    const content = call.formated[1].content
+    const match = /\n<request_data>\n([\s\S]*)\n<\/request_data>$/.exec(content)
+    return JSON.parse(match ? match[1] : content)
+}
+/** The original request input: request data plus the shared evidence. */
+const requestInputJson = (call: MemoryAnalysisModelCall) => {
+    const content = call.formated[1].content
+    const evidence = /^<confirmedMessages>\n([\s\S]*?)\n<\/confirmedMessages>\n/.exec(content)
+    return evidence
+        ? { ...requestDataJson(call), confirmedMessages: JSON.parse(evidence[1]) }
+        : JSON.parse(content)
+}
 
 describe('stored response memory analysis', () => {
     test('builds the recent inquiry fallback from the end within its character budget', () => {
@@ -582,7 +612,10 @@ describe('stored response memory analysis', () => {
         expect(requestModel).toHaveBeenCalledTimes(firstResponse.expectedAttempts ?? 2)
         for (const [request] of requestModel.mock.calls) expect(request.extractJson).toBe('')
         if (requestModel.mock.calls.length > 1) {
-            expect(requestModel.mock.calls[1][0].formated[0].content).toContain('previous response')
+            expect(requestPromptText(requestModel.mock.calls[1][0])).toContain('previous response')
+            // Repair feedback follows the evidence, so the retry keeps the prefix.
+            expect(sharedPrefix(requestModel.mock.calls[1][0]))
+                .toBe(sharedPrefix(requestModel.mock.calls[0][0]))
         }
     })
 
@@ -689,8 +722,11 @@ describe('stored response memory analysis', () => {
         expect(requestModel).toHaveBeenCalledTimes(3)
         expect(requestModel.mock.calls.map(([request]) => Boolean(request.schema)))
             .toEqual([true, true, false])
-        expect(requestModel.mock.calls[2][0].formated[0].content)
+        expect(requestPromptText(requestModel.mock.calls[2][0]))
             .toContain('canonicalUpdateCandidates')
+        // The prompt-schema fallback keeps the native request's prefix.
+        expect(new Set(requestModel.mock.calls.map(([request]) =>
+            sharedPrefix(request))).size).toBe(1)
     })
 
     test('does not prepare or store a v1 snapshot for native v2 analysis', async () => {
@@ -1915,7 +1951,7 @@ describe('stored response memory analysis', () => {
             analysisTokenLimit: 2_048,
         })
 
-        expect(JSON.parse(requestModel.mock.calls[0][0].formated[1].content).confirmedMessages[0].content)
+        expect(requestInputJson(requestModel.mock.calls[0][0]).confirmedMessages[0].content)
             .toBe(evidence)
         expect(receipt?.notes?.some((note) => note.startsWith('분석 상한 초과:'))).toBe(true)
     })
@@ -1966,7 +2002,7 @@ describe('stored response memory analysis', () => {
             loreReference,
         })
 
-        const input = JSON.parse(requestModel.mock.calls[0][0].formated[1].content)
+        const input = requestInputJson(requestModel.mock.calls[0][0])
         expect(input.confirmedMessages[0].content).toBe(evidence)
         const kept = input.settingReference ?? []
         expect(kept.length).toBeLessThan(loreReference.length)
@@ -2012,7 +2048,7 @@ describe('stored response memory analysis', () => {
                 type: 'success' as const,
                 result: JSON.stringify({
                     schemaVersion: 1,
-                    documents: JSON.parse(request.formated[1].content).targets.map(
+                    documents: requestDataJson(request).targets.map(
                         ({ candidateIndex, target }) => ({
                             candidateIndex,
                             sections: [{
@@ -2087,8 +2123,7 @@ describe('stored response memory analysis', () => {
         for (const call of modelCalls.filter((item) =>
             item.logPurpose === 'bardwiki-canonical-update'
         )) {
-            const targetCount = JSON.parse(call.formated[1].content)
-                .targets.length
+            const targetCount = requestDataJson(call).targets.length
             const schema = JSON.parse(call.schema ?? '{}')
             expect(schema.properties.documents).toMatchObject({
                 minItems: targetCount,
@@ -2107,7 +2142,7 @@ describe('stored response memory analysis', () => {
         try {
             for (const call of modelCalls) {
                 // Confirmed evidence is never shortened; only an oversized turn may exceed the limit.
-                expect(JSON.parse(call.formated[1].content).confirmedMessages[0].content).toBe(evidence)
+                expect(requestInputJson(call).confirmedMessages[0].content).toBe(evidence)
                 if (!longEvidence) {
                     expect(tokenizer.encode(call.formated.map((message) => message.content).join('\n')).length)
                         .toBeLessThanOrEqual(analysisTokenLimit)
@@ -2120,6 +2155,52 @@ describe('stored response memory analysis', () => {
         finally { tokenizer.free() }
         expect(modelCalls[1].formated[1].content).toContain('confirmedMessages')
         expect(savedTitles).toEqual(['사만다', '아만다'])
+        // Writer and canonical calls of one turn share system + evidence
+        // byte-for-byte; only the trailing instructions and data differ.
+        // Evidence is never shortened here, so this holds for long turns too.
+        expect(new Set(modelCalls.map(sharedPrefix)).size).toBe(1)
+        expect(modelCalls[0].formated[1].content)
+            .not.toBe(modelCalls[1].formated[1].content)
+    })
+
+    test('keeps the classic layout for requests without confirmedMessages', () => {
+        expect(buildMemoryAnalysisMessages('instructions', '{"messages":[]}'))
+            .toEqual([
+                { role: 'system', content: 'instructions' },
+                { role: 'user', content: '{"messages":[]}' },
+            ])
+        expect(buildMemoryAnalysisMessages('instructions', 'plain text'))
+            .toEqual([
+                { role: 'system', content: 'instructions' },
+                { role: 'user', content: 'plain text' },
+            ])
+    })
+
+    test('moves confirmedMessages ahead of per-request text without losing data', () => {
+        const confirmedMessages = [
+            { messageId: 'm1', role: 'user', content: '문을 연다.' },
+            { messageId: 'm2', role: 'assistant', content: '문이 열렸다.' },
+        ]
+        const input = JSON.stringify({
+            existingNotes: [{ id: 'n1' }], confirmedMessages, completeCanonicalDocuments: [],
+        })
+        const [system, user] = buildMemoryAnalysisMessages('TASK RULES', input)
+        expect(system).toEqual({ role: 'system', content: BARDWIKI_SHARED_SYSTEM })
+        expect(user.role).toBe('user')
+        expect(user.content).toBe([
+            '<confirmedMessages>', JSON.stringify(confirmedMessages), '</confirmedMessages>', '',
+            '<request_instructions>', 'TASK RULES', '</request_instructions>', '',
+            '<request_data>',
+            JSON.stringify({ existingNotes: [{ id: 'n1' }], completeCanonicalDocuments: [] }),
+            '</request_data>',
+        ].join('\n'))
+        const other = buildMemoryAnalysisMessages('OTHER RULES', JSON.stringify({
+            targets: [], confirmedMessages,
+        }))
+        expect(other[0]).toEqual(system)
+        const evidenceEnd = user.content.indexOf('<request_instructions>')
+        expect(other[1].content.slice(0, evidenceEnd))
+            .toBe(user.content.slice(0, evidenceEnd))
     })
 
     test('retries a canonical native-schema HTTP 400 with a prompt schema', async () => {
@@ -2233,9 +2314,9 @@ describe('stored response memory analysis', () => {
         expect(modelCalls).toHaveLength(3)
         expect(modelCalls[1].schema).toContain('candidateIndex')
         expect(modelCalls[2].schema).toBeUndefined()
-        expect(modelCalls[2].formated[0].content)
+        expect(requestPromptText(modelCalls[2]))
             .toContain('Return exactly one JSON value matching this JSON Schema.')
-        expect(modelCalls[2].formated[0].content).toContain('"documents"')
+        expect(requestPromptText(modelCalls[2])).toContain('"documents"')
     })
 
     test('allows background wiki inquiry to outlive the synchronous chat deadline', async () => {

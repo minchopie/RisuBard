@@ -33,6 +33,22 @@ export function createStructuredOutputFallbackMessage(
     }
 }
 
+// Prefix caches (e.g. Gemini implicit caching) reuse only a byte-identical
+// leading prompt, and Gemini hoists every system message ahead of contents.
+// Append the schema instruction to the final user message when there is one so
+// the shared leading prompt stays stable; callers keep it first otherwise.
+function appendToFinalUserMessage(
+    messages: AdapterChatOptions['messages'],
+    instruction: string
+): AdapterChatOptions['messages'] | null {
+    const last = messages.at(-1)
+    if (last?.role !== 'user' || typeof last.content !== 'string') return null
+    return [
+        ...messages.slice(0, -1),
+        { ...last, content: `${last.content}\n\n${instruction}` },
+    ]
+}
+
 export function isStructuredOutputSchemaRejection(error: unknown): boolean {
     if (!(error instanceof ModelPresetAdapterError)
         || error.kind !== 'invalid-request') {
@@ -64,7 +80,10 @@ export async function sendWithStructuredOutputFallback<T>(
         return send({
             ...options,
             responseSchema: undefined,
-            messages: [fallbackMessage, ...options.messages],
+            messages: appendToFinalUserMessage(
+                options.messages,
+                fallbackMessage.content
+            ) ?? [fallbackMessage, ...options.messages],
         })
     }
 }
