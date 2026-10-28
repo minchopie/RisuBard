@@ -138,7 +138,7 @@
         {:else}
             {@const headline = syncHeadline(sync, syncConflictList, $coordinatorState)}
             <div class="sync-headline" data-tone={headline.tone}>
-                <strong>{headline.tone === 'ok' ? '✓ ' : '! '}{headline.title}</strong>
+                <strong>{headline.tone === 'ok' ? '✓ ' : headline.tone === 'waiting' ? '… ' : '! '}{headline.title}</strong>
                 <span>{headline.detail}</span>
             </div>
             <div class="transfer-actions">
@@ -175,9 +175,9 @@
                     <strong>기기 간 차이 {choices.length}건</strong>
                     {#if sync.role === 'joining' && sync.conflicts}
                         {@const authority = bootstrapAuthority(sync)}
-                        <span>{authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')}(기준 기기)` : '고른 기기'}의 값으로 한 번에 맞출 수 있어요. 이 기기의 원래 값은 복구 기록에 보관돼요.</span>
+                        <span>처음 합류할 때 겹친 앱 설정은 {authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')}(기준 기기)` : '고른 기기'}의 값으로 한 번에 맞출 수 있어요. 대화·페르소나와 합류 뒤에 고친 설정은 아래에서 하나씩 골라 주세요. 이 기기의 원래 값은 복구 기록에 보관돼요.</span>
                         {#if !authority}<label>기준 기기<select bind:value={syncAuthorityPick}><option value="">선택…</option>{#each incomingPeers(sync) as peer (peer.device + peer.incarnation)}<option value={peer.device}>{syncDeviceName(sync, peer.device)} · {peer.label}</option>{/each}</select></label>{/if}
-                        <ShButton disabled={!authority && !syncAuthorityPick} onclick={() => run(async () => { const device = authority?.device ?? syncAuthorityPick; const r = await bootstrapSync(device); await refreshSync(); transferStatus.set(`${syncDeviceName(sync, device)} 기준으로 ${r.resolved}개 항목을 맞췄어요. 원래 값은 복구 기록에 있어요.`) })}>{authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')} 값으로 모두 맞추기` : '고른 기기 값으로 모두 맞추기'}</ShButton>
+                        <ShButton disabled={!authority && !syncAuthorityPick} onclick={() => run(async () => { const device = authority?.device ?? syncAuthorityPick; const r = await bootstrapSync(device); await refreshSync(); transferStatus.set(r.resolved ? `${syncDeviceName(sync, device)} 기준으로 초기 설정 ${r.resolved}개를 맞췄어요. 원래 값은 복구 기록에 있어요.` : '한 번에 맞출 초기 설정 차이가 없어요. 남은 항목은 아래에서 하나씩 골라 주세요.') })}>{authority ? `초기 설정을 ${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')} 값으로 맞추기` : '초기 설정을 고른 기기 값으로 맞추기'}</ShButton>
                     {/if}
                     <details><summary>하나씩 골라서 맞추기</summary>
                         {#each choices as conflict (conflict.root)}
@@ -409,6 +409,7 @@
     .sync-headline { width: 100%; display: grid; gap: .25rem; padding: .75rem 1rem; border-radius: .5rem; border: 1px solid var(--color-darkborderc); }
     .sync-headline[data-tone='ok'] strong { color: var(--color-draculagreen, inherit); }
     .sync-headline[data-tone='attention'] strong { color: var(--color-draculaorange, inherit); }
+    .sync-headline[data-tone='waiting'] strong { color: var(--color-draculayellow, inherit); }
     .sync-card { width: 100%; display: grid; gap: .5rem; padding: .75rem 1rem; border-radius: .5rem; border: 1px solid var(--color-darkborderc); }
     .sync-card summary, details > summary { cursor: pointer; }
     .transfer-actions { width: 100%; display: flex; flex-wrap: wrap; gap: .5rem; }

@@ -406,11 +406,13 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
     /** Logical trash: tombstone heads of the newest TRASH_KEEP deletion operations with their recoverable-until time. Read-only:
      *  nothing is physically removed and older operations simply stop being offered. */
     function trash(at = now()) {
-        const live = Object.entries(state.trash).filter(([id]) => { const r = graph.get(id); return r && graph.heads(rootKey(r)).includes(id); });
+        // The kept operations are chosen over the whole deletion history (restored ones included), so restoring a recent deletion
+        // never brings an older one back into the list.
+        const known = Object.entries(state.trash).filter(([id]) => graph.get(id));
         const operationOf = id => graph.get(id).tombstone?.operation ?? id, latest = new Map();
-        for (const [id, deletedAt] of live) latest.set(operationOf(id), Math.max(latest.get(operationOf(id)) ?? 0, deletedAt));
+        for (const [id, deletedAt] of known) latest.set(operationOf(id), Math.max(latest.get(operationOf(id)) ?? 0, deletedAt));
         const kept = new Set([...latest].sort((a, b) => b[1] - a[1] || compare(a[0], b[0])).slice(0, TRASH_KEEP).map(([operation]) => operation));
-        return live.filter(([id]) => kept.has(operationOf(id)))
+        return known.filter(([id]) => kept.has(operationOf(id)) && graph.heads(rootKey(graph.get(id))).includes(id))
             .map(([id, deletedAt]) => ({ id, root: graph.get(id).root, deletedAt, recoverableUntil: deletedAt + TRASH_DAYS * 86400000, expired: at > deletedAt + TRASH_DAYS * 86400000 }));
     }
     const status = () => ({ deviceId: state.deviceId, incarnationId: state.incarnationId, workspaceId: state.workspaceId, sequence: state.sequence, publications: state.publications, rotations: state.rotations.length, recovery, broken: broken ? String(broken.message) : null,

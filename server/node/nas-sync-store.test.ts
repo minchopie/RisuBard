@@ -381,17 +381,23 @@ test('the trash offers only the newest TRASH_KEEP deletion operations; older one
     expect(a.status().trash).toBe(4)
     expect(a.graph.heads(key('t1'))).toEqual([tombs[0].id]) // its tombstone (the deletion) is untouched
     expect(existsSync(a.blobFile(live[0].contentHash))).toBe(true) // nothing physically removed
+    // Restoring the newest deletion does not bring the oldest one back: the kept operations come from the whole deletion history.
+    clock += 1000; a.commit(a.graph.restore(tombs[4].id))
+    expect(a.trash().map((x: any) => x.root).sort()).toEqual(['t2', 't3'])
+    clock += 1000; const t6 = chat('t6', { root: 't6' }); a.commit([t6]); clock += 1000
+    a.commit([makeRevision({ domain: 'play', type: 'chat', root: 't6', parents: [t6.id], tombstone: { operation: 'op-new', base: t6.id } })])
+    expect(a.trash().map((x: any) => x.root).sort()).toEqual(['t3', 't6']) // op-1 is pushed out by the new deletion
 })
 
 test('commits drafted after a device profile is set carry it; peers record it on admission; malformed profiles are refused', async t => {
     const a = open(await temp(t)), b = open(await temp(t, 'bard-sync-b-')); a.setWorkspace('ws'); b.setWorkspace('ws')
-    const before = a.commit([chat('p0', { n: 0 })])
+    const before = a.commit([chat('p0', { n: 0 })]), bytesBefore = canonical(a.commitObject(before))
     expect(a.commitObject(before).device).toBeUndefined() // drafted before the profile: re-uploads byte-identically
     expect(() => a.setProfile({ kind: 'laptop' })).toThrow(/Invalid device profile/)
     expect(a.setProfile({ kind: 'pc', name: '  거실\u0007 PC  ' })).toEqual({ kind: 'pc', name: '거실 PC' })
     const after = a.commit([chat('p1', { n: 1 })])
     expect(a.commitObject(after).device).toEqual({ kind: 'pc', name: '거실 PC' })
-    expect(a.commitObject(before).device).toBeUndefined()
+    expect(canonical(a.commitObject(before))).toBe(bytesBefore)
     const A = a.identity()
     expect(b.admitRemote(deliver(a, b, before), { device: A.deviceId, incarnation: A.incarnationId, sequence: before.sequence, commitId: before.commitId }).state).toBe('admitted')
     expect(b.status().incoming[`${A.deviceId}/${A.incarnationId}`].profile).toBeNull()

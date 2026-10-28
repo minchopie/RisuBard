@@ -375,7 +375,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     function deletedTitle(s, r) {
         const base = r.tombstone?.base ? s.graph.get(r.tombstone.base) : null, name = base?.content?.name;
         if (r.type !== 'chat') return name || null;
-        const owner = s.graph.revisions().find(x => x.type === 'character' && x.content?.chatIds?.includes(r.root));
+        const owners = s.graph.revisions().filter(x => x.type === 'character' && x.content?.chatIds?.includes(r.root));
+        const owner = owners.find(x => s.graph.heads(`${x.domain}\n${x.type}\n${x.root}`).includes(x.id)) ?? owners.at(-1);
         return [owner?.content?.name, name || '이름 없는 대화'].filter(Boolean).join(' · ');
     }
     function trashList() { const s = requireEnabled(); return s.trash().map(t => { const r = s.graph.get(t.id); return { ...t, domain: r.domain, type: r.type, title: deletedTitle(s, r), operation: r.tombstone.operation, cohort: s.graph.revisions().filter(x => x.tombstone?.operation === r.tombstone.operation).length }; }); }

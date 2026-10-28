@@ -76,16 +76,31 @@ export function groupSyncTrash(items: any[] | null | undefined): { id: string; t
 }
 
 /** One glance: is anything waiting for the user, who is this device, who is the reference device, when did it last apply. */
-export function syncHeadline(status: any, conflicts: any[] = [], c: CoordinatorState | null = null): { tone: 'ok' | 'attention' | 'off'; title: string; detail: string } {
+const PROBLEM_OUTCOMES = new Set(['offline', 'error', 'publish-failed', 'repair-failed', 'save-failed'])
+const RECOVERY_OUTCOMES = new Set(['recovery-pending', 'finish-pending'])
+export function syncHeadline(status: any, conflicts: any[] = [], c: CoordinatorState | null = null): { tone: 'ok' | 'waiting' | 'attention' | 'off'; title: string; detail: string } {
     if (!status?.enabled) return { tone: 'off', title: '자동 동기화 꺼짐', detail: '' }
     const choices = conflicts.filter(x => x?.state === 'diverged').length
-    const s = status.sync ?? {}, pending = (s.outbox?.pending?.length ?? 0)
-    const attention = choices + (status.vault?.pendingGrant ? 1 : 0) + (keyRequestNeeded(status) ? 1 : 0)
+    const s = status.sync ?? {}, pending = (s.outbox?.pending?.length ?? 0), incoming = Object.values(s.incoming ?? {}) as any[]
+    const pendingApply = incoming.reduce((n, p) => n + (p?.pendingApply ?? 0), 0), review = incoming.reduce((n, p) => n + (p?.held ?? 0) + (p?.quarantined ?? 0), 0)
+    const outcome = String(c?.lastOutcome ?? '').replace(/^key-pending:/, '')
+    const attention = choices + review + (status.vault?.pendingGrant ? 1 : 0) + (keyRequestNeeded(status) ? 1 : 0)
+    const problem = c?.offline ? '연결 안 됨 · 재시도 예정' : PROBLEM_OUTCOMES.has(outcome) || c?.lastError ? `${OUTCOME_LABEL[outcome] ?? '오류 · 재시도 예정'}` : ''
+    const recovery = status.plan || status.pendingRestore || RECOVERY_OUTCOMES.has(outcome)
     const me = s.deviceId ? syncDeviceName(status, s.deviceId) : `이 기기${kindLabel(s.profile) ? `(${kindLabel(s.profile)})` : ''}`
     const reference = status.role === 'authority' ? '이 기기' : status.vault?.sharedFrom ? syncDeviceName(status, status.vault.sharedFrom).replace(/ · 기준$/, '') : '아직 없음'
     const last = status.lastAppliedAt ? syncRevisionTime(status.lastAppliedAt) : '기록 없음'
-    const title = attention ? `확인이 필요한 항목 ${attention}건` : c?.paused ? '잠시 중지됨' : pending ? `NAS에 올릴 변경 ${pending}건 대기` : '최신 상태예요'
-    return { tone: attention ? 'attention' : 'ok', title, detail: `${me} · 기준 기기: ${reference} · 마지막 적용: ${last}` }
+    const waitingApply = pendingApply + (status.localApply ?? 0)
+    const title = attention ? `확인이 필요한 항목 ${attention}건`
+        : problem ? problem
+        : recovery ? '이전 적용 결과 확인 대기 · 아래 「자세히」에서 확인'
+        : c?.paused ? '잠시 중지됨'
+        : waitingApply ? `받은 변경 ${waitingApply}건 적용 대기`
+        : pending ? `NAS에 올릴 변경 ${pending}건 대기`
+        : c?.running ? '동기화 중…'
+        : '최신 상태예요'
+    const tone = attention || problem || recovery ? 'attention' : c?.paused || waitingApply || pending || c?.running ? 'waiting' : 'ok'
+    return { tone, title, detail: `${me} · 기준 기기: ${reference} · 마지막 적용: ${last}` }
 }
 export function syncItemTitle(item: any): string {
     const groups: Record<string, string> = { personas: '페르소나', activation: '모듈·플러그인 사용 설정', 'prompt-presets': '프롬프트 프리셋', 'model-presets': '모델 프리셋', 'provider-main': 'API 연결 설정', lorebook: '로어북', memory: '기억 설정', theme: '화면 테마', 'risubard-wiki': 'BardWiki 설정', pluginCustomStorage: '플러그인 저장 자료' };

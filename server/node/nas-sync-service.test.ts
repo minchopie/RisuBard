@@ -1508,3 +1508,23 @@ test('NAS snapshot and plan-check under a data root longer than 260 characters c
     expect(await leftovers()).toEqual([]); expect(await namespaced()).toEqual([])
     await assertNoSentinel(tablet.dataRoot); await assertNoSentinel(phone.dataRoot)
 })
+
+test('the trash lists the newest three deletions by name and refuses to restore an older one, even after a newer one was restored', async t => {
+    const card = (n: number) => ({ chaId: `card${n}`, type: 'character', name: `캐릭터${n}`, chatPage: 0, chats: [{ id: `chat${n}`, name: `대화${n}`, note: '', localLore: [], scriptstate: {}, message: [{ role: 'char', data: `본문${n}` }] }] })
+    const d = await device(t, fixtureDav(), 'trash-cap', baseDb({ characters: [1, 2, 3, 4].map(card) }))
+    d.service.enable({ workspaceId: 'ws-trash' }); await d.service.snapshot()
+    // The character renamed before its deletion is listed under its last name.
+    clock += 1000; const renamed = d.db(); renamed.characters[3].name = '새이름4'; d.save(renamed); await d.service.snapshot()
+    for (const n of [1, 2, 3, 4]) { clock += 1000; const db = d.db(); db.characters = db.characters.filter((c: any) => c.chaId !== `card${n}`); d.save(db); await d.service.snapshot() }
+    const store = d.service.store(), all = Object.keys(store.state().trash)
+    const listed = store.trash().map((x: any) => x.root).sort()
+    expect(listed).toEqual(['card2', 'card3', 'card4', 'chat2', 'chat3', 'chat4'])
+    // Titles come from the last live state; a chat shows its character's current name, not an older one.
+    expect(d.service.trashList().map((x: any) => x.title)).toEqual(expect.arrayContaining(['새이름4', '새이름4 · 대화4', '캐릭터2 · 대화2', '캐릭터3']))
+    const oldest = all.find(id => store.graph.get(id).root === 'card1')!
+    await expect(d.service.restoreTrash({ id: oldest })).rejects.toThrow(/no longer in the trash/)
+    const newest = store.trash().find((x: any) => x.root === 'card4')!
+    await d.service.restoreTrash({ id: newest.id })
+    expect(d.service.store().trash().map((x: any) => x.root)).not.toContain('card1')
+    await expect(d.service.restoreTrash({ id: oldest })).rejects.toThrow(/no longer in the trash/)
+})
