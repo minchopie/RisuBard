@@ -1,0 +1,164 @@
+{
+  "date": "2026-10-17",
+  "apkSha256": "25c97eda5ff4f850c9dc99132691b1b6f3097df208ba521a332358fdf849c95c",
+  "devices": {
+    "TB710FU": {
+      "createdThroughUi": true,
+      "chatSavedHttpStatus": 200,
+      "forceStopRestartAndHydrate": "synthetic first message and user message visible",
+      "viewport": {
+        "landscape": {
+          "innerWidth": 1280,
+          "innerHeight": 760,
+          "visual": 760.4000244140625,
+          "css": "760px",
+          "body": 760,
+          "input": {
+            "x": 544.7999877929688,
+            "y": 705.2000122070312,
+            "width": 511.9125061035156,
+            "height": 40,
+            "top": 705.2000122070312,
+            "right": 1056.7124938964844,
+            "bottom": 745.2000122070312,
+            "left": 544.7999877929688
+          }
+        },
+        "portrait": {
+          "innerWidth": 800,
+          "innerHeight": 1240,
+          "visual": 1240.4000244140625,
+          "css": "1240px",
+          "body": 1240,
+          "input": {
+            "x": 72.80000305175781,
+            "y": 1185.2000732421875,
+            "width": 511.9125061035156,
+            "height": 40,
+            "top": 1185.2000732421875,
+            "right": 584.7125091552734,
+            "bottom": 1225.2000732421875,
+            "left": 72.80000305175781
+          }
+        }
+      },
+      "keyboard": {
+        "status": "passed in landscape after user opened software keyboard; geometry and native screenshot inspected",
+        "apkSha256": "377d681ead3c09841bbcba1bc44a734dcf96450d86cb319f458ee202a96d5f8e",
+        "landscape": {
+          "innerWidth": 1280,
+          "innerHeight": 405,
+          "visual": 404.79998779296875,
+          "css": "405px",
+          "body": 405,
+          "input": {
+            "x": 312.8000183105469,
+            "y": 350.20001220703125,
+            "width": 511.9125061035156,
+            "height": 40,
+            "top": 350.20001220703125,
+            "right": 824.7125244140625,
+            "bottom": 390.20001220703125,
+            "left": 312.8000183105469
+          },
+          "focus": "TEXTAREA"
+        },
+        "portrait": {
+          "innerWidth": 800,
+          "innerHeight": 885,
+          "visual": 884.7999877929688,
+          "css": "885px",
+          "body": 885,
+          "input": {
+            "x": 72.80000305175781,
+            "y": 830.2000122070312,
+            "width": 511.9125061035156,
+            "height": 40,
+            "top": 830.2000122070312,
+            "right": 584.7125091552734,
+            "bottom": 870.2000122070312,
+            "left": 72.80000305175781
+          }
+        }
+      },
+      "update": "synthetic chat preserved after APK update"
+    },
+    "SM_S938N": {
+      "createdThroughUi": true,
+      "forceStopRestartAndHydrate": "synthetic first message and second user message visible",
+      "systemFilePicker": "cancel and reopen; synthetic v2 JSON card import completed",
+      "keyboard": {
+        "status": "passed on patched APK; native screenshots inspected",
+        "portrait": {
+          "innerHeight": 555,
+          "visual": 555.4285888671875,
+          "css": "555px",
+          "body": 555,
+          "input": {
+            "x": 56.857147216796875,
+            "y": 500.14288330078125,
+            "width": 155.10269165039062,
+            "height": 40,
+            "top": 500.14288330078125,
+            "right": 211.9598388671875,
+            "bottom": 540.1428833007812,
+            "left": 56.857147216796875
+          },
+          "ua": "Mozilla/5.0 (Linux; Android 16; SM-S938N Build/BP4A.251205.006; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/155.0.8059.43 Mobile Safari/537.36 RisuBardAndroid/0.9.72-dev-debug"
+        },
+        "landscape": {
+          "innerWidth": 855,
+          "innerHeight": 198,
+          "visual": 198.57142639160156,
+          "css": "199px",
+          "body": 199.00001525878906,
+          "input": {
+            "x": 100.28572082519531,
+            "y": 144.1428680419922,
+            "width": 511.67413330078125,
+            "height": 40,
+            "top": 144.1428680419922,
+            "right": 611.9598541259766,
+            "bottom": 184.1428680419922,
+            "left": 100.28572082519531
+          }
+        },
+        "closed": {
+          "innerHeight": 855,
+          "visual": 854.8571166992188,
+          "css": "855px",
+          "body": 855.0000610351562,
+          "input": {
+            "x": 16.85714340209961,
+            "y": 760.1428833007812,
+            "width": 377.71429443359375,
+            "height": 40,
+            "top": 760.1428833007812,
+            "right": 394.57143783569336,
+            "bottom": 800.1428833007812,
+            "left": 16.85714340209961
+          }
+        }
+      },
+      "background": "Home then launch same PID; draft and saved chat preserved",
+      "update": "synthetic chat preserved after APK update",
+      "firstCharacterSave": {
+        "bodyVerifiedUpload200": true,
+        "explicitCanonicalFlush200": true,
+        "forceStopRestartAndHydrate": true
+      }
+    }
+  },
+  "notVerified": [
+    "BardWiki/save-slot round trip",
+    "16KiB runtime",
+    "transfers"
+  ],
+  "notes": [
+    "Wait for asynchronous chat hydration before asserting persistence; an early isVisible=false is not sufficient evidence of loss.",
+    "First phone slash-message preservation was not conclusively established; repeat with an acknowledged save and hydration wait.",
+    "POST /api/chat-content returns acceptance before debounced disk persistence. Immediate force-stop after acceptance reproduced a missing last message. After canonical flush 200, verified message survives force-stop. This existing contract must be honored by import journals.",
+    "Home kept draft and process alive, but no automatic /api/db/flush request was observed in WebView during the 8-second observation."
+  ],
+  "previousApkSha256": "8146e121f697f0d1279ee6107838c1e68964edfa3400b1ecf70ba1b355a0bb95"
+}

@@ -1,0 +1,1594 @@
+diff --git a/server/node/canonical-projection-sync.test.ts b/server/node/canonical-projection-sync.test.ts
+index f722f4d..506eebd 100644
+--- a/server/node/canonical-projection-sync.test.ts
++++ b/server/node/canonical-projection-sync.test.ts
+@@ -192,6 +192,42 @@ describe('canonical save racing an external edit', () => {
+         expect(f.sync.hasExternalChanges()).toBe(false)
+     })
+ 
++    it('a journal retry preserves a later external edit instead of publishing over it', () => {
++        const f = fixture()
++        const {commitTransaction,recoverTransactions}=require('./file-store.cjs')
++        const save=f.sync.beginSave()
++        const changed={...JSON.parse(fs.readFileSync(path.join(f.repository.dataRoot,f.metadata),'utf8')),desc:'app retry'}
++        expect(()=>observeWrites(save,()=>commitTransaction(f.repository.dataRoot,[
++            {path:'presets/first.json',data:Buffer.from('{}')},
++            {path:f.metadata,data:Buffer.from(JSON.stringify(changed))},
++        ],{failAfterPublish:1}))).toThrow('simulated crash')
++        f.editExternally()
++        expect(()=>observeWrites(save,()=>recoverTransactions(f.repository.dataRoot))).toThrow(expect.objectContaining({code:'CANONICAL_FILES_CHANGED'}))
++        expect(f.desc()).toBe('external')
++        expect(fs.readdirSync(path.join(f.repository.dataRoot,'.journal')).filter(name=>name.endsWith('.json'))).toHaveLength(1)
++    })
++
++    it.each([false, true])('asset failure settles published files while preserving real external changes: %s', external => {
++        const f = fixture()
++        f.database.characters[1].desc = 'acknowledged app edit'
++        const source = fs.readFileSync(path.join(import.meta.dirname, 'server.cjs'), 'utf8')
++        const begin = source.indexOf('function persistCanonicalProjection(')
++        const body = source.slice(begin, source.indexOf('function adoptExternallyChangedCanonicalProjection(', begin))
++        const deps = {
++            elapsedMs: () => 0, nodeCrypto: crypto, reportImportProgress() {}, externalEditSession: null,
++            canonicalProjectionSync: f.sync, observeWrites,
++            writeCanonicalProjection: () => ({ result: f.save(), strategy: 'full-sync' }),
++            userDataRepository: f.repository, canonicalProjectionReady: true,
++            characterAssets: { sync() { if (external) f.editExternally(); throw new Error('asset write failed') } },
++            saveObservation: { record() {} },
++        }
++        const persist = new Function('deps', `with (deps) { ${body}; return persistCanonicalProjection; }`)(deps)
++        expect(() => persist(f.database)).toThrow('asset write failed')
++        expect(f.sync.hasExternalChanges()).toBe(external)
++        expect(JSON.parse(fs.readFileSync(path.join(f.repository.dataRoot, 'characters/other/metadata.json'), 'utf8')).desc).toBe('acknowledged app edit')
++        if (external) expect(f.desc()).toBe('external')
++    })
++
+     it('leaves a file edited during an unrelated save pending for review', () => {
+         const f = fixture()
+         f.database.characters[1].chats[0].message.push({ role: 'char', data: 'yo', chatId: 'other-m2' })
+@@ -203,6 +239,53 @@ describe('canonical save racing an external edit', () => {
+         expect(f.sync.changedFiles()).toEqual([{ path: f.metadata, status: 'changed' }])
+     })
+ 
++    it.each([false, true])('adoption never accepts a later external edit it did not load (merge: %s)', merge => {
++        const f = fixture()
++        f.editExternally()
++        const changed = f.sync.loadExternalChanges()
++        changed.previous = structuredClone(f.database)
++        const pending = structuredClone(f.database)
++        pending.characters[1].desc = 'pending app change'
++        const editLater = () => {
++            const target = path.join(f.repository.dataRoot, f.metadata)
++            const value = JSON.parse(fs.readFileSync(target, 'utf8'))
++            value.desc = 'later external edit'
++            fs.writeFileSync(target, JSON.stringify(value))
++        }
++        const source = fs.readFileSync(path.join(import.meta.dirname, 'server.cjs'), 'utf8')
++        const begin = source.indexOf('function adoptExternallyChangedCanonicalProjection(')
++        const body = source.slice(begin, source.indexOf('async function adoptSettledExternalProjection(', begin))
++        const deps = {
++            canonicalProjectionReady: true,
++            canonicalProjectionSync: { ...f.sync, loadExternalChanges: () => changed },
++            liveCharacterFiles: { isEnabled: () => false, invalidate() {}, accept() {} },
++            liveFilesAdoption: null, liveFilesPendingWrites: merge,
++            normalizeJSON: (value: unknown) => structuredClone(value),
++            reassembleFullDb: () => pending, stripChatsFromDb: (value: unknown) => value,
++            mergePendingLiveDatabase: require('./live-character-files.cjs').mergePendingLiveDatabase,
++            preserveLiveFileRecovery: () => ({}),
++            persistCanonicalProjection: (database: unknown) => {
++                const save = f.sync.beginSave()
++                observeWrites(save, () => f.save(database as typeof f.database))
++                editLater()
++                return { acceptedRevision: save.settle() }
++            },
++            userDataRepository: f.repository,
++            dbCache: { db: {} }, DB_HEX_KEY: 'db', saveTimers: {}, directWriteTracker: { clear() {} },
++            encodeRisuSaveLegacyBuffer: (value: unknown) => { if (!merge) editLater(); return JSON.stringify(value) },
++            kvSet() {}, initChatStore() {}, computeBufferEtag: () => 'etag',
++            dbEtag: null, externallyAdoptedDbEtag: null, liveFileRecovery: { complete() {} },
++            liveFilesRecovery: null, liveFilesRevision: null, liveFilesChatPrevious: null,
++            nodeCrypto: crypto, logger: { info() {} },
++        }
++        const adopt = new Function('deps', `with (deps) { ${body}; return adoptExternallyChangedCanonicalProjection; }`)(deps)
++        if (merge) expect(() => adopt()).toThrow(expect.objectContaining({ code: 'CANONICAL_FILES_CHANGED' }))
++        else adopt()
++        expect(f.sync.hasExternalChanges()).toBe(true)
++        expect(f.desc()).toBe('later external edit')
++        if (merge) expect(deps.liveFilesAdoption).not.toBeNull()
++    })
++
+     it('refuses to replace a file another program rewrote after the save began', () => {
+         const f = fixture()
+         f.database.characters[0].desc = 'app edit'
+diff --git a/server/node/compatibility-cache.cjs b/server/node/compatibility-cache.cjs
+index a038d13..06fb886 100644
+--- a/server/node/compatibility-cache.cjs
++++ b/server/node/compatibility-cache.cjs
+@@ -8,6 +8,7 @@ const DATABASE_KEY = 'database/database.bin';
+ function attachCompatibilityCache({ store, repository, dataRoot, enabled = false, canInvalidate, record }) {
+     const original = { ...store };
+     let recorder = record;
++    let recover = () => repository.recoverPendingTransactions?.();
+     let verified = false;
+     const hasCanonical = () => fs.existsSync(path.join(dataRoot, 'index/sidebar.json'));
+     const observe = row => { try { recorder?.(row); } catch {} };
+@@ -16,7 +17,7 @@ function attachCompatibilityCache({ store, repository, dataRoot, enabled = false
+         if (!hasCanonical()) return null;
+         const started = performance.now();
+         try {
+-            repository.recoverPendingTransactions?.();
++            recover();
+             const bytes = encodeRisuSaveLegacyBuffer(repository.exportLegacyDatabase());
+             original.kvSet(DATABASE_KEY, bytes);
+             observe({ kind: 'compatibility-materialize', trigger, outcome: 'success',
+@@ -61,6 +62,7 @@ function attachCompatibilityCache({ store, repository, dataRoot, enabled = false
+         invalidate: () => original.kvDel(DATABASE_KEY),
+         materialize,
+         setRecorder: callback => { recorder = callback; },
++        setRecoveryHandler: callback => { recover = callback; },
+     };
+ }
+ 
+diff --git a/server/node/compatibility-cache.test.ts b/server/node/compatibility-cache.test.ts
+index 0b854bd..83ba135 100644
+--- a/server/node/compatibility-cache.test.ts
++++ b/server/node/compatibility-cache.test.ts
+@@ -29,6 +29,27 @@ function fixture() {
+ }
+ 
+ describe('P1 regenerable compatibility cache', () => {
++    it('retains the pending save observer when a legacy reader rebuilds the cache', () => {
++        const f = fixture(); f.cache.invalidate()
++        const { createCanonicalProjectionSync } = require('./canonical-projection-sync.cjs')
++        const { commitTransaction, observeWrites } = require('./file-store.cjs')
++        const sync = createCanonicalProjectionSync({ repository: f.repository, readAcceptedRevision: () => null, writeAcceptedRevision: () => {} })
++        sync.accept()
++        const save = sync.beginSave()
++        const target = 'characters/char-1/metadata.json'
++        const original = JSON.parse(fs.readFileSync(path.join(f.root, target), 'utf8'))
++        const external = JSON.stringify({ ...original, name: 'external' })
++        expect(() => observeWrites(save, () => commitTransaction(f.root, [
++            { path: 'presets/first.json', data: Buffer.from('{}') },
++            { path: target, data: Buffer.from(JSON.stringify({ ...original, name: 'app' })) },
++        ], { failAfterPublish: 1 }))).toThrow('simulated crash')
++        fs.writeFileSync(path.join(f.root, target), external)
++        f.cache.setRecoveryHandler(() => observeWrites(save, () => f.repository.recoverPendingTransactions()))
++        expect(() => f.store.kvListWithSizes()).toThrow(expect.objectContaining({ code: 'CANONICAL_FILES_CHANGED' }))
++        expect(fs.readFileSync(path.join(f.root, target), 'utf8')).toBe(external)
++        expect(fs.readdirSync(path.join(f.root, '.journal')).filter(name => name.endsWith('.json'))).toHaveLength(1)
++    })
++
+     it('requires a matching shadow baseline and revokes eligibility after a mismatch', () => {
+         const f = fixture()
+         expect(f.cache.canDefer()).toBe(true)
+diff --git a/server/node/data-root-lock.cjs b/server/node/data-root-lock.cjs
+index 2f408b5..445c0b8 100644
+--- a/server/node/data-root-lock.cjs
++++ b/server/node/data-root-lock.cjs
+@@ -21,7 +21,9 @@ function isProcessAlive(pid) {
+         process.kill(pid, 0);
+         return true;
+     } catch (error) {
+-        return error?.code !== 'ESRCH';
++        // Android can reuse a dead server PID for another UID, which cannot own our private data.
++        return error?.code !== 'ESRCH'
++            && !(process.env.RISUBARD_EMBEDDED_ANDROID === '1' && error?.code === 'EPERM');
+     }
+ }
+ 
+diff --git a/server/node/data-root-lock.test.ts b/server/node/data-root-lock.test.ts
+index 459ed8f..7932e26 100644
+--- a/server/node/data-root-lock.test.ts
++++ b/server/node/data-root-lock.test.ts
+@@ -38,6 +38,26 @@ afterEach(() => {
+ })
+ 
+ describe('data-root process lock', () => {
++    test.each(['0', '1'])('handles a stale PID reused by another UID in embedded mode %s', (embedded) => {
++        const root = tempRoot()
++        const result = spawnSync(process.execPath, ['-e', `
++            const assert = require('node:assert/strict')
++            const fs = require('node:fs')
++            const path = require('node:path')
++            const lockPath = path.join(process.env.DATA_ROOT, '.risubard-server.lock')
++            fs.mkdirSync(lockPath)
++            fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({ pid: process.pid + 1 }))
++            process.kill = () => { throw Object.assign(new Error('other UID'), { code: 'EPERM' }) }
++            const { acquireDataRootLock } = require(process.env.LOCK_MODULE)
++            if (process.env.RISUBARD_EMBEDDED_ANDROID === '1') acquireDataRootLock(process.env.DATA_ROOT).release()
++            else assert.throws(() => acquireDataRootLock(process.env.DATA_ROOT), { code: 'DATA_ROOT_IN_USE' })
++        `], {
++            env: { ...process.env, LOCK_MODULE: lockModule, DATA_ROOT: root, RISUBARD_EMBEDDED_ANDROID: embedded },
++            encoding: 'utf8', timeout: 3000,
++        })
++        expect(result.status, result.stderr).toBe(0)
++    })
++
+     test.each(['SIGINT', 'SIGTERM'])('releases the lock on %s without a shutdown handler', (signal) => {
+         const root = tempRoot()
+         const result = spawnSync(process.execPath, ['-e', `
+diff --git a/server/node/file-store.cjs b/server/node/file-store.cjs
+index fc6e1b3..2f767f0 100644
+--- a/server/node/file-store.cjs
++++ b/server/node/file-store.cjs
+@@ -124,13 +124,29 @@ function copySynced(source, destination) {
+     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+ }
+ 
++const renameWait = new Int32Array(new SharedArrayBuffer(4));
++function retryWindowsSharing(operation) {
++    const deadline = Date.now() + 1000;
++    let delay = 10;
++    for (;;) {
++        try { return operation(); }
++        catch (error) {
++            if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error?.code) || Date.now() >= deadline) throw error;
++            // Windows sharing handles can briefly block replacement; never unlink the good destination.
++            Atomics.wait(renameWait, 0, 0, Math.min(delay, deadline - Date.now()));
++            delay = Math.min(delay * 2, 50);
++        }
++    }
++}
++function renameAtomic(source, destination) { return retryWindowsSharing(() => fs.renameSync(source, destination)); }
++
+ function replaceAtomic(target, data) {
+     const directory = path.dirname(target);
+     fs.mkdirSync(directory, { recursive: true });
+     const temp = path.join(directory, `.${path.basename(target)}.${crypto.randomUUID()}.tmp`);
+     writeSynced(temp, data);
+     try {
+-        fs.renameSync(temp, target);
++        renameAtomic(temp, target);
+         fsyncDirectory(directory);
+     } catch (error) {
+         try { fs.unlinkSync(temp); } catch {}
+@@ -146,8 +162,9 @@ function preserveBackup(target) {
+     // A copied package may have a sidecar for the previous backup revision.
+     // Backups are historical bytes, not a checksummed canonical write. Never
+     // leave that old checksum attached to the replacement backup.
+-    fs.rmSync(`${backup}.sha256`, { force: true });
+-    fs.renameSync(temp, backup);
++    retryWindowsSharing(() => fs.rmSync(`${backup}.sha256`, { force: true }));
++    try { renameAtomic(temp, backup); }
++    catch (error) { try { fs.unlinkSync(temp); } catch {} throw error; }
+     fsyncDirectory(path.dirname(backup));
+ }
+ 
+@@ -171,7 +188,7 @@ function atomicWriteFile(root, relativePath, value, options = {}) {
+ 
+     try {
+         preserveBackup(target);
+-        fs.renameSync(temp, target);
++        renameAtomic(temp, target);
+         replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
+         fsyncDirectory(directory);
+         noteWrite(root, target);
+@@ -216,7 +233,7 @@ function atomicWriteFileChunks(root, relativePath, produce, options = {}) {
+ 
+     try {
+         if (options.backup !== false) preserveBackup(target);
+-        fs.renameSync(temp, target);
++        renameAtomic(temp, target);
+         replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
+         fsyncDirectory(directory);
+         noteWrite(root, target);
+@@ -263,6 +280,33 @@ function writeJournal(journalPath, value) {
+     replaceAtomic(journalPath, Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'));
+ }
+ 
++function preserveRecoveryRevision(root, journal, entry, target) {
++    if (!fs.existsSync(target)) return;
++    const digest = checksumFile(target);
++    const key = checksum(`${entry.path}\0${digest}`);
++    const directory = resolveInside(root, `trash/transaction-recovery/${journal.id}/${key}`);
++    const destination = path.join(directory, 'original');
++    fs.mkdirSync(directory, { recursive: true });
++    // A restart has no observer. Keep every replaced revision beyond the next .bak rotation.
++    writeJournal(path.join(directory, 'mapping.json'), {
++        source: entry.path, destination: path.relative(root, destination).split(path.sep).join('/'), checksum: digest,
++    });
++    if (fs.existsSync(destination)) {
++        if (!matchesChecksum(destination, digest)) throw new Error(`Recovery copy checksum mismatch: ${entry.path}`);
++    } else {
++        const temp = `${destination}.${crypto.randomUUID()}.tmp`;
++        try {
++            copySynced(target, temp);
++            if (!matchesChecksum(temp, digest)) throw canonicalChangedError(entry.path);
++            renameAtomic(temp, destination);
++            fsyncDirectory(directory);
++        } finally {
++            fs.rmSync(temp, { force: true });
++        }
++    }
++    if (!matchesChecksum(target, digest)) throw canonicalChangedError(entry.path);
++}
++
+ function publishTransaction(root, journal, journalPath, options = {}) {
+     let published = 0;
+     let skipped = 0;
+@@ -304,7 +348,7 @@ function publishTransaction(root, journal, journalPath, options = {}) {
+                 continue;
+             }
+             fs.mkdirSync(path.dirname(destination), { recursive: true });
+-            fs.renameSync(source, destination);
++            renameAtomic(source, destination);
+             fsyncDirectory(path.dirname(source));
+             fsyncDirectory(path.dirname(destination));
+             noteTree(root, source);
+@@ -330,9 +374,10 @@ function publishTransaction(root, journal, journalPath, options = {}) {
+         if (!fs.existsSync(entry.staged)) {
+             throw new Error(`Transaction stage is missing for ${entry.path}`);
+         }
++        if (options.recovering) preserveRecoveryRevision(root, journal, entry, target);
+         preserveBackup(target);
+         fs.mkdirSync(path.dirname(target), { recursive: true });
+-        fs.renameSync(entry.staged, target);
++        renameAtomic(entry.staged, target);
+         replaceAtomic(`${target}.sha256`, Buffer.from(`${entry.checksum}\n`, 'utf8'));
+         fsyncDirectory(path.dirname(target));
+         noteWrite(root, target);
+@@ -412,6 +457,10 @@ function commitTransaction(root, operations, options = {}) {
+     if (!Array.isArray(operations) || operations.length === 0) {
+         return { committed: 0, published: 0, skipped: 0, stagedBytes: 0 };
+     }
++    const journalDir = resolveInside(root, '.journal');
++    if (fs.existsSync(journalDir) && fs.readdirSync(journalDir).some(name => name.endsWith('.json'))) {
++        throw Object.assign(new Error('Recover the pending transaction before committing another save'), { code: 'PENDING_TRANSACTION' });
++    }
+     const clearedPaths = [];
+     const prepared = operations.map((operation, operationIndex) => {
+         reportImportProgress('verify-files', operationIndex, operations.length, operation.path);
+@@ -489,7 +538,6 @@ function commitTransaction(root, operations, options = {}) {
+             stagedBytes: 0,
+         };
+     }
+-    const journalDir = resolveInside(root, '.journal');
+     fs.mkdirSync(journalDir, { recursive: true });
+     const id = crypto.randomUUID();
+     const stageDir = path.join(journalDir, `${id}.stage`);
+@@ -548,13 +596,17 @@ function commitTransaction(root, operations, options = {}) {
+ function recoverTransactions(root) {
+     const journalDir = resolveInside(root, '.journal');
+     if (!fs.existsSync(journalDir)) return { recovered: 0 };
+-    const journals = fs.readdirSync(journalDir).filter(name => name.endsWith('.json')).sort();
++    const journals = fs.readdirSync(journalDir).filter(name => name.endsWith('.json')).map(name => ({
++        name, journal: JSON.parse(fs.readFileSync(path.join(journalDir, name), 'utf8')),
++    })).sort((a, b) => (a.journal.createdAt || 0) - (b.journal.createdAt || 0) || a.name.localeCompare(b.name));
+     let recovered = 0;
+-    for (const name of journals) {
++    for (const { name, journal } of journals) {
+         const journalPath = path.join(journalDir, name);
+-        const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+         const stageDir = path.join(journalDir, `${journal.id}.stage`);
+-        publishTransaction(root, journal, journalPath);
++        // An in-process retry retains its write observer; do not replace a later external edit.
++        assertTargetsUnobserved(root, journal.entries.filter(entry => entry.action !== 'replace'
++            || !matchesChecksum(resolveInside(root, entry.path), entry.checksum)));
++        publishTransaction(root, journal, journalPath, { recovering: true });
+         cleanupJournal(journalPath, stageDir);
+         recovered += 1;
+     }
+@@ -567,9 +619,9 @@ function moveToTrash(root, relativePath) {
+     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+     const destination = resolveInside(root, path.join('trash', stamp, relativePath));
+     fs.mkdirSync(path.dirname(destination), { recursive: true });
+-    fs.renameSync(source, destination);
++    renameAtomic(source, destination);
+     for (const suffix of ['.sha256', '.bak']) {
+-        if (fs.existsSync(`${source}${suffix}`)) fs.renameSync(`${source}${suffix}`, `${destination}${suffix}`);
++        if (fs.existsSync(`${source}${suffix}`)) renameAtomic(`${source}${suffix}`, `${destination}${suffix}`);
+     }
+     noteTree(root, source);
+     fsyncDirectory(path.dirname(source));
+@@ -578,6 +630,7 @@ function moveToTrash(root, relativePath) {
+ }
+ 
+ module.exports = {
++    retryWindowsSharing,
+     atomicWriteFile,
+     atomicWriteFileChunks,
+     atomicWriteJson,
+diff --git a/server/node/file-store.test.ts b/server/node/file-store.test.ts
+index e474f01..a63627a 100644
+--- a/server/node/file-store.test.ts
++++ b/server/node/file-store.test.ts
+@@ -34,6 +34,39 @@ afterEach(() => {
+     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
+ })
+ 
++describe('Windows atomic replacement contention', () => {
++    it.runIf(process.platform === 'win32')('retries transient sharing failures for data, backup and checksum', () => {
++        const root = tempRoot()
++        atomicWriteJson(root, 'state.json', { nextId: 1 })
++        const rename = fs.renameSync
++        const attempts = new Map<string, number>()
++        vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
++            const key = String(to)
++            const count = attempts.get(key) ?? 0
++            attempts.set(key, count + 1)
++            if (count < 2) throw Object.assign(new Error('sharing violation'), { code: count ? 'EACCES' : 'EPERM' })
++            return rename(from, to)
++        })
++        atomicWriteJson(root, 'state.json', { nextId: 2 })
++        expect(readVerifiedJson(root, 'state.json')).toEqual({ nextId: 2 })
++        expect(JSON.parse(fs.readFileSync(path.join(root, 'state.json.bak'), 'utf8'))).toEqual({ nextId: 1 })
++        expect([...attempts.values()]).toEqual([3, 3, 3])
++    })
++
++    it('preserves the destination and reports a permanent replacement error', () => {
++        const root = tempRoot()
++        atomicWriteFile(root, 'system.jsonl', 'original\n')
++        const rename = fs.renameSync
++        vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
++            if (String(to) === path.join(root, 'system.jsonl')) throw Object.assign(new Error('permanent denial'), { code: 'EPERM' })
++            return rename(from, to)
++        })
++        expect(() => atomicWriteFile(root, 'system.jsonl', 'replacement\n')).toThrow('permanent denial')
++        expect(fs.readFileSync(path.join(root, 'system.jsonl'), 'utf8')).toBe('original\n')
++        expect(fs.readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([])
++    })
++})
++
+ describe('resolveDataRoot', () => {
+     it('uses an explicit absolute user-data root independently from the app directory', () => {
+         const root = path.resolve(tempRoot(), 'user-data')
+@@ -50,6 +83,88 @@ describe('resolveDataRoot', () => {
+ })
+ 
+ describe('crash-safe canonical writes', () => {
++    it('refuses a later transaction until the previous prepared journal is recovered', () => {
++        const root = tempRoot()
++        atomicWriteFile(root, 'x.json', Buffer.from('v0'))
++        expect(() => commitTransaction(root, [
++            { path: 'a.json', data: Buffer.from('a1') },
++            { path: 'x.json', data: Buffer.from('x1') },
++        ], { failAfterPublish: 1 })).toThrow('simulated crash')
++        expect(() => commitTransaction(root, [{ path: 'x.json', data: Buffer.from('x2') }])).toThrow(/pending transaction/i)
++        expect(fs.readFileSync(path.join(root, 'x.json'), 'utf8')).toBe('v0')
++        expect(fs.readdirSync(path.join(root, '.journal')).filter(name => name.endsWith('.json'))).toHaveLength(1)
++        recoverTransactions(root)
++        commitTransaction(root, [{ path: 'x.json', data: Buffer.from('x2') }])
++        recoverTransactions(root)
++        expect(fs.readFileSync(path.join(root, 'x.json'), 'utf8')).toBe('x2')
++    })
++
++    it('recovers legacy overlapping journals by creation time instead of UUID order', () => {
++        const root = tempRoot()
++        const journalDir = path.join(root, '.journal')
++        const held = path.join(root, 'held-first-journal.json')
++        const create = (value: string, stamp: number, name: string) => {
++            expect(() => commitTransaction(root, [
++                {path:'marker-'+value, data:Buffer.from(value)}, {path:'x.json',data:Buffer.from(value)},
++            ], {failAfterPublish:1})).toThrow('simulated crash')
++            const current=fs.readdirSync(journalDir).find(file=>file.endsWith('.json'))!
++            const journal=JSON.parse(fs.readFileSync(path.join(journalDir,current),'utf8'))
++            journal.createdAt=stamp
++            fs.writeFileSync(path.join(journalDir,current),JSON.stringify(journal))
++            fs.renameSync(path.join(journalDir,current),path.join(journalDir,name))
++        }
++        create('older',1,'z.json')
++        fs.renameSync(path.join(journalDir,'z.json'),held)
++        create('newer',2,'a.json')
++        fs.renameSync(held,path.join(journalDir,'z.json'))
++        expect(recoverTransactions(root)).toEqual({recovered:2})
++        expect(fs.readFileSync(path.join(root,'x.json'),'utf8')).toBe('newer')
++        expect(fs.readdirSync(journalDir)).toEqual([])
++    })
++
++    it('keeps an external revision durably when startup finishes a prepared transaction', () => {
++        const root = tempRoot()
++        atomicWriteFile(root, 'a.json', Buffer.from('before-a'))
++        atomicWriteFile(root, 'b.json', Buffer.from('before-b'))
++        expect(() => commitTransaction(root, [
++            { path: 'a.json', data: Buffer.from('app-a') },
++            { path: 'b.json', data: Buffer.from('app-b') },
++        ], { failAfterPublish: 1 })).toThrow('simulated crash')
++        fs.writeFileSync(path.join(root, 'b.json'), 'external-b')
++        recoverTransactions(root)
++        expect(fs.readFileSync(path.join(root, 'b.json'), 'utf8')).toBe('app-b')
++        atomicWriteFile(root, 'b.json', Buffer.from('later-app-b'))
++        const recovery = path.join(root, 'trash/transaction-recovery')
++        const mappings = fs.readdirSync(recovery, { recursive: true }).map(String).filter(name => name.endsWith('mapping.json'))
++        expect(mappings).toHaveLength(1)
++        const mapping = JSON.parse(fs.readFileSync(path.join(recovery, mappings[0]), 'utf8'))
++        expect(mapping.source).toBe('b.json')
++        expect(fs.readFileSync(path.join(root, mapping.destination), 'utf8')).toBe('external-b')
++        recoverTransactions(root)
++        expect(fs.readdirSync(recovery, { recursive: true }).map(String).filter(name => name.endsWith('mapping.json'))).toEqual(mappings)
++    })
++
++    it('leaves the target and journal intact if its recovery copy cannot be saved', () => {
++        const root = tempRoot()
++        atomicWriteFile(root, 'b.json', Buffer.from('before-b'))
++        expect(() => commitTransaction(root, [
++            { path: 'a.json', data: Buffer.from('app-a') },
++            { path: 'b.json', data: Buffer.from('app-b') },
++        ], { failAfterPublish: 1 })).toThrow('simulated crash')
++        fs.writeFileSync(path.join(root, 'b.json'), 'external-b')
++        const copy = fs.copyFileSync
++        vi.spyOn(fs, 'copyFileSync').mockImplementation((source, target, flags) => {
++            if (String(target).includes('transaction-recovery')) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
++            return copy(source, target, flags)
++        })
++        expect(() => recoverTransactions(root)).toThrow('disk full')
++        expect(fs.readFileSync(path.join(root, 'b.json'), 'utf8')).toBe('external-b')
++        expect(fs.readdirSync(path.join(root, '.journal')).filter(name => name.endsWith('.json'))).toHaveLength(1)
++        vi.restoreAllMocks()
++        recoverTransactions(root)
++        expect(fs.readFileSync(path.join(root, 'b.json'), 'utf8')).toBe('app-b')
++    })
++
+     it('recovers chunked writes after interrupted publication and skips unchanged bytes', () => {
+         const root = tempRoot()
+         const chunks = function* () { yield Buffer.from('한글'); yield Buffer.from('😀\n'); }
+diff --git a/server/node/live-files-http.test.ts b/server/node/live-files-http.test.ts
+index 2c47874..7dfa1ed 100644
+--- a/server/node/live-files-http.test.ts
++++ b/server/node/live-files-http.test.ts
+@@ -4,10 +4,23 @@ import os from 'node:os'
+ import path from 'node:path'
+ import net from 'node:net'
+ import { spawn } from 'node:child_process'
++import http from 'node:http'
+ const { createUserDataRepository } = require('./user-data-repository.cjs')
+ const { createFileKv } = require('./file-kv.cjs')
+ const { encodeRisuSaveLegacyBuffer, decodeRisuSave } = require('./utils.cjs')
+ 
++// fetch rejects some OS-assigned ports client-side ("bad port") before any request is sent; node:http has no such list,
++// so the fixture tests HTTP status/body rather than browser port policy (same pattern as play-transfer-http.test.ts).
++const httpFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array } = {}) => new Promise<Response>((resolve, reject) => {
++    const req = http.request(url, { method: init.method, headers: init.headers }, response => {
++        const chunks: Buffer[] = []
++        response.on('data', chunk => chunks.push(chunk))
++        response.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode })))
++        response.on('error', reject)
++    })
++    req.on('error', reject); req.end(init.body)
++})
++
+ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app was closed, with monitoring retired: %s', async (layout) => {
+     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bard-live-http-'))
+     const dataRoot = path.join(root, 'save')
+@@ -43,30 +56,30 @@ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app
+     try {
+         for (let attempt = 0; attempt < 100; attempt++) {
+             if (child.exitCode !== null) throw new Error(logs)
+-            try { if ((await fetch(`${base}/api/test_auth`)).ok) break } catch {}
++            try { if ((await httpFetch(`${base}/api/test_auth`)).ok) break } catch {}
+             await new Promise(resolve => setTimeout(resolve, 100))
+         }
+-        const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'local-test-password' }) })
++        const login = await httpFetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'local-test-password' }) })
+         expect(login.ok, logs).toBe(true)
+         const { token } = await login.json()
+         const headers = { 'content-type': 'application/json', 'risu-auth': token, 'x-session-id': 'live-test' }
+         const sync = async (revision?: string) => {
+-            const response = await fetch(`${base}/api/live-files/sync`, { method: 'POST', headers, body: JSON.stringify({ revision }) })
++            const response = await httpFetch(`${base}/api/live-files/sync`, { method: 'POST', headers, body: JSON.stringify({ revision }) })
+             expect(response.ok, await response.clone().text()).toBe(true)
+             return response.json()
+         }
+         // A setting saved before monitoring was retired must not restart it.
+         const monitoringUrl = `${base}/api/live-files/monitoring`
+-        expect(await (await fetch(monitoringUrl, { headers })).json()).toEqual({ enabled: false, defaultEnabled: false })
+-        const malformed = await fetch(monitoringUrl, { method: 'POST', headers, body: JSON.stringify({ enabled: 'false' }) })
++        expect(await (await httpFetch(monitoringUrl, { headers })).json()).toEqual({ enabled: false, defaultEnabled: false })
++        const malformed = await httpFetch(monitoringUrl, { method: 'POST', headers, body: JSON.stringify({ enabled: 'false' }) })
+         expect(malformed.status).toBe(400)
+-        const enable = await fetch(monitoringUrl, { method: 'POST', headers, body: JSON.stringify({ enabled: true }) })
++        const enable = await httpFetch(monitoringUrl, { method: 'POST', headers, body: JSON.stringify({ enabled: true }) })
+         expect(enable.ok).toBe(false)
+-        expect((await (await fetch(monitoringUrl, { headers })).json()).enabled).toBe(false)
++        expect((await (await httpFetch(monitoringUrl, { headers })).json()).enabled).toBe(false)
+         // Close the app, edit by hand (stale checksum) and reopen: the first read adopts it.
+         const metadataFile = path.join(dataRoot, characterPath, 'metadata.json')
+         fs.writeFileSync(metadataFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metadataFile, 'utf8')), desc: 'Edited outside' }))
+-        const read = await fetch(`${base}/api/read`, { headers: { ...headers, 'file-path': Buffer.from('database/database.bin').toString('hex') } })
++        const read = await httpFetch(`${base}/api/read`, { headers: { ...headers, 'file-path': Buffer.from('database/database.bin').toString('hex') } })
+         expect(read.status, await read.clone().text()).toBe(200)
+         const loaded = await decodeRisuSave(Buffer.from(await read.arrayBuffer()))
+         expect(loaded.characters[0].desc).toBe('Edited outside')
+@@ -76,7 +89,7 @@ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app
+         const fixed = fs.readFileSync(metadataFile, 'utf8')
+         const broken = '{\n  "chaId": "one",\n  "name": "One"\n  "desc": "x"\n}\n'
+         fs.writeFileSync(metadataFile, broken)
+-        const failed = await fetch(`${base}/api/read`, { headers: { ...headers, 'file-path': Buffer.from('database/database.bin').toString('hex') } })
++        const failed = await httpFetch(`${base}/api/read`, { headers: { ...headers, 'file-path': Buffer.from('database/database.bin').toString('hex') } })
+         expect(failed.status).toBe(500)
+         expect((await failed.json()).error).toContain("metadata.json (line 4, column 3: Expected ',' or '}' after property value)")
+         expect(fs.readFileSync(metadataFile, 'utf8')).toBe(broken)
+@@ -84,7 +97,7 @@ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app
+         const legacyId = loaded.characters[0].chats[1].id
+         expect(legacyId).toEqual(expect.any(String))
+         expect(legacyId.length).toBeGreaterThan(0)
+-        const legacyChat = await fetch(`${base}/api/chat-content/one/1`, { headers: { ...headers, 'x-chat-id': legacyId } })
++        const legacyChat = await httpFetch(`${base}/api/chat-content/one/1`, { headers: { ...headers, 'x-chat-id': legacyId } })
+         expect(legacyChat.ok).toBe(true)
+         expect(await decodeRisuSave(Buffer.from(await legacyChat.arrayBuffer()))).toMatchObject({
+             id: legacyId, name: 'Legacy chat', message: [{ role: 'user', data: 'Preserved legacy message' }],
+@@ -117,3 +130,27 @@ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app
+         fs.rmSync(root, { recursive: true, force: true })
+     }
+ }, 20000)
++
++// Native fetch refuses a fixed list of "bad ports" client-side (cause 'bad port') before any request leaves the process, so an
++// OS-assigned loopback port can make a whole HTTP fixture fail before its first assertion (output/risubard-weekly-20261028/
++// full-base-final-1, bad-port-reproducer-result.json). The node:http transport above has no such list. Only unprivileged ports
++// from that list are tried; a port already in use is skipped, and an environment where none can be bound fails explicitly.
++test('a fetch-blocked loopback port still serves the node:http test transport', async () => {
++    const candidates = [6000, 10080, 6566, 4045]
++    const attempts: Array<{ port: number, code: string }> = []
++    const server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, path: req.url })) })
++    let bound: number | null = null
++    for (const port of candidates) {
++        try { await new Promise<void>((ok, no) => { server.once('error', no); server.listen(port, '127.0.0.1', () => { server.off('error', no); ok() }) }); bound = port; break }
++        catch (error) { attempts.push({ port, code: (error as NodeJS.ErrnoException).code ?? 'unknown' }) }
++    }
++    try {
++        expect(bound, `no fetch-blocked candidate port could be bound: ${JSON.stringify(attempts)}`).not.toBeNull()
++        const base = `http://127.0.0.1:${bound}`
++        const refused = await fetch(`${base}/probe`).then(() => null, (error: Error & { cause?: Error }) => error)
++        expect(refused?.cause?.message).toBe('bad port')
++        const response = await httpFetch(`${base}/probe`)
++        expect(response.status).toBe(200)
++        expect(await response.json()).toEqual({ ok: true, path: '/probe' })
++    } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
++})
+diff --git a/server/node/live-files-stability.test.ts b/server/node/live-files-stability.test.ts
+index 76e1108..a05ef6e 100644
+--- a/server/node/live-files-stability.test.ts
++++ b/server/node/live-files-stability.test.ts
+@@ -154,6 +154,7 @@ test.each(['before-publication', 'after-publication'])('failed adoption retries
+         persistCanonicalProjection: (_db: any, options: any) => {
+             if (persists++ === 0) { published = failureStage === 'after-publication'; throw new Error('disk full') }
+             if (published && options.externalRevision !== 'published') throw new Error('stale revision blocks retry')
++            return { acceptedRevision: 'saved-revision' }
+         },
+         saveTimers: {}, directWriteTracker: { clear: () => {} }, encodeRisuSaveLegacyBuffer: JSON.stringify,
+         kvSet: () => {}, initChatStore: () => {}, computeBufferEtag: () => 'etag', nodeCrypto: { randomUUID: () => 'new' }, logger: { info: () => {} },
+@@ -188,7 +189,7 @@ test.each([
+             applyExternal: (db: any) => ({ ...db, characters: db.characters.map((character: any) => ({ ...character, desc: 'External edit' })) }),
+         },
+         preserveLiveFileRecovery: (record: any) => { archives.push(structuredClone(record)); return { path: 'trash/live-files-recovery/r.json', conflicts: 0 } },
+-        persistCanonicalProjection: (db: any) => persisted.push(db),
++        persistCanonicalProjection: (db: any) => { persisted.push(db); return { acceptedRevision: 'external' } },
+         normalizeJSON: (x: any) => structuredClone(x), reassembleFullDb: (x: any) => x, stripChatsFromDb: (x: any) => x,
+         dbCache: cache, DB_HEX_KEY: 'db', saveTimers: timers,
+         directWriteTracker: { clear: () => {} }, clearTimeout: () => {},
+diff --git a/server/node/no-sqlite-runtime.test.ts b/server/node/no-sqlite-runtime.test.ts
+index 50774a5..64e1f4f 100644
+--- a/server/node/no-sqlite-runtime.test.ts
++++ b/server/node/no-sqlite-runtime.test.ts
+@@ -3,6 +3,7 @@ import fs from 'node:fs'
+ import path from 'node:path'
+ 
+ const root = path.resolve(__dirname, '..', '..')
++const sqliteRuntime = /better-sqlite3|new\s+Database\s*\(|(?<!\.)\.db(?:['"`]|\b)/i
+ 
+ function runtimeFiles(directory: string): string[] {
+     const files: string[] = []
+@@ -16,12 +17,17 @@ function runtimeFiles(directory: string): string[] {
+ }
+ 
+ describe('native SQLite removal', () => {
++    it('distinguishes object spread from SQLite file paths', () => {
++        expect(sqliteRuntime.test('return { ...db, characters }')).toBe(false)
++        expect(sqliteRuntime.test("open('risuai.db')")).toBe(true)
++        expect(sqliteRuntime.test('new Database(file)')).toBe(true)
++    })
+     it('has no runtime SQLite import or database creation', () => {
+         const offenders = runtimeFiles(path.join(root, 'server'))
+             // db.cjs is the one-shot dispatcher that notices an old risuai.db;
+             // only the importer may load a SQLite reader.
+             .filter(file => !['legacy-sqlite-import.cjs', 'db.cjs'].includes(path.basename(file)))
+-            .filter(file => /better-sqlite3|new\s+Database\s*\(|\.db(?:['"`]|\b)/i.test(fs.readFileSync(file, 'utf8')))
++            .filter(file => sqliteRuntime.test(fs.readFileSync(file, 'utf8')))
+             .map(file => path.relative(root, file))
+         expect(offenders).toEqual([])
+     })
+diff --git a/server/node/painter-save-flush.test.ts b/server/node/painter-save-flush.test.ts
+index bd081a7..83609b4 100644
+--- a/server/node/painter-save-flush.test.ts
++++ b/server/node/painter-save-flush.test.ts
+@@ -96,9 +96,29 @@ test('canonical painter flush persists edits before acknowledgement without rebu
+         await flush(false)
+         const bytes = createFileKv({ dataRoot: root }).kvGet('database/database.bin')
+         expect((await decodeRisuSave(bytes)).bardPainterFragments).toEqual(updated)
+-    } finally {
++        const latestRead = await fetch(`${base}/api/read`, { headers })
++        const latest = await decodeRisuSave(Buffer.from(await latestRead.arrayBuffer()))
++        const settings = {
++            language: 'ko',
++            botPresets: [{ id: 'internal-preset', name: '합성 프리셋', mainPrompt: '설정 저장 검사' }],
++            modules: [{ id: 'internal-module', name: '합성 모듈', description: '설정 저장 검사' }],
++        }
++        const settingsPatch = await fetch(`${base}/api/patch`, { method: 'POST', headers, body: JSON.stringify({
++            expectedHash: calculateHash(latest).toString(16),
++            patch: Object.entries(settings).map(([key, value]) => ({ op: 'replace', path: '/' + key, value })),
++        }) })
++        expect(settingsPatch.ok, await settingsPatch.clone().text()).toBe(true)
++        await flush(true)
+         child.kill()
+-        if (child.exitCode === null) await new Promise(resolve => child.once('exit', resolve))
++        if (child.exitCode === null && child.signalCode === null) await new Promise(resolve => child.once('exit', resolve))
++        const durable = createUserDataRepository({ dataRoot: root }).exportLegacyDatabase()
++        expect(durable).toMatchObject(settings)
++        expect(durable.characters[0].chats[0]).toEqual(chat)
++    } finally {
++        if (child.exitCode === null && child.signalCode === null) {
++            child.kill()
++            await new Promise(resolve => child.once('exit', resolve))
++        }
+         if (path.dirname(path.resolve(root)) !== path.resolve(os.tmpdir())) throw new Error('Unexpected test root')
+         fs.rmSync(root, { recursive: true, force: true })
+     }
+diff --git a/server/node/queued-save-debounce.test.ts b/server/node/queued-save-debounce.test.ts
+index adfa39f..807ffd6 100644
+--- a/server/node/queued-save-debounce.test.ts
++++ b/server/node/queued-save-debounce.test.ts
+@@ -42,3 +42,95 @@ it('does not run superseded callbacks or delete their replacement timer', async
+     await queued.shift()!()
+     expect(second).toHaveBeenCalledOnce()
+ })
++
++function gateError(code: string, status = 423) { const error: any = new Error('gate'); error.status = status; error.code = code; return error }
++/** The real writer queue checks the write gate before running the operation; a refusal rejects without ever calling it. */
++function gatedQueue(state: { closed: any }) {
++    return (operation: () => Promise<void>) => state.closed ? Promise.reject(state.closed) : operation()
++}
++
++it('a 423 NAS_SYNC_BUSY / TRANSFER_BUSY refusal before persist starts reschedules the save (no onError), and the save persists once the gate opens', async () => {
++    for (const code of ['NAS_SYNC_BUSY', 'TRANSFER_BUSY']) {
++        vi.useFakeTimers()
++        const timers: Record<string, any> = {}, state = { closed: gateError(code) as any }
++        const write = vi.fn(), onError = vi.fn(), onDeferred = vi.fn()
++        const schedule = createQueuedSaveDebounce({ timers, queue: gatedQueue(state), delay: 5, onError, onDeferred })
++        schedule('db', write)
++        const first = timers.db
++        await vi.advanceTimersByTimeAsync(5) // refused by the gate
++        expect(write).not.toHaveBeenCalled(); expect(onError).not.toHaveBeenCalled()
++        expect(onDeferred).toHaveBeenCalledWith(state.closed, 1)
++        expect(timers.db).toBeDefined(); expect(timers.db).not.toBe(first) // still pending: a flush sees the dirty save
++        await vi.advanceTimersByTimeAsync(5) // still closed → second deferral, counted
++        expect(onDeferred).toHaveBeenLastCalledWith(state.closed, 2); expect(onError).not.toHaveBeenCalled()
++        state.closed = null
++        await vi.advanceTimersByTimeAsync(5)
++        expect(write).toHaveBeenCalledTimes(1); expect(timers.db).toBeUndefined(); expect(onError).not.toHaveBeenCalled()
++        vi.useRealTimers()
++    }
++})
++
++it('any other refusal (423 with another code, or a non-423 error) before persist starts is a failure: onError, no retry, timer left for the flush', async () => {
++    for (const closed of [gateError('OTHER_LOCK'), gateError('NAS_SYNC_BUSY', 500), Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' })]) {
++        vi.useFakeTimers()
++        const timers: Record<string, any> = {}, state = { closed }
++        const write = vi.fn(), onError = vi.fn(), onDeferred = vi.fn()
++        const schedule = createQueuedSaveDebounce({ timers, queue: gatedQueue(state), delay: 5, onError, onDeferred })
++        schedule('db', write)
++        const first = timers.db
++        await vi.advanceTimersByTimeAsync(5)
++        expect(onError).toHaveBeenCalledWith(closed); expect(onDeferred).not.toHaveBeenCalled()
++        expect(timers.db).toBe(first) // unchanged: the stale timer keeps the acknowledged dirty cache visible to the flush
++        await vi.advanceTimersByTimeAsync(20)
++        expect(write).not.toHaveBeenCalled(); expect(onError).toHaveBeenCalledTimes(1) // no self-retry
++        vi.useRealTimers()
++    }
++})
++
++it('a genuine persist failure is never retried even when it carries a gate-shaped error: onError, timer released', async () => {
++    vi.useFakeTimers()
++    const timers: Record<string, any> = {}
++    const io = Object.assign(new Error('EIO'), { code: 'EIO' }), disguised = gateError('NAS_SYNC_BUSY')
++    const onError = vi.fn(), onDeferred = vi.fn()
++    const schedule = createQueuedSaveDebounce({ timers, queue: gatedQueue({ closed: null }), delay: 5, onError, onDeferred })
++    for (const failure of [io, disguised]) {
++        const write = vi.fn(async () => { throw failure })
++        schedule('db', write)
++        await vi.advanceTimersByTimeAsync(5)
++        expect(write).toHaveBeenCalledTimes(1); expect(onError).toHaveBeenLastCalledWith(failure); expect(timers.db).toBeUndefined()
++        await vi.advanceTimersByTimeAsync(20)
++        expect(write).toHaveBeenCalledTimes(1) // no retry of a persist that ran and failed
++    }
++    expect(onDeferred).not.toHaveBeenCalled(); expect(onError).toHaveBeenCalledTimes(2)
++})
++
++it('a gate refusal of a timer that a flush already drained or a newer schedule replaced neither retries nor warns', async () => {
++    vi.useFakeTimers()
++    // 1. drained by a flush while waiting for the writer: the gate still answers for the obsolete run
++    let timers: Record<string, any> = {}
++    const pending: (() => Promise<void>)[] = []
++    const holdQueue = (_operation: () => Promise<void>) => new Promise<void>((resolve, reject) => { pending.push(() => Promise.reject(gateError('NAS_SYNC_BUSY')).then(resolve, reject)) })
++    const write = vi.fn(), onError = vi.fn(), onDeferred = vi.fn()
++    let schedule = createQueuedSaveDebounce({ timers, queue: holdQueue, delay: 5, onError, onDeferred })
++    schedule('db', write)
++    await vi.advanceTimersByTimeAsync(5)
++    delete timers.db // flushPendingDbWithinQueue persisted the cache and removed the timer
++    await pending.shift()!().catch(() => {}); await vi.advanceTimersByTimeAsync(0)
++    expect(timers.db).toBeUndefined(); expect(onError).not.toHaveBeenCalled(); expect(onDeferred).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled()
++    await vi.advanceTimersByTimeAsync(20); expect(write).not.toHaveBeenCalled() // nothing rescheduled
++    // 2. replaced by a newer schedule before the gate answered: the replacement stays, the obsolete refusal is dropped
++    timers = {}
++    const replacementWrite = vi.fn()
++    const state = { closed: gateError('NAS_SYNC_BUSY') as any }
++    const slowGate = (operation: () => Promise<void>) => new Promise<void>((resolve, reject) => { pending.push(() => (state.closed ? Promise.reject(state.closed) : operation()).then(resolve, reject)) })
++    schedule = createQueuedSaveDebounce({ timers, queue: slowGate, delay: 5, onError, onDeferred })
++    schedule('db', write)
++    await vi.advanceTimersByTimeAsync(5) // first run is waiting for the writer
++    schedule('db', replacementWrite)
++    const replacement = timers.db
++    await pending.shift()!().catch(() => {}); await vi.advanceTimersByTimeAsync(0) // gate refuses the obsolete run
++    expect(timers.db).toBe(replacement); expect(onError).not.toHaveBeenCalled(); expect(onDeferred).not.toHaveBeenCalled()
++    state.closed = null
++    await vi.advanceTimersByTimeAsync(5); await pending.shift()!(); await vi.advanceTimersByTimeAsync(0)
++    expect(replacementWrite).toHaveBeenCalledTimes(1); expect(write).not.toHaveBeenCalled(); expect(timers.db).toBeUndefined()
++})
+diff --git a/server/node/risubard-graph-service.test.ts b/server/node/risubard-graph-service.test.ts
+index d73a410..a2f6419 100644
+--- a/server/node/risubard-graph-service.test.ts
++++ b/server/node/risubard-graph-service.test.ts
+@@ -2,7 +2,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+ import * as nodeFs from 'node:fs/promises'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+-import { describe, expect, test, vi } from 'vitest'
++import { afterEach, describe, expect, test, vi } from 'vitest'
+ import type {
+     NarrativeGraphDeltaV2,
+ } from '../../packages/risubard-core/src/narrativeDelta'
+@@ -44,8 +44,15 @@ function addCharacterDelta(): NarrativeGraphDeltaV2 {
+     }
+ }
+ 
++const fixtureRoots: string[] = []
++afterEach(async () => {
++    await Promise.all(fixtureRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
++})
++
+ async function userDataDirectory() {
+-    return mkdtemp(join(tmpdir(), 'risubard-graph-'))
++    const root = await mkdtemp(join(tmpdir(), 'risubard-graph-'))
++    fixtureRoots.push(root)
++    return root
+ }
+ 
+ const emptyV1: NarrativeMemoryState = {
+diff --git a/server/node/risubard-memory-runtime.test.ts b/server/node/risubard-memory-runtime.test.ts
+index 319276a..5ab6c9a 100644
+--- a/server/node/risubard-memory-runtime.test.ts
++++ b/server/node/risubard-memory-runtime.test.ts
+@@ -1,12 +1,23 @@
+ import { createRequire } from 'node:module'
+-import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises'
++import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+-import { describe, expect, test, vi } from 'vitest'
++import { afterEach, describe, expect, test, vi } from 'vitest'
+ import { resolveMemoryWorkspace } from './risubard-memory-workspace'
+ import { resolveNarrativeGraphWorkspace } from './risubard-graph-workspace'
+ import { resolveMarkdownWikiWorkspace } from './risubard-markdown-wiki'
+ 
++const fixtureRoots: string[] = []
++afterEach(async () => {
++    await Promise.all(fixtureRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
++})
++
++async function fixtureDirectory(prefix: string) {
++    const root = await mkdtemp(prefix)
++    fixtureRoots.push(root)
++    return root
++}
++
+ const require = createRequire(import.meta.url)
+ 
+ describe('RisuBard memory CommonJS runtime', () => {
+@@ -14,7 +25,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-save-slot-')
+         )
+         const summary = {
+@@ -104,7 +115,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-fork-queue-')
+         )
+         let releaseFork!: () => void
+@@ -168,7 +179,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-fork-complete-')
+         )
+         const completeForkWorkspace = vi.fn(async (input) => ({
+@@ -194,7 +205,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-snapshot-')
+         )
+         const service = createRuntimeMemoryService(userDataDirectory)
+@@ -225,7 +236,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-reveal-')
+         )
+         const revealFile = vi.fn()
+@@ -260,7 +271,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-empty-')
+         )
+         const service = createRuntimeMemoryService(userDataDirectory)
+@@ -296,7 +307,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-')
+         )
+         const service = createRuntimeMemoryService(userDataDirectory)
+@@ -359,7 +370,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-graph-')
+         )
+         const service = createRuntimeMemoryService(userDataDirectory)
+@@ -460,7 +471,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-reconcile-')
+         )
+         const service = createRuntimeMemoryService(userDataDirectory)
+@@ -527,7 +538,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-writer-')
+         )
+         const service = createRuntimeMemoryService(userDataDirectory)
+@@ -630,7 +641,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-writer-stale-')
+         )
+         const service = createRuntimeMemoryService(userDataDirectory)
+@@ -662,7 +673,7 @@ describe('RisuBard memory CommonJS runtime', () => {
+         const { createRuntimeMemoryService } = require(
+             './risubard-memory-runtime.cjs'
+         )
+-        const userDataDirectory = await mkdtemp(
++        const userDataDirectory = await fixtureDirectory(
+             join(tmpdir(), 'risubard-runtime-lanes-')
+         )
+         let releaseSave!: () => void
+diff --git a/server/node/risubard-narrative-inquiry.test.ts b/server/node/risubard-narrative-inquiry.test.ts
+index e060e26..d44530e 100644
+--- a/server/node/risubard-narrative-inquiry.test.ts
++++ b/server/node/risubard-narrative-inquiry.test.ts
+@@ -1,14 +1,21 @@
+-import { mkdtemp } from 'node:fs/promises'
++import { mkdtemp, rm } from 'node:fs/promises'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+-import { describe, expect, test } from 'vitest'
++import { afterEach, describe, expect, test } from 'vitest'
+ import type { NarrativeMemoryState } from '../../packages/risubard-core/src/memoryDelta'
+ import { createNarrativeGraphService } from './risubard-graph-service'
+ 
+ const evidence = [{ chatId: 'chat-1', messageId: 'message-1' }]
+ 
++const fixtureRoots: string[] = []
++afterEach(async () => {
++    await Promise.all(fixtureRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
++})
++
+ async function userDataDirectory() {
+-    return mkdtemp(join(tmpdir(), 'risubard-inquiry-'))
++    const root = await mkdtemp(join(tmpdir(), 'risubard-inquiry-'))
++    fixtureRoots.push(root)
++    return root
+ }
+ 
+ describe('runtime narrative inquiry', () => {
+diff --git a/src/lib/Others/RisuBardMemoryWiki.test.ts b/src/lib/Others/RisuBardMemoryWiki.test.ts
+index 91423e6..1de19b5 100644
+--- a/src/lib/Others/RisuBardMemoryWiki.test.ts
++++ b/src/lib/Others/RisuBardMemoryWiki.test.ts
+@@ -157,6 +157,7 @@ vi.mock('src/ts/storage/chatStorage', () => ({
+ }))
+ vi.mock('src/ts/stores.svelte', () => ({
+     DBState: { db: mocks.db },
++    selectedCharID: { subscribe: (run: (value: number) => void) => { run(-1); return () => {} } },
+     selIdState: { selId: -1 },
+     botMakerMode: { set: vi.fn() },
+     CharConfigSubMenu: { set: vi.fn() },
+diff --git a/src/ts/process/sendSyncSelection.test.ts b/src/ts/process/sendSyncSelection.test.ts
+index 48f2271..85c8d6d 100644
+--- a/src/ts/process/sendSyncSelection.test.ts
++++ b/src/ts/process/sendSyncSelection.test.ts
+@@ -20,7 +20,7 @@ it('keeps the captured send target when selection changes during synchronization
+     const character = {chaId:'character', chatPage:0, chats:[{id:'first'}, {id:'second'}]}
+     const errors: string[] = []
+     const dependencies = {
+-        DBState: {db:{characters:[character]}}, get:()=>0, selectedCharID:{},
++        DBState: {db:{characters:[character]}}, get:()=>0, selectedCharID:{}, transferBusy:{}, syncSaveHold:{}, // the NAS sync hold gate reads these stores through `get`
+         refreshLiveFiles:()=>sync, waitForSendSync, captureGenerationTarget, createGenerationScope,
+         language:{chatSendSelectionChanged:'selection changed'}, notifyError:(error:string)=>errors.push(error),
+     }
+diff --git a/src/ts/storage/chatContentPage.test.ts b/src/ts/storage/chatContentPage.test.ts
+index 9e85863..e4bc7f3 100644
+--- a/src/ts/storage/chatContentPage.test.ts
++++ b/src/ts/storage/chatContentPage.test.ts
+@@ -43,9 +43,19 @@ describe('getRemainingChatContentPageOffsets', () => {
+         expect(getRemainingChatContentPageOffsets(750, 200, 200)).toEqual([200, 400, 600])
+         expect(getRemainingChatContentPageOffsets(200, 200, 200)).toEqual([])
+         expect(getRemainingChatContentPageOffsets(0, 0, 200)).toEqual([])
++        expect(getRemainingChatContentPageOffsets(436, 436, 500)).toEqual([])
++        expect(getRemainingChatContentPageOffsets(1001, 500, 500)).toEqual([500, 1000])
+     })
+ 
+     it('rejects an invalid page size', () => {
+         expect(() => getRemainingChatContentPageOffsets(1, 0, 0)).toThrow(/page size/i)
+     })
+ })
++
++
++it('assembles a 500-message page contract with the last single message and complete metadata', () => {
++    const metadata = { id: 'chat-1', name: 'Long chat', scriptstate: { '$state': 'kept' }, localLore: [{ key: 'kept' }] }
++    const messages = Array.from({ length: 1001 }, (_, index) => ({ data: `m${index}` }))
++    const page500 = (offset: number) => ({ chat: metadata, messages: messages.slice(offset, offset + 500), offset, limit: 500, total: messages.length })
++    expect(assembleChatContentPages([page500(1000), page500(0), page500(500)])).toEqual({ ...metadata, message: messages })
++})
+diff --git a/src/ts/storage/chatContentPagingConnections.test.ts b/src/ts/storage/chatContentPagingConnections.test.ts
+index 5466e04..e915618 100644
+--- a/src/ts/storage/chatContentPagingConnections.test.ts
++++ b/src/ts/storage/chatContentPagingConnections.test.ts
+@@ -18,3 +18,14 @@ describe('chunked chat hydration connections', () => {
+         expect(storage).toContain('fetchFullChatContent')
+     })
+ })
++
++
++it('keeps the client page size within the existing server cap and concurrency at four', () => {
++    const storage = readFileSync('src/ts/storage/nodeStorage.ts', 'utf8')
++    const server = readFileSync('server/node/chat-content-page.cjs', 'utf8')
++    const clientLimit = Number(storage.match(/CHAT_CONTENT_TRANSFER_PAGE_SIZE = (\d+)/)?.[1])
++    const serverLimit = Number(server.match(/MAX_CHAT_CONTENT_PAGE_SIZE = (\d+)/)?.[1])
++    expect(clientLimit).toBeGreaterThan(0)
++    expect(clientLimit).toBeLessThanOrEqual(serverLimit)
++    expect(storage).toContain('CHAT_CONTENT_TRANSFER_CONCURRENCY = 4')
++})
+diff --git a/src/ts/storage/immediateSave.test.ts b/src/ts/storage/immediateSave.test.ts
+index c575fda..59c27ef 100644
+--- a/src/ts/storage/immediateSave.test.ts
++++ b/src/ts/storage/immediateSave.test.ts
+@@ -1,7 +1,10 @@
+ import { readFileSync } from 'node:fs'
+ import { resolve } from 'node:path'
+ import ts from 'typescript'
+-import { expect, test, vi } from 'vitest'
++import { afterEach, expect, test, vi } from 'vitest'
++import { get, writable } from 'svelte/store'
++
++afterEach(() => vi.unstubAllGlobals())
+ 
+ const source = readFileSync(resolve(process.cwd(), 'src/ts/globalApi.svelte.ts'), 'utf8')
+ const start = source.indexOf('    async function triggerSave(')
+@@ -9,13 +12,14 @@ const end = source.indexOf('    let savetrys = 0', start)
+ const controller = ts.transpile(source.slice(start, end), { target: ts.ScriptTarget.ES2022 })
+ const tracking = ts.transpile(source.slice(source.indexOf('    function hasTrackedChanges('), source.indexOf('    async function flushServerDbNow(')), { target: ts.ScriptTarget.ES2022 })
+ const requeue = ts.transpile(source.slice(source.indexOf('    function requeueTrackedChanges('), source.indexOf('    function collectChatsToPersist(')), { target: ts.ScriptTarget.ES2022 })
++const collect = new Function('knownChatIdsByCharacter', ts.transpile(source.slice(source.indexOf('    function collectChatsToPersist('), source.indexOf('    function updateKnownChatsAfterSuccessfulSave(')), { target: ts.ScriptTarget.ES2022 }) + '\nreturn collectChatsToPersist;')
+ 
+ function fixture(dirty = true) {
+     const sync = vi.fn(async () => {})
+     const save = vi.fn(async (_changes: any) => 'saved')
+     const flush = vi.fn(async () => {})
+-    const create = new Function('syncLiveFilesNow', 'persistTrackedChanges', 'flushServerDbNow', 'initialDirty', `
+-        let saveInFlight = null, requestImmediateSaveImpl, savetrys = 0, changed = false, forceFullWriteOnRetry = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
++    const create = new Function('syncLiveFilesNow', 'persistTrackedChanges', 'flushServerDbNow', 'initialDirty', 'get', 'syncSaveHold', 'canonicalSaveSettled', 'alertStore', `
++        let saveInFlight = null, requestImmediateSaveImpl, savetrys = 0, changed = false, forceFullWriteOnRetry = false, saveFailureNotified = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
+         const supportsPatchSync = true, saving = {}, lastLiveError = '';
+         const saveRuntime = { isActive: () => true }, language = { sessionSavePausedTitle: 'paused' };
+         const changeTracker = { root: initialDirty, character: [], chat: [], botPreset: false, modules: false, plugins: false, pluginCustomStorage: false };
+@@ -27,7 +31,7 @@ function fixture(dirty = true) {
+         ${controller}
+         return { request: requestImmediateSaveImpl, changeTracker };
+     `)
+-    return { sync, save, flush, ...create(sync, save, flush, dirty) }
++    return { sync, save, flush, ...create(sync, save, flush, dirty, get, writable(false), writable(0), writable({ type: 'none' })) }
+ }
+ 
+ test('a preset-only save does not retransmit the chat or character already saved', async () => {
+@@ -41,6 +45,22 @@ test('a preset-only save does not retransmit the chat or character already saved
+     expect(f.save.mock.calls[1][0]).toMatchObject({ root: true, chat: [], character: [] })
+ })
+ 
++test('an import saves explicitly named off-screen characters through the existing dirty batch', async () => {
++    const f = fixture(false)
++    await f.request({ chats: [['incoming', 'new'], ['existing-off-screen', 'appended'], ['incoming', 'new']], flushServer: 'canonical', rejectOnFailure: true })
++    expect(f.save).toHaveBeenCalledOnce()
++    expect(f.save.mock.calls[0][0].character).toEqual(['incoming', 'existing-off-screen'])
++    const db = { characters: [
++        { chaId: 'incoming', chats: [{ id: 'new' }] },
++        { chaId: 'existing-off-screen', chats: [{ id: 'old', _placeholder: true }, { id: 'appended' }] },
++        { chaId: 'unrelated', chats: [{ id: 'keep' }] },
++    ] }
++    // A concurrent metadata save may already have made the incoming IDs known.
++    expect(collect(new Map([['incoming', new Set(['new'])], ['existing-off-screen', new Set(['old', 'appended'])]]))(db, f.save.mock.calls[0][0]))
++        .toEqual([['incoming', 'new'], ['existing-off-screen', 'appended']])
++    expect(f.flush).toHaveBeenCalledWith(false, true, undefined)
++})
++
+ test('edits made during a save remain dirty and a failed save requeues its batch', async () => {
+     const f = fixture()
+     f.changeTracker.chat.push(['bot', 'first'])
+@@ -80,3 +100,55 @@ test('failed preflight prevents a write and failed flush rejects the save', asyn
+     f.flush.mockRejectedValueOnce(new Error('disk full'))
+     await expect(f.request({ flushServer: 'canonical', rejectOnFailure: true })).rejects.toThrow('disk full')
+ })
++
++test('embedded Android save waits for disk persistence and retries a failed flush without losing the batch', async () => {
++    vi.stubGlobal('navigator', { userAgent: 'RisuBardAndroid/0.9.72' })
++    const f = fixture()
++    let finish!: () => void
++    f.flush.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
++    let complete = false
++    const pending = f.request({ rejectOnFailure: true }).then(() => { complete = true })
++    await vi.waitFor(() => expect(f.flush).toHaveBeenCalledWith(false, true))
++    expect(complete).toBe(false)
++    finish(); await pending
++    expect(complete).toBe(true)
++    f.changeTracker.chat.push(['bot', 'new-chat'])
++    f.flush.mockRejectedValueOnce(new Error('disk full'))
++    await expect(f.request({ rejectOnFailure: true })).rejects.toThrow('disk full')
++    expect(f.changeTracker.chat).toEqual([['bot', 'new-chat']])
++    await f.request({ rejectOnFailure: true })
++    expect(f.changeTracker.chat).toEqual([])
++})
++
++test('ordinary browser save keeps its existing deferred persistence contract', async () => {
++    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0' })
++    const f = fixture()
++    await f.request({ rejectOnFailure: true })
++    expect(f.flush).not.toHaveBeenCalled()
++})
++
++test('page hide flushes already uploaded data immediately and Android flushes once more after pending uploads', async () => {
++    const begin = source.indexOf('        function flushImmediate()')
++    const body = source.slice(begin, source.indexOf('        const handleVisibilityFlush', begin))
++    for (const android of [false, true]) {
++        vi.stubGlobal('navigator', { userAgent: android ? 'RisuBardAndroid/test' : 'Mozilla/5.0' })
++        let finish!: () => void
++        const pending = new Promise<void>(resolve => { finish = resolve })
++        const flush = vi.fn(async () => {})
++        const hide = new Function('triggerSave', 'flushServerDbKeepalive', `let changed = false, saveTimeout = null; ${body}; return flushImmediate;`)(() => pending, flush)
++        hide()
++        expect(flush).toHaveBeenCalledTimes(1)
++        finish(); await pending; await Promise.resolve()
++        expect(flush).toHaveBeenCalledTimes(android ? 2 : 1)
++    }
++})
++
++
++test('a card-only sync explicitly tracks off-screen and new characters without fake chats', async () => {
++    const f = fixture(false)
++    await f.request({ characters: ['off-screen', 'new-card', 'off-screen'], chats: [], flushServer: 'canonical', rejectOnFailure: true, syncOwned: true })
++    expect(f.save).toHaveBeenCalledOnce()
++    expect(f.save.mock.calls[0][0].character).toEqual(['off-screen', 'new-card'])
++    expect(f.save.mock.calls[0][0].chat).toEqual([])
++    expect((f.save.mock.calls[0] as any[])[1]).toMatchObject({ trackedCharactersOnly: true })
++})
+diff --git a/src/ts/storage/liveFileSyncRuntime.test.ts b/src/ts/storage/liveFileSyncRuntime.test.ts
+index 278ad54..42b574f 100644
+--- a/src/ts/storage/liveFileSyncRuntime.test.ts
++++ b/src/ts/storage/liveFileSyncRuntime.test.ts
+@@ -43,7 +43,7 @@ test('send preflight failure is a visible false result before any generation sta
+     const dependencies = {
+         refreshLiveFiles, notifyError, waitForSendSync, captureGenerationTarget, createGenerationScope,
+         DBState: { db: { characters: [{ chaId: 'bot', chatPage: 0, chats: [{ id: 'A' }] }] } },
+-        get: () => 0, selectedCharID: {}, language: {}, forageStorage: {},
++        get: () => 0, selectedCharID: {}, language: {}, forageStorage: {}, transferBusy: {}, syncSaveHold: {},
+     }
+     const run = new Function(...Object.keys(dependencies), `${preflight}; return preflight`)(...Object.values(dependencies))
+     await expect(run()).resolves.toBe(false)
+diff --git a/src/ts/storage/nodeStorage.bulkWrite.test.ts b/src/ts/storage/nodeStorage.bulkWrite.test.ts
+index 85f07fe..07af85f 100644
+--- a/src/ts/storage/nodeStorage.bulkWrite.test.ts
++++ b/src/ts/storage/nodeStorage.bulkWrite.test.ts
+@@ -49,6 +49,22 @@ describe('NodeStorage import progress', () => {
+ })
+ 
+ describe('NodeStorage live file synchronization', () => {
++    it('keeps the session active during a transfer fence but still deactivates a displaced writer', async () => {
++        const storage = new NodeStorage(), deactivated = vi.fn()
++        ;(storage as any).checkAuth = async () => {}
++        storage.createAuth = async () => 'test-token'
++        let code: string | undefined = 'TRANSFER_BUSY'
++        vi.stubGlobal('fetch', async () => Response.json({ error: 'busy', code }, { status: 423 }))
++        window.addEventListener('risu-session-deactivated', deactivated)
++        try {
++            expect((await (storage as any).authFetch('/api/write')).status).toBe(423)
++            expect(deactivated).not.toHaveBeenCalled()
++            code = undefined
++            await (storage as any).authFetch('/api/write')
++            expect(deactivated).toHaveBeenCalledOnce()
++        } finally { window.removeEventListener('risu-session-deactivated', deactivated); vi.unstubAllGlobals() }
++    })
++
+     it('sends the revision through authenticated transport without advancing the save etag', async () => {
+         const storage = new NodeStorage()
+         storage.setDbEtag('acknowledged')
+diff --git a/src/ts/storage/nodeStorage.connection.test.ts b/src/ts/storage/nodeStorage.connection.test.ts
+index ecf5fba..41c9b2e 100644
+--- a/src/ts/storage/nodeStorage.connection.test.ts
++++ b/src/ts/storage/nodeStorage.connection.test.ts
+@@ -108,3 +108,71 @@ it.each(['chat', 'patch', 'database'])('waits for a slow %s save response withou
+     expect(storage.pendingSaveRequests).toBe(1)
+     expect(request).toHaveBeenCalledTimes(1)
+ })
++
++function authenticatedTransport() {
++    const storage = new NodeStorage()
++    const check = vi.spyOn(storage as any, 'checkAuth').mockResolvedValue(undefined)
++    vi.spyOn(storage, 'createAuth').mockResolvedValue('token')
++    return { storage, check }
++}
++
++it.each(['Failed to fetch', 'NetworkError when attempting to fetch resource.', 'Load failed'])('identifies the app-server transport failure %s and preserves its original cause', async message => {
++    const { storage } = authenticatedTransport()
++    const cause = new TypeError(message)
++    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(cause))
++    const failure = await storage.getLiveFileMonitoring().catch(error => error)
++    expect(failure).toBeInstanceOf(TypeError)
++    expect(failure).toMatchObject({
++        message: '앱 서버에 연결하지 못했습니다', code: 'APP_SERVER_FETCH', cause,
++    })
++    expect(failure.cause).toBe(cause)
++    // authFetch is shared by reads and session requests; it must not claim an unsaved edit exists.
++    for (const route of ['/api/read', '/api/session']) {
++        const failure = await (storage as any).authFetch(route).catch((error: unknown) => error)
++        expect(failure).toBeInstanceOf(TypeError)
++        expect(failure.message).toBe('앱 서버에 연결하지 못했습니다')
++        expect(failure.cause).toBe(cause)
++        expect(failure.message).not.toMatch(/저장|편집|로컬|내부/)
++    }
++})
++
++it.each([
++    new TypeError('Failed to parse URL from http://['),
++    new TypeError('Request with GET/HEAD method cannot have body.'),
++    new Error('Failed to fetch'),
++    new SyntaxError('invalid response'),
++    new DOMException('Aborted', 'AbortError'),
++])('preserves non-network exceptions unchanged: %s', async failure => {
++    const { storage } = authenticatedTransport()
++    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(failure))
++    await expect((storage as any).authFetch('/api/read')).rejects.toBe(failure)
++})
++
++it('does not relabel a cancelled request even if fetch rejects with a network-looking TypeError', async () => {
++    const { storage } = authenticatedTransport()
++    const controller = new AbortController(), failure = new TypeError('Failed to fetch')
++    vi.stubGlobal('fetch', vi.fn(async () => { controller.abort(); throw failure }))
++    await expect((storage as any).authFetch('/api/read', { signal: controller.signal })).rejects.toBe(failure)
++})
++
++it('leaves authentication and response-decoding failures outside the transport error boundary', async () => {
++    const { storage, check } = authenticatedTransport()
++    const authFailure = new TypeError('Failed to fetch')
++    const fetch = vi.fn(async () => new Response('not-json'))
++    vi.stubGlobal('fetch', fetch)
++    check.mockRejectedValueOnce(authFailure)
++    await expect((storage as any).authFetch('/api/read')).rejects.toBe(authFailure)
++    expect(fetch).not.toHaveBeenCalled()
++    const decodeFailure = await storage.getLiveFileMonitoring().catch(error => error)
++    expect(decodeFailure).toBeInstanceOf(SyntaxError)
++    expect(decodeFailure.code).toBeUndefined()
++})
++
++it('does not convert an unrecognized HTTP 401 into a connection error or replay it', async () => {
++    const { storage } = authenticatedTransport()
++    const response = Response.json({ error: 'Permission denied' }, { status: 401 })
++    const fetch = vi.fn(async () => response)
++    vi.stubGlobal('fetch', fetch)
++    expect(await (storage as any).authFetch('/api/read')).toBe(response)
++    expect(fetch).toHaveBeenCalledOnce()
++})
+diff --git a/src/ts/storage/saveRetryPersistence.test.ts b/src/ts/storage/saveRetryPersistence.test.ts
+index f577cbe..a1e79bf 100644
+--- a/src/ts/storage/saveRetryPersistence.test.ts
++++ b/src/ts/storage/saveRetryPersistence.test.ts
+@@ -1,7 +1,8 @@
+ import { readFileSync } from 'node:fs'
+ import { resolve } from 'node:path'
+ import ts from 'typescript'
+-import { expect, test, vi } from 'vitest'
++import { afterEach, expect, test, vi } from 'vitest'
++import { get, writable } from 'svelte/store'
+ 
+ vi.mock('./database.svelte', () => ({}))
+ vi.mock('./chatStorage', () => ({ chatToStub: (c: any) => c }))
+@@ -17,9 +18,11 @@ const start = source.indexOf('    async function triggerSave(')
+ const end = source.indexOf('    requestImmediateSaveImpl =', start)
+ const controller = ts.transpile(source.slice(start, end), { target: ts.ScriptTarget.ES2022 })
+ 
++afterEach(() => vi.unstubAllGlobals())
++
+ test.each(['preflight', 'chat-write'] as const)('retains edits and stops retrying after a %s handoff', async (failure) => {
+-    const create = new Function(`
+-        let saveInFlight = null, savetrys = 0, changed = false, forceFullWriteOnRetry = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
++    const create = new Function('get', 'syncSaveHold', 'canonicalSaveSettled', 'alertStore', `
++        let saveInFlight = null, savetrys = 0, changed = false, forceFullWriteOnRetry = false, saveFailureNotified = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
+         const supportsPatchSync = true, saving = {}, lastLiveError = '';
+         const saveRuntime = { isActive: () => true }, language = { sessionSavePausedTitle: 'Saving paused' };
+         const changeTracker = { chat: [['character', 'chat']] };
+@@ -34,7 +37,7 @@ test.each(['preflight', 'chat-write'] as const)('retains edits and stops retryin
+         ${controller}
+         return { trigger: triggerSave, pending: () => changeTracker.chat, requests: () => requests };
+     `)
+-    const state = create()
++    const state = create(get, writable(false), writable(0), writable({ type: 'none' }))
+     await state.trigger()
+     expect(state.pending()).toEqual([['character', 'chat']])
+     const requests = state.requests()
+@@ -78,8 +81,8 @@ test.each([
+         server = applyPatch(server, result.patch).newDocument
+         return 'saved'
+     }
+-    const create = new Function('persistTrackedChanges', `
+-        let saveInFlight = null, savetrys = 0, changed = false, forceFullWriteOnRetry = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
++    const create = new Function('get', 'syncSaveHold', 'canonicalSaveSettled', 'persistTrackedChanges', 'alertStore', `
++        let saveInFlight = null, savetrys = 0, changed = false, forceFullWriteOnRetry = false, saveFailureNotified = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
+         const supportsPatchSync = true;
+         const saveRuntime = { isActive: () => true }, externalEditMode = { active: false }, saving = {};
+         const flags = { character: [], chat: [], root: true, botPreset: true, modules: false, plugins: false, pluginCustomStorage: false };
+@@ -93,7 +96,7 @@ test.each([
+         ${controller}
+         return { trigger: triggerSave, markDirty: () => { dirty = true; } };
+     `)
+-    const { trigger, markDirty } = create(persist)
++    const { trigger, markDirty } = create(get, writable(false), writable(0), persist, writable({ type: 'none' }))
+     await trigger()
+     expect(server).toEqual(initial)
+     await trigger()
+@@ -110,3 +113,197 @@ test.each([
+     expect(server).toEqual(edited)
+     expect(modes.at(-1)).toBe('patch')
+ })
++
++// NAS sync save hold, on the same production controller: an ordinary save is held with its edits still tracked, a save that
++// queued behind an in-flight save before the hold does not resume with stale admission, the sync-owned save passes, and the
++// held edits drain through the ordinary path once the hold lifts.
++function holdFixture() {
++    const hold = writable(false)
++    let release: (() => void) | null = null
++    const persisted: any[] = []
++    const persist = vi.fn(async (toSave: any) => { persisted.push(toSave); await new Promise<void>(r => { release = r }); return 'saved' })
++    const create = new Function('get', 'syncSaveHold', 'canonicalSaveSettled', 'persistTrackedChanges', 'alertStore', `
++        let saveInFlight = null, savetrys = 0, changed = false, forceFullWriteOnRetry = false, saveFailureNotified = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
++        const supportsPatchSync = false, saving = {}, lastLiveError = '';
++        let channel = null; // no broadcast channel in the harness
++        const saveRuntime = { isActive: () => true }, language = { sessionSavePausedTitle: 'Saving paused' };
++        const changeTracker = { chat: [] };
++        const hasTrackedChanges = value => value.chat.length > 0;
++        const takeTrackedChanges = () => { const result = { chat: [...changeTracker.chat] }; changeTracker.chat = []; return result; };
++        const requeueTrackedChanges = value => { changeTracker.chat.push(...value.chat); };
++        const syncLiveFilesNow = async () => {};
++        const sleep = async () => {}, alertError = () => {};
++        ${controller}
++        return { trigger: triggerSave, changeTracker };
++    `)
++    const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
++    const settled = writable(0)
++    return { hold, persist, persisted, settle, settled, release: () => { const r = release; release = null; r?.() }, ...create(get, hold, settled, persist, writable({ type: 'none' })) }
++}
++
++test('NAS sync hold: held saves keep their edits tracked, a save queued before the hold does not resume, the sync-owned save passes, the queue drains after release', async () => {
++    const f = holdFixture()
++    f.changeTracker.chat.push(['character', 'first'])
++    const first = f.trigger(); await f.settle(); expect(f.persisted).toHaveLength(1)
++    f.changeTracker.chat.push(['character', 'second'])
++    const queued = f.trigger(); await f.settle() // admitted before the hold, now waiting behind the in-flight save
++    f.hold.set(true)
++    f.release(); await first; await queued
++    expect(get(f.settled)).toBeGreaterThan(0) // the real success path announced the settled ordinary save (NAS sync trigger)
++    f.settled.set(0)
++    expect(f.persisted).toHaveLength(1) // the queued save re-checked the hold after waiting and did not persist
++    expect(f.changeTracker.chat).toEqual([['character', 'second']]) // still tracked: nothing dropped
++    await f.trigger(); expect(f.persisted).toHaveLength(1) // held outright
++    await expect(f.trigger({ rejectOnFailure: true })).resolves.toBeUndefined() // being held is not a failure
++    const owned = f.trigger({ syncOwned: true }); await f.settle()
++    expect(f.persisted).toHaveLength(2); expect(f.persisted[1].chat).toEqual([['character', 'second']]) // the sync apply's own save takes the tracked batch
++    f.release(); await owned
++    expect(get(f.settled)).toBe(0) // the sync-owned save is not a trigger: no echo cycle
++    f.changeTracker.chat.push(['character', 'third'])
++    await f.trigger(); expect(f.persisted).toHaveLength(2) // still held
++    f.hold.set(false)
++    const drained = f.trigger(); await f.settle(); expect(f.persisted).toHaveLength(3); expect(f.persisted[2].chat).toEqual([['character', 'third']])
++    f.release(); await drained; expect(f.changeTracker.chat).toEqual([])
++})
++
++function outageFixture() {
++    const sync = vi.fn(async () => {})
++    const persist = vi.fn(async (_changes: any, _options: any) => 'saved')
++    const flush = vi.fn(async () => {})
++    const notify = vi.fn(), modal = vi.fn(), errors = vi.fn(), sleep = vi.fn(async (_delay: number) => {})
++    const hold = writable(false)
++    const alerts = writable({ type: 'none' })
++    const create = new Function('get', 'syncSaveHold', 'canonicalSaveSettled', 'syncLiveFilesNow', 'persistTrackedChanges', 'flushServerDbNow', 'notifyError', 'alertError', 'sleep', 'alertStore', 'logError', `
++        let saveInFlight = null, savetrys = 0, changed = true, forceFullWriteOnRetry = false, saveFailureNotified = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
++        const supportsPatchSync = true, saving = {}, lastLiveError = '';
++        const saveRuntime = { isActive: () => true }, language = { sessionSavePausedTitle: 'Saving paused' };
++        const changeTracker = { root: true };
++        const hasTrackedChanges = value => value.root;
++        const takeTrackedChanges = () => { const result = { root: changeTracker.root }; changeTracker.root = false; return result; };
++        const requeueTrackedChanges = value => { changeTracker.root ||= value.root; };
++        const console = { error: logError };
++        ${controller}
++        return {
++            trigger: triggerSave,
++            cycle: async () => { if (!changed || gotChannel || get(syncSaveHold)) return; changed = false; await triggerSave(); },
++            edit: () => { changeTracker.root = true; changed = true; },
++            state: () => ({ dirty: changeTracker.root, changed, forceFullWriteOnRetry, saveFailureNotified, savetrys }),
++        };
++    `)
++    return { sync, persist, flush, notify, modal, sleep, hold, alerts, errors, ...create(get, hold, writable(0), sync, persist, flush, notify, modal, sleep, alerts, errors) }
++}
++
++test('a prolonged preflight disconnect retries without a new edit, notifies once, recovers, then permits a new outage notice', async () => {
++    const f = outageFixture()
++    const cause = new TypeError('Failed to fetch')
++    const failure = Object.assign(new TypeError('앱 서버에 연결하지 못했습니다', { cause }), { code: 'APP_SERVER_FETCH' })
++    f.sync.mockRejectedValue(failure)
++    for (let i = 0; i < 12; i++) {
++        await f.cycle()
++        expect(f.state()).toMatchObject({ dirty: true, changed: true, forceFullWriteOnRetry: true })
++    }
++    expect(f.persist).not.toHaveBeenCalled()
++    expect(f.modal).not.toHaveBeenCalled()
++    expect(f.notify).toHaveBeenCalledOnce()
++    expect(f.notify).toHaveBeenCalledWith('아직 저장하지 못했습니다. 편집 내용은 앱에 남아 있으며 자동으로 재시도합니다.', { source: 'save-retry' })
++    expect(f.notify.mock.calls[0][1].description).toBeUndefined()
++    expect(f.errors).toHaveBeenNthCalledWith(5, failure, cause)
++    expect(f.errors).toHaveBeenCalledTimes(5)
++    expect(f.sleep.mock.calls.map(call => call[0])).toEqual([500, 1000, 1500, 2000, 2500, 3000, 3000, 3000, 3000, 3000, 3000, 3000])
++    f.sync.mockResolvedValue(undefined)
++    await f.cycle()
++    expect(f.persist).toHaveBeenCalledExactlyOnceWith({ root: true }, expect.objectContaining({ forceFullWrite: true }))
++    expect(f.state()).toMatchObject({ dirty: false, saveFailureNotified: false, savetrys: 0, forceFullWriteOnRetry: false })
++    f.edit()
++    f.sync.mockRejectedValue(failure)
++    for (let i = 0; i < 5; i++) await f.cycle()
++    expect(f.notify).toHaveBeenCalledTimes(2)
++    expect(f.modal).not.toHaveBeenCalled()
++})
++
++test('a non-transport preflight exception retains the existing full recovery policy and resumes without another edit', async () => {
++    const f = outageFixture()
++    f.sync.mockRejectedValue(new Error('snapshot application failed'))
++    for (let i = 0; i < 7; i++) await f.cycle()
++    expect(f.notify).toHaveBeenCalledOnce()
++    expect(f.state()).toMatchObject({ dirty: true, changed: true, forceFullWriteOnRetry: true })
++    f.sync.mockResolvedValue(undefined)
++    await f.cycle()
++    expect(f.persist).toHaveBeenCalledExactlyOnceWith({ root: true }, expect.objectContaining({ forceFullWrite: true }))
++    expect(f.state().dirty).toBe(false)
++})
++
++test('an immediate preflight failure rejects unchanged and leaves the background retry scheduled', async () => {
++    const f = outageFixture(), failure = new Error('connection lost')
++    f.sync.mockRejectedValue(failure)
++    await expect(f.trigger({ rejectOnFailure: true })).rejects.toBe(failure)
++    expect(f.state()).toMatchObject({ dirty: true, changed: true, forceFullWriteOnRetry: true })
++    expect(f.notify).not.toHaveBeenCalled()
++    f.sync.mockResolvedValue(undefined)
++    await f.cycle()
++    expect(f.persist).toHaveBeenCalledOnce()
++    expect(f.state().dirty).toBe(false)
++})
++
++test('a noop does not clear the outage notice or consume unsaved edits before a durable success', async () => {
++    const f = outageFixture(), failure = new Error('write failed')
++    f.persist.mockRejectedValue(failure)
++    for (let i = 0; i < 5; i++) await f.cycle()
++    expect(f.notify).toHaveBeenCalledOnce()
++    f.persist.mockResolvedValueOnce('noop')
++    await f.cycle()
++    expect(f.state()).toMatchObject({ dirty: true, changed: true, saveFailureNotified: true })
++    for (let i = 0; i < 5; i++) await f.cycle()
++    expect(f.notify).toHaveBeenCalledOnce()
++    f.persist.mockResolvedValue('saved')
++    await f.cycle()
++    expect(f.state()).toMatchObject({ dirty: false, saveFailureNotified: false })
++})
++
++test('Android flush failures keep both the batch and outage notice until the disk flush succeeds', async () => {
++    vi.stubGlobal('navigator', { userAgent: 'RisuBardAndroid/test' })
++    const f = outageFixture()
++    f.flush.mockRejectedValue(new Error('disk full'))
++    for (let i = 0; i < 7; i++) await f.cycle()
++    expect(f.state()).toMatchObject({ dirty: true, changed: true, forceFullWriteOnRetry: true, saveFailureNotified: true })
++    expect(f.notify).toHaveBeenCalledOnce()
++    f.flush.mockResolvedValue(undefined)
++    await f.cycle()
++    expect(f.persist).toHaveBeenLastCalledWith({ root: true }, expect.objectContaining({ forceFullWrite: true }))
++    expect(f.state()).toMatchObject({ dirty: false, saveFailureNotified: false, forceFullWriteOnRetry: false })
++    expect(f.modal).not.toHaveBeenCalled()
++})
++
++test.each(['wait', 'wait2', 'progress'])('defers the save notice during %s without clearing progress or stopping retries', async type => {
++    const f = outageFixture(), failure = new Error('write unavailable')
++    f.alerts.set({ type })
++    f.sync.mockRejectedValue(failure)
++    for (let i = 0; i < 8; i++) await f.cycle()
++    expect(f.state()).toMatchObject({ dirty: true, changed: true, saveFailureNotified: false })
++    expect(f.sync).toHaveBeenCalledTimes(8)
++    expect(f.notify).not.toHaveBeenCalled()
++    expect(get(f.alerts)).toEqual({ type })
++    f.alerts.set({ type: 'none' })
++    await f.cycle()
++    expect(f.notify).toHaveBeenCalledOnce()
++    expect(f.errors).toHaveBeenLastCalledWith(failure)
++    expect(f.state()).toMatchObject({ changed: true, saveFailureNotified: true })
++    await f.cycle()
++    expect(f.notify).toHaveBeenCalledOnce()
++    expect(f.modal).not.toHaveBeenCalled()
++})
++
++test.each(['wait', 'wait2', 'progress'])('recovery during %s completes without a stale outage notice', async type => {
++    const f = outageFixture()
++    f.alerts.set({ type })
++    f.sync.mockRejectedValue(new Error('write unavailable'))
++    for (let i = 0; i < 7; i++) await f.cycle()
++    f.sync.mockResolvedValue(undefined)
++    await f.cycle()
++    expect(f.state()).toMatchObject({ dirty: false, saveFailureNotified: false, forceFullWriteOnRetry: false })
++    expect(f.notify).not.toHaveBeenCalled()
++    expect(get(f.alerts)).toEqual({ type })
++    f.alerts.set({ type: 'none' })
++    await f.cycle()
++    expect(f.notify).not.toHaveBeenCalled()
++})
+diff --git a/src/ts/storage/serverDbFlush.test.ts b/src/ts/storage/serverDbFlush.test.ts
+index 8b0de8b..d1accab 100644
+--- a/src/ts/storage/serverDbFlush.test.ts
++++ b/src/ts/storage/serverDbFlush.test.ts
+@@ -99,3 +99,9 @@ it('propagates a failed canonical flush instead of reporting a successful save',
+     vi.stubGlobal('fetch', async () => Response.json({ error: 'disk full' }, { status: 500 }))
+     await expect(flush(false, true)).rejects.toThrow('Server database flush failed (500)')
+ })
++
++it.each([false, true])('a paused HTTP 200 is a conflict, never a durable-save acknowledgement (external changes=%s)', async pending => {
++    const { flush } = fixture()
++    vi.stubGlobal('fetch', async () => Response.json({ success: true, paused: true, externalChangesPending: pending, etag: 'revision' }))
++    await expect(flush(false, true)).rejects.toMatchObject({ name: 'ConflictError', currentEtag: 'revision', externalEditMode: !pending, externalChangesPending: pending })
++})

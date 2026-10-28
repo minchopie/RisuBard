@@ -6,6 +6,7 @@ import { getDatabase } from './storage/database.svelte'
 import { alertStore } from './stores.svelte'
 import { ImportCancelled, ImportTransaction, type ImportJournal, type ImportOwner } from './storage/importTransaction'
 import { startImportProgress, stopImportProgress, beginImportSave, receiveImportProgress, loseImportProgress } from './importProgress'
+import { transferBusy } from './transferState'
 
 const JOURNAL_KEY = 'risubard-pending-import-v1'
 const RESET_KEY = 'risubard-reset-import-v1'
@@ -112,7 +113,7 @@ export async function retryImportRollback() {
 }
 
 export async function runImport<T>(work: (transaction: ImportTransaction) => Promise<T>): Promise<T | null> {
-    if (active || localStorage.getItem(JOURNAL_KEY)) {
+    if (active || localStorage.getItem(JOURNAL_KEY) || get(transferBusy)) {
         checkImportRecovery()
         throw new Error(language.importInstall.busy)
     }

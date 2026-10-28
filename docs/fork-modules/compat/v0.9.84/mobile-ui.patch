@@ -1,0 +1,149 @@
+diff --git a/index.html b/index.html
+index 6618b8a..1c3be81 100644
+--- a/index.html
++++ b/index.html
+@@ -18,10 +18,9 @@
+       @keyframes startup-spin { to { transform: rotate(360deg); } }
+       @media (prefers-reduced-motion: reduce) { #preloading svg { animation: none; } }
+     </style>
+-    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/katex@0.16.27/dist/katex.min.css" integrity="sha384-Pu5+C18nP5dwykLJOhd2U4Xen7rjScHN/qusop27hdd2drI+lL5KvX7YntvT8yew" crossorigin="anonymous">
+     <meta name="description" content="An AI frontend for both light and core users.">
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-    <link href="https://fonts.googleapis.com/css2?family=Tilt+Prism&family=Yellowtail&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
++    <link href="/fonts/interface/fonts.css" rel="stylesheet" media="print" onload="this.media='all'">
+     <!-- <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; object-src 'none'; require-trusted-types-for 'script'; trusted-types plugin-policy;"> -->
+     <title>RisuBard</title>
+   </head>
+diff --git a/src/lib/ChatScreens/Chat.svelte b/src/lib/ChatScreens/Chat.svelte
+index 5db97c7..5c28c80 100644
+--- a/src/lib/ChatScreens/Chat.svelte
++++ b/src/lib/ChatScreens/Chat.svelte
+@@ -50,6 +50,7 @@
+     import { mergeTriggerChat } from './triggerResultMerge'
+     import { getChatVar } from 'src/ts/parser/chatVar.svelte'
+     import { Popover } from 'bits-ui'
++    import { isMobile } from 'src/ts/platform'
+ 
+     let viewportWidth = $state(window.innerWidth)
+     let inlineMessageActions = $derived(viewportWidth >= 640 || DBState.db.mobileMessageActionsInline === true)
+@@ -1744,13 +1745,13 @@
+      onpointerdowncapture={buttonTriggerActivation.pointerdown}
+      onclickcapture={buttonTriggerActivation.click}
+      onsubmitcapture={handleFormTriggerWithin}>
+-    <div class="text-textcolor grow max-w-full sm:px-4 py-4">
++    <div class="text-textcolor grow max-w-full {isMobile ? '' : 'sm:px-4'} py-4">
+         {#if !blankMessage}
+             {@const nodeOnlyWidthClass =
+-                DBState.db.nodeOnlyStandardChatWidth === 'full' ? 'max-w-full' :
++                isMobile || DBState.db.nodeOnlyStandardChatWidth === 'full' ? 'max-w-full' :
+                 DBState.db.nodeOnlyStandardChatWidth === 'wide' ? 'max-w-6xl' :
+                 'max-w-3xl'}
+-            <div class="flex flex-col w-full min-w-0 {nodeOnlyWidthClass} mx-auto py-6 px-4 sm:px-8 bg-bgcolor sm:rounded-lg">
++            <div class="flex flex-col w-full min-w-0 {nodeOnlyWidthClass} mx-auto py-6 px-4 {isMobile ? '' : 'sm:px-8'} bg-bgcolor sm:rounded-lg">
+                 <!-- Header: icon + name -->
+                 <div class="flex items-center gap-3 mb-4">
+                     {@render senderIcon({rounded: DBState.db.roundIcons})}
+diff --git a/src/lib/SideBars/RisuBardGallery.svelte b/src/lib/SideBars/RisuBardGallery.svelte
+index c526fde..8484a43 100644
+--- a/src/lib/SideBars/RisuBardGallery.svelte
++++ b/src/lib/SideBars/RisuBardGallery.svelte
+@@ -63,11 +63,13 @@
+     let draftError = $state('')
+     let galleryViewportElement = $state<HTMLElement>()
+     let galleryRevision = $state(0)
++    let receivedGallery = $state(false)
+ 
+     let currentChat = $derived(chara.chats?.[chara.chatPage])
+     let gallery = $derived.by(() => {
+         void galleryRevision
+-        return chara.risuBardGallery
++        return receivedGallery && currentChat?.risuTransferMedia && currentChat.risuBardGallery
++            ? currentChat.risuBardGallery : chara.risuBardGallery
+     })
+     let slots = $derived(gallery?.slots ?? [])
+     let categories = $derived(gallery?.categories ?? [])
+@@ -111,9 +113,10 @@
+ 
+     $effect(() => {
+         if (chara.risuBardGallery) return
++        const legacyChats = (chara.chats ?? []).filter(chat => !chat.risuTransferMedia)
+         const migrated = mergeLegacyChatGalleries(
+-            chara.chats ?? [],
+-            chara.chatPage,
++            legacyChats,
++            legacyChats.indexOf(currentChat),
+             language.galleryDefaultTitle(chara.name || language.Chat),
+         )
+         if (!migrated) return
+@@ -133,7 +136,8 @@
+     }
+ 
+     function persist(nextGallery: RisuBardGallery): void {
+-        chara.risuBardGallery = nextGallery
++        if (receivedGallery && currentChat?.risuTransferMedia && currentChat.risuBardGallery) currentChat.risuBardGallery = nextGallery
++        else chara.risuBardGallery = nextGallery
+         galleryRevision += 1
+         void requestImmediateSave()
+     }
+@@ -532,6 +536,14 @@
+                     />
+                 {:else}
+                     <h2>{displayTitle}</h2>
++                    {#if currentChat?.risuTransferMedia && currentChat.risuBardGallery}
++                        <label>갤러리
++                            <select bind:value={receivedGallery} onchange={() => { selectedSlotId = ''; editingSlotId = ''; selectedSlotIds = new Set() }}>
++                                <option value={false}>캐릭터 갤러리</option>
++                                <option value={true}>받은 대화 갤러리</option>
++                            </select>
++                        </label>
++                    {/if}
+                     <button
+                         type="button"
+                         data-gallery-title-edit
+diff --git a/src/lib/SideBars/RisuBardGalleryConnections.test.ts b/src/lib/SideBars/RisuBardGalleryConnections.test.ts
+index 07d4df4..f422dee 100644
+--- a/src/lib/SideBars/RisuBardGalleryConnections.test.ts
++++ b/src/lib/SideBars/RisuBardGalleryConnections.test.ts
+@@ -56,7 +56,9 @@ describe('chat gallery connections', () => {
+     test('stores a custom gallery title and collections on the bot', () => {
+         expect(database).toMatch(/export interface character[\s\S]*?risuBardGallery\?:RisuBardGallery/)
+         expect(gallery).toContain('chara.risuBardGallery')
+-        expect(gallery).not.toContain('currentChat.risuBardGallery = nextGallery')
++        expect(gallery).toContain('if (receivedGallery && currentChat?.risuTransferMedia && currentChat.risuBardGallery)')
++        expect(gallery).toContain('else chara.risuBardGallery = nextGallery')
++        expect(gallery).toContain('받은 대화 갤러리')
+         expect(gallery).toContain('data-gallery-title-edit')
+         expect(gallery).toContain('data-gallery-title-input')
+         expect(gallery).toContain('galleryDefaultTitle')
+diff --git a/src/main.ts b/src/main.ts
+index 4099e11..e8d83cd 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -1,4 +1,5 @@
+ import "./ts/polyfill";
++import "katex/dist/katex.min.css";
+ import "./styles.css";
+ import "./styles/nodeonly-standard.css";
+ import "core-js/actual"
+diff --git a/src/ts/viewportHeight.ts b/src/ts/viewportHeight.ts
+index 62e0be8..02094fe 100644
+--- a/src/ts/viewportHeight.ts
++++ b/src/ts/viewportHeight.ts
+@@ -31,6 +31,8 @@ export function installDynamicViewportHeight() {
+     if (typeof window === 'undefined') return
+     const vv = window.visualViewport
+     if (!vv) return
++    // The APK resizes its WebView for IME insets; it has no browser pan/lift path.
++    const embeddedAndroid = /\bRisuBardAndroid\//.test(navigator.userAgent)
+     let raf = 0
+     const isEditable = (el: Element | null) => {
+         const he = el as HTMLElement | null
+@@ -39,7 +41,7 @@ export function installDynamicViewportHeight() {
+     const apply = () => {
+         raf = 0
+         if (Math.abs(vv.scale - 1) > 0.01) return
+-        if (isEditable(document.activeElement) && window.innerHeight - vv.height > KEYBOARD_MIN_HEIGHT) return
++        if (!embeddedAndroid && isEditable(document.activeElement) && window.innerHeight - vv.height > KEYBOARD_MIN_HEIGHT) return
+         document.documentElement.style.setProperty('--risu-height-size', `${Math.round(vv.height)}px`)
+     }
+     const schedule = () => { if (!raf) raf = requestAnimationFrame(apply) }

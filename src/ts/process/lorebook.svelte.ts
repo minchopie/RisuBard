@@ -221,7 +221,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
         dontSearchWhenRecursive: boolean
         recursivePrompts: typeof recursivePrompt
     }) => {
-        const sliced = messages.slice(messages.length - arg.searchDepth,messages.length)
+        const sliced = messages.slice(Math.max(0, messages.length - arg.searchDepth),messages.length)
         const newKeys = []
         for (const key of arg.keys) {
             const trimmed = key.trim()
@@ -229,7 +229,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
                 newKeys.push(trimmed)
             }
         }
-        arg.keys = newKeys
+        arg = {...arg, keys: newKeys}
         let mList:{
             source:string
             prompt:string
@@ -264,11 +264,12 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
                     if(!regexString.startsWith('/')){
                         return false
                     }
-                    const regexFlag = regexString.split('/').pop()
-                    if(regexFlag){
-                        arg.keys[0] = regexString.replace('/'+regexFlag,'')
+                    const delimiter = regexString.lastIndexOf('/')
+                    if(delimiter > 0){
+                        const regexFlag = regexString.slice(delimiter + 1)
+                        const regexSource = regexString.slice(1, delimiter)
                         try {
-                            const regex = new RegExp(arg.keys[0],regexFlag)
+                            const regex = new RegExp(regexSource,regexFlag)
                             const d = regex.test(mText.data)
                             if(d){
                                 matchLog.push({

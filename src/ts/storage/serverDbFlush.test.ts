@@ -99,3 +99,9 @@ it('propagates a failed canonical flush instead of reporting a successful save',
     vi.stubGlobal('fetch', async () => Response.json({ error: 'disk full' }, { status: 500 }))
     await expect(flush(false, true)).rejects.toThrow('Server database flush failed (500)')
 })
+
+it.each([false, true])('a paused HTTP 200 is a conflict, never a durable-save acknowledgement (external changes=%s)', async pending => {
+    const { flush } = fixture()
+    vi.stubGlobal('fetch', async () => Response.json({ success: true, paused: true, externalChangesPending: pending, etag: 'revision' }))
+    await expect(flush(false, true)).rejects.toMatchObject({ name: 'ConflictError', currentEtag: 'revision', externalEditMode: !pending, externalChangesPending: pending })
+})

@@ -1,0 +1,40 @@
+{
+  "globalLore": [
+    {
+      "enabled": true,
+      "key": "",
+      "secondkey": "",
+      "insertorder": 3001,
+      "comment": "Fixture: core 1",
+      "content": "CORE_SENTINEL_1",
+      "mode": "normal",
+      "alwaysActive": true,
+      "selective": false,
+      "useRegex": false,
+      "bookVersion": 2,
+      "id": "fixture-core-1"
+    },
+    {
+      "enabled": true,
+      "key": "",
+      "secondkey": "",
+      "insertorder": 3002,
+      "comment": "Fixture: core 2",
+      "content": "CORE_SENTINEL_2",
+      "mode": "normal",
+      "alwaysActive": true,
+      "selective": false,
+      "useRegex": false,
+      "bookVersion": 2,
+      "id": "fixture-core-2"
+    }
+  ],
+  "loreSettings": {
+    "fullWordMatching": false,
+    "matchingMode": "partial",
+    "maxRecursionSteps": 0,
+    "recursiveScanning": false,
+    "scanDepth": 4,
+    "tokenBudget": 64000
+  }
+}

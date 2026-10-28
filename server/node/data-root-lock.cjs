@@ -21,7 +21,9 @@ function isProcessAlive(pid) {
         process.kill(pid, 0);
         return true;
     } catch (error) {
-        return error?.code !== 'ESRCH';
+        // Android can reuse a dead server PID for another UID, which cannot own our private data.
+        return error?.code !== 'ESRCH'
+            && !(process.env.RISUBARD_EMBEDDED_ANDROID === '1' && error?.code === 'EPERM');
     }
 }
 

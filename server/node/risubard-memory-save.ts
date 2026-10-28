@@ -82,7 +82,7 @@ function parseEventPreview(value: unknown): MemorySaveEventPreview {
     return { title: value.title, excerpt: value.excerpt }
 }
 
-function parseManifest(value: unknown): StoredMemorySaveManifest {
+export function parseMemorySaveManifest(value: unknown): StoredMemorySaveManifest {
     if (!isRecord(value)) throw new Error('Invalid memory save manifest')
     const hasEvent = value.latestEvent !== undefined
     const hasLatestMessageId = value.latestMessageId !== undefined
@@ -203,7 +203,7 @@ async function validatedSave(
     const chatPath = join(workspace.directory, SAVE_CHAT)
     await safeFile(fileSystem, manifestPath, 'Memory save manifest')
     await safeFile(fileSystem, chatPath, 'Memory save chat')
-    const manifest = parseManifest(JSON.parse(
+    const manifest = parseMemorySaveManifest(JSON.parse(
         await fileSystem.readFile(manifestPath, 'utf8')
     ))
     if (manifest.saveId !== saveId) {
@@ -373,7 +373,7 @@ export async function listMemorySaveSlots(input: {
         try {
             await safeFile(fileSystem, manifestPath, 'Memory save manifest')
             await safeFile(fileSystem, chatPath, 'Memory save chat')
-            const manifest = parseManifest(JSON.parse(
+            const manifest = parseMemorySaveManifest(JSON.parse(
                 await fileSystem.readFile(manifestPath, 'utf8')
             ))
             if (manifest.sourceChatId !== sourceChatId) continue
@@ -460,7 +460,7 @@ export async function prepareMemorySaveLoad(input: {
     const chatPath = join(workspace.directory, SAVE_CHAT)
     await safeFile(fileSystem, manifestPath, 'Memory save manifest')
     await safeFile(fileSystem, chatPath, 'Memory save chat')
-    const manifest = parseManifest(JSON.parse(
+    const manifest = parseMemorySaveManifest(JSON.parse(
         await fileSystem.readFile(manifestPath, 'utf8')
     ))
     const chatBytes = Buffer.from(await fileSystem.readFile(chatPath))

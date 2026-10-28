@@ -2817,6 +2817,7 @@ export function normalizeChat(chat: Partial<Chat>): Chat {
 }
 
 export interface Chat{
+    risuTransferMedia?: { assets?: Record<string, string>; resolvedAssets?: Record<string, string>; inlays?: Record<string, string>; inlayOrigins?: Record<string, string> }
     bardPainter?: import('../bardPainter/types').PainterChatData
     message: Message[]
     note:string

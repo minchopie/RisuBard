@@ -89,6 +89,11 @@ jobs:
             server/
             packages/risubard-core/
             src/ts/risubard/
+            src/ts/preset/adapter/buildRequest.ts
+            src/ts/preset/adapter/auth.ts
+            src/ts/preset/adapter/error.ts
+            src/ts/preset/adapter/vertexEndpoint.ts
+            shared/play-set/
             package.json
             pnpm-lock.yaml
             pnpm-workspace.yaml
@@ -123,6 +128,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts
+            desktop-transfer
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -249,6 +255,16 @@ jobs:
           "$GCC_DIR/windres" launcher.rc -O coff -o launcher.res
           gcc -municode -O2 -o ../../portable/RisuBard.exe launcher.c launcher.res -lshell32
           rm -f launcher.res icon.ico
+
+      - name: Build bundled Windows transfer companion
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $adbTools = Join-Path $env:ANDROID_HOME 'platform-tools'
+          if (!(Test-Path (Join-Path $adbTools 'adb.exe'))) { throw 'Android platform-tools are required for the bundled USB companion' }
+          dotnet publish desktop-transfer/src/RisuAI.ChatTransfer.WinForms/RisuAI.ChatTransfer.WinForms.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true "-p:AdbToolsPath=$adbTools" -o transfer-publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath transfer-publish/RisuAI-Chat-Transfer.exe -Destination portable/RisuAI-Chat-Transfer.exe
 
       - name: Create macOS app bundle
         if: matrix.platform == 'macos'

@@ -2,7 +2,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import * as nodeFs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import type {
     NarrativeGraphDeltaV2,
 } from '../../packages/risubard-core/src/narrativeDelta'
@@ -44,8 +44,15 @@ function addCharacterDelta(): NarrativeGraphDeltaV2 {
     }
 }
 
+const fixtureRoots: string[] = []
+afterEach(async () => {
+    await Promise.all(fixtureRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+})
+
 async function userDataDirectory() {
-    return mkdtemp(join(tmpdir(), 'risubard-graph-'))
+    const root = await mkdtemp(join(tmpdir(), 'risubard-graph-'))
+    fixtureRoots.push(root)
+    return root
 }
 
 const emptyV1: NarrativeMemoryState = {

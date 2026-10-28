@@ -63,11 +63,13 @@
     let draftError = $state('')
     let galleryViewportElement = $state<HTMLElement>()
     let galleryRevision = $state(0)
+    let receivedGallery = $state(false)
 
     let currentChat = $derived(chara.chats?.[chara.chatPage])
     let gallery = $derived.by(() => {
         void galleryRevision
-        return chara.risuBardGallery
+        return receivedGallery && currentChat?.risuTransferMedia && currentChat.risuBardGallery
+            ? currentChat.risuBardGallery : chara.risuBardGallery
     })
     let slots = $derived(gallery?.slots ?? [])
     let categories = $derived(gallery?.categories ?? [])
@@ -111,9 +113,10 @@
 
     $effect(() => {
         if (chara.risuBardGallery) return
+        const legacyChats = (chara.chats ?? []).filter(chat => !chat.risuTransferMedia)
         const migrated = mergeLegacyChatGalleries(
-            chara.chats ?? [],
-            chara.chatPage,
+            legacyChats,
+            legacyChats.indexOf(currentChat),
             language.galleryDefaultTitle(chara.name || language.Chat),
         )
         if (!migrated) return
@@ -133,7 +136,8 @@
     }
 
     function persist(nextGallery: RisuBardGallery): void {
-        chara.risuBardGallery = nextGallery
+        if (receivedGallery && currentChat?.risuTransferMedia && currentChat.risuBardGallery) currentChat.risuBardGallery = nextGallery
+        else chara.risuBardGallery = nextGallery
         galleryRevision += 1
         void requestImmediateSave()
     }
@@ -532,6 +536,14 @@
                     />
                 {:else}
                     <h2>{displayTitle}</h2>
+                    {#if currentChat?.risuTransferMedia && currentChat.risuBardGallery}
+                        <label>갤러리
+                            <select bind:value={receivedGallery} onchange={() => { selectedSlotId = ''; editingSlotId = ''; selectedSlotIds = new Set() }}>
+                                <option value={false}>캐릭터 갤러리</option>
+                                <option value={true}>받은 대화 갤러리</option>
+                            </select>
+                        </label>
+                    {/if}
                     <button
                         type="button"
                         data-gallery-title-edit

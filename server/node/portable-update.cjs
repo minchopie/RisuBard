@@ -68,7 +68,7 @@ function startAndVerify(root, env = process.env, timeoutMs = 60000, log = () => 
     return new Promise((resolve, reject) => {
         const node = path.join(root, 'bin', process.platform === 'win32' ? 'node.exe' : 'node');
         const child = spawn(node, ['server/node/server.cjs'], {
-            cwd: root, env: { ...env, OPEN_BROWSER: '0' },
+            cwd: root, env: { ...env, OPEN_BROWSER: '0', RISUBARD_APP_UPDATE: '0' },
             detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
         });
         let settled = false, output = '';

@@ -15,7 +15,7 @@ async function main() {
     try {
         const child = await startAndVerify(root, {
             ...process.env, PORT: '0', RISUBARD_DATA_ROOT: data,
-            RISU_UPDATE_CHECK: 'false', OPEN_BROWSER: '0', NODE_PATH: '', NODE_OPTIONS: '',
+            RISU_UPDATE_CHECK: 'false', OPEN_BROWSER: '0', NODE_PATH: '', NODE_OPTIONS: '', RISUBARD_APP_UPDATE: '0',
         }, 60000, console.log);
         const exited = once(child, 'close');
         child.kill();

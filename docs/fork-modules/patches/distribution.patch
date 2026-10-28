@@ -1,0 +1,280 @@
+diff --git a/.gitignore b/.gitignore
+index 88962f0..56752d6 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -52,6 +52,9 @@ dist.zip
+ !/scripts/portable-smoke.cjs
+ !/scripts/portable/
+ !/scripts/termux/
++!/scripts/android/
++!/scripts/fork-modules/
++!/scripts/transfer-sync/
+ !/scripts/check-help-keys.mjs
+ !/scripts/check-public-boundary.mjs
+ !/scripts/check-public-boundary.test.ts
+@@ -75,3 +78,19 @@ test/fixtures/
+ 
+ # Local scratch output (backups, browser runs, reports); never released
+ tmp/
++/.playwright-cli/
++/output/
++
++# Android build outputs and locally provisioned runtime binaries.
++/android-app/.gradle/
++/android-app/local.properties
++/android-app/**/build/
++/android-app/app/src/main/jniLibs/
++/android-app/app/src/main/assets/runtime.zip
++/android-app/app/src/main/assets/runtime.sha256
++/android-app/app/src/main/assets/runtime.properties
++/android-app/app/src/main/assets/runtime-binaries.json
++/android-app/app/src/offline/jniLibs/
++/android-app/app/src/offline/engine-binaries.json
++desktop-transfer/**/bin/
++desktop-transfer/**/obj/
+diff --git a/NOTICE.md b/NOTICE.md
+index f62d88a..216d141 100644
+--- a/NOTICE.md
++++ b/NOTICE.md
+@@ -14,3 +14,23 @@ The workspace mode switch, character configuration navigation, and lorebook work
+ created by [480 Design](https://www.figma.com/community/file/1166831539721848736).
+ The icons are licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+ Their fill color and Svelte wrapper were adapted for RisuBard theming.
++
++## Bundled display fonts
++
++KaTeX 0.16.27 CSS and code use the MIT license in `public/fonts/KaTeX-LICENSE.txt`.
++The unchanged KaTeX font files carry SIL Open Font License 1.1 notices; their
++embedded copyright and reserved names, plus the license, are copied to
++`public/fonts/KaTeX-Fonts-OFL.txt`. The web build keeps these fonts in `dist/assets/`
++as files or as embedded data in the stylesheet.
++Tilt Prism and Yellowtail are bundled unchanged under their licenses in
++`public/fonts/interface/`; `SOURCES.json` records the original URLs and hashes.
++
++## Optional Android local AI engine
++
++The Offline build includes llama.cpp at commit
++`ea0c4c2c85fb183ec0fbd30a1af4e4275a18a064` (MIT), built with Android NDK r29.
++Its entry point is replaced by `scripts/android/llama-owner-main.cpp` to stop
++the child if its RisuBard server dies. The engine, included vendor libraries,
++and NDK runtime notices are preserved in `android-app/notices/llama.cpp/` and
++included in the packaged runtime. Model weights are selected by the user and
++are not included in the APK; their own licenses apply.
+diff --git a/package.json b/package.json
+index 2ec83a4..e4d6fb4 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "risubard",
+   "private": true,
+-  "version": "0.9.71",
++  "version": "0.9.99",
+   "license": "GPL-3.0-only",
+   "packageManager": "pnpm@10.34.1",
+   "engines": {
+@@ -13,7 +13,7 @@
+     "dev:server": "node --watch-path=server/node --watch-preserve-output server/node/server.cjs",
+     "convert:v2-to-v1": "node scripts/convert-v2-to-v0925.cjs",
+     "inspect:backup": "node server/node/inspect-backup.cjs",
+-    "build": "vite build --sourcemap",
++    "build": "node scripts/app-update.mjs fingerprint && vite build --sourcemap",
+     "preview": "vite preview",
+     "check": "svelte-check --tsconfig ./tsconfig.json",
+     "check:public-boundary": "node scripts/check-public-boundary.mjs",
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 9f22d68..10d3a4b 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -223,6 +223,12 @@ importers:
+       ws:
+         specifier: ^8.18.3
+         version: 8.18.3
++      yauzl:
++        specifier: 3.4.0
++        version: 3.4.0
++      yazl:
++        specifier: 3.3.1
++        version: 3.3.1
+     devDependencies:
+       '@rollup/plugin-strip':
+         specifier: ^3.0.4
+@@ -1615,6 +1621,10 @@ packages:
+     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
+     hasBin: true
+ 
++  buffer-crc32@1.0.0:
++    resolution: {integrity: sha512-Db1SbgBS/fg/392AblrMJk97KggmvYhr4pB5ZIMTWtaivCPMWLkmb7m21cJvpvgK+J3nsU2CmmixNBZx4vFj/w==}
++    engines: {node: '>=8.0.0'}
++
+   buffer@6.0.3:
+     resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
+ 
+@@ -2437,6 +2447,9 @@ packages:
+     resolution: {integrity: sha512-/Y3fcFrXEAsMjJXeL9J8+ZG9U01LbuWaYypvDW2ycW1jL269L3js3DVBjDJ0Up9Np1uqDXsDrRihHANhZOlwdQ==}
+     engines: {node: '>=20'}
+ 
++  pend@1.2.0:
++    resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
++
+   picocolors@1.1.1:
+     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
+ 
+@@ -3001,6 +3014,13 @@ packages:
+     resolution: {integrity: sha512-aePbxDmcYW++PaqBsJ+HYUFwCdv4LVvdnhBy78E57PIor8/OVvhMrADFFEDh8DHDFRv/O9i3lPhsENjO7QX0+A==}
+     engines: {node: '>=8'}
+ 
++  yauzl@3.4.0:
++    resolution: {integrity: sha512-jIH9yLR9wqr0wOS0TpBvo/g/2UgZH5qePVbjgRliiF0BYvOZyaBknKsF+x9Iht0O6sqgnB93rCICdOZFecJuDw==}
++    engines: {node: '>=12'}
++
++  yazl@3.3.1:
++    resolution: {integrity: sha512-BbETDVWG+VcMUle37k5Fqp//7SDOK2/1+T7X8TD96M3D9G8jK5VLUdQVdVjGi8im7FGkazX7kk5hkU8X4L5Bng==}
++
+   zimmerframe@1.1.4:
+     resolution: {integrity: sha512-B58NGBEoc8Y9MWWCQGl/gq9xBCe4IiKM0a2x7GZdQKOW5Exr8S1W24J6OgM1njK8xCRGvAJIL/MxXHf6SkmQKQ==}
+ 
+@@ -4022,6 +4042,8 @@ snapshots:
+       node-releases: 2.0.27
+       update-browserslist-db: 1.2.3(browserslist@4.28.1)
+ 
++  buffer-crc32@1.0.0: {}
++
+   buffer@6.0.3:
+     dependencies:
+       base64-js: 1.5.1
+@@ -4790,6 +4812,8 @@ snapshots:
+     optionalDependencies:
+       '@napi-rs/canvas': 0.1.86
+ 
++  pend@1.2.0: {}
++
+   picocolors@1.1.1: {}
+ 
+   picomatch@4.0.3: {}
+@@ -5380,4 +5404,12 @@ snapshots:
+       y18n: 4.0.3
+       yargs-parser: 18.1.3
+ 
++  yauzl@3.4.0:
++    dependencies:
++      pend: 1.2.0
++
++  yazl@3.3.1:
++    dependencies:
++      buffer-crc32: 1.0.0
++
+   zimmerframe@1.1.4: {}
+diff --git a/scripts/portable-smoke.cjs b/scripts/portable-smoke.cjs
+index 130433e..f5e7b8a 100644
+--- a/scripts/portable-smoke.cjs
++++ b/scripts/portable-smoke.cjs
+@@ -15,7 +15,7 @@ async function main() {
+     try {
+         const child = await startAndVerify(root, {
+             ...process.env, PORT: '0', RISUBARD_DATA_ROOT: data,
+-            RISU_UPDATE_CHECK: 'false', OPEN_BROWSER: '0', NODE_PATH: '', NODE_OPTIONS: '',
++            RISU_UPDATE_CHECK: 'false', OPEN_BROWSER: '0', NODE_PATH: '', NODE_OPTIONS: '', RISUBARD_APP_UPDATE: '0',
+         }, 60000, console.log);
+         const exited = once(child, 'close');
+         child.kill();
+diff --git a/scripts/release.mjs b/scripts/release.mjs
+index 785b57d..8192959 100644
+--- a/scripts/release.mjs
++++ b/scripts/release.mjs
+@@ -8,7 +8,7 @@
+ import { execFileSync, spawnSync } from 'node:child_process'
+ import { readFileSync } from 'node:fs'
+ 
+-const RELEASE_ACCOUNT = 'rpaddict'
++const RELEASE_ACCOUNT = 'minchopie'
+ const dryRun = process.argv.includes('--dry-run')
+ 
+ function fail(message) {
+diff --git a/scripts/updater.cjs b/scripts/updater.cjs
+index a9e9751..9d0eca7 100644
+--- a/scripts/updater.cjs
++++ b/scripts/updater.cjs
+@@ -16,7 +16,7 @@ const { rollbackInterruptedUpdate } = require('./updater-recovery.cjs');
+ const { validatePackage, restoreEntries } = require(fs.existsSync(path.join(__dirname, 'portable-update.cjs'))
+     ? './portable-update.cjs' : '../server/node/portable-update.cjs');
+ 
+-const REPO = 'rpaddict/RisuBard';
++const REPO = 'minchopie/RisuBard';
+ const ROOT = path.resolve(__dirname, '..');
+ 
+ const isWin = process.platform === 'win32';
+diff --git a/server/node/portable-update.cjs b/server/node/portable-update.cjs
+index dc96159..0f1fc01 100644
+--- a/server/node/portable-update.cjs
++++ b/server/node/portable-update.cjs
+@@ -68,7 +68,7 @@ function startAndVerify(root, env = process.env, timeoutMs = 60000, log = () =>
+     return new Promise((resolve, reject) => {
+         const node = path.join(root, 'bin', process.platform === 'win32' ? 'node.exe' : 'node');
+         const child = spawn(node, ['server/node/server.cjs'], {
+-            cwd: root, env: { ...env, OPEN_BROWSER: '0' },
++            cwd: root, env: { ...env, OPEN_BROWSER: '0', RISUBARD_APP_UPDATE: '0' },
+             detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+         });
+         let settled = false, output = '';
+diff --git a/server/node/release-update.test.ts b/server/node/release-update.test.ts
+index 2a00acd..24be8aa 100644
+--- a/server/node/release-update.test.ts
++++ b/server/node/release-update.test.ts
+@@ -18,7 +18,7 @@ describe('GitHub release update information', () => {
+             {
+                 tag_name: 'v0.1.1',
+                 name: 'RisuBard 0.1.1',
+-                html_url: 'https://github.com/rpaddict/RisuBard/releases/tag/v0.1.1',
++                html_url: 'https://github.com/minchopie/RisuBard/releases/tag/v0.1.1',
+                 published_at: '2026-08-19T00:00:00Z',
+             },
+             '0.1.0'
+@@ -29,7 +29,7 @@ describe('GitHub release update information', () => {
+             latestVersion: '0.1.1',
+             hasUpdate: true,
+             severity: 'optional',
+-            releaseUrl: 'https://github.com/rpaddict/RisuBard/releases/tag/v0.1.1',
++            releaseUrl: 'https://github.com/minchopie/RisuBard/releases/tag/v0.1.1',
+             releaseName: 'RisuBard 0.1.1',
+             publishedAt: '2026-08-19T00:00:00Z',
+             manualOnly: false,
+diff --git a/server/node/risubard-update-release.test.ts b/server/node/risubard-update-release.test.ts
+index 8b52d3f..48991e7 100644
+--- a/server/node/risubard-update-release.test.ts
++++ b/server/node/risubard-update-release.test.ts
+@@ -39,17 +39,17 @@ const languageSources = ['en.ts', 'ko.ts', 'zh-Hant.ts'].map(name =>
+ )
+ 
+ describe('RisuBard release updater target', () => {
+-    test('checks and downloads releases from rpaddict/RisuBard', () => {
++    test('checks and downloads releases from minchopie/RisuBard', () => {
+         const server = readFileSync(serverSource, 'utf8')
+         const updater = readFileSync(updaterSource, 'utf8')
+         const sourceUpdater = readFileSync(sourceUpdaterSource, 'utf8')
+ 
+-        expect(server).toContain("const GITHUB_REPO = 'rpaddict/RisuBard';")
++        expect(server).toContain("const GITHUB_REPO = 'minchopie/RisuBard';")
+         expect(server).toContain(
+             'https://api.github.com/repos/${GITHUB_REPO}/releases/latest'
+         )
+-        expect(updater).toContain("const REPO = 'rpaddict/RisuBard';")
+-        expect(sourceUpdater).toContain('REPO="rpaddict/RisuBard"')
++        expect(updater).toContain("const REPO = 'minchopie/RisuBard';")
++        expect(sourceUpdater).toContain('REPO="minchopie/RisuBard"')
+     })
+ 
+     test('does not expose inherited upstream public statistics', () => {
+diff --git a/update.sh b/update.sh
+index ff1a3ac..ad57b6a 100644
+--- a/update.sh
++++ b/update.sh
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ 
+-REPO="rpaddict/RisuBard"
++REPO="minchopie/RisuBard"
+ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ cd "$SCRIPT_DIR"
+ 

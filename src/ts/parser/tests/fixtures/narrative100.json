@@ -1,0 +1,29 @@
+{
+  "type": "risuModule",
+  "module": {
+    "name": "마물소녀도감 공용 서술 보강 v1.0.0",
+    "description": "선택형 공용 서술 지침. 전투 묘사 다양화·같은 성과의 반복 감탄 완화·해결 뒤 분량용 위기 억제. 기존 능력·판정·선택·상태·사건 조건은 유지합니다.",
+    "id": "dc4a8f37-791f-4378-954b-22fd9296f7a4",
+    "namespace": "mge_narration_guidance",
+    "lowLevelAccess": false,
+    "lorebook": [
+      {
+        "id": "dc4a8f37-791f-4378-954b-22fd9296f7a4-lore",
+        "key": "",
+        "secondkey": "",
+        "insertorder": 1400,
+        "comment": "Narration guidance: MGE combat/reaction/aftermath v1.0.0",
+        "content": "[Optional narration guidance: combat, reactions and aftermath]\nDuring combat, let the scene's actual weapons, abilities, positioning, the opponent's rhythm, psychological pressure and relevant surroundings guide the focus of description. Vary what matters rather than repeating the same muscle, tendon or impact sensation at each clash; these are available focuses, not a checklist or a requirement to use them all. Keep established injuries and bodily effects in force; how often they are described follows the card. Preserve the card's outcome rules and the player's declared actions; do not supply a new tactical choice or deliberate movement for the player.\nFor an NPC who has already witnessed the player perform the same kind of accomplishment, let familiarity inform the reaction instead of repeating the same first-time astonishment. Preserve that NPC's established personality, warmth, pride and relationship; a genuinely new feat may still surprise them.\nAfter the main threat has actually been resolved, allow its consequences and unfinished business room to develop without inventing a fresh crisis merely to prolong the scene. Existing causes, NPC plans, fulfilled event prerequisites, player-created risks, ongoing fights or pursuits and the card's encounter rules still apply. This sets no chapter count, crisis quota, forced closure or mandatory rest.\nUse the existing card, persona, time, exposure and memory protocols.",
+        "mode": "constant",
+        "alwaysActive": true,
+        "selective": false,
+        "enabled": true,
+        "useRegex": false,
+        "bookVersion": 2
+      }
+    ],
+    "trigger": [],
+    "regex": [],
+    "assets": []
+  }
+}

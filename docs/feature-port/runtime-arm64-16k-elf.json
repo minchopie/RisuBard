@@ -1,0 +1,33 @@
+{
+  "archiveSha256": "abce532d539fdd8a8da8ab79f3445fa63e04a7bf08df864a7943e67dba89a322",
+  "node": {
+    "sha256": "7a7354f5d4bacc5d2230ca41442bcb81cb3f22ddf09941728257528cc5bdcc9c",
+    "machine": 183,
+    "loads": [
+      {
+        "offset": 0,
+        "address": 0,
+        "alignment": 16384
+      },
+      {
+        "offset": 93766976,
+        "address": 93783360,
+        "alignment": 16384
+      },
+      {
+        "offset": 95027200,
+        "address": 95059968,
+        "alignment": 16384
+      }
+    ]
+  },
+  "buildExitCode": 0,
+  "runtimeVerified": false,
+  "dynamicDependencies": [
+    "libm.so",
+    "libdl.so",
+    "liblog.so",
+    "libc.so"
+  ],
+  "dynamicDependencyEvidence": "tmp/arm64-16k-dynamic.log"
+}

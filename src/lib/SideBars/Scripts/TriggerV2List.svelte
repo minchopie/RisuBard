@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { alertError } from "src/ts/alert";
+    import { downloadFile } from "src/ts/globalApi.svelte";
     import { PlusIcon, ArrowLeftIcon, DownloadIcon, UploadIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import Button from "src/lib/UI/GUI/Button.svelte";
@@ -2606,17 +2608,7 @@
                             const triggersToExport = value.slice(1);
                             const jsonData = JSON.stringify(triggersToExport, null, 2);
                             
-                            const blob = new Blob([jsonData], { type: 'application/json' });
-                            const url = URL.createObjectURL(blob);
-                            
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = `triggers-${new Date().getTime()}.json`;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            
-                            URL.revokeObjectURL(url);
+                            void downloadFile(`triggers-${new Date().getTime()}.json`, jsonData).catch(error => { if (!(globalThis as any).RisuPlay) alertError(String(error)) });
                         }}>
                             <DownloadIcon />
                         </button>

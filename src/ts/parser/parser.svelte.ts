@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify';
+import { resolvePlaySetHtml, transferMediaScope } from '../transferAssets';
 import markdownit from 'markdown-it'
 import { appVer, getCurrentCharacter, getDatabase, type Chat, type Database, type character, type customscript, type triggerscript } from '../storage/database.svelte';
 import { DBState, selIdState } from '../stores.svelte';
@@ -701,13 +702,14 @@ function createMissingInlayPlaceholder(id: string): HTMLDivElement {
     return box
 }
 
-export function parseInlayAssets(data:string){
+export function parseInlayAssets(data:string, scope = transferMediaScope()){
     const inlayMatch = data.match(/{{(inlay|inlayed|inlayeddata)::(.+?)}}/g)
     if(inlayMatch){
         const occurrences = new Map<string, number>()
         for(const inlay of inlayMatch){
             const inlayType = inlay.startsWith('{{inlayed') ? 'inlayed' : 'inlay'
-            const id = inlay.substring(inlay.indexOf('::') + 2, inlay.length - 2)
+            const sourceId = inlay.substring(inlay.indexOf('::') + 2, inlay.length - 2)
+            const id = typeof scope?.inlays?.[sourceId] === 'string' ? scope.inlays[sourceId] as string : sourceId
             const occurrence = occurrences.get(id) ?? 0
             occurrences.set(id, occurrence + 1)
             const escapedId = id.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -954,7 +956,8 @@ export async function ParseMarkdown(
         })
     }
 
-    data = parseInlayAssets(data ?? '')
+    const mediaScope = transferMediaScope(char as character)
+    data = parseInlayAssets(data ?? '', mediaScope)
 
     data = parseThoughtsAndTools(data)
 
@@ -966,7 +969,7 @@ export async function ParseMarkdown(
             return data
         }
     }
-    return trimMarkdown(data)
+    return resolvePlaySetHtml(trimMarkdown(data), mediaScope)
 }
 
 // LRU cache for DOMPurify + decodeStyle results.

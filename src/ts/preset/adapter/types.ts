@@ -185,6 +185,8 @@ export interface AdapterCacheContext {
 
 export interface AdapterChatOptions {
     messages: AdapterChatMessage[]
+    /** Stable main-chat key for OpenRouter sticky routing; other endpoints ignore it. */
+    sessionId?: string
     tools?: AdapterToolDef[]             // when present, enables tool use on the request
     /** Authoritative per-call sampling controls. */
     temperature?: number

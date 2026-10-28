@@ -271,6 +271,14 @@ async function prepareOpenAiBody(
         delete prepared.body.parallel_tool_calls
         delete prepared.body.tool_choice
     }
+    if (options.sessionId && options.sessionId.length <= 256
+        && !('session_id' in prepared.body)
+        && !('prompt_cache_key' in prepared.body)
+        && !Object.keys(prepared.headers).some((key) => key.toLowerCase() === 'x-session-id')) {
+        let hostname = ''
+        try { hostname = new URL(prepared.url).hostname } catch {}
+        if (hostname === 'openrouter.ai') prepared.body.session_id = options.sessionId
+    }
     return prepared
 }
 
@@ -431,6 +439,11 @@ function extractThoughtSignature(extraContent: unknown): string | undefined {
 // Exported (pure) for job-journal recovery replay (process/request/jobRecovery.ts).
 export function parseChatStreamDelta(raw: unknown): AdapterChatStreamDelta | null {
     if (!isPlainObject(raw)) return null
+    if (raw.error !== undefined && raw.error !== null) {
+        const code = isPlainObject(raw.error) ? raw.error.code : undefined
+        const status = typeof code === 'number' && Number.isInteger(code) && code >= 400 && code < 600 ? code : 500
+        throw normalizeHttpStatus(status, extractErrorMessage(JSON.stringify(raw)) ?? 'Model stream failed')!
+    }
     const choices = raw['choices']
     let textDelta = ''
     let reasoningDelta = ''

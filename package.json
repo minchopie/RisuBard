@@ -1,7 +1,7 @@
 {
   "name": "risubard",
   "private": true,
-  "version": "0.9.71",
+  "version": "0.9.99",
   "license": "GPL-3.0-only",
   "packageManager": "pnpm@10.34.1",
   "engines": {
@@ -13,7 +13,7 @@
     "dev:server": "node --watch-path=server/node --watch-preserve-output server/node/server.cjs",
     "convert:v2-to-v1": "node scripts/convert-v2-to-v0925.cjs",
     "inspect:backup": "node server/node/inspect-backup.cjs",
-    "build": "vite build --sourcemap",
+    "build": "node scripts/app-update.mjs fingerprint && vite build --sourcemap",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:public-boundary": "node scripts/check-public-boundary.mjs",
@@ -103,7 +103,9 @@
     "wasmoon": "^1.16.0",
     "wavefile": "^11.0.0",
     "web-streams-polyfill": "^3.3.3",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "yauzl": "3.4.0",
+    "yazl": "3.3.1"
   },
   "devDependencies": {
     "@rollup/plugin-strip": "^3.0.4",

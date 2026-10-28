@@ -1,0 +1,1 @@
+{"type":"risuChat","ver":2,"data":{"id":"desktop-device-smoke","name":"Desktop device smoke","message":[{"role":"user","data":"RisuAI desktop-to-Android protocol smoke test"},{"role":"char","data":"Transport authenticated and decrypted."}],"note":"Non-user test fixture","localLore":[],"fmIndex":-1},"folders":[]}

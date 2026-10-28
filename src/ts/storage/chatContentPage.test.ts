@@ -43,9 +43,19 @@ describe('getRemainingChatContentPageOffsets', () => {
         expect(getRemainingChatContentPageOffsets(750, 200, 200)).toEqual([200, 400, 600])
         expect(getRemainingChatContentPageOffsets(200, 200, 200)).toEqual([])
         expect(getRemainingChatContentPageOffsets(0, 0, 200)).toEqual([])
+        expect(getRemainingChatContentPageOffsets(436, 436, 500)).toEqual([])
+        expect(getRemainingChatContentPageOffsets(1001, 500, 500)).toEqual([500, 1000])
     })
 
     it('rejects an invalid page size', () => {
         expect(() => getRemainingChatContentPageOffsets(1, 0, 0)).toThrow(/page size/i)
     })
+})
+
+
+it('assembles a 500-message page contract with the last single message and complete metadata', () => {
+    const metadata = { id: 'chat-1', name: 'Long chat', scriptstate: { '$state': 'kept' }, localLore: [{ key: 'kept' }] }
+    const messages = Array.from({ length: 1001 }, (_, index) => ({ data: `m${index}` }))
+    const page500 = (offset: number) => ({ chat: metadata, messages: messages.slice(offset, offset + 500), offset, limit: 500, total: messages.length })
+    expect(assembleChatContentPages([page500(1000), page500(0), page500(500)])).toEqual({ ...metadata, message: messages })
 })

@@ -108,3 +108,71 @@ it.each(['chat', 'patch', 'database'])('waits for a slow %s save response withou
     expect(storage.pendingSaveRequests).toBe(1)
     expect(request).toHaveBeenCalledTimes(1)
 })
+
+function authenticatedTransport() {
+    const storage = new NodeStorage()
+    const check = vi.spyOn(storage as any, 'checkAuth').mockResolvedValue(undefined)
+    vi.spyOn(storage, 'createAuth').mockResolvedValue('token')
+    return { storage, check }
+}
+
+it.each(['Failed to fetch', 'NetworkError when attempting to fetch resource.', 'Load failed'])('identifies the app-server transport failure %s and preserves its original cause', async message => {
+    const { storage } = authenticatedTransport()
+    const cause = new TypeError(message)
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(cause))
+    const failure = await storage.getLiveFileMonitoring().catch(error => error)
+    expect(failure).toBeInstanceOf(TypeError)
+    expect(failure).toMatchObject({
+        message: '앱 서버에 연결하지 못했습니다', code: 'APP_SERVER_FETCH', cause,
+    })
+    expect(failure.cause).toBe(cause)
+    // authFetch is shared by reads and session requests; it must not claim an unsaved edit exists.
+    for (const route of ['/api/read', '/api/session']) {
+        const failure = await (storage as any).authFetch(route).catch((error: unknown) => error)
+        expect(failure).toBeInstanceOf(TypeError)
+        expect(failure.message).toBe('앱 서버에 연결하지 못했습니다')
+        expect(failure.cause).toBe(cause)
+        expect(failure.message).not.toMatch(/저장|편집|로컬|내부/)
+    }
+})
+
+it.each([
+    new TypeError('Failed to parse URL from http://['),
+    new TypeError('Request with GET/HEAD method cannot have body.'),
+    new Error('Failed to fetch'),
+    new SyntaxError('invalid response'),
+    new DOMException('Aborted', 'AbortError'),
+])('preserves non-network exceptions unchanged: %s', async failure => {
+    const { storage } = authenticatedTransport()
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(failure))
+    await expect((storage as any).authFetch('/api/read')).rejects.toBe(failure)
+})
+
+it('does not relabel a cancelled request even if fetch rejects with a network-looking TypeError', async () => {
+    const { storage } = authenticatedTransport()
+    const controller = new AbortController(), failure = new TypeError('Failed to fetch')
+    vi.stubGlobal('fetch', vi.fn(async () => { controller.abort(); throw failure }))
+    await expect((storage as any).authFetch('/api/read', { signal: controller.signal })).rejects.toBe(failure)
+})
+
+it('leaves authentication and response-decoding failures outside the transport error boundary', async () => {
+    const { storage, check } = authenticatedTransport()
+    const authFailure = new TypeError('Failed to fetch')
+    const fetch = vi.fn(async () => new Response('not-json'))
+    vi.stubGlobal('fetch', fetch)
+    check.mockRejectedValueOnce(authFailure)
+    await expect((storage as any).authFetch('/api/read')).rejects.toBe(authFailure)
+    expect(fetch).not.toHaveBeenCalled()
+    const decodeFailure = await storage.getLiveFileMonitoring().catch(error => error)
+    expect(decodeFailure).toBeInstanceOf(SyntaxError)
+    expect(decodeFailure.code).toBeUndefined()
+})
+
+it('does not convert an unrecognized HTTP 401 into a connection error or replay it', async () => {
+    const { storage } = authenticatedTransport()
+    const response = Response.json({ error: 'Permission denied' }, { status: 401 })
+    const fetch = vi.fn(async () => response)
+    vi.stubGlobal('fetch', fetch)
+    expect(await (storage as any).authFetch('/api/read')).toBe(response)
+    expect(fetch).toHaveBeenCalledOnce()
+})

@@ -16,7 +16,7 @@ const { rollbackInterruptedUpdate } = require('./updater-recovery.cjs');
 const { validatePackage, restoreEntries } = require(fs.existsSync(path.join(__dirname, 'portable-update.cjs'))
     ? './portable-update.cjs' : '../server/node/portable-update.cjs');
 
-const REPO = 'rpaddict/RisuBard';
+const REPO = 'minchopie/RisuBard';
 const ROOT = path.resolve(__dirname, '..');
 
 const isWin = process.platform === 'win32';

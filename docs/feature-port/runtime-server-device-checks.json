@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-17",
+  "apkSha256": "377d681ead3c09841bbcba1bc44a734dcf96450d86cb319f458ee202a96d5f8e",
+  "devices": [
+    {
+      "serial": "HA28ZBM5",
+      "pass": true,
+      "serverImageRoute": true,
+      "serverWikiRoutes": true,
+      "persistedProbeRuns": 5
+    },
+    {
+      "serial": "R3CY20CLF0P",
+      "pass": true,
+      "serverImageRoute": true,
+      "serverWikiRoutes": true,
+      "persistedProbeRuns": 5
+    }
+  ],
+  "notes": [
+    "Two real 4KiB Android16 devices. Standalone APK Node process, installed runtime server routes.",
+    "API wiki fixture corrected: omit documentId for creation; specifying an absent ID correctly rejects an edit.",
+    "This does not verify memory/save-slot transfer or 16KiB execution."
+  ]
+}

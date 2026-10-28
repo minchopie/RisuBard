@@ -3,7 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { atomicWriteFile, atomicWriteJson, readVerifiedJson } = require('./file-store.cjs');
+const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
 const { resolveDataRoot } = require('./data-root.cjs');
 
 const MAX_ROWS = 5000;
@@ -17,19 +17,21 @@ const logFile = path.join(logRoot, 'system.jsonl');
 const stateFile = path.join(logRoot, 'state.json');
 const writeLockFile = path.join(logRoot, '.write.lock');
 const LOCK_WAIT_MS = 5;
-const LOCK_TIMEOUT_MS = 5000;
+// Several processes can queue fsynced writes on a slow Windows disk.
+const LOCK_TIMEOUT_MS = 30000;
 const LOCK_OWNER_GRACE_MS = 100;
-const LOCK_STALE_MS = 30000;
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+let holdingWriteLock = false;
 fs.mkdirSync(logRoot, { recursive: true });
 
 function processIsAlive(pid) {
     if (!Number.isInteger(pid) || pid < 1) return false;
+    if (pid === process.pid) return holdingWriteLock;
     try {
         process.kill(pid, 0);
         return true;
     } catch (error) {
-        return error?.code !== 'ESRCH';
+        return error?.code !== 'ESRCH' && !(process.env.RISUBARD_EMBEDDED_ANDROID === '1' && error?.code === 'EPERM');
     }
 }
 
@@ -39,7 +41,7 @@ function removeStaleWriteLock() {
         const pid = Number.parseInt(fs.readFileSync(writeLockFile, 'utf8'), 10);
         const age = Date.now() - stat.mtimeMs;
         if (!Number.isInteger(pid) && age < LOCK_OWNER_GRACE_MS) return false;
-        if (processIsAlive(pid) && age < LOCK_STALE_MS) return false;
+        if (processIsAlive(pid)) return false;
         fs.unlinkSync(writeLockFile);
         return true;
     } catch (error) {
@@ -52,7 +54,9 @@ function acquireWriteLock() {
     while (Date.now() - startedAt < LOCK_TIMEOUT_MS) {
         try {
             const fd = fs.openSync(writeLockFile, 'wx', 0o600);
-            fs.writeFileSync(fd, String(process.pid), 'utf8');
+            try { fs.writeFileSync(fd, String(process.pid), 'utf8'); }
+            catch (error) { fs.closeSync(fd); throw error; }
+            holdingWriteLock = true;
             return fd;
         } catch (error) {
             const isWindowsLockContention = process.platform === 'win32'
@@ -71,7 +75,8 @@ function withWriteLock(action) {
         return action();
     } finally {
         try { fs.closeSync(fd); } catch {}
-        try { fs.unlinkSync(writeLockFile); } catch {}
+        holdingWriteLock = false;
+        retryWindowsSharing(() => { try { fs.unlinkSync(writeLockFile); } catch (error) { if (error?.code !== 'ENOENT') throw error; } });
     }
 }
 
@@ -177,7 +182,13 @@ const MASK_PATTERNS = [
 
 function maskSensitive(value) {
     if (typeof value !== 'string') return value;
-    let out = value;
+    // Provider keys in URLs may be opaque and query names can be percent-encoded.
+    let out = value.replace(/([?&](?:amp;)?)([^=&#\s"']+)=([^&#\s"']*)/g, (match, prefix, name) => {
+        let key;
+        try { key = decodeURIComponent(name).toLowerCase(); } catch { return match; }
+        return /^(?:key|api[-_]?key|x-goog-api-key|token|access[-_]?token|refresh[-_]?token|auth|authorization|password|secret|signature|x-amz-signature|x-amz-credential|x-amz-security-token)$/.test(key)
+            ? `${prefix}${name}=[REDACTED]` : match;
+    });
     for (const { re, replacement } of MASK_PATTERNS) {
         out = out.replace(re, replacement);
     }

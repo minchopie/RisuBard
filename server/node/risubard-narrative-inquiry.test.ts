@@ -1,14 +1,21 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test } from 'vitest'
 import type { NarrativeMemoryState } from '../../packages/risubard-core/src/memoryDelta'
 import { createNarrativeGraphService } from './risubard-graph-service'
 
 const evidence = [{ chatId: 'chat-1', messageId: 'message-1' }]
 
+const fixtureRoots: string[] = []
+afterEach(async () => {
+    await Promise.all(fixtureRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+})
+
 async function userDataDirectory() {
-    return mkdtemp(join(tmpdir(), 'risubard-inquiry-'))
+    const root = await mkdtemp(join(tmpdir(), 'risubard-inquiry-'))
+    fixtureRoots.push(root)
+    return root
 }
 
 describe('runtime narrative inquiry', () => {

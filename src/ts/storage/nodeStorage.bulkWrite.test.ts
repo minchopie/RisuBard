@@ -49,6 +49,22 @@ describe('NodeStorage import progress', () => {
 })
 
 describe('NodeStorage live file synchronization', () => {
+    it('keeps the session active during a transfer fence but still deactivates a displaced writer', async () => {
+        const storage = new NodeStorage(), deactivated = vi.fn()
+        ;(storage as any).checkAuth = async () => {}
+        storage.createAuth = async () => 'test-token'
+        let code: string | undefined = 'TRANSFER_BUSY'
+        vi.stubGlobal('fetch', async () => Response.json({ error: 'busy', code }, { status: 423 }))
+        window.addEventListener('risu-session-deactivated', deactivated)
+        try {
+            expect((await (storage as any).authFetch('/api/write')).status).toBe(423)
+            expect(deactivated).not.toHaveBeenCalled()
+            code = undefined
+            await (storage as any).authFetch('/api/write')
+            expect(deactivated).toHaveBeenCalledOnce()
+        } finally { window.removeEventListener('risu-session-deactivated', deactivated); vi.unstubAllGlobals() }
+    })
+
     it('sends the revision through authenticated transport without advancing the save etag', async () => {
         const storage = new NodeStorage()
         storage.setDbEtag('acknowledged')

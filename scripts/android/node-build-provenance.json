@@ -1,0 +1,23 @@
+{
+  "status": "both architectures built and statically verified; x64 16KiB emulator passed; final ARM64 runtime test pending physical-device hold",
+  "version": "24.21.0",
+  "source": "https://nodejs.org/dist/v24.21.0/node-v24.21.0.tar.xz",
+  "sourceSha256": "a6f54defb6fd7c84f41dba13d61e78e9b4e0961712cf61f29715c05f5ced94fc",
+  "ndk": "https://dl.google.com/android/repository/android-ndk-r29-linux.zip",
+  "ndkSha256": "4abbbcdc842f3d4879206e9695d52709603e52dd68d3c1fff04b3b5e7a308ecf",
+  "ndkOfficialSha1": "87e2bb7e9be5d6a1c6cdf5ec40dd4e0c6d07c30b",
+  "buildHelper": "https://github.com/Delusions6515/node-android-build",
+  "buildHelperCommit": "8255800ed90e1c4a1ab5c9d33bf8f1fd46976504",
+  "architectures": [
+    "arm64",
+    "x64"
+  ],
+  "buildScript": "scripts/android/build-node.sh",
+  "cpuFeaturesShim": "scripts/android/compat/cpu-features.h (project-authored, portable zlib path)",
+  "ldflags": "-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384",
+  "licenseFiles": [
+    "android-app/notices/NODE-LICENSE.txt",
+    "android-app/notices/TERMUX-PATCHES-LICENSE.txt"
+  ],
+  "notes": "Source SHA-256 matched official SHASUMS256.txt; NDK SHA-1 matched android/ndk Unsupported-Downloads. Third-party helper is fetched by pinned commit and not copied into this source tree."
+}

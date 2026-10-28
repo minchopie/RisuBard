@@ -1,0 +1,101 @@
+# Fable 5.1 — R10 runtime data-preservation fixes: read-only review (supplied source and evidence only)
+
+No tools were run and nothing was touched. Everything below is derived from the supplied files: `server.cjs` (full), `file-store.cjs`, `compatibility-cache.cjs`, `user-data-repository.cjs`, `live-file-monitoring.cjs`, `canonical-projection-sync.cjs`, `canonical-projection-writer.cjs`, the five test files, the R10 doc/response, and the `tmp/` logs/JSON. `db.cjs`, `direct-write-tracker.cjs`, `external-change-review.cjs`, `external-edit-session.cjs`, `live-character-files.cjs`, `projection-revision-store.cjs`, the asset/package route modules and the client are not supplied; claims that depend on them are marked unverified. Scope: the six VERIFY targets plus concrete errors in these fixes. Not a release, integration, or device approval; physical devices stay on HOLD; existing user data and legacy maintenance lanes are checked for preservation, not changed.
+
+## 0. Summary
+
+- Five of the six verification targets are confirmed in source and by discriminating evidence. The sixth ("canonical startup and hydration agree after failures") is confirmed for the lanes the new tests exercise, but one hydration lane still reads the compatibility blob: the `/api/patch` cold-cache load. That is a source-determined gap in the stated invariant (§2.1), not a byte-loss path.
+- No new byte-loss regression was found. The R9 primitive defect (orphan journal replayed over a later commit) is closed at the primitive, and the observer-loss variant is closed in the server.
+- Two concrete, actionable items in these fixes (§2.1, §2.2); several hypotheses that remain source-suggested but unverifiable here (§3).
+- Evidence is internally consistent (§4). The APK14 provenance JSON lists nine hashes for the claimed 497 files; the hashes cannot be recomputed here, and the original API35 RisuBard crash stack is not in this bundle, so "same BuildId" is asserted rather than cross-checked.
+
+## 1. Verification targets
+
+### 1.1 Pending-journal primitive rejects later commits — verified
+
+`commitTransaction` now checks `.journal` for any `*.json` before preparing or staging and throws `PENDING_TRANSACTION` ("Recover the pending transaction before committing another save"). The check sits after the empty-operations early return (which writes nothing) and before the all-unchanged fast path, so even a no-op commit is refused while a journal pends — conservative and correct. `writeJournal` temp files are `.<id>.json.<uuid>.tmp` and are not matched by the `.json` filter.
+
+Evidence: `file-store.test` "refuses a later transaction until the previous prepared journal is recovered" asserts the throw, that `x.json` is still `v0`, exactly one journal, and that a commit succeeds after `recoverTransactions`. `runtime10-journal-repro.log` shows the pre-fix failure at the exact assertion ("expected [Function] to throw"); `runtime10-journal-fixed.log` 31/31. This is the R9 §2 three-step case; it now fails closed at step 2.
+
+Server consequence: with one journal possible per root, `pendingCanonicalRecovery` as a single slot is sound. In-process, `queueStorageOperation` retries the retained observer first, so queued endpoints never reach `commitTransaction` while a hold is active; `PENDING_TRANSACTION` is therefore reachable from unqueued persist paths only (§3.4).
+
+### 1.2 Chronological legacy replay — verified
+
+`recoverTransactions` sorts by `journal.createdAt || 0`, then filename. Journals without `createdAt` sort first (0), i.e. the legacy behaviour is preserved for them. The test "recovers legacy overlapping journals by creation time instead of UUID order" constructs two journals (moving the first out of `.journal` to get past the new refusal), reverses their filenames against their stamps, and asserts the newer wins and `.journal` is empty. With the refusal in place, multiple journals can only come from pre-fix roots, which is the stated target.
+
+### 1.3 Original observer retained even for CFC direct fallback — verified
+
+`persistCanonicalProjection` catch now sets `pendingCanonicalRecovery = save` unconditionally for `errorStage === 'transaction'` and attempts one in-catch recovery under that observer; `recoverFailedCanonicalTransaction` clears the slot only after a successful `recoverPendingTransactions()` and `settle()`, so a CFC thrown by `assertTargetsUnobserved` leaves the original save in place. Trace for the direct-lane variant: `syncLegacyChatState` commit fails mid-publish → `writeCanonicalProjection` fallback runs `recoverPendingTransactions()` under the same `observeWrites(save, …)` → CFC → rethrown with `canonicalWriteMeta` → catch: slot set, retry throws CFC (swallowed), slot retained; `save.settle()` records the partial sentinel. Subsequent queued operations fail at the queue gate with the file path in the message.
+
+Evidence: `full-write-failure-http` `direct-external/external` asserts 500 for both the review GET and the canonical flush with the path in the body, target bytes intact, one journal, exit 1, recovery file, then an actual `server.cjs` boot that completes the journal, archives the external bytes under `trash/transaction-recovery/*/mapping.json`, empties `.journal`, and exports `incoming`. `runtime10-direct-cfc-repro.log` shows the pre-fix 200 at line 99 (the review GET succeeded because recovery had silently replayed); `runtime10-direct-cfc-fixed.log` passes. The full suite (`server-suite-runtime12.log`) includes this case and is green, which also establishes the reverted source was restored before the 05:42:31 suite run.
+
+Note the fixture mechanics: the fault wrapper appends to the first unpublished entry whose target exists — a chat `metadata.json`/`messages.jsonl` in the chat-state lane — so the guarded file is a tracked source, as the response states. The `compatibility-cache.test` unit case wires `setRecoveryHandler` manually and proves the `kvListWithSizes()` → `rebuild` → `recover` → CFC path at unit level; the server wiring (`pendingCanonicalRecovery ? recoverFailedCanonicalTransaction() : recoverPendingTransactions()`) is source-verified only.
+
+### 1.4 Canonical startup and hydration agree after failures — verified for tested lanes; one lane excluded (see §2.1)
+
+`ensureChatStore` now hydrates from `userDataRepository.exportLegacyDatabase()` when `canonicalProjectionReady`, through the same `prepareDatabaseWithPersistentChatIds` maintenance (missing chat IDs, orphan folder IDs, cold-storage restore) used by the legacy decoder; the legacy blob lane is retained for roots without `index/sidebar.json`. `prepareDatabaseRead`'s canonical lane additionally requires `isRemoteMigrationDone()` and `!externalEditSession.isActive()`; the first is equivalent in practice (a remote-block migration calls `invalidateDbCache`, which flips `canonicalProjectionReady` false), and the second is dead in the current runtime (monitoring is retired, `/api/external-edit/start` returns 409).
+
+Evidence: `runtime10-boot-repro-valid.log` shows `canonical/restart-read` and `canonical/restart-chat` failing pre-fix with "Attempted chat change" present in the decoded chat (blob hydration after a canonical-failed write) — a valid, discriminating repro after the harness decoding was corrected. Both pass in the full suite, in both read-first and hydrate-first orders, and `GET /api/chat-content` before hydration goes through `loadIndexedChat` on the same source.
+
+What still reads the blob: the `/api/patch` cold-cache load (§2.1), `persistChatStoreWithoutCache` (reached only after `delete dbCache[...]` from the stub-flag-loss abort or a patch-apply failure), the `/api/chat-content` index fallback, `/api/db/stats/characters` card bytes, and orphan cleanup. The acknowledged blob-ahead window (kvSet before canonical in the full path) is unchanged.
+
+### 1.5 Concurrent legacy statistics cannot reset accepted chats — verified
+
+Both lanes of `ensureChatStore` re-check `if (fullChatStore) return` after their only awaits and before `initChatStore`; in the canonical lane the only yield is the microtask of `await migrateRemoteBlocksIfNeeded()`, before the synchronous export, and in the legacy lane the guard sits after `decodeDatabaseWithPersistentChatIds` resolves with no further yield before `initChatStore`. A late-finishing unqueued decode therefore cannot replace a store that a queued chat save has already populated. The `uncached-chat-flush` `concurrentStats` case uses a genuine blob-only root (no `importLegacyDatabase`, no accepted-revision key), delays only the first `decodeRisuSave`, lands the chat save while that decode is parked, releases it, and asserts the accepted chat survives the canonical flush. The response's rationale for re-basing the fixture is correct: the canonical lane no longer awaits a decoder, so the old delay would not have exercised the race. No pre-fix repro log for this case is supplied; the test discriminates by construction (without the guard, the parked decode would `initChatStore` over the accepted chat before the debounce persists).
+
+Caveat (pre-existing, not new): both lanes may perform maintenance writes (`kvSet` of the blob and `persistCanonicalProjection`) from unqueued GET paths when ids/folders/cold storage need fixing, and the legacy lane always persists canonical when `!canonicalProjectionReady`. These writes are synchronous transactions and cannot interleave with a queued transaction, but they are outside the writer queue.
+
+### 1.6 Actual server boot replaces the primitive-only restart test — verified
+
+The restart branches of `full-write-failure-http` spawn `server.cjs` on the retained root (not `node -e recoverTransactions`), re-authenticate, read startup metadata and chat bytes in both orders, run `/api/db/stats/characters`, flush canonical, compare the repository export, and re-verify the shutdown recovery file. The `external` action additionally asserts the durable archive after that boot. This closes R9 §3/§6's "boot half not executed" gap for these faults. Boot-time behaviour when recovery itself throws remains untested (§3.2).
+
+## 2. Concrete actionable errors in these fixes (source-determined; not executed)
+
+### 2.1 `/api/patch` cold-cache hydration still uses the compatibility blob
+
+```js
+if (!dbCache[filePath]) {
+    const fileContent = kvGet(decodedKey);           // blob (or rebuild only if absent)
+    … decodeDatabaseWithPersistentChatIds(fileContent)
+    if (!fullChatStore) initChatStore(decoded);
+    dbCache[filePath] = normalizeJSON(stripChatsFromDb(decoded));
+```
+
+Deterministic path: `/api/write` with `kvSet` succeeded and canonical failed (the `canonical` fault, or any real canonical failure) → shutdown flush fails under the same condition → recovery file → restart. `save.settle()` accepted the unchanged revision at failure time, so `adoptSettledExternalProjection()` is a no-op. If the first write-side request from a resumed tab is `/api/patch` (no `/api/read` since the restart), `dbCache` is seeded from the attempted blob; if a chat GET came first, `fullChatStore` is already canonical (old) and the reassembled persist writes old chat bodies under attempted metadata. If the patch comes first, the failed full write is fully resurrected into canonical on the next flush, whereas the `/api/read`-first order keeps the old canonical and leaves the attempted bytes only in the recovery file. Outcome depends on request order — the R9 §4.1 hybrid, narrowed to this lane.
+
+Bounded: no bytes are lost (recovery file, archive). Reachability requires a resumed tab whose first post-restart write is a patch with a matching hash; the client is not supplied, and `ensureChatStore`'s own comment ("even when a resumed tab saves before its first read") shows the authors consider this order real. Not covered by any supplied test.
+
+Fix: when `canonicalProjectionReady && isRemoteMigrationDone() && !externalEditSession.isActive()`, replace the blob load with `await ensureChatStore()` and use its seeded `dbCache[DB_HEX_KEY]`, keeping the blob path for legacy roots; equivalently, factor one source selector shared by `prepareDatabaseRead`, `ensureChatStore`, and the patch cold load. The `persistChatStoreWithoutCache` metadata source should follow the same selector.
+
+### 2.2 `ensureChatStore`'s canonical lane has no fallback, unlike `prepareDatabaseRead`
+
+`prepareDatabaseRead` wraps `loadStartupDatabase()` in try/catch and falls back to the compatibility reader; `ensureChatStore` calls `exportLegacyDatabase()` (with `acceptExternalChanges` false) unguarded. `readVerifiedJson` throws "Canonical file checksum mismatch" for any source whose sidecar is stale. Consequence: a hand edit made while the app was closed (the bot-factory-installer pattern in `canonical-projection-sync.test`: rename in, leave the old checksum) now makes unqueued `GET /api/chat-content/*` and `/api/db/stats/characters` return 500 until the first `/api/read` adopts the files — R9 served these from the blob. Write endpoints are unaffected (they return 409 `EXTERNAL_CHANGES_PENDING` first). The same unguarded call is now in the shutdown recovery path; it is practically a no-op there (`fullChatStore` is set by every path that sets `liveFilesPendingWrites`), but if it ever runs it can suppress the recovery file.
+
+Fail-closed is defensible; the problem is that it is an untested behavioural change in an unqueued reader, and the shutdown path should not be able to lose its last resort to a checksum sidecar. Fix: mirror the `prepareDatabaseRead` fallback in `ensureChatStore` (log, then blob), or at minimum guard the shutdown `ensureChatStore()`/`exportLegacyDatabase()` with a blob-based fallback before giving up on `trash/shutdown-recovery`.
+
+### 2.3 Harness fragility (test code, not product)
+
+The `with(deps)` extractions in `canonical-projection-sync.test` now cover a `persistCanonicalProjection` body that references `pendingCanonicalRecovery`, `recoverFailedCanonicalTransaction`, `liveCharacterFiles`, `liveFilesPendingWrites`, `projectionShadow`, `kvList`, `reclaimDeletedCharacterAssets`, and `logger`, none of which are in `deps`. The two extracted cases avoid them only because they fail at `character-assets`; a future transaction-stage case would swallow a `ReferenceError` in the `try{}catch{}` and assign a sloppy-mode global. Prefer exporting the function for tests over source slicing.
+
+## 3. Unverified risks (hypotheses; not asserted as defects)
+
+1. **Untracked `commitTransaction` callers.** Character-package/module-asset routes and the directory-mapping functions (whose own catch runs `recoverTransactions` without an observer) can leave a journal with `pendingCanonicalRecovery` null. The refusal prevents a later commit over it, but the next replay then happens under the *next* save's baseline (taken after any intervening hand edit), or via the handler's no-observer branch, or at boot — silently replacing the edit (archived). Routes not supplied.
+2. **Boot-time recovery throw.** `createUserDataRepository` calls `recoverTransactions` before anything else; a persistent ENOSPC, a corrupt journal JSON, or a recovery-copy failure throws out of the constructor. Whether `db.cjs` lets the server start in a degraded mode or exits is not supplied. The in-process ENOSPC case is tested; boot is not.
+3. **Terminal in-process hold.** Once a CFC/ENOSPC hold is active, every queued endpoint — including `GET /api/external-changes` — returns 500 until restart, and the restart replays the app's journal over the hand edit (archived). Durable, discoverable only via the 500 body and `trash/`; the user cannot choose the hand edit in-app. This is the acknowledged non-queued status/recovery UI gate.
+4. **Observer replacement in a corner case.** A zero-publish, non-CFC transaction failure does not settle and leaves the accepted revision equal to the current one; an unqueued maintenance persist could then hit `PENDING_TRANSACTION` and overwrite `pendingCanonicalRecovery` with its own save. The baselines are taken at essentially the same state, so no practical consequence was identified; it is only noteworthy because the sentinel/revision check is what otherwise protects the slot.
+5. **Archive growth.** Every in-process retry runs with `recovering: true`, archiving the app's own previous revision of each unpublished file under `trash/transaction-recovery/`; retention/backup policy for that subtree is not supplied (listed as a gate).
+6. **"500 can mean fully persisted."** The in-catch retry can complete the journal and settle the save while the caller still receives the original error (`publish` fault: blob and canonical both hold `incoming`, response 500, `persistWarning` recorded). Not loss; client handling of a 500 after a landed write is unverified.
+7. **Invalid-JSON hand edit before first read.** `/api/read` → `loadExternalChanges` → `reconcileCanonicalProjection({externalEditing:true})` throws `LIVE_FILES_INVALID`; `resolve keep` with no loaded `dbCache` returns 409 "reload the page", which repeats the 500. Depends on `db.cjs` passing `liveExternalEditing` and on `external-change-review.cjs`; pre-existing (R9 §2-A), not a regression.
+8. **Lane dead code.** The `externalEditSession.isActive()` difference between `prepareDatabaseRead` and `ensureChatStore` is unreachable while monitoring is retired; if external edit mode is ever re-enabled, `ensureChatStore` would read half-edited canonical files.
+9. **Newly created targets and delete replays** remain unguarded/unarchived on the normal commit path, as the response states.
+
+## 4. Evidence assessment
+
+- `journal` repro/fixed, `boot-repro-valid`, `direct-cfc` repro/fixed, `legacy-concurrency-fixed` (40 pass across 2 files; composition not attributable), `server-suite-runtime12` (102 files passed, 1 skipped; 1177 passed, 3 skipped; painter timing 244/256 ms), `client-suite-ports4` (484 files, 4713/6), `typecheck` 0 errors/8 CSS warnings, `web-build` success, `transfer5-memory` 25/25 — all consistent with the claims. Timeline 05:19 (client, unchanged since) → 05:35–05:42 (server fixes) → 05:42:31 full suite is coherent; the full suite passing the `direct-external` case is the proof that the revert used for the 05:42:28 repro was restored.
+- `maxWorkers 4` remains the documented internal setting; default-concurrency logs are not in this bundle.
+- APK14: `apk14-file-verification.json` shows both ABIs with 16 KiB load alignment; `apk14-signature.log` is v2-only debug signing; `apk14-source-reviewed.json` lists nine hashes (including `server.cjs`, `file-store.cjs`, `compatibility-cache.cjs`) of 497 claimed and states the dist-bytes limitation. I cannot recompute hashes against the supplied text; provenance is asserted with targeted hashes, not proved here.
+- WebView: the API35 stack is for `app.risubard.internal.webviewprobe` (blank probe) crashing on `MemoryInfra` in `libmonochrome_64.so` with the CDP memory-dump timeout; API36 shows a successful dump and the APK14 instrumentation results. The original RisuBard API35 stack is not in this bundle, so "same native frame/BuildId" is not cross-checked here. The conclusion that the failure is environmental is consistent with what is supplied; no universal or ARM64 physical claim is made, correctly.
+
+## 5. Scoped verdict
+
+Within this scope: the primitive now refuses overlapping commits and replays legacy journals chronologically; the server retains the original observer across every transaction-stage failure including the direct-lane CFC fallback; canonical startup and the hydration lanes exercised by the new tests agree; the concurrent-statistics race is closed with a correctly re-based legacy fixture; restart is now proved against an actual `server.cjs` boot. No byte-loss regression was found in the supplied source. Two concrete items should be fixed before the next round: the `/api/patch` cold-cache blob hydration (§2.1) and the unguarded canonical export in `ensureChatStore`/shutdown (§2.2). The non-queued blocked/recovery UI and the v2 journaled receiver/transport/UI integration are unimplemented and are integration gates, not delivered features. Existing user data, legacy maintenance (ID/folder/cold-storage) and legacy blob roots are preserved by these changes. No device installs; no release approval.

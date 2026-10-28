@@ -11,6 +11,7 @@ import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseCh
 import { applyAdditionalParameters, applyParameters, getAdditionalParameters, type LLMParameter } from './shared'
 import { bodyIntercepterStore } from "src/ts/stores.svelte"
 import { resolveGeminiThinkingConfig } from "./geminiThinking"
+import { normalizePrivateMobileGeminiContents } from './privateMobileGeminiRequest'
 
 type GeminiFunctionCall = {
     id?: string;
@@ -572,6 +573,10 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
 
     if(arg.aiModel === 'reverse_proxy' || arg.aiModel?.startsWith('xcustom:::')){
         body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel))
+    }
+
+    if (navigator.userAgent.includes('RisuBardAndroid/') && Array.isArray(body.contents)) {
+        body.contents = normalizePrivateMobileGeminiContents(body.contents)
     }
 
     if(arg.previewBody){

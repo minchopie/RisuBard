@@ -4,9 +4,22 @@ import os from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { spawn } from 'node:child_process'
+import http from 'node:http'
 const { createUserDataRepository } = require('./user-data-repository.cjs')
 const { createFileKv } = require('./file-kv.cjs')
 const { encodeRisuSaveLegacyBuffer, decodeRisuSave } = require('./utils.cjs')
+
+// fetch rejects some OS-assigned ports client-side ("bad port") before any request is sent; node:http has no such list,
+// so the fixture tests HTTP status/body rather than browser port policy (same pattern as play-transfer-http.test.ts).
+const httpFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array } = {}) => new Promise<Response>((resolve, reject) => {
+    const req = http.request(url, { method: init.method, headers: init.headers }, response => {
+        const chunks: Buffer[] = []
+        response.on('data', chunk => chunks.push(chunk))
+        response.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode })))
+        response.on('error', reject)
+    })
+    req.on('error', reject); req.end(init.body)
+})
 
 test.each(['legacy', 'v3'])('running server adopts metadata edited while the app was closed, with monitoring retired: %s', async (layout) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bard-live-http-'))
@@ -43,30 +56,30 @@ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app
     try {
         for (let attempt = 0; attempt < 100; attempt++) {
             if (child.exitCode !== null) throw new Error(logs)
-            try { if ((await fetch(`${base}/api/test_auth`)).ok) break } catch {}
+            try { if ((await httpFetch(`${base}/api/test_auth`)).ok) break } catch {}
             await new Promise(resolve => setTimeout(resolve, 100))
         }
-        const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'local-test-password' }) })
+        const login = await httpFetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'local-test-password' }) })
         expect(login.ok, logs).toBe(true)
         const { token } = await login.json()
         const headers = { 'content-type': 'application/json', 'risu-auth': token, 'x-session-id': 'live-test' }
         const sync = async (revision?: string) => {
-            const response = await fetch(`${base}/api/live-files/sync`, { method: 'POST', headers, body: JSON.stringify({ revision }) })
+            const response = await httpFetch(`${base}/api/live-files/sync`, { method: 'POST', headers, body: JSON.stringify({ revision }) })
             expect(response.ok, await response.clone().text()).toBe(true)
             return response.json()
         }
         // A setting saved before monitoring was retired must not restart it.
         const monitoringUrl = `${base}/api/live-files/monitoring`
-        expect(await (await fetch(monitoringUrl, { headers })).json()).toEqual({ enabled: false, defaultEnabled: false })
-        const malformed = await fetch(monitoringUrl, { method: 'POST', headers, body: JSON.stringify({ enabled: 'false' }) })
+        expect(await (await httpFetch(monitoringUrl, { headers })).json()).toEqual({ enabled: false, defaultEnabled: false })
+        const malformed = await httpFetch(monitoringUrl, { method: 'POST', headers, body: JSON.stringify({ enabled: 'false' }) })
         expect(malformed.status).toBe(400)
-        const enable = await fetch(monitoringUrl, { method: 'POST', headers, body: JSON.stringify({ enabled: true }) })
+        const enable = await httpFetch(monitoringUrl, { method: 'POST', headers, body: JSON.stringify({ enabled: true }) })
         expect(enable.ok).toBe(false)
-        expect((await (await fetch(monitoringUrl, { headers })).json()).enabled).toBe(false)
+        expect((await (await httpFetch(monitoringUrl, { headers })).json()).enabled).toBe(false)
         // Close the app, edit by hand (stale checksum) and reopen: the first read adopts it.
         const metadataFile = path.join(dataRoot, characterPath, 'metadata.json')
         fs.writeFileSync(metadataFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metadataFile, 'utf8')), desc: 'Edited outside' }))
-        const read = await fetch(`${base}/api/read`, { headers: { ...headers, 'file-path': Buffer.from('database/database.bin').toString('hex') } })
+        const read = await httpFetch(`${base}/api/read`, { headers: { ...headers, 'file-path': Buffer.from('database/database.bin').toString('hex') } })
         expect(read.status, await read.clone().text()).toBe(200)
         const loaded = await decodeRisuSave(Buffer.from(await read.arrayBuffer()))
         expect(loaded.characters[0].desc).toBe('Edited outside')
@@ -76,7 +89,7 @@ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app
         const fixed = fs.readFileSync(metadataFile, 'utf8')
         const broken = '{\n  "chaId": "one",\n  "name": "One"\n  "desc": "x"\n}\n'
         fs.writeFileSync(metadataFile, broken)
-        const failed = await fetch(`${base}/api/read`, { headers: { ...headers, 'file-path': Buffer.from('database/database.bin').toString('hex') } })
+        const failed = await httpFetch(`${base}/api/read`, { headers: { ...headers, 'file-path': Buffer.from('database/database.bin').toString('hex') } })
         expect(failed.status).toBe(500)
         expect((await failed.json()).error).toContain("metadata.json (line 4, column 3: Expected ',' or '}' after property value)")
         expect(fs.readFileSync(metadataFile, 'utf8')).toBe(broken)
@@ -84,7 +97,7 @@ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app
         const legacyId = loaded.characters[0].chats[1].id
         expect(legacyId).toEqual(expect.any(String))
         expect(legacyId.length).toBeGreaterThan(0)
-        const legacyChat = await fetch(`${base}/api/chat-content/one/1`, { headers: { ...headers, 'x-chat-id': legacyId } })
+        const legacyChat = await httpFetch(`${base}/api/chat-content/one/1`, { headers: { ...headers, 'x-chat-id': legacyId } })
         expect(legacyChat.ok).toBe(true)
         expect(await decodeRisuSave(Buffer.from(await legacyChat.arrayBuffer()))).toMatchObject({
             id: legacyId, name: 'Legacy chat', message: [{ role: 'user', data: 'Preserved legacy message' }],
@@ -95,3 +108,27 @@ test.each(['legacy', 'v3'])('running server adopts metadata edited while the app
         fs.rmSync(root, { recursive: true, force: true })
     }
 }, 20000)
+
+// Native fetch refuses a fixed list of "bad ports" client-side (cause 'bad port') before any request leaves the process, so an
+// OS-assigned loopback port can make a whole HTTP fixture fail before its first assertion (output/risubard-weekly-20261028/
+// full-base-final-1, bad-port-reproducer-result.json). The node:http transport above has no such list. Only unprivileged ports
+// from that list are tried; a port already in use is skipped, and an environment where none can be bound fails explicitly.
+test('a fetch-blocked loopback port still serves the node:http test transport', async () => {
+    const candidates = [6000, 10080, 6566, 4045]
+    const attempts: Array<{ port: number, code: string }> = []
+    const server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, path: req.url })) })
+    let bound: number | null = null
+    for (const port of candidates) {
+        try { await new Promise<void>((ok, no) => { server.once('error', no); server.listen(port, '127.0.0.1', () => { server.off('error', no); ok() }) }); bound = port; break }
+        catch (error) { attempts.push({ port, code: (error as NodeJS.ErrnoException).code ?? 'unknown' }) }
+    }
+    try {
+        expect(bound, `no fetch-blocked candidate port could be bound: ${JSON.stringify(attempts)}`).not.toBeNull()
+        const base = `http://127.0.0.1:${bound}`
+        const refused = await fetch(`${base}/probe`).then(() => null, (error: Error & { cause?: Error }) => error)
+        expect(refused?.cause?.message).toBe('bad port')
+        const response = await httpFetch(`${base}/probe`)
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ ok: true, path: '/probe' })
+    } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
+})
