@@ -2640,6 +2640,14 @@
       "bytes": 1774
     },
     {
+      "path": ".dockerignore",
+      "module": "distribution",
+      "kind": "hosts",
+      "sha256": "162e36fb7c34d296d2fb1ed2c7d30871e146434a39e1b6518c587e4160a0535e",
+      "contentSha256": "162e36fb7c34d296d2fb1ed2c7d30871e146434a39e1b6518c587e4160a0535e",
+      "bytes": 117
+    },
+    {
       "path": ".github/workflows/release.yml",
       "module": "distribution",
       "kind": "hosts",
@@ -4462,6 +4470,7 @@
       "id": "distribution",
       "name": "배포·업데이트·라이선스",
       "hosts": [
+        ".dockerignore",
         ".github/workflows/release.yml",
         ".gitignore",
         "NOTICE.md",
@@ -4487,7 +4496,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "2bb59cdf7552e5d6ba10740a7f3d76d570beacb171309f404aae72cf351634e9"
+        "sha256": "72b87a0c3ff2d4fd5cd183a1a2dbcb0692c92d08c4c33d3b2be137fd128fbeb7"
       }
     },
     {
@@ -4717,7 +4726,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "8e96d6c59185fccaa2c2eee782a8859546ca6e4e1a5adada501106f396839169"
+      "sha256": "a3b008bc239eaba0df23e189da08f97238d1364c4301e95f0f2d8b14fc44d02c"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -4772,8 +4781,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "2bb59cdf7552e5d6ba10740a7f3d76d570beacb171309f404aae72cf351634e9",
-          "sha256": "288de68f7653c8eaa7bef9bff8146979f50496dffda68837ed1803228cedb16c"
+          "sourceSha256": "72b87a0c3ff2d4fd5cd183a1a2dbcb0692c92d08c4c33d3b2be137fd128fbeb7",
+          "sha256": "b5c91f0b2e872021834b4dbe8d329b8ebd42b4cd9cb76812a621ff8639304106"
         },
         {
           "module": "host-bridges",
@@ -4856,8 +4865,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "2bb59cdf7552e5d6ba10740a7f3d76d570beacb171309f404aae72cf351634e9",
-          "sha256": "a093e880e7fb5eb0bb206bca8e06dd304c3b77f55c021f8449e3496220411598"
+          "sourceSha256": "72b87a0c3ff2d4fd5cd183a1a2dbcb0692c92d08c4c33d3b2be137fd128fbeb7",
+          "sha256": "bc3e93ff3b1ff6c2eb1188d97dd652375713ee1c88fbbed1d5e0f8dc605c1140"
         },
         {
           "module": "lore-lua",

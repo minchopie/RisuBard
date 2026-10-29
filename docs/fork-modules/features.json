@@ -385,6 +385,7 @@
       "id": "distribution",
       "name": "배포·업데이트·라이선스",
       "hosts": [
+        ".dockerignore",
         ".github/workflows/release.yml",
         ".gitignore",
         "NOTICE.md",
@@ -644,7 +645,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "2bb59cdf7552e5d6ba10740a7f3d76d570beacb171309f404aae72cf351634e9"
+          "sourceSha256": "72b87a0c3ff2d4fd5cd183a1a2dbcb0692c92d08c4c33d3b2be137fd128fbeb7"
         },
         {
           "module": "host-bridges",
@@ -723,7 +724,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "2bb59cdf7552e5d6ba10740a7f3d76d570beacb171309f404aae72cf351634e9"
+          "sourceSha256": "72b87a0c3ff2d4fd5cd183a1a2dbcb0692c92d08c4c33d3b2be137fd128fbeb7"
         },
         {
           "module": "lore-lua",

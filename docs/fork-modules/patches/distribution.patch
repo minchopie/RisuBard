@@ -1,3 +1,18 @@
+diff --git a/.dockerignore b/.dockerignore
+index 4b15f7a..619929e 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -1,6 +1,9 @@
+ node_modules
+ save
+ .git
+-.github
++.github/*
++!.github/workflows/
++.github/workflows/*
++!.github/workflows/release.yml
+ .claude
+ dist
 diff --git a/.gitignore b/.gitignore
 index 88962f0..56752d6 100644
 --- a/.gitignore
