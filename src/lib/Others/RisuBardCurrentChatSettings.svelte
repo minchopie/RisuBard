@@ -3,8 +3,15 @@
     import { tooltip } from 'src/ts/gui/tooltip'
     import tippy from 'tippy.js'
     import type { Chat, character as Character } from 'src/ts/storage/database.svelte'
-    import type { RisuBardChatSettings } from 'src/ts/risubard/risuBardSettings'
-    import { normalizeRisuBardDynamicMemoryMode, resolveRisuBardChatSettings } from 'src/ts/risubard/risuBardSettings'
+    import { alertConfirm } from 'src/ts/alert'
+    import type { RisuBardChatSettings, RisuBardNumberSettingKey } from 'src/ts/risubard/risuBardSettings'
+    import {
+        normalizeRisuBardDynamicMemoryMode,
+        normalizeRisuBardNumberSetting,
+        resolveRisuBardChatSettings,
+        risuBardNumberSettingBounds,
+        RISUBARD_ANALYSIS_LORE_EXCLUDE_WORDS_MAX_LENGTH,
+    } from 'src/ts/risubard/risuBardSettings'
     import { dynamicMemoryGrowth, measureActiveMemoryCharacters, resolveDynamicMemoryBudget } from 'src/ts/risubard/dynamicMemoryBudget'
     import {
         MEMORY_BUDGET_PRESETS,
@@ -18,6 +25,7 @@
         buildRisuBardChatSettingHelp,
         formatRisuBardChatProfile,
         measureRisuBardChat,
+        risuBardCurrentChatSettingKeys,
         type RisuBardChatSettingHelpKey,
         type RisuBardChatSettingKey,
     } from 'src/ts/risubard/chatSettingsHelp'
@@ -50,6 +58,16 @@
         return pinned || Boolean(chat?.risuBardSettings
             && Object.keys(chat.risuBardSettings).length > 0)
     })
+    let matchesGlobal = $derived.by(() => {
+        const resolvedGlobal = resolveRisuBardChatSettings(global)
+        return risuBardCurrentChatSettingKeys.every((key) => resolvedGlobal[key] === settings[key])
+    })
+    let formDisabled = $derived(!chat && !globalDynamicOnly)
+    let scopeText = $derived(pinned
+        ? '바꾼 값은 이 봇의 모든 챗에 저장됩니다. 고정을 풀면 이 챗은 지금 값을 그대로 씁니다.'
+        : hasOverrides
+            ? '바꾼 값은 이 챗에만 저장됩니다.'
+            : '바꾼 값은 이 챗에만 저장됩니다. 지금은 전역값을 따릅니다.')
     let profile = $derived(measureRisuBardChat(chat?.message ?? []))
     let dynamicCharacters = $derived(settings.risuBardDynamicMemoryMode === 'off' ? 0 : measureActiveMemoryCharacters(chat?.message ?? [], true))
     let dynamicBudget = $derived(resolveDynamicMemoryBudget(settings, dynamicCharacters))
@@ -59,7 +77,7 @@
     const formatNumber = (value: number) => value.toLocaleString('ko-KR')
     const dynamicModeLabels = { off: '사용 안 함', economy: '절약형', balanced: '균형형', recall: '회수 우선형' } as const
 
-    // The selection is derived from the six stored values; only choosing 커스텀 keeps the fields open without changing them.
+    // The selection is derived from the six stored values; only choosing 사용자 지정 keeps the fields open without changing them.
     let customOpen = $state(false)
     let presetSelection = $derived<MemoryBudgetPresetId | 'custom'>(customOpen ? 'custom' : detectMemoryBudgetPreset(settings))
     let showBudgetFields = $derived(globalDynamicOnly || presetSelection === 'custom')
@@ -96,7 +114,7 @@
             return `+${Number((dynamicMemoryGrowth(mode, characters) * 100).toFixed(1))}%`
         }
         return [
-            '현재 챗의 활성 AI 응답 본문 길이에 따라 검색 목표 토큰, 사건 검색 토큰, 검색 최대 토큰과 분석 토큰 한도를 늘립니다.',
+            '현재 챗의 활성 AI 응답 본문 길이에 따라 검색 목표 토큰, 사건 검색 토큰, 검색 최대 토큰과 위키 분석 최대 길이를 늘립니다.',
             '처음부터 조금씩 늘고 증가 폭이 점차 줄어들며, 누적 50만 자에서 멈춥니다. AI 응답이 1,000자씩일 때의 기본값 대비 증가율:',
             `절약형: 50턴 ${example('economy', 50_000)}, 100턴 ${example('economy', 100_000)}, 500턴부터 ${example('economy', 500_000)}`,
             `균형형: 50턴 ${example('balanced', 50_000)}, 100턴 ${example('balanced', 100_000)}, 500턴부터 ${example('balanced', 500_000)}`,
@@ -108,7 +126,7 @@
     function settingHelp(key: RisuBardChatSettingHelpKey): string {
         if (key === 'risuBardMemoryBudgetPreset') return buildRisuBardChatSettingHelp(key, profile)
         if (key === 'risuBardDynamicMemoryMode') return dynamicModeHelp()
-        if (key === 'risuBardDynamicMemoryMaximumTokens') return '검색 최대 토큰이 동적으로 늘어날 수 있는 상한입니다. 기본값이 이 값보다 크면 기본값을 유지합니다. 분석 토큰 한도는 모드별 최대 증가율을 따릅니다.'
+        if (key === 'risuBardDynamicMemoryMaximumTokens') return '검색 최대 토큰이 동적으로 늘어날 수 있는 상한입니다. 기본값이 이 값보다 크면 기본값을 유지합니다. 위키 분석 최대 길이는 모드별 최대 증가율을 따릅니다.'
         return [dynamicValueHelp(key), buildRisuBardChatSettingHelp(key, profile)].filter(Boolean).join('\n\n')
     }
 
@@ -134,8 +152,50 @@
         revision++
     }
 
-    function setNumber(key: keyof RisuBardChatSettings, event: Event) {
-        setValue(key, Number((event.currentTarget as HTMLInputElement).value))
+    // A short note next to a number field when the typed value was changed before saving.
+    let numberNotes = $state<Partial<Record<RisuBardNumberSettingKey, string>>>({})
+    const noteTimers = new Map<RisuBardNumberSettingKey, ReturnType<typeof setTimeout>>()
+
+    function clearNumberNote(key: RisuBardNumberSettingKey) {
+        clearTimeout(noteTimers.get(key))
+        noteTimers.delete(key)
+        if (numberNotes[key] !== undefined) delete numberNotes[key]
+    }
+
+    function showNumberNote(key: RisuBardNumberSettingKey, note: string) {
+        clearNumberNote(key)
+        numberNotes[key] = note
+        noteTimers.set(key, setTimeout(() => clearNumberNote(key), 3_000))
+    }
+
+    $effect(() => () => {
+        for (const timer of noteTimers.values()) clearTimeout(timer)
+        noteTimers.clear()
+    })
+
+    function numberBounds(key: RisuBardNumberSettingKey) {
+        return risuBardNumberSettingBounds(key, settings.risuBardInquiryMaximumTokenBudget)
+    }
+
+    /** Normalizes a typed value with the resolve bounds, writes it back into the field, and stores it when it changed. */
+    function commitNumber(key: RisuBardNumberSettingKey, raw: string, input: HTMLInputElement) {
+        const current = settings[key]
+        const { min, max } = numberBounds(key)
+        const typed = raw.trim() ? Number(raw) : Number.NaN
+        const next = normalizeRisuBardNumberSetting(key, typed, current, settings.risuBardInquiryMaximumTokenBudget)
+        input.value = String(next)
+        if (next !== current) setValue(key, next)
+        if (!Number.isFinite(typed)) showNumberNote(key, '빈 값은 저장하지 않고 이전 값으로 되돌렸습니다.')
+        else if (typed < min || typed > max) showNumberNote(key, max === Number.MAX_SAFE_INTEGER
+            ? `최솟값 ${formatNumber(min)}에 맞췄습니다.`
+            : `허용 범위(${formatNumber(min)}~${formatNumber(max)})에 맞췄습니다.`)
+        else if (next !== typed) showNumberNote(key, '정수로 맞췄습니다.')
+        else clearNumberNote(key)
+    }
+
+    function setNumber(key: RisuBardNumberSettingKey, event: Event) {
+        const input = event.currentTarget as HTMLInputElement
+        commitNumber(key, input.value, input)
     }
 
     function selectMemoryBudgetPreset(value: string) {
@@ -168,8 +228,9 @@
         revision++
     }
 
-    function applyToGlobal() {
-        if (!chat || !hasOverrides) return
+    async function applyToGlobal() {
+        if (!chat || matchesGlobal) return
+        if (!await alertConfirm('모든 봇의 기본값이 지금 값으로 바뀝니다. 계속할까요?')) return
         applyCurrentRisuBardSettingsToGlobal(global, settings)
         delete chat.risuBardSettings
         globalFeedback = '현재 값을 전역 설정에 적용했습니다.'
@@ -178,7 +239,8 @@
 
     function resetToGlobal() {
         if (!chat) return
-        if (pinned && character) character.risuBardPinnedSettings = resolveRisuBardChatSettings(global)
+        // Pinned: drop the pin as well, so this chat follows global instead of a pinned copy of it.
+        if (character) delete character.risuBardPinnedSettings
         delete chat.risuBardSettings
         globalFeedback = ''
         revision++
@@ -203,13 +265,28 @@
     </span>
 {/snippet}
 
-{#snippet dynamicNumber(key: DynamicKey, id: string, min = 256, max?: number)}
+{#snippet numberNote(key: RisuBardNumberSettingKey, id: string)}
+    {#if numberNotes[key]}
+        <small id={`${id}-note`} class="number-note" role="status" data-number-note={key}>{numberNotes[key]}</small>
+    {/if}
+{/snippet}
+
+{#snippet numberInput(key: RisuBardNumberSettingKey, id: string)}
+    <input {id} type="number" min={numberBounds(key).min} max={numberBounds(key).max} value={settings[key]}
+        aria-describedby={numberNotes[key] ? `${id}-note` : undefined}
+        oninput={() => clearNumberNote(key)}
+        onchange={(event) => setNumber(key, event)} />
+    {@render numberNote(key, id)}
+{/snippet}
+
+{#snippet dynamicNumber(key: DynamicKey, id: string)}
     <div class="dynamic-number">
-        <input {id} type="number" {min} {max}
+        <input {id} type="number" min={numberBounds(key).min} max={numberBounds(key).max}
             value={editingKey === key ? numberDraft : settings[key]}
             aria-describedby={[
                 settings.risuBardDynamicMemoryMode !== 'off' ? `${id}-dynamic` : '',
                 editingKey === key ? `${id}-editing` : '',
+                numberNotes[key] ? `${id}-note` : '',
             ].filter(Boolean).join(' ') || undefined}
             use:tooltip={dynamicValueHelp(key)}
             onfocus={(event) => {
@@ -217,14 +294,10 @@
                 numberDraft = String(settings[key])
                 event.currentTarget.value = numberDraft
             }}
-            oninput={(event) => numberDraft = event.currentTarget.value}
-            onblur={() => {
+            oninput={(event) => { numberDraft = event.currentTarget.value; clearNumberNote(key) }}
+            onblur={(event) => {
                 if (editingKey !== key) return
-                const value = Number(numberDraft)
-                if (numberDraft.trim() && Number.isFinite(value)) {
-                    const next = Math.min(max ?? Infinity, Math.max(min, Math.floor(value)))
-                    if (next !== settings[key]) setValue(key, next)
-                }
+                commitNumber(key, numberDraft, event.currentTarget)
                 editingKey = null
             }}
             onkeydown={(event) => {
@@ -240,6 +313,7 @@
             </small>
         {/if}
         {#if editingKey === key}<small id={`${id}-editing`} class="editing-hint">기본값 편집 중</small>{/if}
+        {@render numberNote(key, id)}
     </div>
 {/snippet}
 
@@ -247,26 +321,31 @@
     {#if !globalDynamicOnly}
     <header class="settings-head">
         <div class="settings-title">
-            <strong>현재 챗 설정</strong>
+            <strong>{pinned ? '이 봇의 모든 챗 설정 (고정)' : '이 챗 설정'}</strong>
             <small>{formatRisuBardChatProfile(profile)}</small>
         </div>
         <div class="settings-actions">
-            <label class="toggle-control" use:tooltip={'현재 설정을 이 봇의 기존 챗과 새 챗에 공통 적용합니다. 고정 중 변경한 옵션도 함께 반영됩니다. 해제하면 현재 챗은 값을 유지하고 다른 챗은 기존 개별 설정으로 돌아갑니다.'}>
+            <label class="toggle-control">
                 <input type="checkbox" data-pin-chat-settings-character checked={pinned}
                     disabled={!chat || !character} onchange={setPinned} />
                 <span>이 봇에 고정</span>
             </label>
             <button type="button" class="primary-action" data-apply-chat-settings-global
-                disabled={!hasOverrides} use:tooltip={'현재 BardWiki 값을 전역 기본값으로 저장합니다. 봇 고정 상태는 유지합니다.'}
+                disabled={!chat || matchesGlobal}
                 onclick={applyToGlobal}>전역값으로 적용</button>
-            <button type="button" data-reset-chat-settings-global disabled={!hasOverrides}
-                use:tooltip={pinned ? '이 봇의 고정 설정을 현재 전역 기본값으로 바꿉니다.' : '이 챗의 개별 설정을 지우고 전역 기본값을 사용합니다.'}
-                onclick={resetToGlobal}>전역값 사용</button>
+            <button type="button" data-reset-chat-settings-global disabled={!chat || !hasOverrides}
+                onclick={resetToGlobal}>{pinned ? '고정 풀고 전역값 따르기' : '전역값 사용'}</button>
         </div>
+        {#if formDisabled}
+            <small class="scope-line" data-chat-settings-disabled-reason>챗을 연 뒤 바꿀 수 있습니다.</small>
+        {:else}
+            <small class="scope-line" data-chat-settings-scope>{scopeText}</small>
+        {/if}
         {#if globalFeedback}<small class="global-feedback" role="status">{globalFeedback}</small>{/if}
     </header>
     {/if}
 
+    <fieldset class="settings-form" data-chat-settings-form disabled={formDisabled}>
     <section class="settings-section" aria-label={globalDynamicOnly ? '장기기억 동적 한도' : '기억 예산'}>
         <div class="settings-grid">
             {#if !globalDynamicOnly}
@@ -279,7 +358,7 @@
                             {#each MEMORY_BUDGET_PRESET_IDS as id (id)}
                                 <option value={id}>{MEMORY_BUDGET_PRESETS[id].label}</option>
                             {/each}
-                            <option value="custom">커스텀</option>
+                            <option value="custom">사용자 지정</option>
                         </select>
                     </div>
                     {#if presetSummaryParts.length}
@@ -299,8 +378,7 @@
                 {#if settings.risuBardDynamicMemoryMode !== 'off'}
                     <div class="setting-field" data-chat-setting-field="risuBardDynamicMemoryMaximumTokens">
                         {@render settingTitle('risuBardDynamicMemoryMaximumTokens', '검색 증가 상한', 'bardwiki-dynamic-maximum')}
-                        <input id="bardwiki-dynamic-maximum" type="number" min="256" value={settings.risuBardDynamicMemoryMaximumTokens}
-                            onchange={(event) => setNumber('risuBardDynamicMemoryMaximumTokens', event)} />
+                        {@render numberInput('risuBardDynamicMemoryMaximumTokens', 'bardwiki-dynamic-maximum')}
                     </div>
                 {/if}
             {/if}
@@ -326,21 +404,6 @@
                     <span>{settings.showRequestStatus ? '표시' : '숨김'}</span>
                 </label>
             </div>
-            <div class="setting-field featured" data-chat-setting-field="risuBardBardChanEnabled">
-                {@render settingTitle('risuBardBardChanEnabled', '바드쨩 (Bard-chan)', 'bardwiki-bard-chan')}
-                <label class="toggle-control" for="bardwiki-bard-chan">
-                    <input id="bardwiki-bard-chan" type="checkbox" checked={settings.risuBardBardChanEnabled}
-                        onchange={(event) => setValue('risuBardBardChanEnabled', (event.currentTarget as HTMLInputElement).checked)} />
-                    <span>{settings.risuBardBardChanEnabled ? '사용' : '사용 안 함'}</span>
-                </label>
-            </div>
-            <div class="setting-field featured" data-chat-setting-field="risuBardBardChanModelMode">
-                {@render settingTitle('risuBardBardChanModelMode', '바드쨩 모델', 'bardwiki-bard-chan-model')}
-                <select id="bardwiki-bard-chan-model" value={settings.risuBardBardChanModelMode}
-                    onchange={(event) => setValue('risuBardBardChanModelMode', (event.currentTarget as HTMLSelectElement).value === 'model' ? 'model' : 'memory')}>
-                    <option value="memory">보조 모델</option><option value="model">메인 모델</option>
-                </select>
-            </div>
         </div>
     </section>
 
@@ -358,7 +421,7 @@
                 </div>
                 <div class="setting-field" data-chat-setting-field="risuBardInquirySourceTokenBudget">
                     {@render settingTitle('risuBardInquirySourceTokenBudget', '자료별 검색 토큰', 'bardwiki-source-tokens')}
-                    <input id="bardwiki-source-tokens" type="number" min="256" value={settings.risuBardInquirySourceTokenBudget} onchange={(event) => setNumber('risuBardInquirySourceTokenBudget', event)} />
+                    {@render numberInput('risuBardInquirySourceTokenBudget', 'bardwiki-source-tokens')}
                 </div>
                 <div class="setting-field" data-chat-setting-field="risuBardInquiryMaximumTokenBudget">
                     {@render settingTitle('risuBardInquiryMaximumTokenBudget', '검색 최대 토큰', 'bardwiki-maximum-tokens')}
@@ -367,53 +430,83 @@
             {/if}
             <div class="setting-field" data-chat-setting-field="risuBardInquiryTimeoutMs">
                 {@render settingTitle('risuBardInquiryTimeoutMs', '위키 조회 제한 시간(ms)', 'bardwiki-timeout')}
-                <input id="bardwiki-timeout" type="number" min="1" max="10000" value={settings.risuBardInquiryTimeoutMs} onchange={(event) => setNumber('risuBardInquiryTimeoutMs', event)} />
+                <input id="bardwiki-timeout" type="number" min="1" max="10000" value={settings.risuBardInquiryTimeoutMs}
+                    aria-describedby={numberNotes.risuBardInquiryTimeoutMs ? 'bardwiki-timeout-note' : undefined}
+                    oninput={() => clearNumberNote('risuBardInquiryTimeoutMs')}
+                    onchange={(event) => setNumber('risuBardInquiryTimeoutMs', event)} />
+                {@render numberNote('risuBardInquiryTimeoutMs', 'bardwiki-timeout')}
             </div>
             <div class="setting-field" data-chat-setting-field="risuBardHistoricalSourceMatchLimit">
                 {@render settingTitle('risuBardHistoricalSourceMatchLimit', '과거 원문 최대 수', 'bardwiki-history-limit')}
-                <input id="bardwiki-history-limit" type="number" min="0" max="32" value={settings.risuBardHistoricalSourceMatchLimit} onchange={(event) => setNumber('risuBardHistoricalSourceMatchLimit', event)} />
+                <input id="bardwiki-history-limit" type="number" min="0" max="32" value={settings.risuBardHistoricalSourceMatchLimit}
+                    aria-describedby={numberNotes.risuBardHistoricalSourceMatchLimit ? 'bardwiki-history-limit-note' : undefined}
+                    oninput={() => clearNumberNote('risuBardHistoricalSourceMatchLimit')}
+                    onchange={(event) => setNumber('risuBardHistoricalSourceMatchLimit', event)} />
+                {@render numberNote('risuBardHistoricalSourceMatchLimit', 'bardwiki-history-limit')}
             </div>
         </div>
     </section>
 
     <section class="settings-section" aria-labelledby="bardwiki-analysis-settings">
-        <h3 id="bardwiki-analysis-settings">분석 · 응답</h3>
+        <h3 id="bardwiki-analysis-settings">분석과 답변</h3>
         <div class="settings-grid">
             <div class="setting-field" data-chat-setting-field="risuBardAnalysisTokenLimit">
-                {@render settingTitle('risuBardAnalysisTokenLimit', '분석 토큰 한도', 'bardwiki-analysis-tokens')}
-                {@render dynamicNumber('risuBardAnalysisTokenLimit', 'bardwiki-analysis-tokens', 3072)}
+                {@render settingTitle('risuBardAnalysisTokenLimit', '위키 분석 최대 길이(토큰)', 'bardwiki-analysis-tokens')}
+                {@render dynamicNumber('risuBardAnalysisTokenLimit', 'bardwiki-analysis-tokens')}
             </div>
             <div class="setting-field" data-chat-setting-field="risuBardAdditionalSearchLimit">
-                {@render settingTitle('risuBardAdditionalSearchLimit', '추가 검색 횟수', 'bardwiki-search-count')}
-                <input id="bardwiki-search-count" type="number" min="0" value={settings.risuBardAdditionalSearchLimit} onchange={(event) => setNumber('risuBardAdditionalSearchLimit', event)} />
+                {@render settingTitle('risuBardAdditionalSearchLimit', '근거 부족 시 다시 찾기 횟수', 'bardwiki-search-count')}
+                {@render numberInput('risuBardAdditionalSearchLimit', 'bardwiki-search-count')}
             </div>
             <div class="setting-field" data-chat-setting-field="risuBardCanonicalTargetLimit">
-                {@render settingTitle('risuBardCanonicalTargetLimit', '정본 대상 한도', 'bardwiki-target-limit')}
-                <input id="bardwiki-target-limit" type="number" min="1" value={settings.risuBardCanonicalTargetLimit} onchange={(event) => setNumber('risuBardCanonicalTargetLimit', event)} />
+                {@render settingTitle('risuBardCanonicalTargetLimit', '한 번에 고칠 위키 문서 수', 'bardwiki-target-limit')}
+                {@render numberInput('risuBardCanonicalTargetLimit', 'bardwiki-target-limit')}
             </div>
             <div class="setting-field" data-chat-setting-field="risuBardRecentMessageCount">
-                {@render settingTitle('risuBardRecentMessageCount', '분석할 턴 수', 'bardwiki-analysis-messages')}
-                <input id="bardwiki-analysis-messages" type="number" min="1" value={settings.risuBardRecentMessageCount} onchange={(event) => setNumber('risuBardRecentMessageCount', event)} />
+                {@render settingTitle('risuBardRecentMessageCount', '위키 분석이 읽을 최근 응답 수', 'bardwiki-analysis-messages')}
+                {@render numberInput('risuBardRecentMessageCount', 'bardwiki-analysis-messages')}
             </div>
             <div class="setting-field" data-chat-setting-field="risuBardResponseMessageCount">
-                {@render settingTitle('risuBardResponseMessageCount', '응답용 턴 수', 'bardwiki-response-messages')}
-                <input id="bardwiki-response-messages" type="number" min="1" value={settings.risuBardResponseMessageCount} onchange={(event) => setNumber('risuBardResponseMessageCount', event)} />
+                {@render settingTitle('risuBardResponseMessageCount', '답변에 그대로 넣을 최근 응답 수', 'bardwiki-response-messages')}
+                {@render numberInput('risuBardResponseMessageCount', 'bardwiki-response-messages')}
             </div>
+            <!-- The stored keys say "exclude"; the checkboxes show the inverse so that checked means included. -->
             <div class="setting-field" data-chat-setting-field="risuBardResponseExcludeUserMessages">
-                {@render settingTitle('risuBardResponseExcludeUserMessages', '응답 사용자 메시지', 'bardwiki-response-exclude-user')}
+                {@render settingTitle('risuBardResponseExcludeUserMessages', '답변에 사용자 메시지 넣기', 'bardwiki-response-exclude-user')}
                 <label class="toggle-control" for="bardwiki-response-exclude-user">
-                    <input id="bardwiki-response-exclude-user" type="checkbox" checked={settings.risuBardResponseExcludeUserMessages}
-                        onchange={(event) => setValue('risuBardResponseExcludeUserMessages', (event.currentTarget as HTMLInputElement).checked)} />
-                    <span>{settings.risuBardResponseExcludeUserMessages ? '제외' : '포함'}</span>
+                    <input id="bardwiki-response-exclude-user" type="checkbox" checked={!settings.risuBardResponseExcludeUserMessages}
+                        onchange={(event) => setValue('risuBardResponseExcludeUserMessages', !(event.currentTarget as HTMLInputElement).checked)} />
+                    <span>{settings.risuBardResponseExcludeUserMessages ? '뺌' : '넣음'}</span>
                 </label>
             </div>
             <div class="setting-field" data-chat-setting-field="risuBardAnalysisExcludeUserMessages">
-                {@render settingTitle('risuBardAnalysisExcludeUserMessages', '분석 사용자 메시지', 'bardwiki-analysis-exclude-user')}
+                {@render settingTitle('risuBardAnalysisExcludeUserMessages', '분석에 사용자 메시지 넣기', 'bardwiki-analysis-exclude-user')}
                 <label class="toggle-control" for="bardwiki-analysis-exclude-user">
-                    <input id="bardwiki-analysis-exclude-user" type="checkbox" checked={settings.risuBardAnalysisExcludeUserMessages}
-                        onchange={(event) => setValue('risuBardAnalysisExcludeUserMessages', (event.currentTarget as HTMLInputElement).checked)} />
-                    <span>{settings.risuBardAnalysisExcludeUserMessages ? '제외' : '포함'}</span>
+                    <input id="bardwiki-analysis-exclude-user" type="checkbox" checked={!settings.risuBardAnalysisExcludeUserMessages}
+                        onchange={(event) => setValue('risuBardAnalysisExcludeUserMessages', !(event.currentTarget as HTMLInputElement).checked)} />
+                    <span>{settings.risuBardAnalysisExcludeUserMessages ? '뺌' : '넣음'}</span>
                 </label>
+            </div>
+            <div class="setting-field" data-chat-setting-field="risuBardAnalysisLoreTokenLimit">
+                {@render settingTitle('risuBardAnalysisLoreTokenLimit', '분석에 넣을 로어북(토큰)', 'bardwiki-analysis-lore-tokens')}
+                {@render numberInput('risuBardAnalysisLoreTokenLimit', 'bardwiki-analysis-lore-tokens')}
+            </div>
+            <div class="setting-field" data-chat-setting-field="risuBardAnalysisLoreIncludeAlwaysActive">
+                {@render settingTitle('risuBardAnalysisLoreIncludeAlwaysActive', '항상 켜진 로어북 넣기', 'bardwiki-analysis-lore-always')}
+                <label class="toggle-control" for="bardwiki-analysis-lore-always">
+                    <input id="bardwiki-analysis-lore-always" type="checkbox" checked={settings.risuBardAnalysisLoreIncludeAlwaysActive}
+                        disabled={settings.risuBardAnalysisLoreTokenLimit === 0}
+                        onchange={(event) => setValue('risuBardAnalysisLoreIncludeAlwaysActive', (event.currentTarget as HTMLInputElement).checked)} />
+                    <span>{settings.risuBardAnalysisLoreIncludeAlwaysActive ? '넣음' : '뺌'}</span>
+                </label>
+            </div>
+            <div class="setting-field wide" data-chat-setting-field="risuBardAnalysisLoreExcludeWords">
+                {@render settingTitle('risuBardAnalysisLoreExcludeWords', '이 단어가 든 로어북 빼기', 'bardwiki-analysis-lore-exclude')}
+                <textarea id="bardwiki-analysis-lore-exclude" rows="3" maxlength={RISUBARD_ANALYSIS_LORE_EXCLUDE_WORDS_MAX_LENGTH}
+                    placeholder="한 줄에 하나씩"
+                    disabled={settings.risuBardAnalysisLoreTokenLimit === 0}
+                    value={settings.risuBardAnalysisLoreExcludeWords}
+                    onchange={(event) => setValue('risuBardAnalysisLoreExcludeWords', (event.currentTarget as HTMLTextAreaElement).value)}></textarea>
             </div>
         </div>
     </section>
@@ -448,13 +541,17 @@
         </div>
     </section>
     {/if}
+    </fieldset>
 </div>
 
 <style>
     .dynamic-number { min-width: 0; position: relative; }
-    .dynamic-value { display: block; margin-top: .2rem; color: var(--color-info); font-size: .7rem; line-height: 1.4; overflow-wrap: anywhere; }
+    .dynamic-value { display: block; margin-top: .2rem; color: var(--color-info); font-size: .75rem; line-height: 1.4; overflow-wrap: anywhere; }
     .dynamic-note { display: block; color: var(--color-textcolor2); }
-    .editing-hint { display: block; color: var(--color-textcolor2); font-size: .7rem; margin-top: .2rem; }
+    .editing-hint { display: block; color: var(--color-textcolor2); font-size: .75rem; margin-top: .2rem; }
+    .number-note { display: block; grid-column: 1 / -1; margin-top: .1rem; color: var(--color-danger, var(--risu-theme-textcolor2)); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+    .settings-form { display: grid; gap: .48rem; min-width: 0; margin: 0; padding: 0; border: 0; }
+    .settings-form:disabled { opacity: .6; }
     .chat-settings { container: chat-settings / inline-size; display: grid; gap: .48rem; min-width: 0; padding: .05rem; }
     .settings-head { position: sticky; z-index: 2; top: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .3rem .75rem; padding: .18rem .12rem .48rem; border-bottom: 1px solid var(--risu-theme-darkborderc); background: var(--risu-theme-bgcolor); }
     .settings-title { display: grid; min-width: 0; gap: .12rem; }
@@ -464,22 +561,22 @@
     .settings-head button { min-height: 2.2rem; padding: .35rem .58rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .38rem; color: var(--risu-theme-textcolor2); background: color-mix(in srgb, var(--risu-theme-darkbg) 86%, var(--color-bgcolor)); font-size: calc(.62rem + 4px); font-weight: 650; cursor: pointer; }
     .settings-head button.primary-action { border-color: color-mix(in srgb, var(--risu-theme-primary) 58%, var(--risu-theme-darkborderc)); color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-primary) 16%, var(--risu-theme-darkbg)); }
     .settings-head button:disabled { opacity: .45; cursor: default; }
+    .scope-line { grid-column: 1 / -1; line-height: 1.45; }
     .global-feedback { grid-column: 1 / -1; color: var(--risu-theme-primary) !important; }
     .settings-section { display: grid; gap: .32rem; min-width: 0; padding: .46rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .48rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 54%, var(--risu-theme-bgcolor)); }
     .settings-section h3 { margin: 0; color: var(--risu-theme-textcolor); font-size: calc(.68rem + 4px); font-weight: 750; letter-spacing: .01em; }
     .settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .32rem; }
     .setting-field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(5.75rem, .72fr); min-width: 0; align-items: center; gap: .38rem; padding: .3rem .38rem; border: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 72%, transparent); border-radius: .36rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 76%, var(--color-bgcolor)); }
-    .setting-field.featured { border-color: color-mix(in srgb, var(--risu-theme-primary) 38%, var(--risu-theme-darkborderc)); background: color-mix(in srgb, var(--risu-theme-primary) 8%, var(--risu-theme-darkbg)); }
     .setting-field.wide { grid-column: 1 / -1; grid-template-columns: minmax(8rem, .3fr) 1fr; }
     .setting-field.preset-field { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr); row-gap: .3rem; }
     .preset-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; min-width: 0; }
     .preset-controls .setting-heading { flex: 0 0 auto; }
     .preset-controls select { flex: 1 1 7rem; width: auto; max-width: min(16rem, 100%); }
-    .budget-summary { min-width: 0; color: var(--risu-theme-textcolor2); font-size: .72rem; line-height: 1.45; overflow-wrap: anywhere; }
+    .budget-summary { min-width: 0; color: var(--risu-theme-textcolor2); font-size: .75rem; line-height: 1.45; overflow-wrap: anywhere; }
     .summary-part { white-space: nowrap; }
     .setting-heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: .35rem; color: var(--risu-theme-textcolor2); }
     .setting-heading label { min-width: 0; line-height: 1.28; font-size: .78rem; font-weight: 650; }
-    .help-button { position: relative; display: grid; width: 1.45rem; height: 1.45rem; flex: 0 0 1.45rem; place-items: center; padding: 0; border: 1px solid var(--risu-theme-darkborderc); border-radius: 50%; color: var(--risu-theme-textcolor2); background: transparent; font-size: .72rem; font-weight: 750; cursor: help; }
+    .help-button { position: relative; display: grid; width: 1.45rem; height: 1.45rem; flex: 0 0 1.45rem; place-items: center; padding: 0; border: 1px solid var(--risu-theme-darkborderc); border-radius: 50%; color: var(--risu-theme-textcolor2); background: transparent; font-size: .75rem; font-weight: 750; cursor: help; }
     .help-button::after { position: absolute; inset: -.58rem; content: ''; }
     .help-button:hover { border-color: var(--risu-theme-primary); color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); }
     input, select, textarea { width: 100%; min-width: 0; min-height: 2rem; padding: .28rem .42rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .32rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-darkbg) 92%, var(--color-bgcolor)); font-size: .78rem; }

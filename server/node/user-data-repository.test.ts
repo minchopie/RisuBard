@@ -113,6 +113,43 @@ describe('canonical entity tree', () => {
             .toBe(messages.map(message => JSON.stringify(message)).join('\n') + '\n')
     })
 
+    it('keeps chat-variable checkpoints only on the latest message that has them', () => {
+        const dataRoot = root()
+        const repository = createUserDataRepository({ dataRoot })
+        const database = legacyDatabase()
+        const checkpoint = { before: { a: '1' }, after: { a: '2' } }
+        database.characters[0].chats[0].message = [
+            { id: 'm1', role: 'char', data: 'old', scriptstateCheckpoint: checkpoint, scriptstateSwipeCheckpoints: [checkpoint] },
+            { id: 'm2', role: 'char', data: 'latest', scriptstateCheckpoint: checkpoint },
+            { id: 'm3', role: 'user', data: 'next' },
+        ] as any
+        repository.importLegacyDatabase(database, { mode: 'sync' })
+        expect(repository.exportLegacyDatabase().characters[0].chats[0].message).toEqual([
+            { id: 'm1', role: 'char', data: 'old' },
+            { id: 'm2', role: 'char', data: 'latest', scriptstateCheckpoint: checkpoint },
+            { id: 'm3', role: 'user', data: 'next' },
+        ])
+    })
+
+    it('drops the latest checkpoint instead of failing when the message is too large to serialize', () => {
+        const dataRoot = root()
+        const repository = createUserDataRepository({ dataRoot })
+        const database = legacyDatabase()
+        database.characters[0].chats[0].message = [
+            { id: 'm1', role: 'char', data: 'huge', scriptstateSwipeCheckpoints: [{ before: null, after: { a: 'x' } }] },
+        ] as any
+        const stringify = JSON.stringify
+        vi.spyOn(JSON, 'stringify').mockImplementation(function (this: unknown, value: any, ...rest: any[]) {
+            if (value?.id === 'm1' && value.scriptstateSwipeCheckpoints) throw new RangeError('Invalid string length')
+            return stringify.call(JSON, value, ...rest)
+        } as typeof JSON.stringify)
+        repository.importLegacyDatabase(database, { mode: 'sync' })
+        vi.restoreAllMocks()
+        expect(repository.exportLegacyDatabase().characters[0].chats[0].message).toEqual([
+            { id: 'm1', role: 'char', data: 'huge' },
+        ])
+    })
+
     it.each(['full', 'direct'])('round-trips %s chat saves without a chat-sized string', (mode) => {
         const dataRoot = root()
         const repository = createUserDataRepository({ dataRoot })
@@ -165,6 +202,24 @@ describe('canonical entity tree', () => {
         expect(repository.loadIndexedChat('char-1', 1)).toEqual(database.characters[0].chats[1])
         expect(reads.mock.calls.some(([file]) => String(file).includes('chat-1'))).toBe(false)
         expect(repository.exportLegacyDatabase()).toEqual(database)
+    })
+
+    it('previews an indexed chat from its metadata and last message line only', () => {
+        const dataRoot = root()
+        const repository = createUserDataRepository({ dataRoot })
+        const database = legacyDatabase()
+        Object.assign(database.characters[0].chats[0], { bindedPersona: 'persona-1', note: 'not in preview' })
+        repository.importLegacyDatabase(database, { mode: 'sync' })
+        const reads = vi.spyOn(fs, 'readFileSync')
+        expect(repository.loadIndexedChatPreview('char-1', 0)).toEqual({
+            id: 'chat-1',
+            bindedPersona: 'persona-1',
+            lastMessage: { role: 'char', data: 'world' },
+        })
+        // The message file is read through a bounded tail read, never parsed whole.
+        expect(reads.mock.calls.some(([file]) => String(file).endsWith('messages.jsonl'))).toBe(false)
+        expect(repository.loadIndexedChatPreview('char-1', 5)).toBeNull()
+        expect(repository.loadIndexedChatPreview('missing', 0)).toBeNull()
     })
 
     it('declines direct startup for legacy chats needing persistent IDs', () => {

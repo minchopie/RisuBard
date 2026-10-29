@@ -31,7 +31,7 @@ describe('BardWiki Plugin API contract', () => {
 
     it('requires a dedicated permission for BardWiki writes', () => {
         expect(implementation).toContain("'bardWikiWrite'")
-        expect(implementation).toContain("getPluginPermission(plugin.name, 'bardWikiWrite')")
+        expect(implementation).toContain("getPermission('bardWikiWrite')")
         expect(implementation).toContain('language.bardWikiWriteConsent')
     })
 

@@ -27,7 +27,7 @@ NODE_OPTIONS="--max-old-space-size=2048" pnpm build
 cat <<'EOF'
 
 Build OK. Start the server with:
-  node server/node/server.cjs
+  node --max-old-space-size=2048 server/node/server.cjs
 
 Then open this address in the phone's own browser:
   http://localhost:7777

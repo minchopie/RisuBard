@@ -1,6 +1,6 @@
 // View helpers behind the NAS sync area: authority binding, explicit peer choice, safe conflict labels, state rows, route restriction.
 import { test, expect } from 'vitest'
-import { syncItemTitle, syncDifference, syncRevisionTime, SYNC_ITEM_STATE, bootstrapAuthority, incomingPeers, conflictVariantLabel, syncStateRows, keyRequestNeeded, shareMethodAllowed, hydrateSyncForm, withSavedHomeSsids, routeLabel } from './nasSyncUi'
+import { syncItemTitle, syncDifference, syncRevisionTime, SYNC_ITEM_STATE, bootstrapAuthority, incomingPeers, conflictVariantLabel, syncStateRows, keyRequestNeeded, shareMethodAllowed, hydrateSyncForm, withSavedHomeSsids, routeLabel, detectDeviceKind, syncDeviceName, groupSyncTrash, syncHeadline } from './nasSyncUi'
 
 test('revision dates always show Korea time and old or invalid dates stay unknown', () => {
     expect(syncRevisionTime(Date.parse('2026-10-22T16:05:00Z'))).toBe('2026. 10. 23. 01:05')
@@ -110,4 +110,46 @@ test('completion labels distinguish receipt, partial apply and the persisted las
     expect(OUTCOME_LABEL.deferred).not.toContain('다운로드')
     expect(SYNC_ITEM_STATE.pending).not.toContain('다운로드 완료')
     expect(syncStateRows({ enabled: true, lastAppliedAt: Date.parse('2026-10-24T01:23:00Z') }, null).at(-1)).toBe('이 기기 마지막 적용 완료: 2026. 10. 24. 10:23')
+})
+
+test('devices are named PC / 태블릿 / 스마트폰 from their reported profile, the reference device is marked, and unknown peers keep a short id', () => {
+    expect(detectDeviceKind('Mozilla/5.0 (Windows NT 10.0) Chrome', { width: 1920, height: 1080 })).toBe('pc')
+    expect(detectDeviceKind('Mozilla/5.0 (Linux; Android 15) RisuBardAndroid/0.9.99', { width: 1280, height: 800 })).toBe('tablet')
+    expect(detectDeviceKind('Mozilla/5.0 (Linux; Android 15) RisuBardAndroid/0.9.99', { width: 412, height: 915 })).toBe('phone')
+    const status = { enabled: true, role: 'joining', vault: { origin: 'shared', sharedFrom: 'tablet-device' }, sync: { deviceId: 'pc-device', profile: { kind: 'pc' }, incoming: { 'tablet-device/i1': { profile: { kind: 'tablet' } }, 'phone-device/i2': { profile: { kind: 'phone', name: 'S25' } }, 'old-device-123/i3': { profile: null } } } }
+    expect(syncDeviceName(status, 'pc-device')).toBe('이 기기(PC)')
+    expect(syncDeviceName(status, 'tablet-device')).toBe('태블릿 · 기준')
+    expect(syncDeviceName(status, 'phone-device')).toBe('스마트폰 S25')
+    expect(syncDeviceName(status, 'old-device-123')).toBe('기기 old-')
+    expect(syncDeviceName(status, null)).toBe('출처 미상')
+    const a = { heads: ['h1'], source: { device: 'pc-device', self: true }, content: { aiModel: 'gpt' } }, b = { heads: ['h2'], source: { device: 'tablet-device', self: false }, content: { aiModel: 'claude' } }
+    expect(conflictVariantLabel(b, 1, [a], status)).toBe('태블릿 · 기준 값 유지 · aiModel: claude')
+    expect(conflictVariantLabel(a, 0, [b], status)).toBe('이 기기(PC) 값 유지 · aiModel: gpt')
+    expect(conflictVariantLabel(b, 1, [a])).toBe('2번 유지 · 다른 기기 · aiModel: claude') // callers without status keep the old wording
+})
+
+test('the trash shows one named row per deletion, newest first; the headline sums what needs the user in one line', () => {
+    const rows = groupSyncTrash([
+        { id: 'c1', operation: 'op1', type: 'chat', title: '리리스 · 첫 대화', deletedAt: 10, recoverableUntil: 99, cohort: 3, expired: false },
+        { id: 'k1', operation: 'op1', type: 'character', title: '리리스', deletedAt: 10, recoverableUntil: 99, cohort: 3, expired: false },
+        { id: 'c2', operation: 'op2', type: 'chat', title: null, deletedAt: 20, recoverableUntil: 99, cohort: 1, expired: true },
+    ])
+    expect(rows.map(r => [r.title, r.count, r.expired])).toEqual([['대화', 1, true], ['리리스, 리리스 · 첫 대화 외 1개', 3, false]])
+    const status = { enabled: true, role: 'joining', lastAppliedAt: Date.parse('2026-10-28T16:38:00Z'), vault: { origin: 'shared', sharedFrom: 'tablet-device' }, sync: { deviceId: 'pc-device', profile: { kind: 'pc' }, outbox: { pending: [] }, incoming: { 'tablet-device/i': { profile: { kind: 'tablet' } } } } }
+    expect(syncHeadline(status, [])).toEqual({ tone: 'ok', title: '최신 상태예요', detail: '이 기기(PC) · 기준 기기: 태블릿 · 마지막 적용: 2026. 10. 29. 01:38' })
+    expect(syncHeadline(status, [{ state: 'diverged' }, { state: 'delete-pending' }]).title).toBe('확인이 필요한 항목 1건')
+    expect(syncHeadline({ ...status, role: 'authority' }, []).detail).toContain('기준 기기: 이 기기')
+    expect(syncHeadline({ enabled: false }, []).tone).toBe('off')
+    // Received-but-unapplied changes, errors/offline and an unsettled apply never show as "최신 상태".
+    const incoming = { ...status, sync: { ...status.sync, incoming: { 'tablet-device/i': { profile: { kind: 'tablet' }, pendingApply: 2 } } } }
+    expect(syncHeadline(incoming, [], { lastOutcome: 'pulled' } as any)).toMatchObject({ tone: 'waiting', title: '받은 변경 2건 적용 대기' })
+    expect(syncHeadline(status, [], { offline: true, lastOutcome: 'offline', lastError: 'network fetch failed' } as any)).toMatchObject({ tone: 'attention', title: '연결 안 됨 · 재시도 예정' })
+    expect(syncHeadline(status, [], { lastOutcome: 'error', lastError: 'x' } as any)).toMatchObject({ tone: 'attention', title: '오류 · 재시도 예정' })
+    expect(syncHeadline({ ...status, plan: { phase: 'saving' } }, [], { lastOutcome: 'recovery-pending' } as any).tone).toBe('attention')
+    expect(syncHeadline({ ...status, sync: { ...status.sync, incoming: { 'tablet-device/i': { held: 1 } } } }, []).title).toBe('확인이 필요한 항목 1건')
+    expect(syncHeadline(status, [], { paused: true } as any)).toMatchObject({ tone: 'waiting', title: '잠시 중지됨' })
+    // Commits still waiting for their parents or blobs are not "최신 상태"; a pause after an error does not promise a retry.
+    expect(syncHeadline({ ...status, sync: { ...status.sync, incoming: { 'tablet-device/i': { waiting: 1, pendingApply: 0, held: 0, quarantined: 0 } } } }, [], { lastOutcome: 'empty', lastError: '', offline: false } as any)).toMatchObject({ tone: 'waiting', title: '받은 변경 1건 · 나머지 자료 도착 대기' })
+    expect(syncHeadline(status, [], { paused: true, offline: true, lastOutcome: 'offline', lastError: 'network fetch failed' } as any)).toMatchObject({ tone: 'attention', title: '잠시 중지됨 · 연결 안 됨' })
+    expect(syncHeadline({ ...status, plan: { phase: 'saving' } }, [], { paused: true } as any)).toMatchObject({ tone: 'attention', title: '잠시 중지됨 · 이전 적용 결과 확인 대기' })
 })

@@ -1,9 +1,10 @@
 import { beforeEach, test, expect, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
-const f = vi.hoisted(() => ({ db: {} as any, request: vi.fn(), save: vi.fn(), unavailable: vi.fn(), confirm: vi.fn(), order: vi.fn(), storage: { syncTransaction: undefined as string | undefined }, tracked: null as any, hydrate: undefined as any }))
+const f = vi.hoisted(() => ({ db: {} as any, request: vi.fn(), save: vi.fn(), unavailable: vi.fn(), confirm: vi.fn(), order: vi.fn(), storage: { syncTransaction: undefined as string | undefined, fetchRawChatContent: vi.fn() }, tracked: null as any, hydrate: undefined as any, recoveryWrite: vi.fn(), normalize: undefined as any }))
 vi.mock('./globalApi.svelte', () => ({ forageStorage: { Init: async () => {}, realStorage: Object.assign(f.storage, { syncRequest: (...args: any[]) => f.request(...args) }) }, requestImmediateSave: (...args: any[]) => f.save(...args), checkCharOrder: () => f.order(), pendingTrackedChanges: () => f.tracked }))
-vi.mock('./storage/database.svelte', () => ({ getDatabase: () => f.db, normalizeChat: (chat: any) => chat }))
+vi.mock('./storage/database.svelte', () => ({ getDatabase: () => f.db, normalizeChat: (chat: any) => f.normalize ? f.normalize(chat) : chat }))
 vi.mock('./storage/chatStorage', () => ({ ensureChatHydrated: async (chats: any[], index: number, id: string) => f.hydrate ? f.hydrate(chats, index, id) : chats[index] }))
+vi.mock('./storage/syncRecoveryWriter', () => ({ writePartialSyncResume: (...args: any[]) => f.recoveryWrite(...args) }))
 vi.mock('./alert', () => ({ alertConfirm: (...args: any[]) => f.confirm(...args) }))
 vi.mock('./transfer-sync/playTransfer', () => ({ transferUnavailable: () => f.unavailable() }))
 vi.mock('./stores.svelte', () => ({ selectedCharID: writable(0) }))
@@ -23,8 +24,8 @@ const liveDb = () => stateLike({ aiModel: 'local-model', textAreaSize: 7, module
 beforeEach(() => {
     f.db = liveDb()
     expect(() => structuredClone(f.db.characters[0].chats[0])).toThrow() // the fixture really behaves like proxied app state
-    f.request.mockReset(); f.save.mockReset(); f.save.mockResolvedValue(undefined); f.unavailable.mockReturnValue(false); f.confirm.mockReset(); f.order.mockReset(); f.storage.syncTransaction = undefined
-    selectedCharID.set(0); transferBusy.set(false); syncSaveHold.set(false); f.tracked = null; f.hydrate = undefined
+    f.request.mockReset(); f.save.mockReset(); f.save.mockResolvedValue(undefined); f.unavailable.mockReturnValue(false); f.confirm.mockReset(); f.order.mockReset(); f.storage.syncTransaction = undefined; f.storage.fetchRawChatContent.mockReset()
+    selectedCharID.set(0); transferBusy.set(false); syncSaveHold.set(false); f.tracked = null; f.hydrate = undefined; f.normalize = undefined; f.recoveryWrite.mockReset(); f.recoveryWrite.mockResolvedValue(undefined)
 })
 const EMPTY_TRACKED = { character: [] as string[], chat: [] as [string, string][], root: false, botPreset: false, modules: false, plugins: false, pluginCustomStorage: false }
 const script = (handlers: Record<string, (init?: RequestInit) => Response | Promise<Response>>) => f.request.mockImplementation(async (path: string, init?: RequestInit) => { const h = handlers[path]; if (!h) throw new Error('unexpected ' + path); return h(init) })
@@ -430,4 +431,211 @@ test('a lost rollback receipt unlocks only a client that never mutated; mutated 
     const retry = await retrySyncApply()
     expect(retry.state).toBe('finish-pending'); expect(retry.error).toContain('앱을 다시 열어')
     expect(get(syncSaveHold)).toBe(true); expect(JSON.stringify(f.db)).toBe(mutated); expect(f.confirm).not.toHaveBeenCalled()
+})
+
+
+test('a card-only plan explicitly persists an off-screen character and a new card without a chat', async () => {
+    f.db.characters.push({ chaId: 'off-screen', name: 'Before', chatPage: 0, chats: [] })
+    const originalSelected = f.db.characters[0]
+    const plan = { ...basePlan(), settings: {}, pluginEnabled: null, modules: [], plugins: [], chats: [], deletions: [],
+        characters: [{ chaId: 'off-screen', fields: { name: 'After', bardLore: { schemaVersion: 2, metadata: { synthetic: {} } }, reloadKeys: 2 }, chatIds: [] }],
+        newCharacters: [{ chaId: 'new-card', name: 'New', chats: [], chatIds: [] }] }
+    script({ '/plan': () => reply(plan), '/arm': () => reply({ ready: true }), '/finish': () => reply({ state: 'applied', pending: [], keptDeletions: [] }) })
+    expect((await applySync()).state).toBe('applied')
+    const ownSave = f.save.mock.calls.find(([options]) => (options as any)?.syncOwned)?.[0] as any
+    expect(ownSave.characters).toEqual(['off-screen', 'new-card'])
+    expect(ownSave.chats).toEqual([])
+    expect(f.db.characters[0]).toBe(originalSelected)
+    expect(f.db.characters.find((c: any) => c.chaId === 'off-screen')).toMatchObject({ name: 'After', reloadKeys: 2 })
+})
+
+async function partialFixture() {
+    const { hashLocalJson } = await import('../../shared/play-set/protocol')
+    const fields = { chaId: 'off-screen', name: 'Preserved', bardLore: { schemaVersion: 2, metadata: { synthetic: { name: 'kept' } } }, reloadKeys: 12 }
+    f.db.characters.push({ chaId: 'off-screen', name: 'Preserved', chats: [], chatPage: 0 })
+    f.db.aiModel = 'already-persisted'
+    const plan = basePlan({ phase: 'saving', settings: { aiModel: 'already-persisted' }, pluginEnabled: null, modules: [], plugins: [], chats: [], characters: [{ chaId: 'off-screen', fields, chatIds: [] }] })
+    const detail = { resumable: true, units: [
+        { kind: 'setting', id: 'aiModel', state: 'expected', expectedHash: await hashLocalJson(plan.settings.aiModel), currentHash: await hashLocalJson(plan.settings.aiModel), beforeHash: null },
+        { kind: 'character', id: 'off-screen', state: 'before', fields: Object.keys(fields), expectedHash: await hashLocalJson(fields), currentHash: await hashLocalJson({ chaId: 'off-screen', name: 'Preserved', chatPage: 0 }), beforeHash: 'baseline' },
+    ] }
+    return { plan, detail, fields }
+}
+
+test('startup resumes only missing off-screen metadata through the real writer boundary and strict original finish, without hold/dialog/rearm', async () => {
+    const { plan, detail, fields } = await partialFixture()
+    const selected = f.db.characters[0], beforeChats = JSON.stringify(selected.chats), order: string[] = []
+    let finished = 0
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]), '/plan': () => reply(plan),
+        '/finish': init => { order.push('finish'); expect(JSON.parse(init!.body as string).transaction).toBe('tx'); return ++finished === 1 ? reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) : reply({ state: 'applied' }) } })
+    f.recoveryWrite.mockImplementation(async (scope: any) => {
+        order.push('write'); expect(scope).toEqual({ transaction: 'tx', characters: ['off-screen'], chats: [] })
+        expect(f.storage.syncTransaction).toBe('tx'); expect(get(syncSaveHold)).toBe(true)
+        expect(f.db.characters[1]).toMatchObject(fields)
+    })
+    await recoverSync()
+    expect(order).toEqual(['finish', 'write', 'finish']); expect(f.confirm).not.toHaveBeenCalled(); expect(f.save).not.toHaveBeenCalled()
+    expect(f.db.characters[0]).toBe(selected); expect(JSON.stringify(selected.chats)).toBe(beforeChats)
+    expect(f.db.aiModel).toBe('already-persisted'); expect(get(syncSaveHold)).toBe(false); expect(f.storage.syncTransaction).toBeUndefined()
+    expect(f.request.mock.calls.some(([p]) => p === '/arm' || p === '/hold')).toBe(false)
+})
+
+test.each(['material', 'fields', 'neither', 'deletion', 'transaction', 'writer', 'finish'])('partial recovery %s failure keeps the original hold and journal path without false completion', async mode => {
+    const { plan, detail } = await partialFixture(), before = JSON.stringify(f.db)
+    if (mode === 'material') plan.characters[0].fields.reloadKeys = 999
+    if (mode === 'fields') detail.units[1].fields!.push('not-original')
+    if (mode === 'neither') { detail.resumable = false; detail.units[1].state = 'other' }
+    if (mode === 'deletion') detail.units[1].kind = 'deletion'
+    if (mode === 'transaction') plan.transaction = 'other'
+    if (mode === 'writer') f.recoveryWrite.mockRejectedValue(new Error('write failed'))
+    f.confirm.mockResolvedValue(false)
+    let finishes = 0
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]), '/plan': () => reply(plan),
+        '/finish': () => ++finishes === 1 || mode === 'finish' ? reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) : reply({ state: 'applied' }) })
+    await expect(recoverSync()).rejects.toThrow()
+    expect(get(syncSaveHold)).toBe(true); expect(f.storage.syncTransaction).toBeUndefined()
+    expect(f.request.mock.calls.some(([p]) => p === '/arm' || p === '/hold')).toBe(false)
+    if (mode !== 'finish') expect(JSON.stringify(f.db)).toBe(before)
+})
+
+test('live retry saves already-applied missing metadata through the running save runtime; no startup writer or replacement', async () => {
+    const { plan, detail } = await partialFixture()
+    plan.phase = 'prepared'
+    script({ '/plan': () => reply(plan), '/arm': () => reply({ ready: true }), '/finish': () => reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) })
+    expect((await applySync()).state).toBe('finish-pending')
+    const ref = f.db.characters[1], applied = JSON.stringify(f.db)
+    plan.phase = 'saving'; let finishes = 0
+    script({ '/plan': () => reply(plan), '/finish': () => ++finishes === 1 ? reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) : reply({ state: 'applied' }) })
+    expect((await retrySyncApply()).state).toBe('applied')
+    expect(f.db.characters[1]).toBe(ref); expect(JSON.stringify(f.db)).toBe(applied); expect(f.recoveryWrite).not.toHaveBeenCalled()
+    expect(f.save).toHaveBeenLastCalledWith(expect.objectContaining({ characters: ['off-screen'], chats: [], syncOwned: true, flushServer: 'canonical' }))
+    expect(get(syncSaveHold)).toBe(false)
+})
+
+test('live retry refuses newer off-screen unsaved edits even when the selected-character tracker missed them', async () => {
+    const { plan, detail } = await partialFixture()
+    plan.phase = 'prepared'
+    script({ '/plan': () => reply(plan), '/arm': () => reply({ ready: true }), '/finish': () => reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) })
+    expect((await applySync()).state).toBe('finish-pending')
+    f.db.characters[1].reloadKeys = 777; f.tracked = null
+    const before = JSON.stringify(f.db), saves = f.save.mock.calls.length
+    plan.phase = 'saving'
+    expect((await retrySyncApply()).state).toBe('finish-pending')
+    expect(JSON.stringify(f.db)).toBe(before); expect(f.save).toHaveBeenCalledTimes(saves)
+    expect(get(syncSaveHold)).toBe(true); expect(f.recoveryWrite).not.toHaveBeenCalled(); expect(f.confirm).not.toHaveBeenCalled()
+})
+
+test.each(['unchanged', 'already-applied', 'third-name', 'third-extra-key', 'third-settings'])('startup fresh baseline %s is checked before writing or advancing completion', async mode => {
+    const { plan, detail } = await partialFixture(), raw = JSON.parse(JSON.stringify(f.db))
+    if (mode === 'already-applied') Object.assign(raw.characters[1], plan.characters[0].fields)
+    if (mode === 'third-name') raw.characters[1].name = 'new canonical edit'
+    if (mode === 'third-extra-key') raw.characters[1].newUnsavedField = 'must not remove'
+    if (mode === 'third-settings') raw.aiModel = 'must not overwrite'
+    const rawBefore = JSON.stringify(raw), rejected = mode.startsWith('third-')
+    let finishes = 0
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]), '/plan': () => reply(plan),
+        '/finish': () => ++finishes === 1 ? reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) : reply({ state: 'applied' }) })
+    f.recoveryWrite.mockImplementation(async (_scope: any, validate: (db: any) => Promise<void>) => { await validate(raw) })
+    f.confirm.mockResolvedValue(false)
+    if (rejected) {
+        await expect(recoverSync()).rejects.toThrow('canonical data changed')
+        expect(get(syncSaveHold)).toBe(true); expect(finishes).toBe(1)
+    } else { await recoverSync(); expect(get(syncSaveHold)).toBe(false); expect(finishes).toBe(2) }
+    expect(JSON.stringify(raw)).toBe(rawBefore); expect(f.storage.syncTransaction).toBeUndefined()
+})
+
+test('startup does not replace an edit that arrives during plan materialization', async () => {
+    const { plan, detail } = await partialFixture()
+    f.confirm.mockResolvedValue(false)
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]),
+        '/plan': () => { f.db.characters[1].name = 'local edit during await'; return reply(plan) },
+        '/finish': () => reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) })
+    await expect(recoverSync()).rejects.toThrow('state changed')
+    expect(f.db.characters[1].name).toBe('local edit during await'); expect(f.recoveryWrite).not.toHaveBeenCalled()
+    expect(get(syncSaveHold)).toBe(true)
+})
+
+test('startup refuses a theme whose local layout cannot reproduce the originally armed hash', async () => {
+    const { hashLocalJson } = await import('../../shared/play-set/protocol'), { plan, detail } = await partialFixture()
+    plan.characters = []; plan.settings = { themePresets: [{ name: 'theme', zoomsize: 100 }] }
+    f.db.themePresets = [{ name: 'theme', zoomsize: 135 }]
+    detail.units = [{ kind: 'setting', id: 'themePresets', state: 'before', expectedHash: await hashLocalJson(plan.settings.themePresets), beforeHash: null, currentHash: null }] as any
+    f.confirm.mockResolvedValue(false)
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]), '/plan': () => reply(plan), '/finish': () => reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) })
+    await expect(recoverSync()).rejects.toThrow('does not match the armed version')
+    expect(f.recoveryWrite).not.toHaveBeenCalled(); expect(f.db.themePresets[0].zoomsize).toBe(135); expect(get(syncSaveHold)).toBe(true)
+})
+
+test('startup chat reconstruction compares the JSON arm echo, dropping transient undefined fields without removing chat state', async () => {
+    const { hashLocalJson } = await import('../../shared/play-set/protocol'), { plan, detail } = await partialFixture()
+    plan.characters = []; const chat = { ...chatA(), scriptstate: { n: 2 }, memoryData: { data: 'kept memory' } }
+    plan.chats = [{ characterId: 'card', chat, update: true, root: 'A', head: 'h' }]
+    detail.units = [{ kind: 'chat', id: 'A', characterId: 'card', state: 'before', fields: Object.keys(chat), expectedHash: await hashLocalJson(chat), currentHash: await hashLocalJson(chatA()), beforeHash: await hashLocalJson(chatA()) }] as any
+    f.normalize = (value: any) => ({ ...value, risuBardWikiReboot: undefined, activeStreamingDisplayOptimizationMode: undefined })
+    let finishes = 0
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]), '/plan': () => reply(plan),
+        '/finish': () => ++finishes === 1 ? reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) : reply({ state: 'applied' }) })
+    const ref = f.db.characters[0].chats[0]
+    await recoverSync()
+    expect(f.db.characters[0].chats[0]).toBe(ref); expect(ref.scriptstate.n).toBe(2); expect(ref.memoryData.data).toBe('kept memory')
+    expect(f.recoveryWrite).toHaveBeenCalledWith(expect.objectContaining({ chats: [['card', 'A']] }), expect.any(Function))
+    expect(f.confirm).not.toHaveBeenCalled(); expect(get(syncSaveHold)).toBe(false)
+})
+
+test('live chat retry retains undefined runtime fields and nested values while checking the exact original JSON echo', async () => {
+    const { hashLocalJson } = await import('../../shared/play-set/protocol'), { plan, detail } = await partialFixture()
+    plan.characters = []; plan.phase = 'prepared'
+    const chat = { ...chatA(), scriptstate: { n: 2 } }
+    plan.chats = [{ characterId: 'card', chat, update: true, root: 'A', head: 'h' }]
+    detail.units = [{ kind: 'chat', id: 'A', characterId: 'card', state: 'before', fields: Object.keys(chat), expectedHash: await hashLocalJson(chat), currentHash: await hashLocalJson(chatA()), beforeHash: await hashLocalJson(chatA()) }] as any
+    f.normalize = (value: any) => ({ ...value, risuBardWikiReboot: undefined, activeStreamingDisplayOptimizationMode: undefined })
+    script({ '/plan': () => reply(plan), '/arm': () => reply({ ready: true }), '/finish': () => reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) })
+    expect((await applySync()).state).toBe('finish-pending')
+    f.db.characters[0].chats[0].scriptstate.transient = undefined
+    plan.phase = 'saving'; let finishes = 0
+    script({ '/plan': () => reply(plan), '/finish': () => ++finishes === 1 ? reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) : reply({ state: 'applied' }) })
+    expect((await retrySyncApply()).state).toBe('applied')
+    expect(f.save).toHaveBeenLastCalledWith(expect.objectContaining({ chats: [['card', 'A']], syncOwned: true }))
+    expect(f.db.characters[0].chats[0].scriptstate.n).toBe(2); expect(f.recoveryWrite).not.toHaveBeenCalled()
+})
+
+test('startup validates the raw legacy chat body before saving; normalizing missing default fields cannot change its canonical hash', async () => {
+    const { hashLocalJson } = await import('../../shared/play-set/protocol'), { plan, detail } = await partialFixture()
+    const legacy = { id: 'A', name: 'A', message: [{ role: 'char', data: 'old legacy body' }] }
+    const expected = { ...legacy, note: '', localLore: [], scriptstate: { n: 2 } }
+    plan.characters = []; plan.chats = [{ characterId: 'card', chat: expected, update: true, root: 'A', head: 'h' }]
+    detail.units = [{ kind: 'chat', id: 'A', characterId: 'card', state: 'before', fields: Object.keys(expected), expectedHash: await hashLocalJson(expected), currentHash: await hashLocalJson(legacy), beforeHash: await hashLocalJson(legacy) }] as any
+    const raw = { characters: [{ chaId: 'card', chats: [{ id: 'A', name: 'A', _stub: true }] }] }
+    f.storage.fetchRawChatContent.mockResolvedValue(legacy)
+    f.recoveryWrite.mockImplementation(async (_scope: any, validate: (db: any) => Promise<void>) => { await validate(raw) })
+    let finishes = 0
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]), '/plan': () => reply(plan),
+        '/finish': () => ++finishes === 1 ? reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) : reply({ state: 'applied' }) })
+    await recoverSync()
+    expect(f.storage.fetchRawChatContent).toHaveBeenCalledWith('card', 0, 'A'); expect(f.confirm).not.toHaveBeenCalled()
+    expect(f.db.characters[0].chats[0].scriptstate.n).toBe(2); expect(get(syncSaveHold)).toBe(false)
+})
+
+test('startup pre-write rejection restores memory before a user holds recovery, so opening the app cannot autosave an uncommitted plan', async () => {
+    const { plan, detail } = await partialFixture(), before = JSON.stringify(f.db), selected = f.db.characters[0]
+    f.recoveryWrite.mockRejectedValue(Object.assign(new Error('validation failed before write'), { persisted: false }))
+    f.confirm.mockResolvedValue(true)
+    const hold = vi.fn(() => { expect(JSON.stringify(f.db)).toBe(before); return reply({ held: true }) })
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]), '/plan': () => reply(plan),
+        '/finish': () => reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400), '/hold': hold })
+    await recoverSync()
+    expect(JSON.stringify(f.db)).toBe(before); expect(f.db.characters[0]).toBe(selected)
+    expect(hold).toHaveBeenCalledOnce(); expect(f.save).not.toHaveBeenCalled()
+    expect(get(syncSaveHold)).toBe(false); expect(f.storage.syncTransaction).toBeUndefined()
+})
+
+test('startup uncertain write keeps applied memory and the original hold rather than rewinding a possibly persisted change', async () => {
+    const { plan, detail, fields } = await partialFixture()
+    f.recoveryWrite.mockRejectedValue(Object.assign(new Error('patch response lost'), { persisted: true }))
+    f.confirm.mockResolvedValue(false)
+    script({ '/recovery': () => reply([{ transaction: 'tx', phase: 'saving' }]), '/plan': () => reply(plan),
+        '/finish': () => reply({ code: 'NAS_SYNC_PARTIAL', error: 'partial', detail }, 400) })
+    await expect(recoverSync()).rejects.toThrow('patch response lost')
+    expect(f.db.characters[1]).toMatchObject(fields); expect(get(syncSaveHold)).toBe(true)
+    expect(f.storage.syncTransaction).toBeUndefined(); expect(f.request.mock.calls.some(([p]) => p === '/hold' || p === '/arm')).toBe(false)
 })

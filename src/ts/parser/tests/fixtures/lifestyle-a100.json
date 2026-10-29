@@ -1,0 +1,29 @@
+{
+  "type": "risuModule",
+  "module": {
+    "name": "마물소녀도감 생활 A — 새집 초기 생활 (용사지망 전용) v1.0.0",
+    "description": "함건희(보어·용사지망) 전용. 새집 정리·물/장작·보급·마을 왕래의 선택 가능한 장면 재료. 다른 페르소나로 새 플레이를 시작하면 끄세요. 정확한 페르소나 이름이 다르면 본문도 CBS로 제외됩니다. 기존 플레이 사실은 초기화하지 않습니다.",
+    "id": "f0256637-e11e-4d72-8fb9-c04a03e4ea80",
+    "namespace": "mge_life_pack_a",
+    "lowLevelAccess": false,
+    "lorebook": [
+      {
+        "id": "f0256637-e11e-4d72-8fb9-c04a03e4ea80-lore",
+        "key": "",
+        "secondkey": "",
+        "insertorder": 1400,
+        "comment": "Authored: MGE life pack A v1.0.0 — 새집 초기 생활 (용사지망 전용)",
+        "content": "{{#if {{equal::{{user}}::함건희(보어·용사지망)}}}}\n[Authored play extension: first days at the new house — aspirant persona]\nUse these scene materials when the current story concerns his established house outside his home village, its supplies or a village visit. This is optional scene material, not a new event or a daily checklist. The house was barely settled a few days after moving out at the opening; later scenes retain everything already done, changed or left behind. Do not restart those first days or bring him home from another journey.\n\nWater and fuel: choosing a source, a manageable load, a dry place to stack wood, or tending a fire can make an ordinary task concrete. Let weight, cold water, smoke, weather and the route matter where established. Sources, containers, tools, a hearth and shortages are possibilities to establish in a scene, not an inventory he already owns or a compulsory hardship.\nSettling in: deciding where something belongs, airing a room, dealing with an actual draught or repair, or arranging help can give the house a lived history. A villager may offer a tool, useful news or a hand with a task; whether it is accepted and how he participates stay open. If work, a loan or a delivery is completed in play, a later visit can refer to that particular result instead of repeating the same errand.\nVillage visits: the whole home village already knows his condition and chose to shelter him. His headman's permit is a mundane local resident's pass, valid only there; it does not change an outsider's knowledge or attitude. New villagers can appear as individuals with their own occupations, temperaments and immediate concerns. Do not present a family tie, an old friendship or a prior arrangement as already settled unless play has established it.\nFood and support follow the persona and established play: previous help does not make a named supplier, a free delivery schedule or continued direct help an accomplished fact. Existing food, exposure and hunger rules still apply.\n\nDevelop the part of ordinary life the scene opens, without obligatory checkpoints, discovery, damage or a forced decision. Unmentioned possessions are unknown, not proof of an empty house. Describe the surroundings and NPC actions; leave the player's next deliberate action to the player instead of performing it for scene flow. Keep NPC initiative, existing secrecy and learned knowledge, the player's words and choices, and the card's time, state and record rules intact. This material does not itself grant items or resolve a task.\n{{/if}}",
+        "mode": "constant",
+        "alwaysActive": true,
+        "selective": false,
+        "enabled": true,
+        "useRegex": false,
+        "bookVersion": 2
+      }
+    ],
+    "trigger": [],
+    "regex": [],
+    "assets": []
+  }
+}

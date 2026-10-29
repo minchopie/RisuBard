@@ -184,7 +184,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
 +        if (!file) return null;
 +        const metadata = await readInlaySidecar(id) || await readInlayLegacyInfo(id);
 +        if (!metadata) throw new Error('Missing inlay metadata: ' + id);
-+        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(file, { type: getMimeFromExt(metadata.ext) }) };
++        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(path.toNamespacedPath(file), { type: getMimeFromExt(metadata.ext) }) };
 +    },
 +    installInlay: async (entry, staging) => {
 +        if (!isSafeInlayId(entry.id)) throw new Error('Invalid inlay identity');
@@ -236,7 +236,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
 +        if (!file) return null;
 +        const metadata = await readInlaySidecar(id) || await readInlayLegacyInfo(id);
 +        if (!metadata) throw new Error('Missing inlay metadata: ' + id);
-+        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(file, { type: getMimeFromExt(metadata.ext) }) };
++        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(path.toNamespacedPath(file), { type: getMimeFromExt(metadata.ext) }) };
 +    },
 +    installInlay: async (entry, staging) => {
 +        if (!isSafeInlayId(entry.id)) throw new Error('Invalid inlay identity');

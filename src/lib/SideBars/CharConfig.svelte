@@ -8,7 +8,7 @@
     import { CharConfigSubMenu, MobileGUI, selectedCharID, hypaV3ModalOpen, characterEditorJumpRequest, type CharacterEditorJumpRequest } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import { get } from 'svelte/store';
-    import { PlusIcon, TrashIcon, DownloadIcon, HardDriveUploadIcon, ImageIcon, ImageOffIcon, ArrowUp, ArrowDown, TriangleAlertIcon, LayoutTemplateIcon } from '@lucide/svelte'
+    import { PlusIcon, TrashIcon, DownloadIcon, HardDriveUploadIcon, ImageIcon, ImageOffIcon, RefreshCwIcon, ArrowUp, ArrowDown, TriangleAlertIcon, LayoutTemplateIcon } from '@lucide/svelte'
     import Check from "../UI/GUI/CheckInput.svelte";
     import { addCharEmotion, addingEmotion, getCharImage, rmCharEmotion, selectCharImg, removeChar, changeCharImage } from "../../ts/characters";
     import LoreBook from "./LoreBook/LoreBookSetting.svelte";
@@ -16,7 +16,9 @@
     import Help from "../Others/Help.svelte";
     import { exportChar } from "src/ts/characterCards";
     import { getElevenTTSVoices, getWebSpeechTTSVoices, getVOICEVOXVoices, oaiVoices, getNovelAIVoices } from "src/ts/process/tts";
-    import { getFileSrc } from "src/ts/globalApi.svelte";
+    import { getFileSrc, assetFolderScan, scanCharacterAssetFolder } from "src/ts/globalApi.svelte";
+    import { isNodeServer } from "src/ts/platform";
+    import { tooltip } from "src/ts/gui/tooltip";
 import { openAssetViewer, hasImageAssets } from "src/ts/assetViewer.svelte";
     import TextInput from "../UI/GUI/TextInput.svelte";
     import ShInput from "../UI/GUI/ShInput.svelte";
@@ -293,14 +295,29 @@ import ShButton from "../UI/GUI/ShButton.svelte";
 </script>
 
 {#snippet assetViewerButton()}
-    {#if DBState.db.characters[$selectedCharID].type === 'character' && hasImageAssets((DBState.db.characters[$selectedCharID] as character).additionalAssets)}
-        <ShButton
-            className="w-full mb-3"
-            onclick={() => openAssetViewer(DBState.db.characters[$selectedCharID].name, (DBState.db.characters[$selectedCharID] as character).additionalAssets)}
-        >
-            <ImageIcon size={16} />
-            <span>{language.viewInAssetViewer}</span>
-        </ShButton>
+    {@const showViewer = DBState.db.characters[$selectedCharID].type === 'character' && hasImageAssets((DBState.db.characters[$selectedCharID] as character).additionalAssets)}
+    {@const showReload = isNodeServer && DBState.db.characters[$selectedCharID].type === 'character'}
+    {#if showViewer || showReload}
+        <div class="mb-3 flex w-full gap-2">
+            {#if showViewer}
+                <ShButton
+                    className="min-w-0 flex-1"
+                    onclick={() => openAssetViewer(DBState.db.characters[$selectedCharID].name, (DBState.db.characters[$selectedCharID] as character).additionalAssets)}
+                >
+                    <ImageIcon size={16} />
+                    <span class="truncate">{language.viewInAssetViewer}</span>
+                </ShButton>
+            {/if}
+            {#if showReload}
+                <span class="flex shrink-0" class:flex-1={!showViewer} use:tooltip={language.assetFolderScanHelp}>
+                    <ShButton className="w-full" disabled={assetFolderScan.busy}
+                        onclick={() => scanCharacterAssetFolder(DBState.db.characters[$selectedCharID].chaId)}>
+                        <RefreshCwIcon size={16} class={assetFolderScan.busy ? 'animate-spin' : ''} />
+                        <span>{language.assetFolderScan}</span>
+                    </ShButton>
+                </span>
+            {/if}
+        </div>
     {/if}
 {/snippet}
 
@@ -429,16 +446,11 @@ import ShButton from "../UI/GUI/ShButton.svelte";
         <button onclick={() => {
             viewSubMenu = 0
         }} class="p-2 flex-1" class:bg-selected={viewSubMenu === 0}>
-            <span>{language.charIcon}</span>
-        </button>
-        <button onclick={() => {
-            viewSubMenu = 1
-        }} class="p2 flex-1 border-r border-l border-selected" class:bg-selected={viewSubMenu === 1}>
-            <span>{language.viewScreen}</span>
+            <span>{language.charIconAndScreen}</span>
         </button>
         <button onclick={() => {
             viewSubMenu = 2
-        }} class="p-2 flex-1" class:bg-selected={viewSubMenu === 2}>
+        }} class="p-2 flex-1 border-r border-l border-selected" class:bg-selected={viewSubMenu === 2}>
             <span>{language.additionalAssets}</span>
         </button>
         <button onclick={() => { viewSubMenu = 3 }} class="p-2 flex-1" class:bg-selected={viewSubMenu === 3}>
@@ -449,6 +461,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     {#if viewSubMenu === 3}
         {#key currentCharacter.chaId}<BardPainterGallery bot={currentCharacter as character}/>{/key}
     {:else if viewSubMenu === 0}
+            <span class="block text-textcolor mb-2">{language.charIcon}</span>
             <div class="p-2 border-darkborderc border rounded-md flex flex-wrap gap-2">
                 {#if DBState.db.characters[$selectedCharID].image !== '' && DBState.db.characters[$selectedCharID].image}
                     <button onclick={() => {
@@ -527,10 +540,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
             </div>
         {/if}
 
-
-    {:else if viewSubMenu === 1}
-        <!-- svelte-ignore block_empty -->
-
+            <span class="block text-textcolor mt-6 mb-2">{language.viewScreen}</span>
             <SelectInput className="mb-2" bind:value={DBState.db.characters[$selectedCharID].viewScreen} onchange={() => {
                 DBState.db.characters[$selectedCharID] = updateInlayScreen((DBState.db.characters[$selectedCharID] as character))
             }}>

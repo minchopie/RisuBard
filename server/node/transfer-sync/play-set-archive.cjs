@@ -3,7 +3,9 @@
 require('sucrase/register/ts');
 const { createWriteStream } = require('node:fs');
 const fs = require('node:fs/promises');
-const { join } = require('node:path');
+const { join, dirname, basename, toNamespacedPath } = require('node:path');
+// fs.mkdtemp lacks Node's Windows long-path handling (>260 chars): create through the namespaced prefix, return the plain path.
+const mkdtempLong = async prefix => join(dirname(prefix), basename(await fs.mkdtemp(toNamespacedPath(prefix))));
 const { createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
@@ -33,7 +35,7 @@ async function writePlaySetArchive(snapshot, temporaryDirectory) {
     if (!Number.isSafeInteger(recordsSize) || recordsSize > DEFAULT_RECORD_BYTE_BUDGET) throw new Error('Records exceed JSON memory budget');
     const expanded = manifest.length + [...entries.values()].reduce((total, item) => total + item.bytes, 0);
     if (!Number.isSafeInteger(expanded * 2) || await availableBytes(temporaryDirectory) < expanded * 2) throw new Error('Not enough storage space');
-    const directory = await fs.mkdtemp(join(temporaryDirectory, 'play-export-'));
+    const directory = await mkdtempLong(join(temporaryDirectory, 'play-export-'));
     const destination = join(directory, 'transfer.risuplay');
     const zip = new ZipFile(), active = new Set();
     const output = createWriteStream(destination, { flags: 'wx', mode: 0o600 });

@@ -53,6 +53,7 @@ dist.zip
 !/scripts/portable/
 !/scripts/termux/
 !/scripts/android/
+!/scripts/fork-modules/
 !/scripts/transfer-sync/
 !/scripts/check-help-keys.mjs
 !/scripts/check-public-boundary.mjs

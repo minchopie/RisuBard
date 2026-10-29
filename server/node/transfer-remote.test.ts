@@ -16,9 +16,9 @@ async function fixture(t: any, size = 9 * 1024 * 1024 + 1) {
     await writeFile(file, content)
     const db: any = { nas: { url: 'https://nas.invalid/home/RisuAI/', username: 'test', password: 'synthetic' }, github: { repository: 'fixture/private', token: 'synthetic' } }
     const secrets = { get: async (key: string) => db[key] ?? {}, set: async (key: string, value: unknown) => { db[key] = value } }
-    const imports: Buffer[] = []
-    const transfers = { file: async () => file, list: async () => [{ id: 'out', backupKey: 'a'.repeat(64) }], ingest: async (stream: any) => { imports.push(await bytes(stream)); return { state: 'waiting' } } }
-    return { root, file, content, db, secrets, transfers, imports }
+    const imports: Buffer[] = [], importOptions: any[] = []
+    const transfers = { file: async () => file, list: async () => [{ id: 'out', backupKey: 'a'.repeat(64) }], ingest: async (stream: any, options: any) => { imports.push(await bytes(stream)); importOptions.push(options); return { state: 'waiting' } } }
+    return { root, file, content, db, secrets, transfers, imports, importOptions }
 }
 
 test('protected settings are ciphertext, survive restart and do not silently reset on wrong key', async t => {
@@ -76,6 +76,15 @@ test('NAS hash mismatch removes only its temporary file and never publishes it',
     await expect(remote.dispatch('nas', 'upload', { id: 'out' })).rejects.toThrow('hash mismatch')
     expect(calls).toEqual(['PUT', 'GET', 'DELETE'])
 })
+
+test('NAS direct receive persists explicit apply intent without trusting the remote file', async t => {
+    const f = await fixture(t, 24)
+    const remote = createRemoteTransfers({ ...f, fetch: async () => response(200, f.content) })
+    await remote.dispatch('nas', 'download', { name: 'card.risuplay', applyRequested: true })
+    await remote.dispatch('nas', 'download', { name: 'card.risuplay' })
+    expect(f.importOptions).toEqual([{ name: 'card.risuplay', applyRequested: true }, { name: 'card.risuplay', applyRequested: false }])
+    expect(f.imports[0]).toEqual(f.content)
+})
 test('GitHub >8MiB upload checks exact commit and hash; conflict does not delete the previous backup', async t => {
     const f = await fixture(t), sha = await gitHash(f.file, f.content.length), commit = 'b'.repeat(40), previous = 'c'.repeat(40)
     let conflict = false; const methods: string[] = []
@@ -103,7 +112,8 @@ test('GitHub fixed revision download verifies bytes before durable ingestion; pu
         return o.headers.Accept.includes('raw') ? response(200, corrupt ? Buffer.alloc(24) : f.content) : response(200, { type: 'file', sha, size: 24 })
     } })
     const input = { name: 'a'.repeat(64) + '.risuplay', commit, sha }
-    expect((await remote.dispatch('github', 'download', input)).state).toBe('waiting')
+    expect((await remote.dispatch('github', 'download', { ...input, applyRequested: true })).state).toBe('waiting')
+    expect(f.importOptions[0]).toEqual({ name: input.name, applyRequested: true })
     corrupt = true; await expect(remote.dispatch('github', 'download', input)).rejects.toThrow('hash mismatch')
     expect(f.imports).toHaveLength(1)
     publicRepo = true; await expect(remote.dispatch('github', 'download', input)).rejects.toThrow('비공개')

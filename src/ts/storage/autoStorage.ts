@@ -94,9 +94,20 @@ export class AutoStorage{
         return this.realStorage.syncLiveFiles(revision)
     }
 
+    takeLiveFilesRecoveryPath() {
+        const recoveryPath = this.realStorage?.liveFilesRecoveryPath ?? null
+        if (this.realStorage) this.realStorage.liveFilesRecoveryPath = null
+        return recoveryPath
+    }
+
     async getExternalChanges() {
         await this.Init()
         return this.realStorage.getExternalChanges()
+    }
+
+    async scanCharacterAssets(characterId: string) {
+        await this.Init()
+        return this.realStorage.scanCharacterAssets(characterId)
     }
 
     async resolveExternalChanges(decision: 'accept' | 'keep', revision: string) {
@@ -158,6 +169,14 @@ export class AutoStorage{
     async restoreServerBackup(filename: string, onProgress?: (bytes: number, totalBytes: number, phase?: BackupImportPhase) => void) { await this.Init(); return this.realStorage.restoreServerBackup(filename, onProgress) }
     async deleteServerBackup(filename: string) { await this.Init(); return this.realStorage.deleteServerBackup(filename) }
     async downloadServerBackup(filename: string) { await this.Init(); return this.realStorage.downloadServerBackup(filename) }
+
+    // ── RisuAI account import ─────────────────────────────────────────────────
+    async getRisuAccountImportConfig() { await this.Init(); return this.realStorage.getRisuAccountImportConfig() }
+    async getRisuAccountImportStatus() { await this.Init(); return this.realStorage.getRisuAccountImportStatus() }
+    async prepareRisuAccountImport(token: string, id: string) { await this.Init(); return this.realStorage.prepareRisuAccountImport(token, id) }
+    async startRisuAccountDownload() { await this.Init(); return this.realStorage.startRisuAccountDownload() }
+    async cancelRisuAccountImport() { await this.Init(); return this.realStorage.cancelRisuAccountImport() }
+    async applyRisuAccountImport() { await this.Init(); return this.realStorage.applyRisuAccountImport() }
 
     // ── Save-folder migration ─────────────────────────────────────────────────
     async scanSaveFolder(folderPath?: string) { await this.Init(); return this.realStorage.scanSaveFolder(folderPath) }

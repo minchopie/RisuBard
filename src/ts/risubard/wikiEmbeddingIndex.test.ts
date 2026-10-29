@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { WikiEmbeddingIndex, buildWikiEmbeddingQueries, mergeWikiSemanticMatches } from './wikiEmbeddingIndex'
+import { WikiEmbeddingIndex, buildWikiEmbeddingQueries } from './wikiEmbeddingIndex'
 import { chunkWikiDocument } from './wikiEmbeddingChunks'
 
 const chunk = (documentId: string, text: string, contentHash = 'hash') => ({
@@ -13,7 +13,7 @@ const cache = () => {
 }
 
 describe('optional wiki embedding index', () => {
-    it('optionally retains independent passages and preserves them through document reranking', async () => {
+    it('optionally retains independent passages for one document', async () => {
         const index = new WikiEmbeddingIndex({ identity:'passages',embed:async texts=>texts.map(()=>[1,0]) },cache())
         await index.refresh(page([
             {...chunk('a','first evidence'),start:0,end:14},
@@ -21,9 +21,7 @@ describe('optional wiki embedding index', () => {
             {...chunk('b','other evidence'),start:0,end:14},
         ]))
         const result = await index.search('question','',2000,{ maximumDocuments:32,maximumPassagesPerDocument:3 })
-        expect(result.matches.filter(match=>match.documentId==='a')).toHaveLength(2)
-        const reranked = mergeWikiSemanticMatches(result.matches,[{documentId:'a',score:1}])
-        expect(reranked.filter(match=>match.documentId==='a').map(match=>match.start)).toEqual([0,100])
+        expect(result.matches.filter(match=>match.documentId==='a').map(match=>match.start).sort((x,y)=>x-y)).toEqual([0,100])
     })
     it('reads cached vectors with one batched call per catalog page', async () => {
         const chunks = Array.from({ length: 40 }, (_, i) => chunk(`doc-${i}`, `passage ${i}`))
@@ -211,25 +209,5 @@ describe('optional wiki embedding index', () => {
         expect(queries).toHaveLength(2)
         expect(queries.every(text => text.length <= 4096)).toBe(true)
         expect(queries[1]).toContain('지금 질문')
-    })
-
-    it('preserves semantic evidence when Bard-chan reorders existing candidates', () => {
-        const semantic = { documentId: 'a', score: 0.8, contentHash: 'h', start: 90, end: 150 }
-        expect(mergeWikiSemanticMatches([semantic], [{ documentId: 'a', score: 1 }, { documentId: 'b', score: 0.5 }]))
-            .toEqual([{ ...semantic, score: 1 }, { documentId: 'b', score: 0.5 }])
-    })
-
-    it('does not let unranked cosine scores override the reranker ordering', () => {
-        const semantic = [
-            { documentId: 'omitted', score: 0.99 },
-            { documentId: 'second', score: 0.97, contentHash: 'h', start: 10, end: 30 },
-        ]
-        const merged = mergeWikiSemanticMatches(semantic, [
-            { documentId: 'first', score: 1 }, { documentId: 'second', score: 0.5 },
-        ])
-        expect(merged.map(item => item.documentId)).toEqual(['first', 'second', 'omitted'])
-        expect(merged[1]).toMatchObject({ contentHash: 'h', start: 10, end: 30 })
-        expect(merged[1].score).toBeGreaterThan(merged[2].score)
-        expect(mergeWikiSemanticMatches(semantic, [])).toEqual(semantic)
     })
 })

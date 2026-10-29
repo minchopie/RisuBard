@@ -1,6 +1,6 @@
 <script lang="ts">
     import markdownit from 'markdown-it'
-    import { ArrowRightIcon, PencilIcon, RouteIcon } from '@lucide/svelte'
+    import { ArrowRightIcon, PencilIcon } from '@lucide/svelte'
     import type { WikiCatalogDocument } from 'src/ts/risubard/memoryWiki'
     import type { EventOrderMessage } from 'src/ts/risubard/eventOrder'
     import {
@@ -34,6 +34,9 @@
         ? markdownRenderer.render(storyArcDisplayMarkdown(view.document.content))
         : '')
 
+    // Where the automatic update switch lives in app settings (src/ts/setting/risuBardCommonSettingsData.ts).
+    const autoUpdateSettingPath = '설정 > 리스바드 > 공통 설정 > 아크플로터 (Archplotter) > 아크플로터 자동 갱신'
+
     function normalizedTitle(value: string): string {
         return value.normalize('NFKC').toLocaleLowerCase().trim()
     }
@@ -42,7 +45,8 @@
         const normalized = normalizedTitle(target)
         return documents.find((document) =>
             document.status !== 'retracted'
-            && (normalizedTitle(document.title) === normalized
+            && (document.id === target.trim()
+                || normalizedTitle(document.title) === normalized
                 || (document.aliases ?? []).some((alias) =>
                     normalizedTitle(alias) === normalized)))
     }
@@ -50,7 +54,6 @@
 
 <section class="arc-ledger" data-story-arc-plot aria-label="아크 플롯">
     <header class="arc-hero">
-        <div class="arc-kicker"><RouteIcon size={14} /> STORY ARC PLOT</div>
         <div class="arc-heading">
             <div>
                 <h2>아크 플롯</h2>
@@ -70,6 +73,11 @@
                 {/if}
             </span>
         </div>
+        {#if !enabled && view.document}
+            <p class="arc-paused-note" data-story-arc-paused>
+                자동 갱신이 꺼져 있어 이 플롯은 새 사건을 반영하지 않습니다. {autoUpdateSettingPath}에서 켤 수 있습니다.
+            </p>
+        {/if}
     </header>
 
     {#if !view.document}
@@ -77,9 +85,9 @@
             <span class="empty-route" aria-hidden="true"><i></i><i></i><i></i></span>
             <strong>아직 생성된 아크 플롯이 없습니다.</strong>
             {#if !enabled}
-                <p>아크플로터 자동 갱신이 꺼져 있습니다. 기존 플롯이 없으면 새 플롯도 생성되지 않습니다.</p>
+                <p>자동 갱신이 꺼져 있어 새 플롯을 만들지 않습니다. {autoUpdateSettingPath}에서 켤 수 있습니다.</p>
             {:else if view.remainingEventCount > 0}
-                <p>확정 사건 {view.pendingEventCount}/{view.checkpointSize}개 · {view.remainingEventCount}개가 더 쌓이면 첫 플롯을 만듭니다.</p>
+                <p>사건이 {view.remainingEventCount}개가 더 쌓이면 첫 플롯을 만듭니다.</p>
             {:else}
                 <p>생성 조건을 채웠습니다. 다음 BardWiki 갱신에서 아크 플롯 작성을 시도합니다.</p>
             {/if}
@@ -88,7 +96,6 @@
         <article class="arc-document" data-story-arc-document={view.document.id}>
             <div class="document-toolbar">
                 <div>
-                    <span>CANONICAL PLOT</span>
                     <strong>{view.document.title}</strong>
                 </div>
                 <button
@@ -144,11 +151,11 @@
     }
     .arc-hero, .arc-document, .linked-events, .arc-empty { max-width: 48rem; margin-inline: auto; }
     .arc-hero { margin-bottom: 1.4rem; }
-    .arc-kicker { display: flex; align-items: center; gap: .45rem; color: var(--risu-theme-primary); font: 750 .67rem/1.2 ui-monospace, monospace; letter-spacing: .17em; }
-    .arc-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin-top: .35rem; }
+    .arc-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
+    .arc-paused-note { margin: .7rem 0 0; color: var(--risu-theme-textcolor2); font-size: .8rem; line-height: 1.6; }
     h2 { margin: 0 0 .3rem; font-family: Georgia, 'Noto Serif KR', serif; font-size: clamp(1.55rem, 3vw, 2.15rem); font-weight: 600; letter-spacing: -.035em; }
     .arc-heading p { margin: 0; color: var(--risu-theme-textcolor2); font-size: .84rem; line-height: 1.55; }
-    .arc-status { flex: 0 0 auto; padding: .35rem .58rem; border: 1px solid var(--arc-rule); border-radius: 999px; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent); font-size: .68rem; font-weight: 700; }
+    .arc-status { flex: 0 0 auto; padding: .35rem .58rem; border: 1px solid var(--arc-rule); border-radius: 999px; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent); font-size: .75rem; font-weight: 700; }
     .arc-status.paused { color: var(--risu-theme-textcolor2); border-color: var(--risu-theme-darkborderc); background: transparent; }
     .arc-empty { display: grid; justify-items: center; gap: .7rem; margin-top: 2rem; padding: 2.6rem 1.4rem; border: 1px dashed var(--arc-rule); border-radius: .5rem; text-align: center; background: color-mix(in srgb, var(--risu-theme-darkbg) 54%, transparent); }
     .arc-empty strong { font-family: Georgia, 'Noto Serif KR', serif; font-size: 1rem; }
@@ -159,10 +166,9 @@
     .arc-document { overflow: hidden; border: 1px solid color-mix(in srgb, var(--risu-theme-borderc) 28%, transparent); border-radius: .45rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 82%, transparent); box-shadow: 0 .4rem 1.8rem color-mix(in srgb, var(--color-shadow) 8%, transparent); }
     .document-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .7rem .9rem; border-bottom: 1px solid var(--arc-rule); background: color-mix(in srgb, var(--risu-theme-primary) 6%, transparent); }
     .document-toolbar > div { display: grid; gap: .15rem; }
-    .document-toolbar span { color: var(--risu-theme-primary); font: 700 .58rem/1.2 ui-monospace, monospace; letter-spacing: .14em; }
     .document-toolbar strong { font-family: Georgia, 'Noto Serif KR', serif; font-size: .88rem; }
     .document-toolbar button, .link-list button { display: inline-flex; align-items: center; gap: .38rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 35%, var(--risu-theme-darkborderc)); border-radius: .35rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent); cursor: pointer; }
-    .document-toolbar button { flex: 0 0 auto; padding: .42rem .62rem; font-size: .7rem; }
+    .document-toolbar button { flex: 0 0 auto; padding: .42rem .62rem; font-size: .75rem; }
     .document-toolbar button:hover, .link-list button:hover { border-color: var(--risu-theme-primary); color: var(--risu-theme-primary); }
     button:focus-visible { outline: 2px solid var(--risu-theme-primary); outline-offset: 2px; }
     .arc-markdown { padding: 1rem 1.15rem 1.4rem; font-family: Georgia, 'Noto Serif KR', serif; font-size: .88rem; line-height: 1.75; }
@@ -177,9 +183,9 @@
     .linked-events { margin-top: 1rem; padding: .85rem .95rem; border: 1px solid color-mix(in srgb, var(--risu-theme-borderc) 22%, transparent); border-radius: .45rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 55%, transparent); }
     .linked-heading { display: flex; align-items: baseline; gap: .45rem; margin-bottom: .65rem; }
     .linked-heading span { font-size: .75rem; font-weight: 750; }
-    .linked-heading small { color: var(--risu-theme-textcolor2); font-size: .65rem; }
+    .linked-heading small { color: var(--risu-theme-textcolor2); font-size: .75rem; }
     .link-list { display: flex; flex-wrap: wrap; gap: .45rem; }
-    .link-list button, .missing-link { padding: .38rem .55rem; font-size: .7rem; }
+    .link-list button, .missing-link { padding: .38rem .55rem; font-size: .75rem; }
     .missing-link { border: 1px dashed var(--risu-theme-darkborderc); border-radius: .35rem; color: var(--risu-theme-textcolor2); }
     @media (max-width: 520px) {
         .arc-heading, .document-toolbar { align-items: flex-start; flex-direction: column; }

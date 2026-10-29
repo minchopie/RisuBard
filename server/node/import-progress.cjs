@@ -47,6 +47,8 @@ function stream(id, req, res) {
         res.write(JSON.stringify(row) + '\n');
         // Disk transactions are synchronous. Do not leave progress corked until
         // the transaction returns to the event loop, possibly minutes later.
+        // Node 24.22+ auto-corks the response itself, not only its socket.
+        while (res.writableCorked > 0) res.uncork();
         res.socket?.uncork();
     };
     send({ type: 'heartbeat' });

@@ -84,7 +84,7 @@ export function addLorebookFolder(type:number) {
 
 // An explicit search uses only the supplied text and character lore, without
 // reading chat history/local lore or changing persistent activation flags.
-export async function loadLoreBookV3Prompt(options?: ChatContext | { character: character; text: string }){
+export async function loadLoreBookV3Prompt(options?: (ChatContext & { renderedFirstMessage?: string }) | { character: character; text: string }){
     const search = options && 'text' in options ? options : undefined
     const context = options && 'chat' in options ? options : undefined
     const char = options?.character ?? DBState.db.characters[get(selectedCharID)]
@@ -199,6 +199,24 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
     )
     const matchingLocale = getCurrentLocale()
     const chatLength = currentChat.length + 1 //includes first message
+    // The greeting is sent as the oldest message unless an allBefore marker hides it,
+    // so key search sees it whenever scan depth reaches past the stored messages.
+    let firstMessageForSearch: Message | undefined
+    if(!search && !currentChatState.firstMessageDisabled && !currentChat.some((message) => message.disabled === 'allBefore')){
+        let rendered = context && 'renderedFirstMessage' in context ? context.renderedFirstMessage : undefined
+        if(rendered === undefined){
+            const greeting = (currentChatState.fmIndex ?? -1) === -1
+                ? char.firstMessage
+                : char.alternateGreetings?.[currentChatState.fmIndex]
+            rendered = typeof greeting === 'string'
+                ? risuChatParser(greeting, { chara: char, chat: currentChatState })
+                : ''
+        }
+        if(rendered?.trim()){
+            firstMessageForSearch = { role: 'char', data: rendered }
+        }
+    }
+    const searchChat: Message[] = firstMessageForSearch ? [firstMessageForSearch, ...currentChat] : currentChat
     const recursiveScanning = char.loreSettings?.recursiveScanning ?? true
     const maxRecursionSteps = Math.max(0, char.loreSettings?.maxRecursionSteps ?? 0)
     let recursivePrompt:{
@@ -235,6 +253,13 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
             prompt:string
             data:string
         }[] = sliced.map((msg, i) => {
+            if(msg === firstMessageForSearch){
+                return {
+                    source: 'first message',
+                    prompt: `\x01{{${char.name}}}:` + msg.data + '\x01',
+                    data: msg.data
+                }
+            }
             if(msg.role === 'user'){
                 return {
                     source: `message ${i} by user`,
@@ -259,29 +284,32 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
             }))    
 
         if(arg.regex){
+            const regexes: { regex: RegExp, source: string }[] = []
+            for(const regexString of arg.keys){
+                const parsed = regexString.match(/^\/([\s\S]*)\/([dgimsuvy]*)$/)
+                if(!parsed){
+                    return false
+                }
+                const [, pattern, flags] = parsed
+                try {
+                    regexes.push({
+                        regex: new RegExp(pattern, flags),
+                        source: regexString
+                    })
+                } catch (error) {
+                    return false
+                }
+            }
             for(const mText of mList){
-                for(const regexString of arg.keys){
-                    if(!regexString.startsWith('/')){
-                        return false
-                    }
-                    const delimiter = regexString.lastIndexOf('/')
-                    if(delimiter > 0){
-                        const regexFlag = regexString.slice(delimiter + 1)
-                        const regexSource = regexString.slice(1, delimiter)
-                        try {
-                            const regex = new RegExp(regexSource,regexFlag)
-                            const d = regex.test(mText.data)
-                            if(d){
-                                matchLog.push({
-                                    prompt: mText.prompt,
-                                    source: mText.source,
-                                    activated: regexString
-                                })
-                                return true
-                            }
-                        } catch (error) {
-                            return false
-                        }
+                for(const {regex, source} of regexes){
+                    regex.lastIndex = 0
+                    if(regex.test(mText.data)){
+                        matchLog.push({
+                            prompt: mText.prompt,
+                            source: mText.source,
+                            activated: source
+                        })
+                        return true
                     }
                 }
             }
@@ -348,8 +376,6 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
     let activatedIndexes:number[] = []
     let disabledUIPrompts:string[] = []
     let matchTimes = 0
-    let keepActivateAfterMatch = false
-    let dontActivateAfterMatch = false
     let completedSweeps = 0
     while(matching && canRunLorebookSweep(completedSweeps, maxRecursionSteps)){
         completedSweeps++
@@ -383,6 +409,8 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
             }[] = []
             let matchingMode = matchingModeSetting
             let dontSearchWhenRecursive = false
+            let keepActivateAfterMatch = false
+            let dontActivateAfterMatch = false
             
             if(fullLore[i].mode === 'child'){
                 activated = false
@@ -641,7 +669,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
                 }
     
                 for(const query of searchQueries){
-                    const result = searchMatch(currentChat, {
+                    const result = searchMatch(searchChat, {
                         keys: query.keys,
                         searchDepth: scanDepth,
                         regex: fullLore[i].useRegex,

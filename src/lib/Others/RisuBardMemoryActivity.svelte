@@ -91,6 +91,11 @@
         if (byTimestamp !== 0) return byTimestamp
         return b.key.localeCompare(a.key)
     }))
+    // Long chats keep hundreds of requests; render the newest page first.
+    const ACTIVITY_PAGE_SIZE = 60
+    let shownActivityCount = $state(ACTIVITY_PAGE_SIZE)
+    let shownLegacyCount = $state(ACTIVITY_PAGE_SIZE)
+    let shownActivityEntries = $derived(storedActivityEntries.slice(0, shownActivityCount))
     let recordedGenerationIds = $derived(new Set(requestEntries.flatMap(
         (entry) => entry.generationId ? [entry.generationId] : []
     )))
@@ -280,7 +285,7 @@
 
 <details class="activity-console" open data-memory-activity>
     <summary class="activity-heading">
-        <ActivityIcon size={15} /> 작업 로그
+        <ActivityIcon size={15} /> 요청 기록
     </summary>
     <div class="evidence-toolbar">
         <button
@@ -299,7 +304,7 @@
             <details class="live-session">
                 <summary class="section-toggle">
                     <span><Clock3Icon size={13} /> 이번 실행의 실시간 이벤트</span>
-                    <small>{live.length}개 · 앱 재시작 시 초기화</small>
+                    <small>{live.length}개, 앱을 다시 시작하면 지워집니다</small>
                     <span class="fold-icon"><ChevronDownIcon size={14} /></span>
                 </summary>
                 <div class="live-list">
@@ -320,7 +325,7 @@
             </details>
         {/if}
 
-        {#each storedActivityEntries as item (item.key)}
+        {#each shownActivityEntries as item (item.key)}
             {#if item.kind === 'receipt'}
                 <article
                     class="result-entry"
@@ -335,7 +340,7 @@
                         </em>
                     </div>
                     <p>{item.receipt.message}</p>
-                    <small>사건 보존 {item.receipt.eventCount}건 · 정본 변경 {item.receipt.changeCount}건</small>
+                    <small>사건 보존 {item.receipt.eventCount}건, 정본 변경 {item.receipt.changeCount}건</small>
                 </article>
             {:else}
             <details class="request-entry" data-request-source={item.request.source}>
@@ -381,8 +386,8 @@
                     {#if item.request.injectionManifest}
                         <div class="composition">
                             <div class="detail-title">
-                                입력 상세 · {formatNumber(item.request.injectionManifest.totalTokens)} tokens
-                                {item.request.injectionManifest.estimated ? ' · 추정' : ''}
+                                입력 상세 {formatNumber(item.request.injectionManifest.totalTokens)} 토큰
+                                {item.request.injectionManifest.estimated ? ' (추정)' : ''}
                             </div>
                             <div class="composition-list">
                                 {#each groupInjectionManifestItems(item.request.injectionManifest) as injectionItem}
@@ -434,11 +439,17 @@
                 <small>상세 요청 행이 보존되기 전 기록</small>
             </div>
         {/if}
-        {#each entries as entry (entry.messageId)}
+        {#if storedActivityEntries.length > shownActivityEntries.length}
+            <button type="button" class="activity-more" data-activity-more
+                onclick={() => shownActivityCount += ACTIVITY_PAGE_SIZE}>
+                이전 기록 {storedActivityEntries.length - shownActivityEntries.length}건 더 보기
+            </button>
+        {/if}
+        {#each entries.slice(0, shownLegacyCount) as entry (entry.messageId)}
             <details class="request-entry generation-entry">
                 <summary class="request-summary">
                     <span class="summary-line">
-                        <strong class="request-kind">답변 생성 · 구형</strong>
+                        <strong class="request-kind">답변 생성 (구형 기록)</strong>
                         {#if entry.timestamp}
                             <time datetime={new Date(entry.timestamp).toISOString()}>{formatTimestamp(entry.timestamp)}</time>
                         {:else}
@@ -471,7 +482,7 @@
                             <div class="detail-title">최근 원문 메시지</div>
                             <div class="chips">
                                 {#each entry.info.risuBardContext?.recentMessages ?? [] as recent}
-                                    <code>{recent.role} · {recent.id}</code>
+                                    <code>{recent.role} {recent.id}</code>
                                 {/each}
                             </div>
                         </div>
@@ -493,10 +504,17 @@
         {#if live.length === 0 && storedActivityEntries.length === 0 && entries.length === 0}
             <div class="empty">이 채팅에 보존된 요청 기록이 없습니다.</div>
         {/if}
+        {#if entries.length > shownLegacyCount}
+            <button type="button" class="activity-more" onclick={() => shownLegacyCount += ACTIVITY_PAGE_SIZE}>
+                구형 기록 {entries.length - shownLegacyCount}건 더 보기
+            </button>
+        {/if}
     </div>
 </details>
 
 <style>
+    .activity-more { justify-self: center; padding: .35rem .8rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .35rem; color: var(--risu-theme-textcolor2); font-size: calc(.64rem + var(--activity-font-step)); }
+    .activity-more:hover { color: var(--risu-theme-textcolor); border-color: var(--risu-theme-borderc); }
     .activity-console { --activity-font-step: 3px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-top: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 97%, var(--color-bgcolor)); }
     .activity-heading { display: flex; align-items: center; gap: .45rem; padding: .62rem .85rem; cursor: pointer; color: var(--risu-theme-textcolor); font-size: calc(.74rem + var(--activity-font-step)); font-weight: 800; list-style: none; }
     .evidence-toolbar { display: flex; justify-content: flex-end; padding: 0 .75rem .55rem; color: var(--risu-theme-textcolor2); font-size: calc(.64rem + var(--activity-font-step)); }

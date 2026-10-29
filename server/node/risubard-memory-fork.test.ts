@@ -48,9 +48,10 @@ describe('memory workspace fork', () => {
 
         await expect(fs.readFile(destination.stateFile, 'utf8'))
             .resolves.toBe('source-state')
+        // The retired history folder is not copied.
         await expect(fs.readFile(join(
             destination.directory, 'wiki', '.risubard-history', 'audit.md'
-        ), 'utf8')).resolves.toBe('audit')
+        ), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
         await fs.writeFile(destination.stateFile, 'copy-state')
         await expect(fs.readFile(source.stateFile, 'utf8'))
             .resolves.toBe('source-state')

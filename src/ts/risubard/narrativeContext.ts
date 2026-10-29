@@ -45,7 +45,6 @@ export interface NarrativeInquiryResponse {
     cacheStatus: 'current' | 'missing-or-stale'
     sources: ContextSource[]
     evidenceRequests: Array<{ messageId: string, eventTitle: string, documentId?: string }>
-    rerankCandidates: NarrativeRerankCandidate[]
     entityCandidates: Array<{ id: string, title: string }>
     metrics: {
         candidateCount: number
@@ -60,20 +59,13 @@ export interface NarrativeInquiryResponse {
     }
 }
 
-export interface NarrativeRerankCandidate {
-    documentId: string
-    type: 'character' | 'location' | 'faction' | 'creature' | 'item'
-        | 'concept' | 'event' | 'scene' | 'other'
-    title: string
-    excerpt: string
-    score: number
-}
-
 const NARRATIVE_EVIDENCE_RULES = [
     'Narrative continuity:',
-    '- Treat retrieved sources as authoritative evidence. Preserve established facts, chronology, viewpoint knowledge, and unresolved uncertainty; never replace them with an unsupported continuation.',
+    '- Treat retrieved sources as evidence of what happened. Preserve established facts, chronology, viewpoint knowledge, and unresolved uncertainty; never replace them with an unsupported continuation.',
+    '- When sources disagree, trust them in this order: the recent transcript, original historical chat evidence, event documents, canon documents, the story arc plot. An event labeled with a larger story order number happened later.',
     '- Prefer direct historical chat evidence and event documents for exact past details, and current canonical state for present facts.',
-    '- Character canon records durable state and may compress several scenes into one sentence; it does not establish when they happened. For what happened most recently, use the recent transcript first, then the story flow and turn labels, before any canon summary.',
+    '- Character canon records durable state and may compress several scenes into one sentence; it does not establish when they happened. A trailing (#N) on a canon line names the event that recorded it. For what happened most recently, use the recent transcript first, then the story flow and turn labels, before any canon summary.',
+    '- Where the story has changed what the character description or lorebook says, follow this memory; use the lorebook for what the story has not changed. Leave details the sources do not settle uncertain.',
 ].join('\n')
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -255,7 +247,6 @@ export async function loadNarrativeInquiry(input: {
         ], [
             'evidenceRequests',
             'entityCandidates',
-            'rerankCandidates',
         ])
         || !['v2-current', 'bounded-v1-fallback'].includes(
             String(value.mode)
@@ -396,40 +387,6 @@ export async function loadNarrativeInquiry(input: {
             : (() => {
                 throw new Error('Invalid RisuBard evidence requests')
             })()
-    const rerankCandidates = value.rerankCandidates === undefined
-        ? []
-        : Array.isArray(value.rerankCandidates)
-            ? value.rerankCandidates.slice(0, 12).map((candidate) => {
-                if (!isRecord(candidate)
-                    || !hasExactKeys(candidate, [
-                        'documentId', 'type', 'title', 'excerpt', 'score',
-                    ])
-                    || typeof candidate.documentId !== 'string'
-                    || candidate.documentId.trim().length === 0
-                    || candidate.documentId.length > 256
-                    || !['character', 'location', 'faction', 'creature',
-                        'item', 'concept', 'event', 'scene', 'other']
-                        .includes(String(candidate.type))
-                    || typeof candidate.title !== 'string'
-                    || candidate.title.trim().length === 0
-                    || candidate.title.length > 160
-                    || typeof candidate.excerpt !== 'string'
-                    || candidate.excerpt.length > 320
-                    || typeof candidate.score !== 'number'
-                    || !Number.isFinite(candidate.score)) {
-                    throw new Error('Invalid Bard-chan rerank candidate')
-                }
-                return {
-                    documentId: candidate.documentId,
-                    type: candidate.type as NarrativeRerankCandidate['type'],
-                    title: candidate.title,
-                    excerpt: candidate.excerpt,
-                    score: candidate.score,
-                }
-            })
-            : (() => {
-                throw new Error('Invalid Bard-chan rerank candidates')
-            })()
     const entityCandidates = value.entityCandidates === undefined
         ? []
         : Array.isArray(value.entityCandidates)
@@ -484,7 +441,6 @@ export async function loadNarrativeInquiry(input: {
         cacheStatus: value.cacheStatus as NarrativeInquiryResponse['cacheStatus'],
         sources,
         evidenceRequests,
-        rerankCandidates,
         entityCandidates,
         metrics: {
             candidateCount: boundedMetric(value.metrics.candidateCount, input.retrievalLimits?.candidates ?? 64),

@@ -108,7 +108,7 @@ function createLiveCharacterFiles(options) {
     };
 }
 
-function createActiveLiveCharacterFiles({ repository, writeAsset, writeAssets, reloadAssets = () => {}, watch = true, settleMs = 250, forceInitialReconcile = false, onChange = () => {} }) {
+function createActiveLiveCharacterFiles({ repository, writeAsset, writeAssets, reloadAssets = () => {}, watch = true, settleMs = 250, forceInitialReconcile = false, onChange = () => {}, onlyCharacterIds = null }) {
     const root = repository.dataRoot;
     const directories = createCharacterDirectoryResolver(root);
     let accepted = repository.getProjectionRevision();
@@ -117,11 +117,16 @@ function createActiveLiveCharacterFiles({ repository, writeAsset, writeAssets, r
     try { baseline = metadataSnapshot(repository.exportLegacyDatabase({ metadataOnly: true })); }
     catch { baseline = { characters: [], loreBook: [] }; needsInitialReconcile = true; }
     let dirty = true;
-    let assetsDirty = true;
+    // A one-shot scan (onlyCharacterIds) starts with just those asset folders;
+    // other characters' folders are neither read nor adopted.
+    const scope = onlyCharacterIds
+        ? onlyCharacterIds.map(id => path.posix.basename(directories.characterDirectory(id).replaceAll('\\', '/')))
+        : null;
+    let assetsDirty = !scope;
     // Asset directories touched since the last scan. Our own atomic metadata
     // writes also report their parent directory; rescanning every character
     // for each save read all assets and metadata.
-    const dirtyAssetDirectories = new Set();
+    const dirtyAssetDirectories = new Set(scope || []);
     let changedAt = 0;
     let watcher;
     let fallback = false;

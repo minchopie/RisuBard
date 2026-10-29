@@ -55,8 +55,11 @@ export interface NarrativeMemoryWikiMarkdown {
         content: string
         links: string[]
         created?: string
+        sequence?: number
         authoring?: 'automatic' | 'ai-assisted' | 'manual'
         contextMode: MarkdownWikiContextMode
+        grade?: number
+        gradeBy?: 'user' | 'ai'
         contentHash: string
         reviewStatus?: 'unreviewed' | 'reviewed'
         reviewBaseContent?: string
@@ -335,7 +338,7 @@ function parseMarkdownWikiDocument(document: unknown, catalog = false): WikiCata
     if (!isRecord(document)
         || !documentKeys.every((key) => key in document)
         || Object.keys(document).some((key) => ![
-            ...documentKeys, 'created', 'authoring',
+            ...documentKeys, 'created', 'sequence', 'authoring', 'grade', 'gradeBy',
             'supersededBy', 'reviewStatus',
             'reviewBaseContent', 'aliases', 'retrievalMetadata',
         ].includes(key))
@@ -364,6 +367,8 @@ function parseMarkdownWikiDocument(document: unknown, catalog = false): WikiCata
                     typeof alias === 'string')))
         || (document.created !== undefined
             && typeof document.created !== 'string')
+        || (document.sequence !== undefined
+            && (!Number.isSafeInteger(document.sequence) || (document.sequence as number) < 1))
         || (document.authoring !== undefined
             && !['automatic', 'ai-assisted', 'manual'].includes(
                 String(document.authoring)
@@ -377,6 +382,12 @@ function parseMarkdownWikiDocument(document: unknown, catalog = false): WikiCata
         || !['always', 'auto', 'never'].includes(
             String(document.contextMode)
         )
+        || (document.grade !== undefined
+            && !(Number.isInteger(document.grade)
+                && (document.grade as number) >= 0
+                && (document.grade as number) <= 9))
+        || (document.gradeBy !== undefined
+            && document.gradeBy !== 'user' && document.gradeBy !== 'ai')
         || typeof document.contentHash !== 'string'
         || document.contentHash.length === 0) {
         throw new Error('Invalid RisuBard Markdown wiki view')
@@ -396,6 +407,12 @@ function parseMarkdownWikiDocument(document: unknown, catalog = false): WikiCata
         ...(catalog ? {} : { content: requireString(document.content) }),
         links: document.links,
         contextMode: document.contextMode as MarkdownWikiContextMode,
+        ...(document.grade === undefined ? {} : {
+            grade: document.grade as number,
+            ...(document.gradeBy === undefined ? {} : {
+                gradeBy: document.gradeBy as 'user' | 'ai',
+            }),
+        }),
         contentHash: document.contentHash,
         ...(document.retrievalMetadata === undefined ? {} : {
             retrievalMetadata: normalizeMemoryRetrievalMetadata(document.retrievalMetadata),
@@ -406,6 +423,7 @@ function parseMarkdownWikiDocument(document: unknown, catalog = false): WikiCata
         ...(document.created === undefined
             ? {}
             : { created: requireString(document.created) }),
+        ...(document.sequence === undefined ? {} : { sequence: document.sequence as number }),
         ...(document.authoring === undefined
             ? {}
             : { authoring: document.authoring as
@@ -880,6 +898,64 @@ export async function setWikiDocumentContextMode(input: {
         || value.contextMode !== body.contextMode
         || typeof value.contentHash !== 'string') {
         throw new Error('Invalid wiki context-mode receipt')
+    }
+    return value as unknown as NarrativeMemoryWikiMarkdown['documents'][number]
+}
+
+export async function setWikiDocumentGrade(input: {
+    characterId: string
+    chatId: string
+    documentId: string
+    /** 0-9, or null to clear. */
+    grade: number | null
+    gradeBy?: 'user' | 'ai'
+    expectedContentHash: string
+    fetchImpl: typeof fetch
+    createAuth(): Promise<string>
+}): Promise<NarrativeMemoryWikiMarkdown['documents'][number]> {
+    if (input.grade !== null
+        && !(Number.isInteger(input.grade) && input.grade >= 0 && input.grade <= 9)) {
+        throw new Error('Invalid wiki grade')
+    }
+    const body = {
+        characterId: requiredMutationString(input.characterId, 'Character ID', 1_024),
+        chatId: requiredMutationString(input.chatId, 'Chat ID', 1_024),
+        documentId: requiredMutationString(input.documentId, 'Document ID', 1_024),
+        grade: input.grade,
+        gradeBy: input.gradeBy ?? 'ai',
+        expectedContentHash: requiredMutationString(
+            input.expectedContentHash,
+            'Content hash',
+            128
+        ),
+    }
+    const response = await invokeBrowserFetch(
+        input.fetchImpl,
+        '/api/risubard/memory/wiki/document/grade',
+        {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'content-type': 'application/json',
+                'risu-auth': await input.createAuth(),
+            },
+            body: JSON.stringify(body),
+        }
+    )
+    if (!response.ok) {
+        throw new Error(
+            `Wiki grade update failed with status ${response.status}`
+        )
+    }
+    const value: unknown = await response.json()
+    if (!isRecord(value)
+        || value.id !== body.documentId
+        || value.status !== 'active'
+        || (body.grade === null
+            ? value.grade !== undefined
+            : value.grade !== body.grade)
+        || typeof value.contentHash !== 'string') {
+        throw new Error('Invalid wiki grade receipt')
     }
     return value as unknown as NarrativeMemoryWikiMarkdown['documents'][number]
 }

@@ -4,15 +4,17 @@
     import { sleep } from "src/ts/util";
 
     const {
-        children
+        children,
+        ariaLabel,
     }:{
         children: import("svelte").Snippet
+        ariaLabel: string
     } = $props();
     
     let buttonId = Math.random()
 </script>
 
-<button onclick={async (e:MouseEvent) => {
+<button aria-label={ariaLabel} onclick={async (e:MouseEvent) => {
     await sleep(0)
     if(popupStore.openId === buttonId){
         popupStore.children = null

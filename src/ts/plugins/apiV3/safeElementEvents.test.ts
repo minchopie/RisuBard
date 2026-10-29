@@ -116,6 +116,33 @@ describe('API v3 SafeElement events', () => {
         expect(entered).toHaveBeenCalledOnce()
     })
 
+    test('binds root document listeners to the Document so viewport scroll reaches them', async () => {
+        const scrolled = vi.fn()
+        const root = new SafeElement(document.documentElement, document)
+        const id = await root.addEventListener('scroll', scrolled)
+
+        document.dispatchEvent(new Event('scroll'))
+        expect(scrolled).toHaveBeenCalledOnce()
+        expect(listeners[0].target).toBe(document)
+
+        await root.removeEventListener('scroll', id)
+        document.dispatchEvent(new Event('scroll'))
+        expect(scrolled).toHaveBeenCalledOnce()
+        expect(listeners).toHaveLength(0)
+    })
+
+    test('removal replays the registration even when type and capture do not match', async () => {
+        const { element, safe } = button()
+        const clicked = vi.fn()
+        const id = await safe.addEventListener('click', clicked, true)
+        await safe.removeEventListener('pointerup', id)
+
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+        expect(clicked).not.toHaveBeenCalled()
+        expect(listeners).toHaveLength(0)
+    })
+
     test.each([false, true])('removes listeners from their element with capture=%s', async (capture) => {
         const { element, safe } = button()
         const clicked = vi.fn()

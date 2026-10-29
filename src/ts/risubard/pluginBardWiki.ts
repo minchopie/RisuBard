@@ -7,6 +7,7 @@ import {
     loadNarrativeMemoryWiki,
     saveManualWikiDocument,
     setWikiDocumentContextMode,
+    setWikiDocumentGrade,
     trashWikiDocument,
     type MarkdownWikiContextMode,
     type MarkdownWikiDocumentType,
@@ -299,6 +300,7 @@ interface BardWikiDocumentDependencies {
     loadWiki: typeof loadNarrativeMemoryWiki
     saveDocument: typeof saveManualWikiDocument
     setContextMode: typeof setWikiDocumentContextMode
+    setGrade: typeof setWikiDocumentGrade
     trashDocument: typeof trashWikiDocument
 }
 
@@ -352,6 +354,20 @@ export async function setBardWikiPluginDocumentContextMode(
     dependencies: Partial<BardWikiDocumentDependencies> = {}
 ): Promise<BardWikiPluginDocument> {
     const result = await (dependencies.setContextMode ?? setWikiDocumentContextMode)(input)
+    compatibilityCaches = new WeakMap()
+    return result
+}
+
+export async function setBardWikiPluginDocumentGrade(
+    input: BardWikiPluginScope & {
+        documentId: string
+        grade: number | null
+        gradeBy?: 'user' | 'ai'
+        expectedContentHash: string
+    },
+    dependencies: Partial<BardWikiDocumentDependencies> = {}
+): Promise<BardWikiPluginDocument> {
+    const result = await (dependencies.setGrade ?? setWikiDocumentGrade)(input)
     compatibilityCaches = new WeakMap()
     return result
 }

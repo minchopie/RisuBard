@@ -183,7 +183,7 @@ test('conflicts are listed with every observed head and resolved by an explicit 
     const phone = await device(t, dav, 'phone', { ...EMPTY(), aiModel: 'phone-model', language: 'ja' }); phone.service.enable({ workspaceId: 'ws', role: 'joining' })
     expect((await phone.service.snapshot()).committed).toMatchObject({ sequence: 1 }); await phone.service.pull()
     const diverged = await phone.service.plan(); expect(diverged.pending.map((p: any) => p.reason)).toContain('diverged'); expect((await phone.service.finish(diverged.transaction, false)).state).toBe('rolled-back')
-    const conflicts = phone.service.conflicts(); expect(conflicts.length).toBeGreaterThan(0)
+    const conflicts = await phone.service.conflicts(); expect(conflicts.length).toBeGreaterThan(0)
     const provider = conflicts.find((c: any) => c.variants.some((v: any) => v.content.aiModel === 'gpt'))
     expect(provider.state).toBe('diverged'); expect(provider.variants).toHaveLength(2); expect(JSON.stringify(provider)).not.toContain('SENTINEL') // public form only
     const keep = provider.variants.find((v: any) => v.content.aiModel === 'gpt').heads[0]
@@ -192,16 +192,16 @@ test('conflicts are listed with every observed head and resolved by an explicit 
     const plan = await phone.service.plan(); expect(plan.settings.aiModel).toBe('gpt'); expect(plan.pending.filter((p: any) => p.root === provider.root)).toEqual([])
     const db = phone.db(); await phone.service.arm(plan.transaction, echoOf(plan, applyPlanToDb(structuredClone(db), plan))); phone.save(applyPlanToDb(db, plan))
     expect((await phone.service.finish(plan.transaction, true)).state).toBe('applied'); expect(phone.db().aiModel).toBe('gpt')
-    expect(phone.service.status().localApply).toBe(0); expect(phone.service.conflicts().filter((c: any) => c.root === provider.root)).toEqual([])
+    expect(phone.service.status().localApply).toBe(0); expect((await phone.service.conflicts()).filter((c: any) => c.root === provider.root)).toEqual([])
     // Trash: the tablet deletes its chat; restoring the cohort brings the chat back through plan → save → finish.
     const tdb = tablet.db(); tdb.characters[0].chats = []; tablet.save(tdb)
     expect((await tablet.service.snapshot()).committed).toMatchObject({ tombstones: 1 })
-    const trash = tablet.service.trashList(); expect(trash).toEqual([expect.objectContaining({ root: 'chat', type: 'chat', expired: false })])
+    const trash = await tablet.service.trashList(); expect(trash).toEqual([expect.objectContaining({ root: 'chat', type: 'chat', expired: false })])
     expect(await tablet.service.restoreTrash({ id: trash[0].id })).toMatchObject({ restored: [{ root: 'chat', type: 'chat', revision: expect.any(String) }] })
     const back = await tablet.service.plan(); expect(back.chats).toEqual([expect.objectContaining({ update: false })]); expect(back.chats[0].chat.id).toBe('chat'); expect(back.chats[0].chat.message[0].data).toBe('본문')
     const db2 = tablet.db(); await tablet.service.arm(back.transaction, echoOf(back, applyPlanToDb(structuredClone(db2), back))); tablet.save(applyPlanToDb(db2, back))
     expect((await tablet.service.finish(back.transaction, true)).state).toBe('applied'); expect(tablet.db().characters[0].chats.map((c: any) => c.id)).toEqual(['chat'])
-    expect(tablet.service.trashList()).toEqual([]); expect(tablet.service.store().graph.classify('play\nchat\nchat').state).toBe('live')
+    expect(await tablet.service.trashList()).toEqual([]); expect(tablet.service.store().graph.classify('play\nchat\nchat').state).toBe('live')
 })
 
 test('the chat kept open through a remote deletion can be restored (its lineage continues, the tombstone is parented) or the deletion accepted (lineage dropped)', async t => {
@@ -233,7 +233,7 @@ test('local materialization intent survives an ambiguous commit (durable revisio
     let tdb = tablet.db(); tdb.characters[0].chats.push({ id: 'chat2', name: '둘째', note: '', localLore: [], message: [{ role: 'char', data: '둘째' }] }); tablet.save(tdb); await tablet.service.snapshot()
     tdb = tablet.db(); tdb.characters[0].chats = tdb.characters[0].chats.filter((c: any) => c.id !== 'chat'); tablet.save(tdb); await tablet.service.snapshot() // operation 1
     tdb = tablet.db(); tdb.characters[0].chats = []; tablet.save(tdb); await tablet.service.snapshot() // operation 2
-    const trash = tablet.service.trashList(); expect(trash.map((t: any) => t.root).sort()).toEqual(['chat', 'chat2'])
+    const trash = await tablet.service.trashList(); expect(trash.map((t: any) => t.root).sort()).toEqual(['chat', 'chat2'])
     const first = trash.find((t: any) => t.root === 'chat'), second = trash.find((t: any) => t.root === 'chat2'), store = tablet.service.store(), original = store.commit
     // Ambiguous write: the commit lands durably, then the call reports an error → the intent stays.
     store.commit = (...args: any[]) => { original.apply(store, args); throw new Error('rename failed after the manifest write') }
@@ -247,7 +247,7 @@ test('local materialization intent survives an ambiguous commit (durable revisio
     const plan = await tablet.service.plan(); expect(plan.chats.map((r: any) => r.chat.id)).toEqual(['chat']) // the durable restore is materialized by the next plan
     const db = tablet.db(); await tablet.service.arm(plan.transaction, echoOf(plan, applyPlanToDb(structuredClone(db), plan))); tablet.save(applyPlanToDb(db, plan))
     expect((await tablet.service.finish(plan.transaction, true)).state).toBe('applied'); expect(tablet.service.state().localApply).toEqual([])
-    expect(tablet.db().characters[0].chats.map((c: any) => c.id)).toEqual(['chat']); expect(tablet.service.trashList().map((t: any) => t.root)).toEqual(['chat2'])
+    expect(tablet.db().characters[0].chats.map((c: any) => c.id)).toEqual(['chat']); expect((await tablet.service.trashList()).map((t: any) => t.root)).toEqual(['chat2'])
 })
 
 test('an open sibling-branch chat hit by a remote deletion is restored as THIS chat with its own edited content: the unrelated live branch and an independent deletion of another branch both survive, locally and on a third device', async t => {
@@ -270,8 +270,8 @@ test('an open sibling-branch chat hit by a remote deletion is restored as THIS c
     pdb = phone.db(); pdb.characters[0].chats = pdb.characters[0].chats.filter((c: any) => c.id !== 'chat'); phone.save(pdb)
     expect((await phone.service.snapshot()).committed).toMatchObject({ tombstones: 1 })
     const g0 = phone.service.store().graph
-    const ownDeletion = phone.service.trashList().find((x: any) => g0.get(x.id).tombstone.base === phoneHead); expect(ownDeletion).toBeTruthy() // the trash also lists the tablet's pulled deletion of the other branch
-    expect(phone.service.trashList()).toHaveLength(2)
+    const ownDeletion = (await phone.service.trashList()).find((x: any) => g0.get(x.id).tombstone.base === phoneHead); expect(ownDeletion).toBeTruthy() // the trash also lists the tablet's pulled deletion of the other branch
+    expect(await phone.service.trashList()).toHaveLength(2)
     const restored = await phone.service.restoreOpenDeletion({ chatId: sibling })
     expect(restored.restored).toHaveLength(1); expect(restored.state).toBe('delete-pending') // actual state: restored live head + the unrelated deletion still a head
     const g = phone.service.store().graph, after = g.classify('play\nchat\nchat')
@@ -279,7 +279,7 @@ test('an open sibling-branch chat hit by a remote deletion is restored as THIS c
     expect(head.content.message.map((m: any) => m.data)).toEqual(['본문', '태블릿 편집', '가지에서 이어서']) // this chat's content, root identity space
     expect(after.liveHeads).toEqual([head.id]); expect(after.tombstoneHeads).toEqual([ownDeletion.id]) // the independent deletion survives
     expect(head.parents).not.toContain(ownDeletion.id)
-    expect(phone.service.trashList().map((x: any) => x.id)).toEqual([ownDeletion.id]) // still recoverable
+    expect((await phone.service.trashList()).map((x: any) => x.id)).toEqual([ownDeletion.id]) // still recoverable
     // Recover the other branch from the trash: both branches are live heads again, both chats exist locally.
     await phone.service.restoreTrash({ id: ownDeletion.id })
     const back = await phone.service.plan(); expect(back.chats.map((r: any) => r.chat.id)).toEqual(['chat'])
@@ -370,7 +370,7 @@ test('a device that received the shared key can answer a request (lost-key recov
     // Conflict variants name their source (this device vs the peer that published the head).
     const pc = await device(t, dav, 'pc', { ...EMPTY(), aiModel: 'pc-model' }); pc.service.enable({ workspaceId: 'ws', role: 'joining' }); await pc.service.snapshot(); await pc.service.pull()
     const diverged = await pc.service.plan(); expect(diverged.pending.map((p: any) => p.reason)).toContain('diverged'); await pc.service.finish(diverged.transaction, false)
-    const conflict = pc.service.conflicts().find((c: any) => c.variants.some((v: any) => v.content.aiModel === 'gpt'))
+    const conflict = (await pc.service.conflicts()).find((c: any) => c.variants.some((v: any) => v.content.aiModel === 'gpt'))
     expect(conflict.variants.find((v: any) => v.content.aiModel === 'gpt').source).toEqual({ device: tablet.service.store().identity().deviceId, self: false })
     expect(conflict.variants.find((v: any) => v.content.aiModel === 'pc-model').source).toEqual({ device: pc.service.store().identity().deviceId, self: true })
     expect(JSON.stringify(conflict)).not.toContain('SENTINEL')

@@ -8,6 +8,7 @@
     import RisuBardCommonSettings from './Pages/RisuBardCommonSettings.svelte'
     import RisuBardWikiPromptSettings from './Pages/RisuBardWikiPromptSettings.svelte'
     import RisuBardGrimoirePromptSettings from './Pages/RisuBardGrimoirePromptSettings.svelte'
+    import RisuBardInputAssistantSettings from './Pages/RisuBardInputAssistantSettings.svelte'
     import InlayImageGallery from './Pages/InlayImageGallery.svelte'
     import ModuleSettings from './Pages/Module/ModuleSettings.svelte'
     import NotificationSoundSettings from './Pages/NotificationSoundSettings.svelte'
@@ -124,6 +125,8 @@
                             <RisuBardWikiPromptSettings />
                         {:else if $SettingsMenuIndex === SettingsRoute.RisuBardGrimoirePrompt}
                             <RisuBardGrimoirePromptSettings />
+                        {:else if $SettingsMenuIndex === SettingsRoute.RisuBardInputAssistant}
+                            <RisuBardInputAssistantSettings />
                         {:else if isExperienceSettingsRoute($SettingsMenuIndex as SettingsRouteValue)}
                             <ExperienceSettingsWorkspace
                                 activeRoute={$SettingsMenuIndex as SettingsRouteValue}

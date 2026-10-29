@@ -2,7 +2,7 @@
     import { onDestroy, untrack } from "svelte";
     import { v4 } from "uuid";
     import Sortable from 'sortablejs/modular/sortable.core.esm.js';
-    import { DownloadIcon, PencilIcon, HardDriveUploadIcon, MenuIcon, TrashIcon, SplitIcon, FolderPlusIcon, BookmarkCheckIcon, PackageIcon, CopyIcon, PlusIcon, MergeIcon, EllipsisIcon } from "@lucide/svelte";
+    import { DownloadIcon, PencilIcon, HardDriveUploadIcon, TrashIcon, SplitIcon, FolderPlusIcon, BookmarkCheckIcon, PackageIcon, CopyIcon, PlusIcon, MergeIcon, EllipsisIcon, XIcon, ListChecksIcon, UserRoundIcon, FolderInputIcon, FolderMinusIcon, ArrowUpIcon, ArrowDownIcon, GripVerticalIcon, ChevronRightIcon, PaletteIcon } from "@lucide/svelte";
 
     import type { Chat, ChatFolder, character } from "src/ts/storage/database.svelte";
     import { newChatModelDefaults } from "src/ts/storage/database.svelte";
@@ -13,7 +13,6 @@
     import CheckInput from "../UI/GUI/CheckInput.svelte";
     import ShAccordion from "../UI/GUI/ShAccordion.svelte";
     import ShButton from "../UI/GUI/ShButton.svelte";
-    import TextInput from "../UI/GUI/TextInput.svelte";
 
     import { exportChat, importChat, exportAllChats } from "src/ts/characters";
     import { alertConfirm, alertError, alertInput, alertSelect, alertStore, notifySuccess, notifyError } from "src/ts/alert";
@@ -37,17 +36,25 @@
     import ShDropdownMenuTrigger from '../UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from '../UI/GUI/ShDropdownMenuContent.svelte';
     import ShDropdownMenuItem from '../UI/GUI/ShDropdownMenuItem.svelte';
+    import ShDropdownMenuSeparator from '../UI/GUI/ShDropdownMenuSeparator.svelte';
     import SidebarResizeHandle from './SidebarResizeHandle.svelte';
     import { normalizeChatListHeight } from 'src/ts/gui/sidebarLayout';
     import { rebindPainterChatScope } from 'src/ts/bardPainter/chatScope';
-    import { preservePainterChatGallery } from 'src/ts/bardPainter/gallery';
+    import { deleteCharacterChats, exportCharacterChats } from 'src/ts/risubard/chatListActions';
+    import { chatIdRange, chatSection, gatherSelectionAfterDrag, shiftSelectedChats } from 'src/ts/risubard/chatListOrder';
+    import { loadChatPreview } from 'src/ts/risubard/chatPreview';
+    import { formatPreviewTime, toChatPreviewText } from 'src/ts/risubard/chatPreviewText';
+    import type { ChatPreviewPayload } from 'src/ts/storage/chatContentPage';
+    import { getEffectivePersona, resolvePersonaById } from 'src/ts/personaScopes';
 
     interface Props {
         chara: character;
     }
 
     let { chara = $bindable() }: Props = $props();
-    let editMode = $state(false)
+    let renamingFolderId = $state<string | null>(null)
+    let pendingRenameFolderId: string | null = null
+    let draggingChat = $state(false)
 
     // Safety net: chats whose folderId references a deleted folder would
     // otherwise be invisible (excluded from both the no-folder section and
@@ -57,8 +64,23 @@
     const validFolderIds = $derived(
         new Set((chara.chatFolders ?? []).map(f => f.id).filter(Boolean))
     )
-    const isOrphanFolder = (folderId: string | null | undefined): boolean =>
-        folderId != null && !validFolderIds.has(folderId)
+    // One pass groups every chat by its visible folder; rows keep their array index.
+    const chatGroups = $derived.by(() => {
+        const groups = new Map<string | null, { chat: Chat, index: number }[]>()
+        chara.chats.forEach((chat, index) => {
+            const key = chatSection(chat, validFolderIds)
+            const entry = { chat, index }
+            const list = groups.get(key)
+            if (list) list.push(entry)
+            else groups.set(key, [entry])
+        })
+        return groups
+    })
+    // Display order of the chats a click can reach, for Shift range selection.
+    const visibleChatIds = $derived([
+        ...(chara.chatFolders ?? []).filter(folder => !folder.folded).flatMap(folder => chatGroups.get(folder.id) ?? []),
+        ...(chatGroups.get(null) ?? []),
+    ].map(entry => entry.chat.id).filter((id): id is string => !!id))
 
     let chatsStb: Sortable[] = []
     let folderStb: Sortable = null
@@ -132,65 +154,9 @@
         void requestImmediateSave()
     }
 
-    // Returns false when the chat must not be deleted yet; the reason is already shown.
-    async function preparePainterChatForDeletion(targetCharacter: character, targetChatId: string): Promise<boolean> {
-        try {
-            const { isPainterChatBusy } = await import('src/ts/bardPainter/runtime.svelte')
-            const index = targetCharacter.chats.findIndex(chat => chat.id === targetChatId)
-            if(index < 0) return false
-            const chat = await ensureChatHydrated(targetCharacter.chats, index, targetCharacter.chaId)
-            if (!chat || chat._placeholder || chat.id !== targetChatId) throw new Error('챗 데이터를 불러오지 못했습니다.')
-            if (isPainterChatBusy(targetCharacter.chaId, targetChatId) || chat.bardPainter?.results?.some(result => result.compressionPending)) {
-                notifyError('바드페인터 작업이나 이미지 저장을 마친 뒤 챗을 삭제해 주세요.')
-                return false
-            }
-            await preservePainterChatGallery(chat)
-            if (isPainterChatBusy(targetCharacter.chaId, targetChatId)) {
-                notifyError('바드페인터 작업이나 이미지 저장을 마친 뒤 챗을 삭제해 주세요.')
-                return false
-            }
-            return true
-        } catch (error) {
-            notifyError(`그림의 생성 기록을 보존하지 못해 챗 삭제를 중단했습니다: ${String(error)}`)
-            return false
-        }
-    }
-
-    // The server looks chats up by index until the deletion is saved, so load the next chat first.
-    async function hydrateBeforeRemoval(targetCharacter: character, nextChat: Chat): Promise<Chat | null> {
-        if (!nextChat._placeholder) return nextChat
-        const hydrated = await ensureChatHydrated(targetCharacter.chats, targetCharacter.chats.indexOf(nextChat), targetCharacter.chaId).catch(() => null)
-        if (!hydrated || hydrated._placeholder) {
-            notifyError('챗 데이터를 불러오지 못해 삭제를 중단했습니다.')
-            return null
-        }
-        return hydrated
-    }
-
     async function deleteCurrentChat(): Promise<void> {
-        if(!activeChat) return
-        const targetCharacter = chara, targetChatId = activeChat.id, targetChatName = activeChat.name
-        if(!targetChatId) return
-        if(targetCharacter.chats.length === 1){
-            notifyError(language.errors.onlyOneChat)
-            return
-        }
-        const confirmed = await alertConfirm(
-            `${language.removeConfirm}${targetChatName}`
-        )
-        if(!confirmed) return
-        if (!await preparePainterChatForDeletion(targetCharacter, targetChatId)) return
-        if (targetCharacter.chats.length === 1) { notifyError(language.errors.onlyOneChat); return }
-        const nextChat = targetCharacter.chats.find(chat => chat.id !== targetChatId)
-        if (!nextChat || !await hydrateBeforeRemoval(targetCharacter, nextChat)) return
-        const deletionIndex = targetCharacter.chats.findIndex(chat => chat.id === targetChatId)
-        if (deletionIndex < 0) return
-        targetCharacter.chats.splice(deletionIndex, 1)
-        targetCharacter.chats = targetCharacter.chats
-        if (chara.chaId === targetCharacter.chaId) changeChatTo(0)
-        else targetCharacter.chatPage = Math.max(0, Math.min(targetCharacter.chatPage, targetCharacter.chats.length - 1))
-        $ReloadGUIPointer += 1
-        void requestImmediateSave()
+        if(!activeChat?.id) return
+        await deleteCharacterChats(chara, [activeChat.id])
     }
 
     let selectedChatIds = $state<string[]>([])
@@ -198,8 +164,7 @@
         chara?.chaId
         untrack(() => { selectedChatIds = [] })
     })
-
-    const deleteLabel = $derived(selectedChatIds.length > 0 ? `선택한 챗 ${selectedChatIds.length}개 삭제` : language.remove)
+    const selectedSet = $derived(new Set(selectedChatIds))
 
     function setChatSelected(chatId: string | undefined, checked: boolean): void {
         if (!chatId) return
@@ -208,39 +173,8 @@
     }
 
     async function deleteSelectedChats(): Promise<void> {
-        const targetCharacter = chara
-        const targetIds = targetCharacter.chats.map(chat => chat.id).filter(id => id && selectedChatIds.includes(id))
-        if (targetIds.length === 0) { selectedChatIds = []; return }
-        if (targetIds.length >= targetCharacter.chats.length) {
-            notifyError(language.errors.onlyOneChat)
-            return
-        }
-        const names = targetCharacter.chats.filter(chat => targetIds.includes(chat.id)).map(chat => chat.name)
-        const shownNames = names.slice(0, 10).join(', ') + (names.length > 10 ? ` 외 ${names.length - 10}개` : '')
-        const confirmed = await alertConfirm(`${language.removeConfirm}챗 ${names.length}개 (${shownNames})`)
-        if (!confirmed) return
-        const deletableIds: string[] = []
-        for (const id of targetIds) {
-            if (await preparePainterChatForDeletion(targetCharacter, id)) deletableIds.push(id)
-        }
-        if (deletableIds.length === 0) return
-        const activeChatId = targetCharacter.chats[targetCharacter.chatPage]?.id
-        const remaining = targetCharacter.chats.filter(chat => !deletableIds.includes(chat.id))
-        if (remaining.length === 0) { notifyError(language.errors.onlyOneChat); return }
-        const nextChat = remaining.find(chat => chat.id === activeChatId) ?? remaining[0]
-        const hydrated = await hydrateBeforeRemoval(targetCharacter, nextChat)
-        if (!hydrated) return
-        remaining[remaining.indexOf(nextChat)] = hydrated
-        targetCharacter.chats = remaining
-        selectedChatIds = selectedChatIds.filter(id => !deletableIds.includes(id))
-        const nextPage = Math.max(0, remaining.findIndex(chat => chat.id === activeChatId))
-        if (chara.chaId === targetCharacter.chaId) changeChatTo(nextPage)
-        else targetCharacter.chatPage = nextPage
-        $ReloadGUIPointer += 1
-        void requestImmediateSave()
-        if (deletableIds.length < targetIds.length) {
-            notifyError(`선택한 챗 중 ${targetIds.length - deletableIds.length}개는 삭제하지 못했습니다.`)
-        }
+        const removed = await deleteCharacterChats(chara, selectedChatIds)
+        selectedChatIds = selectedChatIds.filter(id => !removed.includes(id))
     }
 
     async function copyChatWithMemory(chat: Chat): Promise<void> {
@@ -361,6 +295,20 @@
         sorted += 1
         await sleep(1)
         createStb()
+        // Start renaming a new folder only after the remount, or the remount blurs the field.
+        if (pendingRenameFolderId) {
+            renamingFolderId = pendingRenameFolderId
+            pendingRenameFolderId = null
+        }
+    }
+
+    // Reorders keep the same chat open, so only its index moves; changeChatTo
+    // would re-apply chat bindings from whatever chat sat at the new index.
+    const applyChatOrder = (newChats: Chat[], activeChatRef: Chat | undefined) => {
+        chara.chats = newChats
+        const page = activeChatRef ? newChats.indexOf(activeChatRef) : -1
+        if (page >= 0) chara.chatPage = page
+        $ReloadGUIPointer += 1
     }
 
     const createStb = () => {
@@ -369,13 +317,17 @@
         for (let chat of listEle.querySelectorAll('.risu-chat')) {
             chatsStb.push(new Sortable(chat, {
                 group: 'chats',
+                ...sortableOptions,
+                // Rows only drag by their grip, so a long press on the row stays free for selection.
+                handle: '[data-chat-drag-handle]',
+                delay: 0,
+                onStart: () => { draggingChat = true },
                 onEnd: async (event) => {
-                    const currentChatPage = chara.chatPage
-                    const newChats: Chat[] = []
+                    draggingChat = false
+                    const previousChats = [...chara.chats]
+                    const activeChatRef = chara.chats[chara.chatPage]
+                    let newChats: Chat[] = []
 
-                    // const chats: HTMLElement = event.to
-                    // chats.querySelectorAll()
-                    
                     listEle.querySelectorAll('[data-risu-chat-folder-idx]').forEach(folder => {
                         const folderIdx = parseInt(folder.getAttribute('data-risu-chat-folder-idx'))
                         folder.querySelectorAll('[data-risu-chat-idx]').forEach(chatInFolder => {
@@ -396,27 +348,27 @@
                         }
                     })
 
-                    changeChatTo(newChats.indexOf(chara.chats[currentChatPage]))
-                    chara.chats = newChats
+                    // Dragging one selected chat carries the rest of the selection with it.
+                    const draggedId = previousChats[parseInt(event.item.getAttribute('data-risu-chat-idx'))]?.id
+                    if (draggedId) newChats = gatherSelectionAfterDrag(newChats, previousChats, draggedId, selectedSet)
 
-                    try {
-                        this.destroy()
-                    } catch (e) {}
+                    applyChatOrder(newChats, activeChatRef)
                     sorted += 1
                     await sleep(1)
                     createStb()
                 },
-                ...sortableOptions
             }))
         }
         folderStb = Sortable.create(folderEles, {
             group: 'folders',
+            ...sortableOptions,
+            handle: '[data-chat-folder-header]',
             onEnd: async (event) => {
                 const newFolders: ChatFolder[] = []
                 const newChats: Chat[] = []
                 const folders: HTMLElement[] = Array.from<HTMLElement>(event.to.children)
 
-                const currentChatPage = chara.chatPage
+                const activeChatRef = chara.chats[chara.chatPage]
 
                 folders.forEach(folder => {
                     const folderIdx = parseInt(folder.getAttribute('data-risu-chat-folder-idx'))
@@ -436,16 +388,11 @@
                 })
                 
                 chara.chatFolders = newFolders
-                changeChatTo(newChats.indexOf(chara.chats[currentChatPage]))
-                chara.chats = newChats
-                try {
-                    folderStb.destroy()
-                } catch (e) {}
+                applyChatOrder(newChats, activeChatRef)
                 sorted += 1
                 await sleep(1)
                 createStb()
             },
-            ...sortableOptions
         })
     }
 
@@ -456,16 +403,263 @@
     })
 
     onDestroy(destroyStb)
+
+    let rootEle: HTMLDivElement = $state()
+    let selectionAnchor: string | null = null
+    let checkboxShiftClick = false
+    let lastPointerType = ''
+    let longPressTimer: ReturnType<typeof setTimeout> | null = null
+    let longPressStart = { x: 0, y: 0 }
+    let suppressClickId: string | null = null
+
+    const allSelected = $derived(chara.chats.length > 0 && chara.chats.every(chat => !chat.id || selectedSet.has(chat.id)))
+    const sameOrder = (chats: Chat[]) => chats.every((chat, index) => chat === chara.chats[index])
+    const canMoveUp = $derived(selectedChatIds.length > 0 && !sameOrder(shiftSelectedChats(chara.chats, selectedSet, -1, validFolderIds)))
+    const canMoveDown = $derived(selectedChatIds.length > 0 && !sameOrder(shiftSelectedChats(chara.chats, selectedSet, 1, validFolderIds)))
+
+    function toggleChatSelected(chatId: string, checked = !selectedSet.has(chatId)): void {
+        setChatSelected(chatId, checked)
+        selectionAnchor = chatId
+    }
+
+    function selectRangeTo(chatId: string): void {
+        const range = chatIdRange(visibleChatIds, selectionAnchor ?? chatId, chatId)
+        selectedChatIds = [...new Set([...selectedChatIds, ...range])]
+        selectionAnchor = chatId
+    }
+
+    function onCheckboxChange(chatId: string | undefined, checked: boolean): void {
+        if (!chatId) return
+        if (checkboxShiftClick && checked && selectionAnchor) selectRangeTo(chatId)
+        else toggleChatSelected(chatId, checked)
+        checkboxShiftClick = false
+    }
+
+    function clearSelection(): void {
+        selectedChatIds = []
+        selectionAnchor = null
+    }
+
+    function toggleSelectAll(): void {
+        if (allSelected) clearSelection()
+        else selectedChatIds = chara.chats.map(chat => chat.id).filter((id): id is string => !!id)
+    }
+
+    function onChatRowClick(event: MouseEvent, chat: Chat, index: number): void {
+        if (suppressClickId && suppressClickId === chat.id) { suppressClickId = null; return }
+        if (chat.id && event.shiftKey) { selectRangeTo(chat.id); return }
+        if (chat.id && (event.ctrlKey || event.metaKey)) { toggleChatSelected(chat.id); return }
+        // In touch selection mode a tap adds or removes the chat instead of opening it.
+        if (chat.id && selectedChatIds.length > 0 && lastPointerType === 'touch') { toggleChatSelected(chat.id); return }
+        changeChatTo(index)
+    }
+
+    function cancelLongPress(): void {
+        if (longPressTimer) clearTimeout(longPressTimer)
+        longPressTimer = null
+    }
+
+    function onChatRowPointerDown(event: PointerEvent, chat: Chat): void {
+        lastPointerType = event.pointerType
+        suppressClickId = null
+        cancelLongPress()
+        if (event.pointerType !== 'touch' || !chat.id) return
+        const chatId = chat.id
+        longPressStart = { x: event.clientX, y: event.clientY }
+        longPressTimer = setTimeout(() => {
+            longPressTimer = null
+            suppressClickId = chatId
+            toggleChatSelected(chatId, true)
+            navigator.vibrate?.(15)
+        }, 450)
+    }
+
+    function onChatRowPointerMove(event: PointerEvent): void {
+        if (longPressTimer && Math.hypot(event.clientX - longPressStart.x, event.clientY - longPressStart.y) > 10) cancelLongPress()
+    }
+
+    function onWindowKeydown(event: KeyboardEvent): void {
+        if (event.key !== 'Escape' || selectedChatIds.length === 0) return
+        const target = event.target as HTMLElement | null
+        if (target?.closest('input, textarea, [contenteditable="true"], [role="dialog"], [role="menu"]')) return
+        if (target && target !== document.body && !rootEle?.contains(target)) return
+        clearSelection()
+    }
+
+    // One chat keeps the single-chat export with its JSON, TXT and HTML choices.
+    async function exportSelectedChats(): Promise<void> {
+        if (selectedChatIds.length === 1) {
+            const index = chara.chats.findIndex(chat => chat.id === selectedChatIds[0])
+            if (index >= 0) await exportChat(index)
+            return
+        }
+        await exportCharacterChats(chara, selectedChatIds)
+    }
+
+    function moveSelectedChats(direction: -1 | 1): void {
+        const next = shiftSelectedChats(chara.chats, selectedSet, direction, validFolderIds)
+        if (sameOrder(next)) return
+        applyChatOrder(next, chara.chats[chara.chatPage])
+        void requestImmediateSave()
+    }
+
+    function moveSelectedToFolder(folderId: string | null): void {
+        const folder = folderId ? chara.chatFolders?.find(f => f.id === folderId) : null
+        if (folderId && !folder) return
+        let count = 0
+        for (const chat of chara.chats) {
+            if (!chat.id || !selectedSet.has(chat.id)) continue
+            chat.folderId = folderId
+            count++
+        }
+        if (count === 0) return
+        // Open the destination so the moved chats stay in view.
+        if (folder) folder.folded = false
+        chara.chats = chara.chats
+        void requestImmediateSave()
+        notifySuccess(folder ? `챗 ${count}개를 '${folder.name}' 폴더로 옮겼습니다.` : `챗 ${count}개를 폴더 밖으로 옮겼습니다.`)
+    }
+
+    function createFolder(): string {
+        chara.chatFolders ??= []
+        const id = v4()
+        chara.chatFolders.unshift({
+            id,
+            name: `새 폴더 ${chara.chatFolders.length + 1}`,
+            folded: false,
+        })
+        chara.chatFolders = chara.chatFolders
+        pendingRenameFolderId = id
+        $ReloadGUIPointer += 1
+        return id
+    }
+
+    function commitFolderName(folder: ChatFolder, value: string): void {
+        const name = value.trim()
+        if (name) folder.name = name
+        renamingFolderId = null
+    }
+
+    const folderColors = [
+        ['red', '빨강'], ['green', '초록'], ['blue', '파랑'], ['yellow', '노랑'],
+        ['indigo', '남색'], ['purple', '보라'], ['pink', '분홍'], ['default', '기본 색'],
+    ] as const
+
+    async function pickFolderColor(folder: ChatFolder): Promise<void> {
+        const choice = parseInt(await alertSelect([...folderColors.map(([, label]) => label), language.cancel]))
+        if (choice >= 0 && choice < folderColors.length) folder.color = folderColors[choice][0]
+    }
+
+    async function deleteFolder(folder: ChatFolder, index: number): Promise<void> {
+        const count = chatGroups.get(folder.id)?.length ?? 0
+        const note = count > 0 ? ` (안의 챗 ${count}개는 지워지지 않고 폴더 밖으로 옮겨집니다)` : ''
+        if (!await alertConfirm(`${language.removeConfirm}${folder.name}${note}`)) return
+        $ReloadGUIPointer += 1
+        const folders = chara.chatFolders
+        folders.splice(index, 1)
+        chara.chats.forEach(chat => {
+            if (chat.folderId == folder.id) {
+                chat.folderId = null
+            }
+        })
+        chara.chatFolders = folders
+    }
+
+    function focusAndSelect(node: HTMLInputElement): void {
+        node.focus()
+        node.select()
+    }
+
+    // ── Hover preview: persona and the last message, without opening the chat ──
+    const PREVIEW_DELAY_MS = 400
+    const PREVIEW_WIDTH = 320
+    let preview = $state<{ chatId: string, top: number, left: number, data: ChatPreviewPayload | null, loading: boolean } | null>(null)
+    let previewTimer: ReturnType<typeof setTimeout> | null = null
+    let previewRequest = 0
+
+    function portal(node: HTMLElement) {
+        document.body.appendChild(node)
+        return { destroy() { node.remove() } }
+    }
+
+    function hidePreview(): void {
+        if (previewTimer) clearTimeout(previewTimer)
+        previewTimer = null
+        previewRequest++
+        preview = null
+    }
+
+    function schedulePreview(anchor: HTMLElement, chat: Chat, index: number, delay = PREVIEW_DELAY_MS): void {
+        hidePreview()
+        if (!chat.id || draggingChat) return
+        const chatId = chat.id
+        const request = previewRequest
+        previewTimer = setTimeout(async () => {
+            previewTimer = null
+            const listRight = (listEle ?? anchor).getBoundingClientRect().right
+            const rowTop = anchor.getBoundingClientRect().top
+            const left = listRight + 8
+            // No room beside the sidebar (narrow window): skip rather than cover the row.
+            if (left + 240 > window.innerWidth) return
+            const top = Math.max(8, Math.min(rowTop, window.innerHeight - 240))
+            preview = { chatId, top, left, data: null, loading: true }
+            try {
+                const data = await loadChatPreview(chara, chat, index)
+                if (request !== previewRequest) return
+                preview = { chatId, top, left, data, loading: false }
+            } catch {
+                if (request === previewRequest) preview = { chatId, top, left, data: null, loading: false }
+            }
+        }, delay)
+    }
+
+    function onChatRowPointerEnter(event: PointerEvent, chat: Chat, index: number): void {
+        if (event.pointerType === 'touch') return
+        schedulePreview(event.currentTarget as HTMLElement, chat, index)
+    }
+
+    function onChatRowFocus(event: FocusEvent, chat: Chat, index: number): void {
+        const target = event.currentTarget as HTMLElement
+        if (target.matches(':focus-visible')) schedulePreview(target, chat, index)
+    }
+
+    const previewPersona = $derived.by(() => {
+        if (!preview?.data) return null
+        const bound = resolvePersonaById(DBState.db, chara, preview.data.bindedPersona)
+        const persona = bound?.persona ?? getEffectivePersona(DBState.db, chara, null)?.persona
+        return { name: persona?.name || DBState.db.username || 'User', bound: !!bound }
+    })
+
+    const previewMessage = $derived.by(() => {
+        const message = preview?.data?.lastMessage
+        if (!message) return null
+        const userName = previewPersona?.name ?? 'User'
+        const charName = chara.name || '캐릭터'
+        const speaker = message.role === 'user'
+            ? userName
+            : (message.saying ? findCharacterbyId(message.saying)?.name : null) || charName
+        const text = toChatPreviewText(message.data, { user: userName, char: charName })
+        return { speaker, time: message.time ? formatPreviewTime(message.time) : '', text: text || '(내용 없음)' }
+    })
+
+    $effect(() => {
+        if (draggingChat) untrack(hidePreview)
+    })
+    onDestroy(hidePreview)
 </script>
+<svelte:window onkeydown={onWindowKeydown} />
 {#snippet chatSelectBox(chat: Chat)}
-    <CheckInput check={selectedChatIds.includes(chat.id)} onChange={(checked) => setChatSelected(chat.id, checked)}
-        margin={false} hiddenName name={`${chat.name} 선택`} className="shrink-0 self-stretch pl-2 pr-1" />
+    <!-- Capture Shift before the checkbox reports its change, for range selection. -->
+    <span class="contents" onclickcapture={(e) => { checkboxShiftClick = e.shiftKey }}>
+        <CheckInput check={selectedSet.has(chat.id)} onChange={(checked) => onCheckboxChange(chat.id, checked)}
+            margin={false} hiddenName name={`${chat.name} 선택`} className="shrink-0 self-stretch pl-2 pr-1" />
+    </span>
 {/snippet}
 {#if mergeOpen}
     <ChatMergeDialog open={mergeOpen} chats={chara.chats} loadChat={loadMergeChat}
         onMerge={mergeChats} onOpenChange={(open) => { mergeOpen = open }} />
 {/if}
-<div class="flex flex-col w-full">
+<div class="flex flex-col w-full" bind:this={rootEle}>
     <section data-current-chat-section class="border-b border-darkborderc pb-2">
         <div data-chat-file-header class="flex min-h-10 items-center gap-1">
             <div data-current-chat-title class="flex min-w-0 grow items-center px-1.5 py-2 text-textcolor">
@@ -476,6 +670,45 @@
 
     <div data-chat-list-disclosure class="mt-2">
     <ShAccordion bind:open={chatListExpanded} name={language.sidebarChatListLabel} class="w-full">
+        <span class="sr-only" aria-live="polite">{selectedChatIds.length > 0 ? `챗 ${selectedChatIds.length}개 선택됨` : ''}</span>
+        {#if selectedChatIds.length > 0}
+        <div data-chat-selection-bar role="toolbar" aria-label="선택한 챗 작업" class="grid grid-cols-8 items-center gap-0.5 border-b border-darkborderc py-1.5">
+            <ShButton data-chat-selection-clear variant="ghost" size="sm" className="col-span-2 min-w-0 w-full justify-center gap-0.5 px-1" aria-label={`선택 해제, 챗 ${selectedChatIds.length}개 선택됨`} title="선택 해제 (Esc)" onclick={clearSelection}>
+                <XIcon size={16} class="shrink-0" />
+                <span class="text-sm font-semibold tabular-nums">{selectedChatIds.length}</span>
+            </ShButton>
+            <ShButton data-chat-select-all variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-pressed={allSelected}
+                aria-label={allSelected ? '전체 선택 해제' : '전체 선택'} title={allSelected ? '전체 선택 해제' : '전체 선택'} onclick={toggleSelectAll}>
+                <ListChecksIcon size={18} />
+            </ShButton>
+            <ShDropdownMenu>
+                <ShDropdownMenuTrigger data-chat-move-to-folder aria-label="폴더로 이동" title="폴더로 이동"
+                    class="risu-button-lift flex h-8 min-w-0 w-full items-center justify-center rounded-md text-textcolor hover:bg-selected/30 focus-visible:outline-2 focus-visible:outline-borderc">
+                    <FolderInputIcon size={18} />
+                </ShDropdownMenuTrigger>
+                <ShDropdownMenuContent align="start">
+                    {#each chara.chatFolders ?? [] as folder (folder.id)}
+                        <ShDropdownMenuItem onSelect={() => moveSelectedToFolder(folder.id)}><FolderInputIcon size={16} /><span class="truncate">{folder.name}</span></ShDropdownMenuItem>
+                    {/each}
+                    <ShDropdownMenuItem onSelect={() => moveSelectedToFolder(null)}><FolderMinusIcon size={16} />폴더 밖으로</ShDropdownMenuItem>
+                    <ShDropdownMenuSeparator />
+                    <ShDropdownMenuItem onSelect={() => moveSelectedToFolder(createFolder())}><FolderPlusIcon size={16} />새 폴더 만들어 옮기기</ShDropdownMenuItem>
+                </ShDropdownMenuContent>
+            </ShDropdownMenu>
+            <ShButton data-chat-move-up variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="위로 옮기기" title="위로 옮기기" disabled={!canMoveUp} onclick={() => moveSelectedChats(-1)}>
+                <ArrowUpIcon size={18} />
+            </ShButton>
+            <ShButton data-chat-move-down variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="아래로 옮기기" title="아래로 옮기기" disabled={!canMoveDown} onclick={() => moveSelectedChats(1)}>
+                <ArrowDownIcon size={18} />
+            </ShButton>
+            <ShButton data-chat-export-selected variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="선택한 챗 내보내기" title="선택한 챗 내보내기" onclick={() => void exportSelectedChats()}>
+                <DownloadIcon size={18} />
+            </ShButton>
+            <ShButton data-chat-delete-selected variant="destructive" size="icon-sm" className="min-w-0 w-full" aria-label={`선택한 챗 ${selectedChatIds.length}개 삭제`} title={`선택한 챗 ${selectedChatIds.length}개 삭제`} onclick={() => void deleteSelectedChats()}>
+                <TrashIcon size={18} />
+            </ShButton>
+        </div>
+        {:else}
         <div data-chat-list-toolbar class="grid grid-cols-8 items-center gap-0.5 border-b border-darkborderc py-1.5">
             <ShButton data-sidebar-new-chat variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label={language.newChat} title={language.newChat} onclick={createNewChat}>
                 <PlusIcon size={18} />
@@ -493,23 +726,11 @@
             <ShButton data-chat-branch variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="챗 분할 (브랜치)" title="챗 분할 (브랜치)" onclick={() => { alertStore.set({ type: 'branches', msg: '' }) }}>
                 <SplitIcon size={18} />
             </ShButton>
-            <ShButton data-chat-delete variant="destructive" size="icon-sm" className="relative min-w-0 w-full" aria-label={deleteLabel} title={deleteLabel}
-                onclick={() => void (selectedChatIds.length > 0 ? deleteSelectedChats() : deleteCurrentChat())}>
+            <ShButton data-chat-delete variant="destructive" size="icon-sm" className="min-w-0 w-full" aria-label="현재 챗 삭제" title="현재 챗 삭제"
+                onclick={() => void deleteCurrentChat()}>
                 <TrashIcon size={18} />
-                {#if selectedChatIds.length > 0}
-                    <span data-chat-delete-count class="absolute -top-1 -right-0.5 min-w-4 rounded-full bg-darkbg px-1 text-[10px] leading-4 text-textcolor">{selectedChatIds.length}</span>
-                {/if}
             </ShButton>
-            <ShButton data-chat-new-folder variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="새 폴더" title="새 폴더" onclick={() => {
-                chara.chatFolders ??= []
-                chara.chatFolders.unshift({
-                    id: v4(),
-                    name: `New Folder ${chara.chatFolders.length + 1}`,
-                    folded: false,
-                })
-                chara.chatFolders = chara.chatFolders
-                $ReloadGUIPointer += 1
-            }}>
+            <ShButton data-chat-new-folder variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="새 폴더" title="새 폴더" onclick={() => { createFolder() }}>
                 <FolderPlusIcon size={18} />
             </ShButton>
             <ShDropdownMenu>
@@ -518,30 +739,49 @@
                     <EllipsisIcon size={18} />
                 </ShDropdownMenuTrigger>
                 <ShDropdownMenuContent align="end">
-                    <ShDropdownMenuItem onSelect={exportAllChats}><DownloadIcon size={16} />다운로드</ShDropdownMenuItem>
-                    <ShDropdownMenuItem onSelect={importChat}><HardDriveUploadIcon size={16} />임포트</ShDropdownMenuItem>
+                    <ShDropdownMenuItem onSelect={exportAllChats}><DownloadIcon size={16} />모든 챗 내보내기</ShDropdownMenuItem>
+                    <ShDropdownMenuItem onSelect={importChat}><HardDriveUploadIcon size={16} />가져오기</ShDropdownMenuItem>
                     <ShDropdownMenuItem onSelect={() => { $bookmarkListOpen = true }}><BookmarkCheckIcon size={16} />북마크</ShDropdownMenuItem>
                 </ShDropdownMenuContent>
             </ShDropdownMenu>
         </div>
+        {/if}
 
         {#key sorted}
-        <div data-chat-list-scroll class="chat-list-scroll flex flex-col mt-1 overflow-y-auto overflow-x-hidden" bind:this={listEle} style:height={`${chatListHeight}px`}>
+        <div data-chat-list-scroll class="chat-list-scroll flex flex-col mt-1 overflow-y-auto overflow-x-hidden" bind:this={listEle} style:height={`${chatListHeight}px`} onscroll={hidePreview}>
+        {#snippet chatRow(chat: Chat, index: number)}
+            {@const isActive = index === chara.chatPage && !$chatDeselected}
+            <div data-chat-list-row data-risu-chat-idx={index} class="chat-row group flex items-center rounded-md select-none"
+                class:bg-selected={isActive} class:chat-row-checked={!isActive && selectedSet.has(chat.id)}>
+                {@render chatSelectBox(chat)}
+                <button aria-current={isActive ? 'true' : undefined}
+                    aria-describedby={preview?.chatId === chat.id ? 'chat-preview-card' : undefined}
+                    onclick={(e) => { hidePreview(); onChatRowClick(e, chat, index) }}
+                    onpointerdown={(e) => { hidePreview(); onChatRowPointerDown(e, chat) }}
+                    onpointerenter={(e) => onChatRowPointerEnter(e, chat, index)}
+                    onfocus={(e) => onChatRowFocus(e, chat, index)} onblur={hidePreview}
+                    onpointermove={onChatRowPointerMove}
+                    onpointerup={cancelLongPress} onpointercancel={cancelLongPress} onpointerleave={() => { cancelLongPress(); hidePreview() }}
+                    oncontextmenu={(e) => { if (lastPointerType === 'touch') e.preventDefault() }}
+                    class="flex min-w-0 grow items-center text-textcolor border-solid border-0 border-darkborderc p-2 pl-1 cursor-pointer rounded-md">
+                    <span class="truncate">{chat.name}</span>
+                </button>
+                <span data-chat-drag-handle aria-hidden="true" title="끌어서 순서 바꾸기"
+                    class="chat-drag-handle flex shrink-0 cursor-grab items-center self-stretch px-1.5 text-textcolor2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-70">
+                    <GripVerticalIcon size={16} />
+                </span>
+            </div>
+        {/snippet}
         <!-- folder div -->
         <div class="flex flex-col" bind:this={folderEles}>
             <!-- chat folder -->
             {#each chara.chatFolders as folder, i}
+            {@const folderChats = chatGroups.get(folder.id) ?? []}
             <div data-risu-chat-folder-idx={i}
-                class="flex flex-col mb-2 border-solid border-1 border-darkborderc cursor-pointer rounded-md">
-                <!-- folder header -->
-                <button 
-                    onclick={() => {
-                        if(!editMode) {
-                            chara.chatFolders[i].folded = !folder.folded
-                            $ReloadGUIPointer += 1
-                        }
-                    }}
-                    class="flex items-center text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md"
+                class="flex flex-col mb-2 border-solid border-1 border-darkborderc rounded-md">
+                <!-- folder header: also the folder's drag handle -->
+                <div data-chat-folder-header
+                    class="flex items-center gap-0.5 text-textcolor p-1 rounded-md cursor-grab"
                     class:bg-red-900={folder.color === 'red'}
                     class:bg-yellow-900={folder.color === 'yellow'}
                     class:bg-green-900={folder.color === 'green'}
@@ -550,76 +790,47 @@
                     class:bg-purple-900={folder.color === 'purple'}
                     class:bg-pink-900={folder.color === 'pink'}
                 >
-                    {#if editMode}
-                        <TextInput bind:value={chara.chatFolders[i].name} className="grow min-w-0" padding={false}/>
+                    {#if renamingFolderId === folder.id}
+                        <input use:focusAndSelect value={folder.name} aria-label="폴더 이름"
+                            class="min-w-0 grow rounded-md border border-darkborderc bg-bgcolor px-2 py-1 text-sm text-textcolor focus:outline-2 focus:outline-borderc"
+                            onkeydown={(e) => {
+                                if (e.key === 'Enter') commitFolderName(folder, e.currentTarget.value)
+                                else if (e.key === 'Escape') { e.stopPropagation(); renamingFolderId = null }
+                            }}
+                            onblur={(e) => { if (renamingFolderId === folder.id) commitFolderName(folder, e.currentTarget.value) }} />
                     {:else}
-                        <span>{folder.name}</span>
-                    {/if}
-                    <div class="grow flex justify-end">
-                        <div role="button" tabindex="0" onkeydown={(e) => {
-                            if(e.key === 'Enter'){
-                                e.currentTarget.click()
-                            }
-                        }} class="text-textcolor2 hover:text-primary mr-1 cursor-pointer" onclick={async (e) => {
-                            e.stopPropagation()
-                            const sel = parseInt(await alertSelect([language.changeFolderColor, language.cancel]))
-                            switch (sel) {
-                                case 0:
-                                    const colors = ["red","green","blue","yellow","indigo","purple","pink","default"]
-                                    const sel = parseInt(await alertSelect(colors))
-                                    folder.color = colors[sel]
-                                    break
-                            }
-                        }}>
-                            <MenuIcon size={18}/>
-                        </div>
-                        <div role="button" tabindex="0" onkeydown={(e) => {
-                            if(e.key === 'Enter'){
-                                e.currentTarget.click()
-                            }
-                        }} class="text-textcolor2 hover:text-primary mr-1 cursor-pointer" onclick={() => {
-                            editMode = !editMode
-                        }}>
-                            <PencilIcon size={18}/>
-                        </div>
-                        <div role="button" tabindex="0" onkeydown={(e) => {
-                            if(e.key === 'Enter'){
-                                e.currentTarget.click()
-                            }
-                        }} class="text-textcolor2 hover:text-danger/80 cursor-pointer" onclick={async (e) => {
-                            e.stopPropagation()
-                            const d = await alertConfirm(`${language.removeConfirm}${folder.name}`)
-                            if (d) {
+                        <button aria-expanded={!folder.folded} aria-label={`${folder.name} 폴더, 챗 ${folderChats.length}개`}
+                            onclick={() => {
+                                chara.chatFolders[i].folded = !folder.folded
                                 $ReloadGUIPointer += 1
-                                const folders = chara.chatFolders
-                                folders.splice(i, 1)
-                                chara.chats.forEach(chat => {
-                                    if (chat.folderId == folder.id) {
-                                        chat.folderId = null
-                                    }
-                                })
-                                chara.chatFolders = folders
-                            }
-                        }}>
-                            <TrashIcon size={18}/>
-                        </div>
-                    </div>
-                </button>
-                <!-- chats in folder -->
-                <!-- The empty label is CSS-only so the whole empty folder stays a Sortable drop target. -->
-                <div class="risu-chat flex flex-col w-full text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md empty:before:content-['Empty'] empty:before:flex empty:before:justify-center empty:before:text-textcolor2 {folder.folded ? 'hidden' : ''}">
-                    {#each chara.chats.filter(chat => chat.folderId == chara.chatFolders[i].id) as chat}
-                    {@const chatIdx = chara.chats.indexOf(chat)}
-                    <div data-chat-list-row data-risu-chat-idx={chatIdx} class="risu-chats flex items-center rounded-md" class:bg-selected={chatIdx === chara.chatPage && !$chatDeselected}>
-                        {@render chatSelectBox(chat)}
-                        <button onclick={() => {
-                            if(!editMode){
-                                changeChatTo(chatIdx)
-                            }
-                        }} class="flex min-w-0 grow items-center text-textcolor border-solid border-0 border-darkborderc p-2 pl-1 cursor-pointer rounded-md">
-                            <span class="truncate">{chat.name}</span>
+                            }}
+                            class="flex min-w-0 grow items-center gap-1.5 rounded-md p-1 text-left cursor-pointer">
+                            <ChevronRightIcon size={16} class="shrink-0 text-textcolor2 transition-transform {folder.folded ? '' : 'rotate-90'}" />
+                            <span class="truncate">{folder.name}</span>
+                            <span class="shrink-0 text-xs text-textcolor2">{folderChats.length}</span>
                         </button>
-                    </div>
+                    {/if}
+                    <button class="shrink-0 rounded-md p-1 text-textcolor2 hover:text-primary cursor-pointer" aria-label={`${folder.name} 폴더 색 바꾸기`} title="폴더 색 바꾸기"
+                        onclick={() => void pickFolderColor(folder)}>
+                        <PaletteIcon size={16}/>
+                    </button>
+                    <button class="shrink-0 rounded-md p-1 text-textcolor2 hover:text-primary cursor-pointer" aria-label={`${folder.name} 폴더 이름 바꾸기`} title="폴더 이름 바꾸기"
+                        onclick={() => { renamingFolderId = folder.id }}>
+                        <PencilIcon size={16}/>
+                    </button>
+                    <button class="shrink-0 rounded-md p-1 text-textcolor2 hover:text-danger/80 cursor-pointer" aria-label={`${folder.name} 폴더 삭제`} title="폴더 삭제"
+                        onclick={() => void deleteFolder(folder, i)}>
+                        <TrashIcon size={16}/>
+                    </button>
+                </div>
+                <!-- chats in folder -->
+                <!-- The empty label is CSS-only so the whole empty folder stays a Sortable drop target.
+                     While a chat is dragged, a folded folder turns into a slim drop zone. -->
+                <div class="risu-chat flex flex-col w-full text-textcolor border-solid border-0 border-darkborderc p-2 rounded-md
+                    {folder.folded && draggingChat ? 'chat-folder-drop-zone' : 'chat-folder-body'}
+                    {folder.folded && !draggingChat ? 'hidden' : ''}">
+                    {#each folderChats as { chat, index } (chat.id ?? index)}
+                        {@render chatRow(chat, index)}
                     {/each}
                 </div>
             </div>
@@ -627,20 +838,8 @@
         </div>
         <!-- chat without folder div -->
         <div class="risu-chat flex flex-col">
-            {#each chara.chats as chat, i}
-            {#if chat.folderId == null || isOrphanFolder(chat.folderId)}
-            <div data-chat-list-row data-risu-chat-idx={i} class="flex items-center rounded-md" class:bg-selected={i === chara.chatPage && !$chatDeselected}>
-                {@render chatSelectBox(chat)}
-                <button onclick={() => {
-                    if(!editMode){
-                        changeChatTo(i)
-                    }
-                }}
-                class="flex min-w-0 grow items-center text-textcolor border-solid border-0 border-darkborderc p-2 pl-1 cursor-pointer rounded-md">
-                    <span class="truncate">{chat.name}</span>
-                </button>
-            </div>
-            {/if}
+            {#each chatGroups.get(null) ?? [] as { chat, index } (chat.id ?? index)}
+                {@render chatRow(chat, index)}
             {/each}
         </div>
     </div>
@@ -648,6 +847,35 @@
     <SidebarResizeHandle axis="height" target={listEle} />
     </ShAccordion>
     </div>
+
+    {#if preview}
+        <div use:portal id="chat-preview-card" role="tooltip" data-chat-preview-card
+            class="chat-preview-card fixed z-50 rounded-md border border-darkborderc bg-darkbg p-3 text-sm text-textcolor shadow-lg pointer-events-none"
+            style:top={`${preview.top}px`} style:left={`${preview.left}px`} style:width={`min(${PREVIEW_WIDTH}px, calc(100vw - ${preview.left + 8}px))`}>
+            {#if preview.loading}
+                <p class="text-textcolor2">불러오는 중...</p>
+            {:else}
+                {#if previewPersona}
+                    <div class="flex min-w-0 items-center gap-1.5 text-xs text-textcolor2">
+                        <UserRoundIcon size={14} class="shrink-0" />
+                        <span class="truncate text-textcolor">{previewPersona.name}</span>
+                        {#if !previewPersona.bound}<span class="shrink-0">(챗에 고정 안 됨)</span>{/if}
+                    </div>
+                {/if}
+                {#if previewMessage}
+                    <div class="mt-2 flex min-w-0 items-baseline gap-1.5 border-t border-darkborderc pt-2 text-xs text-textcolor2">
+                        <span class="truncate font-semibold text-textcolor">{previewMessage.speaker}</span>
+                        {#if previewMessage.time}<span class="shrink-0">{previewMessage.time}</span>{/if}
+                    </div>
+                    <p class="chat-preview-text mt-1 whitespace-pre-line break-words">{previewMessage.text}</p>
+                {:else if preview.data}
+                    <p class="mt-2 text-textcolor2">아직 주고받은 메시지가 없습니다.</p>
+                {:else}
+                    <p class="text-textcolor2">미리보기를 불러오지 못했습니다.</p>
+                {/if}
+            {/if}
+        </div>
+    {/if}
 
     <div class="border-t border-selected mt-2">
         {#if DBState.db.characters[$selectedCharID]?.chaId !== '§playground' && !$chatDeselected}
@@ -678,4 +906,12 @@
     .chat-list-scroll::-webkit-scrollbar { width: 6px; }
     .chat-list-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--color-textcolor2) 40%, transparent); border-radius: 999px; }
     .chat-list-scroll :global([data-chat-list-row]) { flex-shrink: 0; }
+    .chat-preview-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; line-clamp: 5; overflow: hidden; line-height: 1.5; }
+    .chat-list-scroll :global(.chat-row) { -webkit-touch-callout: none; }
+    .chat-list-scroll :global(.chat-row-checked) { background: color-mix(in srgb, var(--color-borderc) 22%, transparent); }
+    .chat-list-scroll :global(.chat-drag-handle) { touch-action: none; }
+    .chat-list-scroll :global(.chat-folder-body:empty::before) { content: '챗을 끌어 놓거나, 선택한 뒤 폴더로 이동하세요'; display: block; text-align: center; font-size: 0.8125rem; color: var(--color-textcolor2); }
+    .chat-list-scroll :global(.chat-folder-drop-zone) { min-height: 2.25rem; margin: 0 0.5rem 0.5rem; border: 1px dashed color-mix(in srgb, var(--color-textcolor2) 60%, transparent); justify-content: center; }
+    .chat-list-scroll :global(.chat-folder-drop-zone > [data-chat-list-row]:not(.sortable-ghost)) { display: none; }
+    .chat-list-scroll :global(.chat-folder-drop-zone::before) { content: '여기에 놓으면 이 폴더로 옮깁니다'; text-align: center; font-size: 0.8125rem; color: var(--color-textcolor2); }
 </style>

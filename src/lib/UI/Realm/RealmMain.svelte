@@ -9,6 +9,8 @@
     import ShButton from '../GUI/ShButton.svelte';
     import ShDialog from '../GUI/ShDialog.svelte';
     import RealmHubIcon from './RealmHubIcon.svelte';
+    import RealmBlockedCreators from './RealmBlockedCreators.svelte';
+    import { filterBlockedRealmCards } from 'src/ts/realmBlocking';
     let charas: hubType[] = $state([]);
     let page = $state(0);
     let sort = $state('recommended');
@@ -17,6 +19,7 @@
     let tagInputFocused = $state(false);
     let highlightedTagIndex = $state(0);
     let menuOpen = $state(false);
+    let blockedCreatorsOpen = $state(false);
     let nsfw = $state(false);
     let isKorean = $derived(DBState.db.language === 'ko');
     let ui = $derived(isKorean ? {
@@ -37,7 +40,7 @@
         previousPage: '이전 페이지',
         nextPage: '다음 페이지',
         tools: 'RisuRealm 도구',
-        toolsDescription: 'URL 또는 ID로 공유 캐릭터를 가져옵니다.',
+        toolsDescription: 'URL 또는 ID로 공유 캐릭터를 가져오거나 차단한 제작자를 관리합니다.',
         importCharacter: '캐릭터 가져오기',
         importPrompt: 'URL 또는 ID 입력',
     } : {
@@ -58,14 +61,16 @@
         previousPage: 'Previous page',
         nextPage: 'Next page',
         tools: 'RisuRealm tools',
-        toolsDescription: 'Import a shared character directly from its URL or ID.',
+        toolsDescription: 'Import a shared character from its URL or ID, or manage blocked creators.',
         importCharacter: 'Import character',
         importPrompt: 'Input URL or ID',
     });
 
+    let visibleCharas = $derived(filterBlockedRealmCards(charas, DBState.db.blockedRealmCreators ?? []));
+
     let popularTags = $derived.by(() => {
         const counts = new Map<string, number>();
-        for (const chara of charas) {
+        for (const chara of visibleCharas) {
             for (const tag of chara.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
         }
         return [...counts.entries()]
@@ -318,12 +323,12 @@
 {@html hubAdditionalHTML}
 
 <div class="grid w-full grid-cols-1 gap-3 py-4 lg:grid-cols-2">
-    {#each charas as chara (chara.id)}
+    {#each visibleCharas as chara (chara.id)}
         <RealmHubIcon onClick={() => $showRealmInfoStore = chara} onAuthorClick={searchByAuthor} {chara} />
     {/each}
 </div>
 
-{#if charas.length === 0}
+{#if visibleCharas.length === 0}
     <div class="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-darkborderc text-sm text-textcolor2">
         {ui.noResults}
     </div>
@@ -369,4 +374,10 @@
         const id = input.split('?').at(-1);
         if (id) void downloadRisuHub(id);
     }}>{ui.importCharacter}</ShButton>
+    <ShButton variant="outline" className="w-full" onclick={() => {
+        menuOpen = false;
+        blockedCreatorsOpen = true;
+    }}>{language.manageBlockedRealmCreators}</ShButton>
 </ShDialog>
+
+<RealmBlockedCreators bind:open={blockedCreatorsOpen} onUnblock={getHub} />

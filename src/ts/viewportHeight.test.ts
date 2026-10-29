@@ -1,29 +1,78 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { installDynamicViewportHeight } from './viewportHeight'
 
-afterEach(() => vi.unstubAllGlobals())
+class FakeVisualViewport extends EventTarget {
+    height: number
+    scale = 1
+    constructor(height: number) {
+        super()
+        this.height = height
+    }
+}
 
-it.each([
-    ['Android browser, typing', 'Mozilla/5.0 Android', 'TEXTAREA', 0],
-    ['Android browser, browsing', 'Mozilla/5.0 Android', 'BODY', 1],
-    ['embedded Android', 'Mozilla/5.0 Android RisuBardAndroid/0.9.72', 'TEXTAREA', 1],
-])('keeps the composer in the visible viewport for %s', (_name, userAgent, tagName, expected) => {
-    const setProperty = vi.fn()
-    const viewport = { height: 555, scale: 1, addEventListener: vi.fn() }
-    vi.stubGlobal('window', { visualViewport: viewport, innerHeight: 1100, addEventListener: vi.fn() })
-    vi.stubGlobal('navigator', { userAgent })
-    vi.stubGlobal('document', { activeElement: { tagName }, documentElement: { style: { setProperty } }, addEventListener: vi.fn() })
-    installDynamicViewportHeight()
-    expect(setProperty).toHaveBeenCalledTimes(expected)
-    if (expected) expect(setProperty).toHaveBeenCalledWith('--risu-height-size', '555px')
-    let frame: FrameRequestCallback | undefined
-    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1 })
-    viewport.height = 855
-    viewport.addEventListener.mock.calls[0][1]()
-    frame!(0)
-    expect(setProperty).toHaveBeenCalledTimes(expected * 2)
-    if (expected) expect(setProperty).toHaveBeenLastCalledWith('--risu-height-size', '855px')
-    viewport.scale = 2
-    installDynamicViewportHeight()
-    expect(setProperty).toHaveBeenCalledTimes(expected * 2)
+let vv: FakeVisualViewport
+let innerHeight: number
+let rafQueue: FrameRequestCallback[]
+
+const heightVar = () => document.documentElement.style.getPropertyValue('--risu-height-size')
+const flushFrames = () => {
+    const queued = rafQueue
+    rafQueue = []
+    for (const cb of queued) cb(0)
+}
+// Toolbars move both viewports; the keyboard moves only the visual one.
+const setViewport = (visual: number, layout = innerHeight) => {
+    vv.height = visual
+    innerHeight = layout
+    vv.dispatchEvent(new Event('resize'))
+    flushFrames()
+}
+
+describe('installDynamicViewportHeight', () => {
+    let textarea: HTMLTextAreaElement
+
+    beforeEach(() => {
+        innerHeight = 640
+        vv = new FakeVisualViewport(640)
+        rafQueue = []
+        vi.stubGlobal('visualViewport', vv)
+        vi.spyOn(window, 'innerHeight', 'get').mockImplementation(() => innerHeight)
+        vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => rafQueue.push(cb))
+        document.documentElement.style.removeProperty('--risu-height-size')
+        textarea = document.createElement('textarea')
+        document.body.appendChild(textarea)
+    })
+
+    afterEach(() => {
+        textarea.remove()
+        vi.restoreAllMocks()
+        vi.unstubAllGlobals()
+    })
+
+    test('catches up when the keyboard closes but focus stays in the composer', () => {
+        installDynamicViewportHeight()
+        setViewport(696, 696) // toolbars hidden
+        textarea.focus()
+        setViewport(400) // keyboard open
+        expect(heightVar()).toBe('696px')
+        setViewport(640, 640) // keyboard dismissed with Back, toolbars back, still focused
+        expect(heightVar()).toBe('640px')
+    })
+
+    test('re-measures when focus leaves the composer', () => {
+        installDynamicViewportHeight()
+        textarea.focus()
+        setViewport(400) // keyboard open, skipped
+        vv.height = 600 // settled without a further resize event
+        textarea.blur()
+        flushFrames()
+        expect(heightVar()).toBe('600px')
+    })
+
+    test('skips while pinch-zoomed', () => {
+        installDynamicViewportHeight()
+        vv.scale = 2
+        setViewport(320)
+        expect(heightVar()).toBe('640px')
+    })
 })

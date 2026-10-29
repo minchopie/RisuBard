@@ -142,6 +142,7 @@ async function copyDirectoryContents(
 ): Promise<void> {
     for (const entry of await fileSystem.readdir(source, { withFileTypes: true })) {
         if (entry.name === '.risubard-snapshots'
+            || entry.name === '.risubard-history'
             || entry.name === '.risubard-recovery') continue
         const sourcePath = join(source, entry.name)
         const destinationPath = join(destination, entry.name)

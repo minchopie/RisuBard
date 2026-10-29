@@ -1,9 +1,17 @@
 export function removeInlayOccurrence(data: string, id: string, occurrence: number): string {
     let seen = 0
-    return data.replace(/{{(?:inlay|inlayed|inlayeddata)::(.+?)}}/g, (token, tokenId) => {
-        if (tokenId !== id) return token
-        return seen++ === occurrence ? '' : token
-    })
+    for (const match of data.matchAll(/{{(?:inlay|inlayed|inlayeddata)::(.+?)}}/g)) {
+        if (match[1] !== id || seen++ !== occurrence) continue
+        const tokenStart = match.index, tokenEnd = tokenStart + match[0].length
+        let start = tokenStart, end = tokenEnd
+        // An inserted image sits on its own lines; take those breaks with it and leave one gap.
+        while (start > 0 && data[start - 1] === '\n') start--
+        while (end < data.length && data[end] === '\n') end++
+        if (start === tokenStart && end === tokenEnd) return data.slice(0, tokenStart) + data.slice(tokenEnd)
+        const gap = start === 0 || end === data.length ? 0 : Math.min(2, Math.max(tokenStart - start, end - tokenEnd))
+        return data.slice(0, start) + '\n'.repeat(gap) + data.slice(end)
+    }
+    return data
 }
 
 type RemoveInlay = (id: string, occurrence: number) => void

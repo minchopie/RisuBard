@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildWikiFileTree, getRecentlyUpdatedWikiDocumentIds } from './wikiFileTree'
+import { buildWikiFileTree, filterWikiDocumentsByType, getRecentlyUpdatedWikiDocumentIds, listWikiDocumentTypes, wikiDocumentTypeLabels, wikiFolderDisplayName } from './wikiFileTree'
 
 describe('getRecentlyUpdatedWikiDocumentIds', () => {
     const page = (id: string, updated: string, type: 'character' | 'event' = 'character') => ({
@@ -132,5 +132,42 @@ describe('buildWikiFileTree', () => {
                 children: [],
             })
         )
+    })
+})
+
+describe('wiki tree filters and sorting', () => {
+    const docs = [
+        { id: 'b', title: '베타', relativePath: 'characters/b.md', type: 'character' as const, updated: '2026-01-01T00:00:00Z' },
+        { id: 'a', title: '알파', relativePath: 'characters/a.md', type: 'character' as const, updated: '2026-03-01T00:00:00Z' },
+        { id: 'loc', title: '성문', relativePath: 'locations/gate.md', type: 'location' as const, updated: '2026-02-01T00:00:00Z' },
+        { id: 'e1', title: '사건1', relativePath: 'events/e1.md', type: 'event' as const, created: '2026-01-01', updated: '2026-01-01T00:00:00Z' },
+        { id: 'e2', title: '사건2', relativePath: 'events/e2.md', type: 'event' as const, created: '2026-01-02', updated: '2026-05-01T00:00:00Z' },
+    ]
+    const ids = (tree: ReturnType<typeof buildWikiFileTree>, folder: string) => {
+        const node = tree.find((item) => item.name === folder)
+        return node?.kind === 'folder' ? node.children.map((child) => child.kind === 'file' && child.documentId) : []
+    }
+
+    it('lists present document types in a stable order and filters by type', () => {
+        expect(listWikiDocumentTypes(docs)).toEqual(['character', 'location', 'event'])
+        expect(filterWikiDocumentsByType(docs, 'location').map((doc) => doc.id)).toEqual(['loc'])
+        expect(filterWikiDocumentsByType(docs, null)).toHaveLength(5)
+    })
+
+    it('sorts folder children by name or by most recent update', () => {
+        expect(ids(buildWikiFileTree(docs), 'characters')).toEqual(['a', 'b'])
+        expect(ids(buildWikiFileTree(docs, undefined, { sort: 'updated' }), 'characters')).toEqual(['a', 'b'])
+        const byName = [{ ...docs[0], relativePath: 'characters/a.md' }, { ...docs[1], relativePath: 'characters/b.md' }]
+        expect(ids(buildWikiFileTree(byName), 'characters')).toEqual(['b', 'a'])
+        expect(ids(buildWikiFileTree(byName, undefined, { sort: 'updated' }), 'characters')).toEqual(['a', 'b'])
+        expect(ids(buildWikiFileTree(docs, undefined, { sort: 'updated' }), 'events')).toEqual(['e2', 'e1'])
+    })
+
+    it('maps folder keys to Korean display names without changing paths', () => {
+        expect(['characters', 'concepts', 'events', 'factions', 'items', 'locations', 'notes', 'creatures', 'custom']
+            .map(wikiFolderDisplayName))
+            .toEqual(['인물', '개념', '사건', '세력', '사물', '장소', '메모', '종족과 생물', 'custom'])
+        expect(buildWikiFileTree(docs).find((node) => node.name === 'characters')?.path).toBe('characters')
+        expect(wikiDocumentTypeLabels.creature).toBe('종족과 생물')
     })
 })

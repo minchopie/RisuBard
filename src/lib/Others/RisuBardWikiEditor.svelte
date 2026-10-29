@@ -2,6 +2,7 @@
     import { tick } from 'svelte'
     import markdownit from 'markdown-it'
     import {
+        countWikiBacklinks,
         describeWikiLinkTarget,
         wikiLinkPlugin,
         type WikiLinkRenderResolution,
@@ -30,7 +31,7 @@
     import { v4 } from 'uuid'
     import { forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte'
     import { DBState } from 'src/ts/stores.svelte'
-    import { alertConfirmMulti } from 'src/ts/alert'
+    import { alertConfirm, alertConfirmMulti } from 'src/ts/alert'
     import {
         saveManualWikiDocument,
         setWikiDocumentContextMode,
@@ -42,12 +43,21 @@
         type WikiCatalogDocument,
     } from 'src/ts/risubard/memoryWiki'
     import { matchesWikiSearch } from 'src/ts/risubard/wikiSearch'
-    import { buildWikiFileTree, getRecentlyUpdatedWikiDocumentIds, type WikiFileTreeNode } from 'src/ts/risubard/wikiFileTree'
+    import {
+        buildWikiFileTree,
+        filterWikiDocumentsByType,
+        getRecentlyUpdatedWikiDocumentIds,
+        listWikiDocumentTypes,
+        wikiDocumentTypeLabels,
+        wikiFolderDisplayName,
+        type WikiFileTreeNode,
+        type WikiTreeSort,
+    } from 'src/ts/risubard/wikiFileTree'
     import { publishRisuBardMemoryActivity } from 'src/ts/risubard/memoryActivity'
     import { copyWikiDocumentToLorebook } from 'src/ts/risubard/wikiLorebookCopy'
     import { normalizeMemoryWikiTreeHeight } from 'src/ts/risubard/memoryWikiLayout'
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar'
-    import type { EventOrderMessage } from 'src/ts/risubard/eventOrder'
+    import { createEventOrder, type EventOrderMessage } from 'src/ts/risubard/eventOrder'
 
     // Catalog entries from the dock carry no body until it has been fetched.
     type WikiDocument = WikiCatalogDocument
@@ -56,6 +66,11 @@
         auto: '관련 있을 때 포함',
         never: '자동 컨텍스트에서 제외',
     }
+    const contextSegments = [
+        { mode: 'always', label: '항상' },
+        { mode: 'auto', label: '자동' },
+        { mode: 'never', label: '제외' },
+    ] as const
 
     interface Props {
         characterId: string
@@ -65,6 +80,10 @@
         health?: NarrativeMemoryWikiMarkdown['health']
         locked?: boolean
         mobileLayout?: boolean
+        /** Desktop focus view: fold the type, name and alias fields into the action row. */
+        compact?: boolean
+        fieldsExpanded?: boolean
+        onFieldsExpandedChange?: (expanded: boolean) => void
         selectedId?: string
         onChanged?: () => void | Promise<void>
         onSelected?: (documentId: string) => void
@@ -75,6 +94,8 @@
         onRequestBody?: (documentId: string) => void
         /** Server-side full-text search; without it the loaded bodies are searched. */
         onSearch?: (query: string) => Promise<Set<string>>
+        /** Reports whether the editor holds an unsaved draft, so the host can guard view switches. */
+        onDirtyChange?: (dirty: boolean) => void
     }
 
     let {
@@ -87,6 +108,9 @@
         },
         locked = false,
         mobileLayout = false,
+        compact = false,
+        fieldsExpanded = false,
+        onFieldsExpandedChange,
         selectedId = $bindable(''),
         onChanged,
         onSelected,
@@ -95,8 +119,11 @@
         highlightedDocumentIds = null,
         onRequestBody,
         onSearch,
+        onDirtyChange,
     }: Props = $props()
     let creating = $state(false)
+    // 새 문서는 이름을 입력해야 하므로 집중 보기에서도 입력 줄을 보여 준다.
+    let showFields = $derived(!compact || fieldsExpanded || creating)
     let type = $state<MarkdownWikiDocumentType>('character')
     let title = $state('')
     let aliasesText = $state('')
@@ -114,6 +141,8 @@
     let contextDocumentId = $state('')
     let contextX = $state(0)
     let contextY = $state(0)
+    let contextMenuElement = $state<HTMLElement | null>(null)
+    let contextOpener: HTMLElement | null = null
     let wikiEditorElement = $state<HTMLElement | null>(null)
     let treeExpanded = $state(false)
     let editorExpanded = $state(true)
@@ -124,6 +153,8 @@
     let searchDraft = $state('')
     let searchQuery = $state('')
     let searchMatchIds = $state<Set<string> | null>(null)
+    let typeFilter = $state<MarkdownWikiDocumentType | null>(null)
+    let treeSort = $state<WikiTreeSort>('name')
     // Long chats put thousands of events in one folder; render them in pages.
     const folderPageSize = 100
     let folderLimits = $state<Record<string, number>>({})
@@ -225,10 +256,29 @@
             )
             const target = matches.find((document) => document.id === selectedId)
                 ?? matches[0]
-            if (target && target.id !== selectedId) selectDocument(target)
+            if (target && target.id !== selectedId && !dirty) void selectDocument(target)
         }
         await tick()
         highlightEditorMatch()
+    }
+
+    function setTypeFilter(value: MarkdownWikiDocumentType | null) {
+        typeFilter = value
+        folderLimits = {}
+    }
+
+    // The native clear button fires `search`, which Svelte's input props do not type.
+    function listenNativeSearchClear(node: HTMLInputElement) {
+        node.addEventListener('search', clearEmptySearch)
+        return { destroy: () => node.removeEventListener('search', clearEmptySearch) }
+    }
+
+    // Emptying the box (typing or the native clear button) drops the filter at once.
+    function clearEmptySearch(event: Event) {
+        if ((event.currentTarget as HTMLInputElement).value.trim() || !searchQuery) return
+        searchQuery = ''
+        searchMatchIds = null
+        folderLimits = {}
     }
 
     // Rebuilt when documents change so the plugin can flag links whose target
@@ -261,7 +311,7 @@
         const resolution = describeWikiLinkTarget(target, documents)
         if (resolution.status === 'resolved') {
             wikiLinkDiagnostic = null
-            selectDocument(resolution.document)
+            void selectDocument(resolution.document)
             return
         }
         error = ''
@@ -277,9 +327,10 @@
         activateWikiLink(event)
     }
 
-    let filteredDocuments = $derived(documents.filter((document) =>
-        documentMatchesSearch(document, searchQuery)
-    ))
+    let presentTypes = $derived(listWikiDocumentTypes(documents))
+    let activeTypeFilter = $derived(typeFilter && presentTypes.includes(typeFilter) ? typeFilter : null)
+    let filteredDocuments = $derived(filterWikiDocumentsByType(documents, activeTypeFilter)
+        .filter((document) => documentMatchesSearch(document, searchQuery)))
     let contextModes = $derived(new Map(documents
         .filter((document) => document.type !== 'event' && document.type !== 'scene')
         .map((document) => [document.id, document.contextMode ?? 'auto'])))
@@ -289,8 +340,9 @@
         return [title, readOnly ? '읽기 전용' : '', mode ? contextLabels[mode] : '']
             .filter(Boolean).join(', ')
     }
-    let tree = $derived(buildWikiFileTree(filteredDocuments, messages).filter((node) =>
-        !searchQuery || node.kind === 'file' || node.children.length > 0
+    let tree = $derived(buildWikiFileTree(filteredDocuments, messages, { sort: treeSort }).filter((node) =>
+        (!searchQuery && !activeTypeFilter && documents.length > 0)
+            || node.kind === 'file' || node.children.length > 0
     ))
     function visibleFolderChildren(path: string, children: WikiFileTreeNode[]) {
         const selectedIndex = children.findIndex((child) =>
@@ -324,6 +376,47 @@
             || aliasesText !== loadedAliasesText
             || type !== loadedType
             || markdown !== loadedMarkdown))
+    // Analysis replaced the open document while the user held a draft of it.
+    let conflict = $derived(!creating && !!selected && dirty
+        && selected.id === loadedDocumentId
+        && selected.contentHash !== loadedContentHash)
+    let empty = $derived(documents.length === 0 && !creating)
+    let canContextMode = $derived(!creating && !!selected
+        && selected.type !== 'event' && selected.type !== 'scene')
+    let saveTitle = $derived(!title.trim() ? '이름을 입력해야 저장할 수 있습니다'
+        : !markdown.trim() ? '본문을 입력해야 저장할 수 있습니다' : '저장')
+    let sourceMeta = $derived.by(() => {
+        if (creating || !selected) return []
+        const parts: string[] = []
+        if (selected.type === 'event' && messages) {
+            const index = createEventOrder(messages).position(selected)
+            if (index === undefined) parts.push('출처 없음')
+            else if (messages[index]?.role === 'char') {
+                const turn = messages.slice(0, index + 1).filter((message) => message.role === 'char').length
+                parts.push(`${turn}번째 응답`)
+            }
+            else parts.push(`${index + 1}번째 메시지`)
+        }
+        parts.push(`출처 메시지 ${selected.sourceMessageIds.length}개`)
+        const updated = relativeTime(selected.updated)
+        if (updated) parts.push(`${updated} 수정`)
+        return parts
+    })
+
+    $effect(() => {
+        onDirtyChange?.(dirty)
+    })
+
+    function relativeTime(value: string | undefined): string {
+        const timestamp = Date.parse(value ?? '')
+        if (!Number.isFinite(timestamp)) return ''
+        const minutes = Math.floor((Date.now() - timestamp) / 60_000)
+        if (minutes < 1) return '방금'
+        if (minutes < 60) return `${minutes}분 전`
+        if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}시간 전`
+        if (minutes < 60 * 24 * 30) return `${Math.floor(minutes / 60 / 24)}일 전`
+        return new Date(timestamp).toLocaleDateString('ko-KR')
+    }
 
     function loadDocument(document: WikiDocument) {
         if (document.content === undefined) {
@@ -359,14 +452,42 @@
         onSelected?.(document.id)
     }
 
-    function selectDocument(document: WikiDocument) {
+    /** Resolves true when the draft may be replaced: clean, saved, or discarded. */
+    async function confirmDiscardDraft(): Promise<boolean> {
+        if (!dirty) return true
+        const choice = await alertConfirmMulti(
+            '저장하지 않은 변경이 있습니다.',
+            [
+                { label: '저장', variant: 'primary' },
+                { label: '저장하지 않고 이동', variant: 'secondary' },
+            ],
+            '저장하지 않고 이동하면 지금 편집한 내용이 사라집니다.'
+        )
+        if (choice === 0) return await save()
+        return choice === 1
+    }
+
+    async function selectDocument(document: WikiDocument) {
+        // Reselecting the open document must not reload over its draft.
+        if (document.id === selectedId && !creating && dirty) {
+            treeExpanded = false
+            editorExpanded = true
+            return
+        }
+        // A clean editor switches synchronously; only a draft waits for the dialog.
+        if (dirty && !await confirmDiscardDraft()) return
         loadDocument(document)
         treeExpanded = false
         editorExpanded = true
     }
 
-    function startNew() {
+    async function startNew() {
         if (locked) return
+        if (dirty && !await confirmDiscardDraft()) return
+        resetNewDraft()
+    }
+
+    function resetNewDraft() {
         selectedId = ''
         creating = true
         type = 'character'
@@ -426,15 +547,25 @@
         onFocusModeChange?.(focused)
     }
 
-    function openContextMenu(event: MouseEvent, documentId: string) {
+    async function openContextMenu(event: MouseEvent, documentId: string) {
         event.preventDefault()
+        contextOpener = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
         contextDocumentId = documentId
         contextX = Math.min(event.clientX, Math.max(8, window.innerWidth - 232))
         contextY = Math.min(event.clientY, Math.max(8, window.innerHeight - 168))
+        await tick()
+        contextMenuElement?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
     }
 
     function closeContextMenu() {
         contextDocumentId = ''
+    }
+
+    function closeContextMenuOnEscape(event: KeyboardEvent) {
+        if (event.key !== 'Escape' || !contextDocumentId) return
+        event.preventDefault()
+        closeContextMenu()
+        contextOpener?.focus()
     }
 
     function closeContextMenuFromWindow(event: MouseEvent) {
@@ -462,12 +593,14 @@
         }
     }
 
-    async function changeContextMode(mode: 'always' | 'auto' | 'never') {
+    async function changeContextMode(
+        mode: 'always' | 'auto' | 'never',
+        target: WikiDocument | null = contextDocument
+    ) {
         if (locked || saving) return
-        if (!contextDocument
-            || contextDocument.type === 'event'
-            || contextDocument.type === 'scene') return
-        const target = contextDocument
+        if (!target
+            || target.type === 'event'
+            || target.type === 'scene') return
         closeContextMenu()
         saving = true
         error = ''
@@ -506,17 +639,23 @@
 
     function revert() {
         if (creating) {
-            startNew()
+            resetNewDraft()
             return
         }
         if (selected) loadDocument(selected)
     }
 
-    async function save() {
-        if (saving || readOnly || !title.trim() || !markdown.trim()) return
+    async function save(): Promise<boolean> {
+        if (saving || readOnly || !title.trim() || !markdown.trim()) return false
         saving = true
         error = ''
         notice = ''
+        // The server rewrites the body heading from the title, so a rename typed
+        // only into the heading would silently revert. Adopt it as the title.
+        const headingOf = (value: string) => value.match(/^#{1,2}\s+(.+)$/m)?.[1]?.trim()
+        const heading = headingOf(markdown)
+        if (!creating && title === loadedTitle && heading
+            && heading !== headingOf(loadedMarkdown)) title = heading.slice(0, 160)
         try {
             const saved = await saveManualWikiDocument({
                 characterId,
@@ -554,29 +693,35 @@
                 wikiPaths: [saved.relativePath],
             })
             await onChanged?.()
+            return true
         }
         catch (cause) {
             error = cause instanceof Error ? cause.message : String(cause)
+            return false
         }
         finally {
             saving = false
         }
     }
 
+    function keepDraftOverAnalysis() {
+        // The next save sends the analysis hash and deliberately overwrites it.
+        if (selected) loadedContentHash = selected.contentHash
+    }
+
     async function trash() {
         if (!selected || creating || readOnly || saving) return
-        const backlinks = documents.filter((document) =>
-            document.id !== selected.id
-            && document.links.includes(selected.title)
-        ).length
-        if (!confirm(`“${selected.title}” 문서를 휴지통으로 이동할까요? 연결된 문서 ${backlinks}개가 남습니다.`)) return
+        const target = selected
+        const backlinks = countWikiBacklinks(target, documents)
+        if (!await alertConfirm(`“${target.title}” 문서를 휴지통으로 이동할까요? 연결된 문서 ${backlinks}개가 남습니다.`)) return
+        if (saving || selectedId !== target.id) return
         saving = true
         error = ''
         try {
             await trashWikiDocument({
                 characterId,
                 chatId,
-                documentId: selected.id,
+                documentId: target.id,
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
             })
@@ -585,8 +730,8 @@
                 chatId,
                 operation: 'wiki-trash',
                 timestamp: Date.now(),
-                message: `${selected.relativePath} 휴지통 이동`,
-                wikiPaths: [selected.relativePath],
+                message: `${target.relativePath} 휴지통 이동`,
+                wikiPaths: [target.relativePath],
             })
             selectedId = ''
             await onChanged?.()
@@ -603,11 +748,13 @@
         if (!selected
             || selected.type !== 'event'
             || selected.status !== 'active'
+            || locked || readOnly
             || saving) return
-        if (!confirm(
-            `“${selected.title}” 사건을 영구 삭제할까요? 삭제한 사건은 복구할 수 없습니다.`
-        )) return
         const target = selected
+        if (!await alertConfirm(
+            `“${target.title}” 사건을 영구 삭제할까요? 삭제한 사건은 복구할 수 없습니다.`
+        )) return
+        if (saving || locked || selectedId !== target.id) return
         saving = true
         error = ''
         notice = ''
@@ -701,8 +848,10 @@
         const current = documents.find((document) => document.id === selectedId)
             ?? documents[0]
         if (creating || !current) return
-        if (current.content === undefined && dirty
-            && current.contentHash !== loadedContentHash) onRequestBody?.(current.id)
+        // A refreshed catalog entry carries no body. Fetch it whenever it is missing,
+        // including right after a save, or the page stays read-only while it waits.
+        if (current.content === undefined
+            && (!dirty || current.contentHash !== loadedContentHash)) onRequestBody?.(current.id)
         const incomingType = current.type
         const matchesIncoming = title === current.title
             && aliasesText === (current.aliases ?? []).join(', ')
@@ -715,7 +864,7 @@
     })
 </script>
 
-<svelte:window onclick={closeContextMenuFromWindow} />
+<svelte:window onclick={closeContextMenuFromWindow} onkeydown={closeContextMenuOnEscape} />
 
 <section
     class="wiki-editor"
@@ -723,6 +872,7 @@
     class:editor-collapsed={!editorExpanded}
     class:editor-focus={editorFocus}
     class:mobile-layout={mobileLayout}
+    class:compact
     data-wiki-editor
     data-tree-expanded={treeExpanded}
     data-editor-expanded={editorExpanded}
@@ -754,7 +904,7 @@
     {/if}
     <nav id="risubard-wiki-file-tree" class="file-tree" aria-label="위키 파일 트리" data-wiki-file-tree>
         <div class="tree-toolbar">
-            <strong>WIKI</strong>
+            <strong>문서</strong>
             <ShButton size="sm" variant="ghost" onclick={startNew} aria-label="새 문서" disabled={locked}>
                 <PlusIcon size={14} /> 새 문서
             </ShButton>
@@ -763,6 +913,8 @@
             <input
                 type="search"
                 bind:value={searchDraft}
+                oninput={clearEmptySearch}
+                use:listenNativeSearchClear
                 placeholder="문서 내용 검색"
                 aria-label="위키 문서 검색"
                 data-wiki-search-input
@@ -772,6 +924,26 @@
                 <span>검색</span>
             </button>
         </form>
+        {#if documents.length > 0}
+            <div class="tree-filters" data-wiki-tree-filters>
+                <div class="type-chips" role="group" aria-label="문서 유형 필터">
+                    <button type="button" aria-pressed={activeTypeFilter === null}
+                        data-wiki-type-filter="all" onclick={() => setTypeFilter(null)}>전체</button>
+                    {#each presentTypes as documentType (documentType)}
+                        <button type="button" aria-pressed={activeTypeFilter === documentType}
+                            data-wiki-type-filter={documentType}
+                            onclick={() => setTypeFilter(documentType)}>{wikiDocumentTypeLabels[documentType]}</button>
+                    {/each}
+                </div>
+                <button
+                    type="button"
+                    class="tree-sort"
+                    data-wiki-sort
+                    title={treeSort === 'name' ? '최근 수정순으로 정렬' : '이름순으로 정렬'}
+                    onclick={() => treeSort = treeSort === 'name' ? 'updated' : 'name'}
+                >{treeSort === 'name' ? '이름순' : '최근 수정순'}</button>
+            </div>
+        {/if}
         <div class="tree-list" data-wiki-search-results>
         {#if searchQuery && filteredDocuments.length === 0}
             <p class="tree-empty">“{searchQuery}”을 포함한 문서가 없습니다.</p>
@@ -782,7 +954,7 @@
                 <details open class="tree-folder">
                     <summary class:locked={node.readOnly} class="folder-row">
                         <FolderIcon size={14} />
-                        <span>{node.name}</span>
+                        <span>{wikiFolderDisplayName(node.name)}</span>
                         {#if node.children.length > 0}<span class="folder-count">{node.children.length.toLocaleString()}</span>{/if}
                         {#if node.readOnly}<FileLock2Icon size={12} />{/if}
                     </summary>
@@ -802,15 +974,14 @@
                                         class:active={selectedId === child.documentId}
                                         onclick={() => {
                                             const document = documents.find((item) => item.id === child.documentId)
-                                            if (document) selectDocument(document)
-                                            void tick().then(highlightEditorMatch)
+                                            if (document) void selectDocument(document).then(() => tick()).then(highlightEditorMatch)
                                         }}
                                         oncontextmenu={(event) => openContextMenu(event, child.documentId)}
                                         aria-label={documentLabel(child.documentId, child.title, child.readOnly)}
                                     >
                                         {#if child.readOnly}<FileLock2Icon size={13} />
                                         {:else}<FileIcon size={13} />{/if}
-                                        <span class="document-title" class:context-excluded={contextModes.get(child.documentId) === 'never'}>{child.title}</span>
+                                        <span class="document-title" class:context-excluded={contextModes.get(child.documentId) === 'never'} title={child.title}>{child.title}</span>
                                         {@render contextBadge(child.documentId)}
                                         {@render recentUpdateBadge(child.documentId)}
                                     </button>
@@ -844,13 +1015,12 @@
                         class:active={selectedId === node.documentId}
                         onclick={() => {
                             const document = documents.find((item) => item.id === node.documentId)
-                            if (document) selectDocument(document)
-                            void tick().then(highlightEditorMatch)
+                            if (document) void selectDocument(document).then(() => tick()).then(highlightEditorMatch)
                         }}
                         oncontextmenu={(event) => openContextMenu(event, node.documentId)}
                         aria-label={documentLabel(node.documentId, node.title)}
                     >
-                        <FileIcon size={13} /><span class="document-title" class:context-excluded={contextModes.get(node.documentId) === 'never'}>{node.title}</span>
+                        <FileIcon size={13} /><span class="document-title" class:context-excluded={contextModes.get(node.documentId) === 'never'} title={node.title}>{node.title}</span>
                         {@render contextBadge(node.documentId)}
                         {@render recentUpdateBadge(node.documentId)}
                     </button>
@@ -868,14 +1038,13 @@
 
     {#snippet contextBadge(documentId: string)}
         {@const mode = contextModes.get(documentId)}
-        {#if mode}
+        {#if mode === 'always' || mode === 'never'}
             <span class="context-mode-badge" class:context-always={mode === 'always'}
                 data-wiki-context-mode={mode}
                 title={`저장된 포함 설정: ${contextLabels[mode]}. 이번 응답에 실제 포함된 자료는 컨텍스트 내역에서 확인하세요.`}
                 aria-hidden="true">
                 {#if mode === 'always'}<PinIcon size={11} />항상
-                {:else if mode === 'never'}<CircleOffIcon size={11} />제외
-                {:else}자동{/if}
+                {:else}<CircleOffIcon size={11} />제외{/if}
             </span>
         {/if}
     {/snippet}
@@ -883,7 +1052,7 @@
     {#snippet recentUpdateBadge(documentId: string)}
         {#if recentlyUpdatedIds.has(documentId)}
             <span class="recent-update-badge" data-wiki-recent-update
-                title="최근 분석 이후 갱신된 문서" aria-label="최근 갱신">New</span>
+                title="최근 분석 이후 갱신된 문서" aria-label="최근 갱신">새 문서</span>
         {/if}
     {/snippet}
 
@@ -924,7 +1093,16 @@
     </div>
 
     <div id="risubard-wiki-editor-pane" class="editor-pane">
+        {#if empty}
+        <div class="wiki-empty-state" data-wiki-empty-state>
+            <p>아직 기억 문서가 없습니다. AI 응답이 위키 분석을 거치면 인물, 사건, 장소 문서가 여기에 쌓입니다.</p>
+            <ShButton size="sm" variant="outline" onclick={startNew} disabled={locked}>
+                <PlusIcon size={14} /> 새 문서
+            </ShButton>
+        </div>
+        {:else}
         <header class="editor-header">
+            {#if showFields}
             <div class="editor-title-row" data-wiki-title-row>
                 <label>
                     <span>타입</span>
@@ -933,7 +1111,7 @@
                         <option value="character">캐릭터</option>
                         <option value="location">장소</option>
                         <option value="faction">세력</option>
-                        <option value="creature">종족·생물</option>
+                        <option value="creature">종족과 생물</option>
                         <option value="item">사물</option>
                         <option value="concept">개념</option>
                         <option value="scene">현재 장면</option>
@@ -949,7 +1127,8 @@
                     <input aria-label="별칭" bind:value={aliasesText} maxlength="3000" readonly={readOnly} placeholder="쉼표로 구분" />
                 </label>
             </div>
-            {#if selected?.retrievalMetadata}
+            {/if}
+            {#if showFields && selected?.retrievalMetadata}
                 <div class="retrieval-metadata" data-wiki-retrieval-metadata>
                     {#if selected.retrievalMetadata.keywords.length}
                         <span>검색어: {selected.retrievalMetadata.keywords.join(', ')}</span>
@@ -960,7 +1139,27 @@
                     {/if}
                 </div>
             {/if}
+            {#if showFields && sourceMeta.length}
+                <div class="source-meta" data-wiki-source-meta>
+                    {#each sourceMeta as part (part)}<span>{part}</span>{/each}
+                </div>
+            {/if}
             <div class="editor-actions" data-wiki-action-toolbar>
+                {#if compact}
+                    <button
+                        type="button"
+                        class="fields-toggle"
+                        data-wiki-fields-toggle
+                        aria-expanded={showFields}
+                        aria-controls="risubard-wiki-editor-pane"
+                        title={showFields ? '타입, 이름, 별칭 접기' : '타입, 이름, 별칭 펼치기'}
+                        disabled={creating}
+                        onclick={() => onFieldsExpandedChange?.(!fieldsExpanded)}
+                    >
+                        <ChevronDownIcon size={15} class={showFields ? '' : 'collapsed'} />
+                        <span>{title || (creating ? '새 문서' : '문서를 선택하세요')}</span>
+                    </button>
+                {/if}
                 {#if selected && selected.sourceMessageIds.length > 0 && onNavigateSource}
                     {@const localSourceIds = selected.sourceMessageIds.filter(id => !id.startsWith('inherited:'))}
                     <span class="editor-source-action" data-wiki-source-action>
@@ -981,7 +1180,23 @@
                         </ShButton>
                     </span>
                 {/if}
-                <ShButton size="sm" variant="success" aria-label="저장" title="저장" onclick={save} disabled={readOnly || saving || !dirty || !title.trim() || !markdown.trim()}>
+                {#if canContextMode && selected}
+                    {@const currentMode = selected.contextMode ?? 'auto'}
+                    <div class="context-segments" role="radiogroup" aria-label="컨텍스트 포함 설정" data-wiki-context-control>
+                        {#each contextSegments as segment (segment.mode)}
+                            <button
+                                type="button"
+                                role="radio"
+                                aria-checked={currentMode === segment.mode}
+                                title={contextLabels[segment.mode]}
+                                disabled={readOnly || saving}
+                                data-wiki-context-segment={segment.mode}
+                                onclick={() => changeContextMode(segment.mode, selected)}
+                            >{segment.label}</button>
+                        {/each}
+                    </div>
+                {/if}
+                <ShButton size="sm" variant="success" aria-label="저장" title={saveTitle} onclick={save} disabled={readOnly || saving || !dirty || !title.trim() || !markdown.trim()}>
                     <SaveIcon size={14} />
                 </ShButton>
                 <ShButton size="sm" variant="ghost" aria-label="되돌리기" title="되돌리기" onclick={revert} disabled={!dirty || saving}>
@@ -998,11 +1213,11 @@
                     <BookCopyIcon size={14} /> <span data-wiki-action-label>로어북에 복사</span>
                 </ShButton>
                 {#if selected?.type === 'event' && selected.status === 'active'}
-                    <ShButton size="sm" variant="ghost" aria-label="삭제" title="삭제" onclick={retractEvent} disabled={saving}>
+                    <ShButton size="sm" variant="ghost" className="text-danger" aria-label="영구 삭제" title="영구 삭제" onclick={retractEvent} disabled={locked || saving}>
                         <Trash2Icon size={14} />
                     </ShButton>
                 {:else}
-                    <ShButton size="sm" variant="ghost" aria-label="삭제" title="삭제" onclick={trash} disabled={!selected || creating || readOnly || saving}>
+                    <ShButton size="sm" variant="ghost" aria-label="휴지통으로 이동" title="휴지통으로 이동" onclick={trash} disabled={!selected || creating || readOnly || saving}>
                         <Trash2Icon size={14} />
                     </ShButton>
                 {/if}
@@ -1018,6 +1233,13 @@
                 </label>
             </div>
         </header>
+        {#if conflict}
+            <div class="conflict-banner" role="alert" data-wiki-conflict>
+                <span>분석이 이 문서를 갱신했습니다</span>
+                <ShButton size="xs" variant="outline" data-wiki-conflict-latest onclick={() => { if (selected) loadDocument(selected) }}>최신본 보기</ShButton>
+                <ShButton size="xs" variant="ghost" data-wiki-conflict-keep onclick={keepDraftOverAnalysis}>내 편집 유지</ShButton>
+            </div>
+        {/if}
         {#if selected?.status === 'retracted' || readOnly || dirty || selected?.type === 'event'}
             <div class="document-meta">
             {#if selected?.status === 'retracted'}<span class="readonly-badge">철회된 사건 기록</span>
@@ -1062,6 +1284,7 @@
             {:else if readOnly}<span>현재 위키 작업이 끝난 뒤 수정할 수 있습니다.</span>
             {:else if selected?.type === 'event'}<span>수정 내용은 지금까지의 이야기에 반영되며 연결된 채팅 출처는 유지됩니다.</span>{/if}
         </div>
+        {/if}
     </div>
 </section>
 
@@ -1070,6 +1293,7 @@
         class="file-context-menu"
         role="menu"
         tabindex="-1"
+        bind:this={contextMenuElement}
         aria-label={`${contextDocument.title} 파일 메뉴`}
         style:left={`${contextX}px`}
         style:top={`${contextY}px`}
@@ -1112,7 +1336,14 @@
     .tree-empty { margin: .5rem .35rem; color: var(--risu-theme-textcolor2); font-size: .7rem; line-height: 1.5; }
     .wiki-health { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: .3rem; margin-top: .45rem; padding: .5rem .25rem .1rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 72%, transparent); color: var(--risu-theme-textcolor2); font-size: .65rem; }
     .wiki-health span { border: 1px solid var(--risu-theme-darkborderc); border-radius: 999px; padding: .16rem .38rem; }
-    .tree-toolbar strong { color: var(--risu-theme-textcolor2); font: 700 .65rem/1 ui-monospace, monospace; letter-spacing: .16em; }
+    .tree-toolbar strong { color: var(--risu-theme-textcolor2); font-size: .7rem; font-weight: 700; line-height: 1; }
+    .tree-filters { display: flex; align-items: flex-start; gap: .35rem; padding: 0 .25rem .55rem; }
+    .type-chips { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: .25rem; min-width: 0; }
+    .type-chips button, .tree-sort { padding: .16rem .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: 999px; color: var(--risu-theme-textcolor2); background: transparent; font-size: .65rem; font-weight: 600; line-height: 1.4; white-space: nowrap; cursor: pointer; }
+    .type-chips button:hover, .tree-sort:hover { color: var(--risu-theme-textcolor); border-color: color-mix(in srgb, var(--risu-theme-primary) 45%, var(--risu-theme-darkborderc)); }
+    .type-chips button[aria-pressed="true"] { color: var(--risu-theme-primary); border-color: color-mix(in srgb, var(--risu-theme-primary) 60%, var(--risu-theme-darkborderc)); background: color-mix(in srgb, var(--risu-theme-primary) 12%, transparent); }
+    .tree-sort { flex: 0 0 auto; border-radius: .3rem; }
+    .type-chips button:focus-visible, .tree-sort:focus-visible, .context-segments button:focus-visible { outline: 2px solid color-mix(in srgb, var(--risu-theme-primary) 70%, transparent); outline-offset: 1px; }
     .folder-row, .root-file, .folder-children .file-select { width: 100%; display: flex; align-items: center; gap: .4rem; min-width: 0; padding: .38rem .45rem; border-radius: .32rem; color: var(--risu-theme-textcolor); text-align: left; font-size: .74rem; }
     .folder-row { color: var(--risu-theme-textcolor2); font-weight: 700; }
     .folder-row { cursor: pointer; list-style: none; }
@@ -1145,7 +1376,44 @@
     .editor-title-row select, .editor-title-row input { box-sizing: border-box; width: 100%; min-height: 2rem; padding: .3rem .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .32rem; color: var(--risu-theme-textcolor); background: var(--risu-theme-darkbg); }
     .title-field { flex: 1 1 12rem; }
     .aliases-field { flex: 1 1 12rem; }
+    .source-meta { display: flex; flex-wrap: wrap; gap: .15rem .75rem; padding: 0 .75rem .4rem; color: var(--risu-theme-textcolor2); font-size: .68rem; font-variant-numeric: tabular-nums; }
+    .context-segments { display: inline-flex; flex: 0 0 auto; overflow: hidden; border: 1px solid var(--risu-theme-darkborderc); border-radius: .34rem; }
+    .context-segments button { min-height: 2rem; padding: 0 .55rem; border: 0; color: var(--risu-theme-textcolor2); background: transparent; font-size: .7rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .context-segments button + button { border-left: 1px solid var(--risu-theme-darkborderc); }
+    .context-segments button[aria-checked="true"] { color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 14%, transparent); }
+    .context-segments button:disabled { opacity: .5; cursor: not-allowed; }
+    .conflict-banner { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; padding: .45rem .75rem; border-bottom: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent); color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--color-warning) 12%, transparent); font-size: .72rem; }
+    .conflict-banner span { margin-right: auto; font-weight: 700; }
+    .wiki-empty-state { display: grid; flex: 1; align-content: center; justify-items: center; gap: .85rem; padding: 2rem 1.25rem; text-align: center; }
+    .wiki-empty-state p { max-width: 26rem; margin: 0; color: var(--risu-theme-textcolor2); font-size: .8rem; line-height: 1.7; word-break: keep-all; }
     .retrieval-metadata { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; font-size: 0.75rem; color: var(--risu-theme-textcolor2); overflow-wrap: anywhere; }
+    .fields-toggle {
+        display: inline-flex;
+        flex: 0 1 auto;
+        min-width: 0;
+        min-height: 2rem;
+        align-items: center;
+        gap: .35rem;
+        margin-right: auto;
+        padding: .25rem .5rem .25rem .3rem;
+        border: 1px solid transparent;
+        border-radius: .32rem;
+        color: var(--risu-theme-textcolor);
+        background: transparent;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+    }
+    .fields-toggle span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fields-toggle :global(svg) { flex: 0 0 auto; color: var(--risu-theme-textcolor2); transition: transform .15s ease-out; }
+    .fields-toggle :global(svg.collapsed) { transform: rotate(-90deg); }
+    .fields-toggle:hover:not(:disabled) { border-color: var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-primary) 9%, transparent); }
+    .fields-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--risu-theme-primary) 70%, transparent); outline-offset: 1px; }
+    .fields-toggle:disabled { cursor: default; }
+    .wiki-editor.compact .editor-actions { border-top: 0; padding-block: .3rem; }
+    .wiki-editor.compact .editor-title-row + .editor-actions,
+    .wiki-editor.compact .retrieval-metadata + .editor-actions,
+    .wiki-editor.compact .source-meta + .editor-actions { border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); }
     .editor-actions { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: .25rem; overflow-x: auto; padding: .45rem .75rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); }
     .editor-source-action { display: inline-flex; flex: 0 0 auto; margin-right: auto; }
     .markdown-preview-toggle { display: inline-flex; flex: 0 0 auto; min-height: 2rem; align-items: center; gap: .32rem; padding: 0 .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .34rem; color: var(--risu-theme-textcolor2); font: 700 .67rem/1 ui-monospace, monospace; cursor: pointer; user-select: none; }
@@ -1219,6 +1487,8 @@
     @container wiki-editor-pane (max-width: 32rem) {
         .editor-actions :global(button) { width: 2rem; padding-inline: .35rem; }
         .editor-actions .editor-source-action :global(button) { width: auto; padding-inline: .55rem; }
+        .editor-actions .fields-toggle { width: auto; padding-inline: .3rem .5rem; }
+        .editor-actions .context-segments button { width: auto; padding-inline: .45rem; }
         .editor-actions [data-wiki-action-label] { display: none; }
     }
     .wiki-editor.mobile-layout {
@@ -1331,6 +1601,8 @@
         }
         .wiki-editor.mobile-layout .editor-actions {
             width: 100%;
+            flex-wrap: wrap;
+            overflow-x: visible;
             align-items: center;
             justify-content: flex-end;
             gap: .35rem;
@@ -1363,6 +1635,7 @@
 
     @media (prefers-reduced-motion: reduce) {
         .tree-panel-header :global(svg:last-child),
+        .fields-toggle :global(svg),
         .file-tree { transition: none; }
     }
 </style>

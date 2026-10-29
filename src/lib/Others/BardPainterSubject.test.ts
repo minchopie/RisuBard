@@ -26,7 +26,7 @@ beforeEach(() => {
     const cape = { id: 'cape', subjectId: 'saved-person', name: 'Travel cape', clothing: 'green cape', state: 'dusty' }
     session = painterTestState({
         data: { draft: { subjects: [{ id: 'draft-person', name: 'Current', aliases: [], kind: 'character', appearance: 'short hair', clothing: 'old jacket', state: '', pose: 'looking left', negative: '' }] }, outfits: [] },
-        bot: { identities: [{ id: 'saved-person', name: 'Saved', aliases: ['Alias'], appearance: 'long hair' }], outfits: [cape] },
+        bot: { identities: [{ id: 'saved-person', name: 'Saved', aliases: ['Alias'], appearance: 'long hair' }], outfits: [cape] }, get identities() { return this.bot.identities },
         unreflectedGlobalIdentities: [{ id: 'g-current', name: 'Current', aliases: [], appearance: 'global look' }],
         globalMatchFor(item: any) { return item.id === 'saved-person' ? undefined : this.unreflectedGlobalIdentities.find((global: any) => global.name === item.name) },
         outfitChoices(id: string) { return id === 'saved-person' ? [cape] : [] },

@@ -28,6 +28,7 @@ const PURPOSES = [
     'bard-lore-analysis',
     'prompt-assistant',
     'character-assistant',
+    'input-assistant',
 ];
 const READ_CHUNK_BYTES = 1024 * 1024;
 const BODY_FIELDS = ['requestHeaders', 'requestBody', 'responseBody'];

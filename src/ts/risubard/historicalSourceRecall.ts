@@ -70,7 +70,9 @@ export function resolveHistoricalSourceMatchesById(input: {
 }): HistoricalSourceMatch[] {
     const requested = [...new Set(input.messageIds)].slice(0, MAX_SOURCE_MATCHES)
     if (requested.length === 0) return []
-    const historical = eligibleHistoricalSources(input.messages, input.ignoreOocTurns, input.excludeRecentMessages)
+    // An event already chose these messages as its source; the scissors cut
+    // hides old chat from the prompt but must not hide a remembered event's origin.
+    const historical = eligibleHistoricalSources(input.messages, input.ignoreOocTurns, input.excludeRecentMessages, false)
     const byId = new Map(historical.map(({ message, occurredAt }) => [
         message.chatId as string,
         { message, occurredAt },
@@ -89,9 +91,10 @@ export function resolveHistoricalSourceMatchesById(input: {
     })
 }
 
-export function eligibleHistoricalSources(messages: readonly HistoricalSourceMessage[], ignoreOocTurns = true, excludeRecentMessages = 12) {
-    const allBeforeBoundary = messages.findLastIndex((message) =>
-        message.disabled === 'allBefore')
+export function eligibleHistoricalSources(messages: readonly HistoricalSourceMessage[], ignoreOocTurns = true, excludeRecentMessages = 12, respectCut = true) {
+    const allBeforeBoundary = respectCut
+        ? messages.findLastIndex((message) => message.disabled === 'allBefore')
+        : -1
     const excluded = oocTurnIndices(messages, ignoreOocTurns)
     const active = messages.flatMap((message, occurredAt) => {
         if (excluded.has(occurredAt) || occurredAt <= allBeforeBoundary
@@ -100,7 +103,7 @@ export function eligibleHistoricalSources(messages: readonly HistoricalSourceMes
             || typeof message.chatId !== 'string'
             || message.chatId.trim().length === 0
             || message.isComment
-            || message.disabled) return []
+            || message.disabled === true) return []
         return [{ message, occurredAt }]
     })
     const requestedRecent = Number.isSafeInteger(excludeRecentMessages)

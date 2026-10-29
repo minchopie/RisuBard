@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { loadBundledRegistry } from '../registry/loader'
 import { resolveSnapshot } from '../registry/snapshot'
 import type { ModelPreset, ResolvedModelProfileSnapshot } from '../types'
@@ -111,6 +112,116 @@ function captureFetch(response: Response | (() => Response)): {
     }
     return { fetchImpl, calls }
 }
+
+describe('OpenRouter main-chat session metadata', () => {
+    const makeRouterPreset = (overrides: Partial<ModelPreset> = {}) => makePreset({
+        profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url: 'https://openrouter.ai/api/v1/chat/completions' } }),
+        ...overrides,
+    })
+
+    test('adds only session metadata to non-streaming, streaming and preview requests', async () => {
+        const preset = makeRouterPreset({ customBody: { provider: { only: ['google-ai-studio/flex'] } } })
+        const original = structuredClone(preset)
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+        const options = { messages: userMessages, sessionId: 'chat-1', fetchImpl }
+        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
+        const preview = await previewChatRequest(preset, options, { apiKey: 'sk' })
+        expect(calls).toHaveLength(0)
+        expect(preview.body).toEqual({ ...before.body, session_id: 'chat-1' })
+        await sendChatRequest(preset, options, { apiKey: 'sk' })
+        expect(calls[0].body).toEqual(preview.body)
+
+        const streaming = captureFetch(sseResponse(['data: [DONE]\n\n']))
+        for await (const _ of streamChatRequest(preset, { ...options, fetchImpl: streaming.fetchImpl }, { apiKey: 'sk' })) { /* drain */ }
+        expect(streaming.calls[0].body).toEqual({ ...preview.body, stream: true })
+        expect(preset).toEqual(original)
+    })
+
+    test.each(['https://demo.test/v1/chat/completions', 'https://openrouter.ai.demo.test/api/v1/chat/completions', '/api/local/chat/completions'])(
+        'leaves non-OpenRouter endpoint %s unchanged', async (url) => {
+            const preset = makePreset({ profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url } }) })
+            const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
+            const after = await previewChatRequest(preset, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
+            expect(after).toEqual(before)
+        },
+    )
+
+    test.each([
+        { customBody: { session_id: 'user-session' } },
+        { customBody: { session_id: null } },
+        { customBody: { prompt_cache_key: 'user-cache-key' } },
+        { customHeaders: { 'X-SESSION-ID': 'user-header' } },
+        { additionalParamsText: 'header::X-Session-Id=user-header' },
+        { additionalParamsText: 'session_id=user-session' },
+    ])('preserves explicitly configured routing metadata %j', async (overrides) => {
+        const preset = makeRouterPreset(overrides)
+        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
+        const after = await previewChatRequest(preset, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
+        expect(after).toEqual(before)
+    })
+
+    test.each([undefined, '', 'x'.repeat(257)])('does not send an absent or invalid-length session key %j', async (sessionId) => {
+        const preset = makeRouterPreset()
+        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
+        const after = await previewChatRequest(preset, { messages: userMessages, sessionId }, { apiKey: 'sk' })
+        expect(after).toEqual(before)
+    })
+
+    test('works without URL.canParse on older browsers and preserves relative endpoints', async () => {
+        const original = Object.getOwnPropertyDescriptor(URL, 'canParse')
+        Object.defineProperty(URL, 'canParse', { configurable: true, value: undefined })
+        try {
+            const routed = await previewChatRequest(makeRouterPreset(), { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
+            expect(routed.body.session_id).toBe('chat-1')
+            const local = makePreset({ profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url: '/api/local/chat/completions' } }) })
+            const before = await previewChatRequest(local, { messages: userMessages }, { apiKey: 'sk' })
+            const after = await previewChatRequest(local, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
+            expect(after).toEqual(before)
+        } finally {
+            if (original) Object.defineProperty(URL, 'canParse', original)
+            else Reflect.deleteProperty(URL, 'canParse')
+        }
+    })
+
+    test('keeps one chat key for tool follow-ups and separates another chat', async () => {
+        const { fetchImpl, calls } = captureFetch(() => jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+        const preset = makeRouterPreset()
+        const tools = [{ name: 'lookup', parameters: { type: 'object' } }]
+        const messages: AdapterChatMessage[] = [...userMessages]
+        await sendChatRequest(preset, { messages, tools, sessionId: 'chat-1', fetchImpl }, { apiKey: 'sk' })
+        messages.push(
+            { role: 'assistant', content: '', toolCalls: [{ id: 'call-1', name: 'lookup', arguments: '{}' }] },
+            { role: 'tool', content: 'result', toolCallId: 'call-1' },
+        )
+        await sendChatRequest(preset, { messages, tools, sessionId: 'chat-1', fetchImpl }, { apiKey: 'sk' })
+        await sendChatRequest(preset, { messages: userMessages, sessionId: 'chat-2', fetchImpl }, { apiKey: 'sk' })
+        expect(calls.map(({ body }) => body.session_id)).toEqual(['chat-1', 'chat-1', 'chat-2'])
+        expect(calls[1].body.messages).toHaveLength(4)
+    })
+
+    test('request gate requires opt-in, explicit main-chat identity and no cache exclusion, including preview', () => {
+        const request = readFileSync('src/ts/process/request/request.ts', 'utf8')
+        const expression = request.match(/const sessionId = ([\s\S]*?)(?:\r?\n){2}/)?.[1]
+        expect(expression).toBeDefined()
+        const evaluate = new Function('getDatabase', 'arg', 'toLogSource', 'mode', `return (${expression})`)
+        const gate = (enabled: boolean | undefined, arg: Record<string, unknown>, mode = 'model') => evaluate(
+            () => ({ risuBardCacheFriendlyContext: enabled }), arg,
+            (value: string) => value === 'model' ? 'main' : value, mode,
+        )
+        expect(gate(true, { realChatId: 'chat-1' })).toBe('chat-1')
+        expect(gate(true, { realChatId: 'chat-1', previewBody: true })).toBe('chat-1')
+        expect(gate(false, { realChatId: 'chat-1' })).toBeUndefined()
+        expect(gate(undefined, { realChatId: 'chat-1' })).toBeUndefined()
+        expect(gate(true, { realChatId: 'chat-1', disablePromptCache: true })).toBeUndefined()
+        expect(gate(true, { realChatId: 'chat-1', logSource: 'memory' })).toBeUndefined()
+        expect(gate(true, { realChatId: 'chat-1' }, 'memory')).toBeUndefined()
+        expect(gate(true, {})).toBeUndefined()
+        expect(request).toContain('messages, tools, fetchImpl, sessionId,')
+        expect(request).toContain('generationId: genId, cache, sessionId,')
+        expect(request).toContain('messages, tools, abortSignal, sessionId)')
+        expect(request).toContain('messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl, sessionId,')
+    })
+})
 
 describe('sendChatRequest (non-stream)', () => {
     test('classifies an explicit refusal separately from an empty successful response', async () => {

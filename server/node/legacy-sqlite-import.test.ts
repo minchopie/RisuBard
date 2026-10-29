@@ -38,4 +38,38 @@ describe('one-shot legacy SQLite import', () => {
 
         expect(migrateLegacySqlite({ dataRoot, store, sqlitePath })).toMatchObject({ migrated: false, reason: 'already-migrated' })
     })
+
+    it('streams rows into the store instead of loading every value first', () => {
+        const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'risubard-sqlite-import-'))
+        roots.push(dataRoot)
+        const sqlitePath = path.join(dataRoot, 'risuai.db')
+        const db = new DatabaseSync(sqlitePath)
+        db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value BLOB NOT NULL, updated_at INTEGER NOT NULL)')
+        const raw = db.prepare('INSERT INTO kv VALUES (?, ?, ?)')
+        raw.run('database/database.bin', Buffer.from('db'), Date.now())
+        for (let i = 0; i < 5; i++) raw.run(`inlay/${i}`, Buffer.from(`inlay-${i}`), Date.now())
+        db.close()
+
+        const store = createFileKv({ dataRoot })
+        const seen: unknown[] = []
+        const replaceAll = store.kvReplaceAll
+        store.kvReplaceAll = (entries: Iterable<unknown>) => { seen.push(entries); replaceAll(entries) }
+        expect(migrateLegacySqlite({ dataRoot, store, sqlitePath })).toMatchObject({ migrated: true, entries: 6 })
+        expect(Array.isArray(seen[0])).toBe(false)
+        expect(store.kvGet('inlay/4')?.toString()).toBe('inlay-4')
+    })
+
+    it('refuses a SQLite file without the main database before writing anything', () => {
+        const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'risubard-sqlite-import-'))
+        roots.push(dataRoot)
+        const sqlitePath = path.join(dataRoot, 'risuai.db')
+        const db = new DatabaseSync(sqlitePath)
+        db.exec('CREATE TABLE kv (key TEXT PRIMARY KEY, value BLOB NOT NULL, updated_at INTEGER NOT NULL)')
+        db.prepare('INSERT INTO kv VALUES (?, ?, ?)').run('assets/raw', Buffer.from('asset'), Date.now())
+        db.close()
+
+        const store = createFileKv({ dataRoot })
+        expect(() => migrateLegacySqlite({ dataRoot, store, sqlitePath })).toThrow('does not contain database/database.bin')
+        expect(store.kvGet('assets/raw')).toBeNull()
+    })
 })

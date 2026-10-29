@@ -70,7 +70,7 @@ Wenn der Build abgeschlossen ist, sehen Sie:
 
 ```
 Build OK. Start the server with:
-  node server/node/server.cjs
+  node --max-old-space-size=2048 server/node/server.cjs
 
 Then open this address in the phone's own browser:
   http://localhost:7777
@@ -84,8 +84,10 @@ Then open this address in the phone's own browser:
 Starten Sie den Server aus demselben Verzeichnis:
 
 ```bash
-node server/node/server.cjs
+node --max-old-space-size=2048 server/node/server.cjs
 ```
+
+`--max-old-space-size=2048` hebt das Speicherlimit von Node von standardmäßig etwa 1 GB auf 2 GB an. Ohne diese Option kann der Server bei großen Datenbeständen mit dem Fehler `JavaScript heap out of memory` abbrechen. Telefone mit 8 GB RAM oder mehr können bis `4096` gehen; ein Wert über dem tatsächlichen RAM führt dazu, dass Android Termux beendet.
 
 Sobald das Server-Boot-Protokoll erscheint, öffnen Sie den Browser des Telefons (Chrome, Firefox usw.) und navigieren Sie zu:
 

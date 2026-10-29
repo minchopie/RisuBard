@@ -118,6 +118,21 @@ const updated = await Risuai.bardWiki.setContextMode({
 - `auto`: 현재 입력과 관련 있을 때 포함
 - `never`: 자동 컨텍스트에서 제외
 
+## 중요도 등급
+
+문서에는 선택 필드 `grade`(정수 0~9)와 `gradeBy`(`'user'` 또는 `'ai'`)가 있을 수 있습니다. 필드가 없는 문서는 미평가입니다. 표시용 등급은 점수에서 계산합니다: 0~1 없음, 2~3 D, 4~5 C, 6 B, 7 A, 8 S, 9 EX.
+
+```typescript
+const updated = await Risuai.bardWiki.setGrade({
+  documentId: document.id,
+  grade: 6,            // null이면 등급 해제
+  gradeBy: 'ai',       // 기본값 'ai'. 사용자가 지정한 등급('user')은 'ai'로 덮어쓸 수 없습니다.
+  expectedContentHash: document.contentHash,
+});
+```
+
+`setGrade`도 쓰기 권한을 요청하며, 거부되면 `null`을 반환합니다. 문서를 `saveDocument`로 수정해도 기존 등급은 유지됩니다.
+
 ## 문서 삭제
 
 ```typescript

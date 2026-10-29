@@ -1,10 +1,13 @@
 <script lang="ts">
-    import { CircleCheckIcon, GlobeIcon, MessageSquareIcon, Waypoints } from '@lucide/svelte'
+    import { CircleCheckIcon, GlobeIcon, MessageSquareIcon, SquarePen, TrashIcon, Waypoints } from '@lucide/svelte'
     import { language } from 'src/lang'
     import CollectionOrganizerList from 'src/lib/UI/CollectionOrganizerList.svelte'
     import ShDialog from 'src/lib/UI/GUI/ShDialog.svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
-    import { DBState, ReloadGUIPointer, selectedCharID } from 'src/ts/stores.svelte'
+    import { DBState, ReloadGUIPointer, openModuleEditId, selectedCharID } from 'src/ts/stores.svelte'
+    import { alertConfirm, notifySuccess } from 'src/ts/alert'
+    import { removeModules } from 'src/ts/process/moduleRemoval'
+    import { openSettings, SettingsRoute } from 'src/ts/routing'
     import { requestImmediateSave } from 'src/ts/globalApi.svelte'
     import { checkPersonaBinded } from 'src/ts/util'
 
@@ -37,6 +40,19 @@
         }
         $ReloadGUIPointer += 1
         void requestImmediateSave()
+    }
+
+    function editModule(moduleId: string) {
+        openModuleEditId.set(moduleId)
+        openSettings(SettingsRoute.Module)
+        close('')
+    }
+
+    async function deleteModule(moduleId: string, name: string) {
+        if (!await alertConfirm(language.removeConfirm + name)) return
+        removeModules([moduleId])
+        $ReloadGUIPointer += 1
+        notifySuccess(language.moduleDeleted)
     }
 </script>
 
@@ -91,6 +107,18 @@
                                     <MessageSquareIcon size={19.2}/>
                                 </button>
                             </div>
+                            <div class="chat-module-actions">
+                                <button type="button" class="chat-module-toggle"
+                                    aria-label={module.name + ': ' + language.edit} title={language.edit}
+                                    disabled={Boolean(module.mcp)} onclick={() => editModule(moduleId)}>
+                                    <SquarePen size={17}/>
+                                </button>
+                                <button type="button" class="chat-module-toggle chat-module-delete"
+                                    aria-label={module.name + ': ' + language.remove} title={language.remove}
+                                    onclick={() => deleteModule(moduleId, module.name)}>
+                                    <TrashIcon size={17}/>
+                                </button>
+                            </div>
                         </div>
                     {/if}
                 </div>
@@ -107,6 +135,8 @@
     .chat-module-copy .chat-module-inherited { color: var(--color-info); }
     .chat-module-scopes { display: flex; flex: 0 0 auto; gap: .5rem; margin-left: auto; }
     .chat-module-scope { display: flex; align-items: center; }
+    .chat-module-actions { display: flex; align-items: center; gap: .5rem; margin-left: .25rem; padding-left: .75rem; border-left: 1px solid var(--color-darkborderc); }
+    .chat-module-toggle.chat-module-delete:hover { color: var(--color-danger); border-color: var(--color-danger); }
     .chat-module-toggle { display: flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; flex: 0 0 auto; padding: 0; border: 1px solid var(--color-darkborderc); border-radius: .4rem; color: var(--color-textcolor2); background: var(--color-darkbg); cursor: pointer; }
     .chat-module-toggle.active { color: var(--color-accenttext); background: var(--color-primary); border-color: var(--color-primary); }
     .chat-module-toggle:hover { border-color: var(--color-info); }

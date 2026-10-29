@@ -46,6 +46,25 @@ test('v2 imports only additional chats, commits after durable save, and repeats 
     expect(duplicate.duplicate).toBe(true); expect(duplicate.added).toHaveLength(0)
 })
 
+test('direct app receive intent survives restart without changing native provenance or old inbox defaults', async t => {
+    const { receiver, receiving, create, entry } = await fixture(t)
+    expect(entry.applyRequested).toBeUndefined()
+    const incoming = await receiving.ingest(createReadStream(await receiving.file(entry.id)), { applyRequested: true })
+    expect(incoming).toMatchObject({ state: 'waiting', applyRequested: true, trusted: false })
+    const fresh = await create('receiver', receiver)
+    expect((await fresh.inspect(incoming.id)).applyRequested).toBe(true)
+    await fresh.requestApply(incoming.id, false)
+    const restarted = await create('receiver', receiver)
+    expect((await restarted.inspect(incoming.id))).toMatchObject({ state: 'waiting', applyRequested: false, trusted: false })
+    await expect(restarted.requestApply(incoming.id, 'true')).rejects.toThrow('Cannot change')
+    const plan = await restarted.prepare(incoming.id)
+    await expect(restarted.requestApply(incoming.id, true)).rejects.toThrow('Cannot change')
+    await restarted.arm(incoming.id, plan.transaction, plan.added)
+    receiver.characters[0].chats.push(plan.added[0].chat); receiver.risuPlaySets = plan.registry
+    await restarted.finish(incoming.id, true)
+    await expect(restarted.requestApply(incoming.id, true)).rejects.toThrow('Cannot change')
+})
+
 test('restart rolls back only uncommitted staging and preserves incoming queue and unrelated data', async t => {
     const { root, receiver, receiving, create, entry } = await fixture(t)
     await receiving.prepare(entry.id)
@@ -235,4 +254,91 @@ test('canonical disk save, process restart, transferred Wiki and saved-slot load
     const again = make(receiverRoot)
     expect(await again.memory.listMemorySaves({ characterId: 'receiver', sourceChatId: received.id })).toHaveLength(1)
     expect(again.repository.exportLegacyDatabase().characters[0].chats[0].id).toBe('keep')
+})
+
+const { openPlaySetArchive } = require('./play-set-archive.cjs')
+const { createHash } = require('node:crypto')
+const { posix, win32 } = require('node:path')
+const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
+
+// Windows limits ordinary paths to 260 characters. Node's fs handles longer ones, but fs.openAsBlob (the transfer
+// blob reader) only accepts them in the namespaced form (output/risubard-weekly-20261028/openblob-path-probe-result.json).
+// The fixture root alone exceeds the limit, so every staged file, Wiki page, slot and asset is read through a long path.
+async function longFixtureRoot(t: { onTestFinished(fn: () => Promise<void>): void }) {
+    const base = await mkdtemp(join(tmpdir(), 'bard-transfer-long-'))
+    t.onTestFinished(() => rm(base, { recursive: true, force: true }))
+    let root = base
+    while (root.length < 280) root = join(root, 'segment-0123456789abcdef')
+    await mkdir(root, { recursive: true })
+    return root
+}
+
+test('the blob readers take the platform namespaced path: a Windows prefix only on win32, identity on POSIX', () => {
+    expect(posix.toNamespacedPath('/tmp/bard/export-work-1/blob')).toBe('/tmp/bard/export-work-1/blob')
+    expect(win32.toNamespacedPath('C:\\bard\\export-work-1\\blob')).toBe('\\\\?\\C:\\bard\\export-work-1\\blob')
+})
+
+test('export under a Windows long path (>260 chars) stages Wiki, saved slot, inlay and asset bytes through the blob readers', async t => {
+    const root = await longFixtureRoot(t)
+    const dataRoot = join(root, 'sender')
+    const assetBytes = Buffer.from('long-path-asset-bytes'), inlayBytes = Buffer.from('long-path-inlay-bytes')
+    const chat: any = { id: 'source-chat', name: '장경로', note: '', localLore: [], message: [{ role: 'char', data: '{{inlay::long-image}}' }], scriptstate: { day: 1 } }
+    const source: any = { language: 'ko', characters: [{ chaId: 'source', type: 'character', name: '캐릭터', image: 'assets/long-icon.png', chats: [chat] }], modules: [], botPresets: [], personas: [], loreBook: [] }
+    const repository = createUserDataRepository({ dataRoot }); repository.importLegacyDatabase(source, { mode: 'sync' })
+    const storage = createFileKv({ dataRoot }); storage.kvSet('assets/long-icon.png', assetBytes)
+    const memory = createRuntimeMemoryService(dataRoot)
+    const service = createPlaySetService({ dataRoot, readDatabase: async () => repository.exportLegacyDatabase(), memory, storage,
+        readInlay: async () => ({ metadata: { type: 'image', ext: 'png', width: 1, height: 1 }, data: new Blob([inlayBytes], { type: 'image/png' }) }),
+        installInlay: async () => {}, removeInlay: async () => {} })
+    await memory.saveMarkdownWikiTurn({ characterId: 'source', chatId: chat.id, sourceMessageIds: ['first-message:source-chat:0'], markdown: '## 장경로 기억\n\n보존 내용 {{inlay::long-image}}' })
+    await memory.createMemorySave({ characterId: 'source', sourceChatId: chat.id, saveId: 'slot', sourceChatName: '저장 슬롯', turnCount: 1, chatBytes: encodeMemorySaveChat(chat) })
+    const sent = await service.exportSet({ characterId: 'source', chatIds: [chat.id], primaryChatId: chat.id })
+    expect(sent.missing).toEqual([])
+    const file = await service.file(sent.id)
+    expect(file.length).toBeGreaterThan(260)
+    const scratch = join(root, 'opened'); await mkdir(scratch)
+    const opened = await openPlaySetArchive(file, scratch) // verifies every entry against its declared hash
+    try {
+        const assets = opened.manifest.items.filter((item: any) => item.kind === 'asset')
+        expect(assets.map((item: any) => item.hash).sort()).toEqual([sha256(assetBytes), sha256(inlayBytes)].sort())
+        for (const item of assets) {
+            const copy = join(scratch, item.hash)
+            await opened.copyEntry(item.entry, copy)
+            expect(sha256(await readFile(copy))).toBe(item.hash)
+        }
+        const bard = opened.manifest.bard[0]
+        expect(bard.files.some((entry: any) => entry.path.endsWith('.md'))).toBe(true)
+        expect(bard.slots).toHaveLength(1)
+        expect(bard.slots[0].files.some((entry: any) => entry.path === 'chat.bin')).toBe(true)
+    } finally { await opened.close() }
+})
+
+test('a missing asset under a long path is still reported as missing material, not turned into a path error', async t => {
+    const root = await longFixtureRoot(t)
+    const dataRoot = join(root, 'sender'); await mkdir(dataRoot)
+    const db = { characters: [{ chaId: 'card', name: 'card', image: 'assets/absent.png', chats: [{ id: 'chat', message: [] }] }] }
+    const service = createPlaySetService({ dataRoot, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(dataRoot),
+        storage: createFileKv({ dataRoot }), readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+    const sent = await service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat' })
+    expect(sent.missing).toEqual([expect.objectContaining({ reason: 'Missing local asset: assets/absent.png' })])
+})
+
+test('fingerprint failure under a long path still raises its original failure and leaves no sendable export', async t => {
+    const root = await longFixtureRoot(t)
+    const dataRoot = join(root, 'fingerprint-failure'); await mkdir(dataRoot)
+    const db = { characters: [{ chaId: 'card', name: 'card', chats: [{ id: 'chat', message: [] }] }] }
+    const sender = createPlaySetService({ dataRoot, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(dataRoot),
+        storage: createFileKv({ dataRoot }), readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+    await createRuntimeMemoryService(dataRoot).saveMarkdownWikiTurn({ characterId: 'card', chatId: 'chat', sourceMessageIds: ['first-message:chat:0'], markdown: '## 기억\n\n내용' })
+    const read = promiseFiles.readFile
+    const fault = vi.spyOn(promiseFiles, 'readFile').mockImplementation(async (...args: any[]) => {
+        if (String(args[0]).includes('export-work-') && syncFiles.readdirSync(join(dataRoot, 'play-transfer')).some((name: string) => syncFiles.existsSync(join(dataRoot, 'play-transfer', name, 'export.risuplay')))) {
+            throw new Error('synthetic fingerprint read failure')
+        }
+        return read(...args)
+    })
+    try { await expect(sender.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat' })).rejects.toThrow('fingerprint read failure') }
+    finally { fault.mockRestore() }
+    expect(await sender.list()).toEqual([])
+    expect((await readdir(join(dataRoot, 'play-transfer'))).filter((name: string) => /^[a-f0-9-]{36}$/.test(name))).toHaveLength(0)
 })

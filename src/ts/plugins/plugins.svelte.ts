@@ -15,6 +15,7 @@ import { runPluginUpdate } from "./pluginUpdate";
 import { PluginChatOutputListeners, V2_CHAT_OUTPUT_OWNER, createV2ChatOutputApi } from "./pluginChatOutput";
 import type { PluginProviderResponse, PluginProviderStructuredOutput } from './providerStructuredOutput';
 import { createPluginFetchLogging } from './pluginFetchLogging';
+import { installApprovedPlugins } from './pluginDbProxy';
 
 export const customProviderStore = writable([] as string[])
 export const pluginProviderOwners = new Map<string, string>()
@@ -734,7 +735,9 @@ export const getV2PluginAPIs = (pluginName = '') => {
             getItem: (key: string) => {
                 const db = getDatabase({ snapshot: true });
                 db.pluginCustomStorage ??= {}
-                return db.pluginCustomStorage[key] || null;
+                // `??`, not `||`: a stored 0, false or '' is a value; only a
+                // missing key reads as null.
+                return db.pluginCustomStorage[key] ?? null;
             },
             setItem: (key: string, value: string) => {
                 const db = getDatabase();
@@ -786,7 +789,11 @@ export const getV2PluginAPIs = (pluginName = '') => {
             for (const key of Object.keys(newDb)) {
                 if (key === 'plugins') {
                     console.warn('[WARN] Plugin attempted to access plugin directly. this would be blocked in future versions. Instead, use the provided APIs to manage plugins. Attempting to handle plugin installation via plugin for new plugins in the provided database object.')
-                    newDb[key] = await handlePluginInstallViaPlugin(newDb.plugins)
+                    await installApprovedPlugins(newDb.plugins, handlePluginInstallViaPlugin, {
+                        get: () => db.plugins ?? [],
+                        set: (plugins) => { db.plugins = plugins },
+                    })
+                    continue
                 }
                 
                 if (allowedDbKeys.includes(key)) {

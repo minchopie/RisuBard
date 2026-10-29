@@ -5,6 +5,7 @@ import { appVer, getCurrentCharacter, getDatabase, type Chat, type Database, typ
 import { DBState, selIdState } from '../stores.svelte';
 import { aiWatermarkingLawApplies, getFileSrc } from '../globalApi.svelte';
 import { isNodeServer } from "src/ts/platform"
+import { sha256Digest } from '../secureCrypto';
 import { getChatVar, setChatVar, getGlobalChatVar } from './chatVar.svelte';
 import { processScriptFull } from '../process/scripts';
 import { get } from 'svelte/store';
@@ -15,6 +16,8 @@ import { findCharacterbyId, getPersonaPrompt, getUserIcon, getUserName, pickHash
 
 import { getInlayInfosBatch } from '../process/files/inlays';
 import { getModuleAssets, getModuleLorebooks, getModules } from '../process/modules';
+import { findClosestAsset, type AssetPaths } from './closestAsset';
+export { getDistance } from './closestAsset';
 import hljs from 'highlight.js/lib/core'
 import { language } from 'src/lang';
 import katex from 'katex'
@@ -452,11 +455,6 @@ async function getFileSrcCached(path:string){
     return src
 }
 
-type AssetPaths = {[key:string]:{
-    srcPaths:string[]
-    ext?:string
-}}
-
 let assetsCache: AssetPaths | null = null
 let emoAssetsCache: AssetPaths | null = null
 let assetsCacheCharacterId = ''
@@ -545,7 +543,7 @@ async function parseAdditionalAssets(data:string, char:simpleCharacterArgument|c
             }
 
             if(assetPaths){
-                match = getClosestMatch(char, name, assetPaths)
+                match = getClosestMatch(name, assetPaths)
             }
 
             if(!match){
@@ -611,69 +609,13 @@ async function parseAdditionalAssets(data:string, char:simpleCharacterArgument|c
     return data
 }
 
-function getClosestMatch(char: simpleCharacterArgument|character, name:string, assetPaths:AssetPaths){   
-    if(!char.additionalAssets) return null
-
-    let closest = ''
-    let closestDist = 999999
-    let targetPath = ''
-    let targetExt = ''
-
-    const trimmedName = trimmer(name)
-    for(const asset of char.additionalAssets) {
-        const key = asset[0].toLocaleLowerCase()
-        const dist = getDistance(trimmedName, trimmer(key))
-        if(dist < closestDist){
-            closest = key
-            closestDist = dist
-            targetPath = asset[1]
-            targetExt = asset[2]
-        }
+// Searches character and module assets; the result is cached under the requested name.
+function getClosestMatch(name:string, assetPaths:AssetPaths){
+    const match = findClosestAsset(name, assetPaths, DBState.db.assetMaxDifference)
+    if(match){
+        assetPaths[name] = match
     }
-    
-    if(closestDist > DBState.db.assetMaxDifference){
-        return null
-    }
-
-    assetPaths[closest] = {
-        srcPaths: [targetPath],
-        ext: targetExt
-    }
-
-    return assetPaths[closest]
-}
-
-//Levenshtein distance, new with 1d array
-export function getDistance(a:string, b:string) {
-    const h = a.length + 1
-    const w = b.length + 1
-    let d = new Int16Array(h * w)
-    for(let i=0;i<h;i++){
-        d[i * w] = i
-    }
-    for(let i=0;i<w;i++){
-        d[i] = i
-    }
-    for(let i=1; i<h; i++){
-        for(let j=1;j<w;j++){
-            d[i * w + j] = Math.min(
-                d[(i-1) * w + j-1] + (a.charAt(i-1)===b.charAt(j-1) ? 0 : 1),
-                d[(i-1) * w + j]+1, d[i * w + j-1]+1
-            )
-        }
-    }
-    return d[h * w - 1]
-}
-
-function trimmer(str:string){
-    const ext = ['webp', 'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'avi', 'm4p', 'm4v', 'mp3', 'wav', 'ogg']
-    for(const e of ext){
-        if(str.endsWith('.' + e)){
-            str = str.substring(0, str.length - e.length - 1)
-        }
-    }
-
-    return str.trim().replace(/[_ -.]/g, '')
+    return match
 }
 
 const blobUrlCache = new Map<string, { url: string; type: string }>()
@@ -978,7 +920,7 @@ const trimCache = new Map<string, string>()
 const TRIM_CACHE_MAX = 200
 const trimSanitizeConfig = {
     ADD_TAGS: ["iframe", "style", "risu-style", "x-em", 'annotation', 'semantics', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac', 'msqrt'],
-    ADD_ATTR: ["allow", "allowfullscreen", "frameborder", "scrolling", "risu-ctrl" ,"risu-btn", 'risu-trigger', 'risu-mark', 'risu-id', 'x-hl-lang', 'x-hl-text', 'data-inlay-id', 'data-inlay-type'],
+    ADD_ATTR: ["allow", "allowfullscreen", "frameborder", "scrolling", "risu-ctrl" ,"risu-btn", 'risu-form', 'risu-trigger', 'risu-mark', 'risu-id', 'x-hl-lang', 'x-hl-text', 'data-inlay-id', 'data-inlay-type'],
 }
 
 export function trimMarkdown(data:string){
@@ -1181,7 +1123,7 @@ function decodeStyleContent(encoded:string): string|{diagnostic:string}{
 }
 
 export async function hasher(data:Uint8Array){
-    return Buffer.from(await crypto.subtle.digest("SHA-256", data as any)).toString('hex');
+    return Buffer.from(await sha256Digest(data)).toString('hex');
 }
 
 export type CbsConditions = {

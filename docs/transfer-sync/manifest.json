@@ -108,7 +108,9 @@
         "excludeAdded": [
           "local-ai\\.cjs",
           "localAI\\.",
-          "^\\s+recoverFailedCanonicalTransaction\\(\\);$"
+          "^\\s+recoverFailedCanonicalTransaction\\(\\);$",
+          "^if \\(require\\('\\./app-update/bootstrap\\.cjs'\\)\\.start\\(__filename\\)\\) return;$",
+          "^\\s+readColdChat: key => readColdStorageJsonEntry\\(key\\)\\?\\.coldData \\?\\? null,$"
         ],
         "anchors": [
           "storageWriteContext",
@@ -170,9 +172,13 @@
           [
             "const GITHUB_REPO = 'minchopie/RisuBard';",
             "const GITHUB_REPO = 'rpaddict/RisuBard';"
+          ],
+          [
+            "        server.once('listening', () => { require('./app-update/bootstrap.cjs').ready(); embedded.ready(server, savePath); });",
+            "        server.once('listening', () => embedded.ready(server, savePath));"
           ]
         ],
-        "note": "The fork's updater identity (GITHUB_REPO → minchopie) is NOT part of the module: the rewrite keeps the target's own repo so updater.cjs/update.sh/release tests stay consistent."
+        "note": "The fork's updater identity (GITHUB_REPO → minchopie) is NOT part of the module: the rewrite keeps the target's own repo so updater.cjs/update.sh/release tests stay consistent. The app-update bootstrap (start/ready, host-bridges) and the cold-chat reader option (readColdChat; createNasSyncService defaults it to null) are other features that git merges into module hunks by proximity; they are excluded/rewritten, never part of the module patch."
       },
       "server/node/risubard-memory-runtime.cjs": {
         "anchors": [
@@ -209,7 +215,9 @@
             "from": "^\\s{4}async localAIRequest\\(",
             "to": "^\\s{4}\\}$"
           }
-        ]
+        ],
+        "context": 1,
+        "note": "context 1: the host's APP_SERVER_FETCH try/catch REPLACES the original fetch call (removed lines) three lines below the module's header hook and three lines above its 423 gate hook; at context 2 git merges all three into one hunk that no exclusion may touch (removals are never filtered). At context 1 the replacement is its own anchor-free hunk and is dropped whole, so the base fetch lines stay untouched."
       },
       "src/ts/globalApi.svelte.ts": {
         "anchors": [
@@ -232,7 +240,18 @@
           "syncOwned",
           "canonicalSaveSettled",
           "risubard-chat-opened"
-        ]
+        ],
+        "excludeAdded": [
+          "^\\s+characters\\?: string\\[\\]$",
+          "^\\s+saveFailureNotified = false$"
+        ],
+        "excludeAddedBlocks": [
+          {
+            "from": "^\\s+for \\(const id of options\\?\\.characters \\?\\? \\[\\]\\) \\{$",
+            "to": "^\\s{8}\\}$"
+          }
+        ],
+        "note": "Other features next to the module's immediateSave hooks: the `characters` dirty-list option (type field in both literals + its loop, whose inner line is identical to one inside the module's `chats` loop, hence a block exclusion) and the save-failure toast latch (`saveFailureNotified`)."
       },
       "src/ts/bootstrap.ts": {
         "anchors": [

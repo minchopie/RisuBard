@@ -216,6 +216,35 @@ describe('CharacterVaultDialog', () => {
         expect(document.body.textContent).not.toContain('Cato')
     })
 
+    test('groups the full vault by folder in sidebar order', async () => {
+        mocks.db.characterOrder.push({ id: 'folder-2', name: 'Empty', color: '#336699', data: [] } as never)
+        await render()
+        const sort = document.body.querySelector<HTMLSelectElement>(
+            '[aria-label="캐릭터 정렬 기준"]'
+        )!
+        sort.value = 'order'
+        sort.dispatchEvent(new Event('change', { bubbles: true }))
+        await tick()
+
+        const sections = [...document.body.querySelectorAll('.vault-section')]
+        expect(sections.map((section) => [
+            section.querySelector('h3')?.textContent,
+            [...section.querySelectorAll('.character-caption strong')].map((name) => name.textContent),
+        ])).toEqual([
+            ['미분류', ['Alice']],
+            ['Cast', ['Bryn']],
+            ['미분류', ['Cato']],
+            ['Empty', []],
+        ])
+        expect(sections[3].textContent).toContain('비어 있는 폴더입니다.')
+        expect(document.body.querySelector<HTMLButtonElement>('[aria-label^="정렬 방향"]')?.disabled).toBe(true)
+
+        click('Cast 폴더 열기')
+        await tick()
+        expect(document.body.querySelectorAll('.vault-section')).toHaveLength(0)
+        expect(document.body.querySelectorAll('.character-card')).toHaveLength(1)
+    })
+
     test('duplicates selected characters with chats and their BardWiki workspaces', async () => {
         Object.assign(mocks.db.characters[0], {
             chats: [{

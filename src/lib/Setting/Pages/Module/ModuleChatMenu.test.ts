@@ -3,26 +3,30 @@ import { readFileSync } from 'node:fs'
 import { mount, tick, unmount } from 'svelte'
 import { get } from 'svelte/store'
 import ModuleChatMenu from './ModuleChatMenu.svelte'
-import { DBState, ReloadGUIPointer, selectedCharID } from 'src/ts/stores.svelte'
+import { DBState, ReloadGUIPointer, openModuleEditId, selectedCharID } from 'src/ts/stores.svelte'
+import { alertConfirm, notifySuccess } from 'src/ts/alert'
+import { openSettings, SettingsRoute } from 'src/ts/routing'
 import { requestImmediateSave } from 'src/ts/globalApi.svelte'
 import { language } from 'src/lang'
 
 vi.mock('src/ts/stores.svelte', async () => {
     const { writable } = await import('svelte/store')
-    return { DBState: { db: {} }, ReloadGUIPointer: writable(0), selectedCharID: writable(0) }
+    return { DBState: { db: {} }, ReloadGUIPointer: writable(0), selectedCharID: writable(0), openModuleEditId: writable(null) }
 })
 vi.mock('src/ts/storage/database.svelte', async () => {
     const { DBState } = await import('src/ts/stores.svelte')
-    return { getDatabase: () => DBState.db }
+    return { getDatabase: () => DBState.db, normalizePersonaEnabledModules: (value: unknown) => value ?? {} }
 })
 vi.mock('src/ts/globalApi.svelte', () => ({ requestImmediateSave: vi.fn() }))
-vi.mock('src/ts/alert', () => ({ alertConfirm: vi.fn(), alertInput: vi.fn() }))
+vi.mock('src/ts/alert', () => ({ alertConfirm: vi.fn(), alertInput: vi.fn(), notifySuccess: vi.fn() }))
+vi.mock('src/ts/routing', () => ({ openSettings: vi.fn(), SettingsRoute: { Module: 14 } }))
 vi.mock('src/ts/util', () => ({ checkPersonaBinded: () => null }))
 
 let component: ReturnType<typeof mount> | undefined
 beforeEach(() => {
     vi.clearAllMocks()
     selectedCharID.set(0)
+    openModuleEditId.set(null)
     ReloadGUIPointer.set(0)
     DBState.db = {
         modules: [{ id: 'one', name: 'Test module', description: 'A module description' }],
@@ -52,6 +56,10 @@ async function openMenu(alertMode = false) {
     component = mount(ModuleChatMenu, { target: host, props: { close, alertMode } })
     await tick()
     return { host, close }
+}
+
+function actionButton(action: 'edit' | 'remove') {
+    return document.querySelector<HTMLButtonElement>(`button[aria-label="Test module: ${language[action]}"]`)!
 }
 
 function scopeButton(scope: 'global' | 'chat') {
@@ -199,5 +207,43 @@ describe('chat module manager', () => {
         document.querySelector<HTMLButtonElement>(`button[aria-label="${language.close}"]`)!.click()
         await tick()
         expect(close).toHaveBeenCalledWith('')
+    })
+
+    test('opens the module editor in settings from the edit button', async () => {
+        const { close } = await openMenu()
+        actionButton('edit').click()
+        expect(get(openModuleEditId)).toBe('one')
+        expect(openSettings).toHaveBeenCalledWith(SettingsRoute.Module)
+        expect(close).toHaveBeenCalledWith('')
+    })
+
+    test('disables editing for MCP modules like the settings page', async () => {
+        DBState.db.modules[0].mcp = { url: 'http://localhost' } as any
+        await openMenu()
+        expect(actionButton('edit').disabled).toBe(true)
+        expect(actionButton('remove').disabled).toBe(false)
+    })
+
+    test('deletes a module only after confirmation', async () => {
+        DBState.db.enabledModules = ['one']
+        vi.mocked(alertConfirm).mockResolvedValueOnce(false)
+        await openMenu()
+        actionButton('remove').click()
+        await vi.waitFor(() => expect(alertConfirm).toHaveBeenCalledWith(language.removeConfirm + 'Test module'))
+        expect(DBState.db.modules).toHaveLength(1)
+
+        vi.mocked(alertConfirm).mockResolvedValueOnce(true)
+        actionButton('remove').click()
+        await vi.waitFor(() => expect(DBState.db.modules).toEqual([]))
+        expect(DBState.db.enabledModules).toEqual([])
+        expect(DBState.db.collectionOrganizers.modules.folderByItemId).toEqual({})
+        expect(notifySuccess).toHaveBeenCalledWith(language.moduleDeleted)
+        expect(requestImmediateSave).toHaveBeenCalledTimes(1)
+    })
+
+    test('hides edit and delete in the module picker', async () => {
+        await openMenu(true)
+        expect(actionButton('edit')).toBeNull()
+        expect(actionButton('remove')).toBeNull()
     })
 })

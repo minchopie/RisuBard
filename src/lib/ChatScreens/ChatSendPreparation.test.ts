@@ -30,6 +30,7 @@ function screen(overrides: Record<string, unknown> = {}) {
     const calls: string[] = []
     const dependencies = {
         $selectedCharID: 0, $doingChat: false, wikiRebootBlocksGeneration: false, currentChatGenerating: false,
+        inputAssistBusy: false, notifyInfo: () => {},
         language: {}, DBState: { db: { characters: [character], aiModel: 'model-A', botPresetsId: 1 } },
         ensureActiveChatReady: async () => chat,
         runTrigger: async () => undefined,

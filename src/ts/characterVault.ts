@@ -499,6 +499,52 @@ export function sortCharacterVaultCharacters<T extends SortableCharacter>(
     })
 }
 
+/** One block of the vault's sidebar-order view: a folder, or a run of unfiled characters between folders. */
+export interface CharacterVaultSection<T> {
+    key: string
+    folder: folder | null
+    items: T[]
+}
+
+/**
+ * Groups already-filtered items in sidebar order: one section per folder
+ * (empty ones only when `keepEmptyFolders`) and unfiled runs between them.
+ * Items missing from the order go to a trailing unfiled run; repeats are dropped.
+ */
+export function buildCharacterVaultSections<T extends { chaId: string }>(
+    order: (string | folder)[],
+    items: T[],
+    keepEmptyFolders: boolean
+): CharacterVaultSection<T>[] {
+    const byId = new Map(items.map((item) => [item.chaId, item]))
+    const seen = new Set<string>()
+    const sections: CharacterVaultSection<T>[] = []
+    const take = (id: string, into: T[]) => {
+        const item = byId.get(id)
+        if (item && !seen.has(id)) { seen.add(id); into.push(item) }
+    }
+    const looseRun = () => {
+        const last = sections[sections.length - 1]
+        if (last && !last.folder) return last
+        const run = { key: `unfiled:${sections.length}`, folder: null, items: [] as T[] }
+        sections.push(run)
+        return run
+    }
+    for (const entry of order) {
+        if (typeof entry === 'string') {
+            take(entry, looseRun().items)
+            continue
+        }
+        const folderItems: T[] = []
+        entry.data.forEach((id) => take(id, folderItems))
+        if (folderItems.length > 0 || keepEmptyFolders) {
+            sections.push({ key: `folder:${entry.id}`, folder: entry, items: folderItems })
+        }
+    }
+    for (const item of items) take(item.chaId, looseRun().items)
+    return sections.filter((section) => section.folder || section.items.length > 0)
+}
+
 export function deleteCharacterVaultFolder(
     db: VaultDatabase,
     folderId: string

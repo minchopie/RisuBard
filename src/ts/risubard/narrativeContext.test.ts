@@ -650,7 +650,8 @@ describe('actual narrative inquiry prompt', () => {
             priority: 120,
         }], '')!
 
-        expect(prompt).toContain('Treat retrieved sources as authoritative evidence')
+        expect(prompt).toContain('Treat retrieved sources as evidence of what happened')
+        expect(prompt).toContain('When sources disagree, trust them in this order')
         expect(prompt).toContain('chronology')
         expect(prompt).toContain('viewpoint knowledge')
     })

@@ -88,6 +88,22 @@ describe('applyPainterPresets', () => {
         const [kept] = applyPainterPresets([subject({ id: 'severa', appearance: '', clothing: '', state: '', outfitId: 'robe' })], presets, outfitsFor, [edited])
         expect(kept).toMatchObject({ appearance: 'edited hair', appearanceEdited: true, clothing: 'edited robe', outfitEdited: true })
     })
+    it('keeps hand-edited pose always and hand-edited state only with the same outfit', () => {
+        const before = subject({ id: 'severa', pose: 'my pose', poseEdited: true, state: 'my state', stateEdited: true, outfitId: 'robe' })
+        const [same] = applyPainterPresets([subject({ id: 'severa', pose: 'model pose', state: 'model state', outfitId: 'robe' })], presets, outfitsFor, [before])
+        expect(same).toMatchObject({ pose: 'my pose', poseEdited: true, state: 'my state', stateEdited: true })
+        const [changed] = applyPainterPresets([subject({ id: 'severa', pose: 'model pose', state: 'model state' })], presets, outfitsFor, [before])
+        expect(changed).toMatchObject({ pose: 'my pose', poseEdited: true, state: 'model state' })
+        expect(changed.stateEdited).toBeUndefined()
+        const [fresh] = applyPainterPresets([subject({ id: 'severa', poseEdited: true, stateEdited: true })], presets, outfitsFor, [])
+        expect(fresh.poseEdited).toBeUndefined()
+        expect(fresh.stateEdited).toBeUndefined()
+    })
+    it('keeps the previous sex only when the planner omits it', () => {
+        const before = subject({ id: 'severa', sex: 'female' })
+        expect(applyPainterPresets([subject({ id: 'severa' })], presets, outfitsFor, [before])[0].sex).toBe('female')
+        expect(applyPainterPresets([subject({ id: 'severa', sex: 'other' })], presets, outfitsFor, [before])[0].sex).toBe('other')
+    })
     it('keeps the user-added mark across revisions', () => {
         const [result] = applyPainterPresets([subject({ id: 'new' })], presets, outfitsFor, [subject({ id: 'new', manual: true })])
         expect(result.manual).toBe(true)

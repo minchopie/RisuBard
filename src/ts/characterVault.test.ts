@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import type { Database, character, folder } from './storage/database.svelte'
 import {
     applyCharacterVaultClones,
+    buildCharacterVaultSections,
     clearCharacterVaultNew,
     createCharacterVaultFolder,
     createCharacterVaultClones,
@@ -298,6 +299,51 @@ describe('Character Vault state', () => {
 
         expect(sortCharacterVaultCharacters(characters, sortBy, direction)
             .map((character) => character.chaId)).toEqual(expected)
+    })
+
+    describe('buildCharacterVaultSections', () => {
+        const folderOf = (id: string, data: string[]): folder => ({
+            id, name: id, data, color: '', folder: true, imgFile: '', img: '',
+        } as folder)
+        const item = (chaId: string) => ({ chaId })
+        const summary = (sections: ReturnType<typeof buildCharacterVaultSections<{ chaId: string }>>) =>
+            sections.map((section) => [
+                section.folder?.id ?? 'unfiled',
+                section.items.map((entry) => entry.chaId),
+            ])
+
+        test('keeps sidebar order with unfiled runs between folders', () => {
+            const order = ['a', 'b', folderOf('f1', ['c', 'd']), 'e', folderOf('f2', ['f'])]
+            const items = ['f', 'e', 'd', 'c', 'b', 'a'].map(item)
+
+            expect(summary(buildCharacterVaultSections(order, items, true))).toEqual([
+                ['unfiled', ['a', 'b']],
+                ['f1', ['c', 'd']],
+                ['unfiled', ['e']],
+                ['f2', ['f']],
+            ])
+        })
+
+        test('shows empty folders only when asked and drops empty unfiled runs', () => {
+            const order = [folderOf('empty', []), 'x', folderOf('f1', ['a'])]
+            const items = [item('a')]
+
+            expect(summary(buildCharacterVaultSections(order, items, true)))
+                .toEqual([['empty', []], ['f1', ['a']]])
+            expect(summary(buildCharacterVaultSections(order, items, false)))
+                .toEqual([['f1', ['a']]])
+        })
+
+        test('skips repeats and appends items missing from the order', () => {
+            const order = ['a', folderOf('f1', ['a', 'b'])]
+            const items = ['a', 'b', 'orphan'].map(item)
+
+            expect(summary(buildCharacterVaultSections(order, items, false))).toEqual([
+                ['unfiled', ['a']],
+                ['f1', ['b']],
+                ['unfiled', ['orphan']],
+            ])
+        })
     })
 
     test('plans chat-inclusive clones with unique character and chat IDs', () => {

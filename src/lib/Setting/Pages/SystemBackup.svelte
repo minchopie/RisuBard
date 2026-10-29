@@ -16,6 +16,7 @@
     import { exportAsDataset } from 'src/ts/storage/exportAsDataset'
     import ShAccordion from 'src/lib/UI/GUI/ShAccordion.svelte'
     import Button from 'src/lib/UI/GUI/Button.svelte'
+    import RisuAccountImport from 'src/lib/Setting/RisuAccountImport.svelte'
 
     async function downloadLocal() {
         if (!(await alertConfirm(language.backupConfirm))) return
@@ -94,6 +95,8 @@
         <span class="font-medium">{language.migration}</span>
     </div>
     <p class="text-textcolor2 text-sm leading-relaxed mb-4">{language.migrationDesc}</p>
+
+    <RisuAccountImport />
 
     <div class="mt-4">
         <ShAccordion name={language.migrationSaveFolderAccordion} variant="card">

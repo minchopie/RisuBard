@@ -93,6 +93,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
      * apply). Its epoch is compared with the live interaction count at every decision point; a count that moved means the user is playing.
      */
     async function cycle(reason: string, external?: AbortSignal, safe: SafeWindow | null = null, direction: 'both' | 'upload' | 'download' = 'both'): Promise<string> {
+        // A failed startup probe leaves enabled unknown; an explicit retry must recheck it instead of silently returning idle forever.
+        if (reason === 'manual' && started && !state.probed && !state.paused) await probe()
         if (!active()) return 'idle'
         if (state.running) return 'running'
         if (!o.visible()) { state.lastOutcome = 'hidden'; return 'hidden' } // no background work; the visibility listener resumes

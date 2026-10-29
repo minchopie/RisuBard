@@ -37,11 +37,26 @@ test('ownership is disjoint and total over the real Database interface; the pres
     // v0.9.81 also removed personaNote. Values already stored on devices keep syncing instead of becoming unowned optional keys. Documented here; never silently widened.
     const LEGACY_OWNED = ['risuBardBardChanEnabled', 'risuBardBardChanModelMode', 'personaNote']
     for (const key of LEGACY_OWNED) expect(ownerOf(key), `${key} must stay owned by a settings group`).toMatch(/^settings:/)
-    const known = new Set([...keys, ...MIRROR, ...LEGACY_OWNED, 'risuPlaySets', 'formatversion', 'personaEnabledModules', 'hypaV3Settings', 'pluginDevelopMode'])
+    // mobileMessageActionsInline: upstream v0.9.84 display toggle, declared device-local ahead of that Database interface
+    // so the fork assembled on an older upstream never publishes it as an unknown settings root.
+    const known = new Set([...keys, ...MIRROR, ...LEGACY_OWNED, 'risuPlaySets', 'formatversion', 'personaEnabledModules', 'hypaV3Settings', 'pluginDevelopMode', 'mobileMessageActionsInline'])
     const stale = [...Object.values(SETTINGS_GROUPS).flat(), ...DEVICE_LOCAL].filter(k => !known.has(k))
     expect(stale).toEqual([])
     expect(ownerOf('nodeOnlyModelModeLock')).toBe('settings:model-presets'); expect(ownerOf('nodeOnlyScrollButtonType')).toBe('local')
     expect(ownerOf('someFutureOptionalKey')).toBe('settings:someFutureOptionalKey') // unknown optional keys are preserved, never dropped
+})
+
+test('mobileMessageActionsInline (upstream v0.9.84 message-toolbar toggle) is device-local: flipping it changes no projected root', async t => {
+    const f = await fixture(t), vault = createVault(master)
+    const run = async (db: any) => projectDatabase({ database: db, vault, captures: new Map([['card', f.capture]]), materials: playSetMemoryMaterials, ...f.readers })
+    expect(ownerOf('mobileMessageActionsInline')).toBe('local')
+    const base = await run(f.database())
+    const graph = createGraph(), initial = diffProjection(graph, base.desired); graph.addAll(initial.revisions)
+    const lineage = Object.fromEntries(base.desired.map((d: any, i: number) => [d.lineageKey, initial.revisions[i].id]))
+    const flipped: any = f.database(); flipped.mobileMessageActionsInline = true
+    const projected = await run(flipped)
+    expect(diffProjection(graph, projected.desired, lineage)).toMatchObject({ revisions: [], diverged: [] })
+    expect(projected.desired.some((d: any) => text(d.content).includes('mobileMessageActionsInline'))).toBe(false)
 })
 
 test('collectReferences follows the manual snapshot rules for assets, inlays and painter pointers', () => {

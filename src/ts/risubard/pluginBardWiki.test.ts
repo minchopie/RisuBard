@@ -155,7 +155,6 @@ describe('BardWiki plugin service', () => {
                         displayName: 'Sealed Gate',
                     }],
                     evidenceRequests: [],
-                    rerankCandidates: [],
                     entityCandidates: [],
                     metrics: {
                         candidateCount: 1,
@@ -199,7 +198,6 @@ describe('BardWiki plugin service', () => {
                 cacheStatus: 'current',
                 sources: [],
                 evidenceRequests: [],
-                rerankCandidates: [],
                 entityCandidates: [],
                 metrics: {
                     candidateCount: 0,
@@ -328,7 +326,6 @@ describe('BardWiki plugin service', () => {
                 tokens: 3,
             }],
             evidenceRequests: [],
-            rerankCandidates: [],
             entityCandidates: [],
             metrics: {
                 candidateCount: 1,

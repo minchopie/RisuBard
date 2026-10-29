@@ -164,6 +164,8 @@ export function buildRebootBatchDraftSchema(turnCount?: 1 | 2): string {
 
 export const rebootBatchDraftSchema = buildRebootBatchDraftSchema()
 
+export const CANONICAL_EDIT_MAX_ITEMS = 128
+
 export function buildCanonicalBatchSchema(candidateCount?: number): string {
     if (candidateCount !== undefined
         && (!Number.isSafeInteger(candidateCount) || candidateCount < 1)) {
@@ -197,15 +199,42 @@ export function buildCanonicalBatchSchema(candidateCount?: number): string {
                             items: {
                                 type: 'object',
                                 additionalProperties: false,
-                                required: ['heading', 'operation', 'content'],
+                                required: ['heading', 'operation', 'content', 'add', 'replace', 'remove'],
                                 properties: {
                                     heading: {
                                         type: 'string', maxLength: 160,
                                     },
                                     operation: {
-                                        type: 'string', enum: ['upsert', 'delete'],
+                                        type: 'string', enum: ['upsert', 'delete', 'edit'],
                                     },
                                     content: { type: 'string' },
+                                    add: {
+                                        type: 'array', maxItems: CANONICAL_EDIT_MAX_ITEMS,
+                                        items: { type: 'string', minLength: 1 },
+                                    },
+                                    replace: {
+                                        type: 'array', maxItems: CANONICAL_EDIT_MAX_ITEMS,
+                                        items: {
+                                            type: 'object', additionalProperties: false,
+                                            required: ['index', 'text'],
+                                            properties: {
+                                                index: { type: 'integer', minimum: 0 },
+                                                text: { type: 'string', minLength: 1 },
+                                            },
+                                        },
+                                    },
+                                    remove: {
+                                        type: 'array', maxItems: CANONICAL_EDIT_MAX_ITEMS,
+                                        items: {
+                                            type: 'object', additionalProperties: false,
+                                            required: ['index', 'reason', 'mergedInto'],
+                                            properties: {
+                                                index: { type: 'integer', minimum: 0 },
+                                                reason: { type: 'string', enum: ['superseded', 'merged', 'corrected'] },
+                                                mergedInto: { type: ['integer', 'null'], minimum: 0 },
+                                            },
+                                        },
+                                    },
                                 },
                             },
                         },
@@ -272,10 +301,21 @@ export interface MemoryWriterDraft {
     }>
 }
 
+/**
+ * Unit edits address the numbered units of an existing section. Units that
+ * are not mentioned stay as they are; removing one needs a reason.
+ */
+export interface CanonicalUnitEdits {
+    add: string[]
+    replace: Array<{ index: number; text: string }>
+    remove: Array<{ index: number; reason: 'superseded' | 'merged' | 'corrected'; mergedInto: number | null }>
+}
+
 export interface CanonicalSectionPatch {
     heading: string
-    operation: 'upsert' | 'delete'
+    operation: 'upsert' | 'delete' | 'edit'
     content: string
+    edits?: CanonicalUnitEdits
 }
 
 export interface CanonicalBatch {
@@ -615,6 +655,37 @@ export function rebootBatchToMemoryDraft(
     }
 }
 
+function parseCanonicalUnitEdits(section: Record<string, unknown>, label: string): CanonicalUnitEdits {
+    const add = boundedArray(section.add ?? [], `${label}.add`, CANONICAL_EDIT_MAX_ITEMS).map((text, index) => {
+        if (typeof text !== 'string' || !text.trim()) throw new Error(`${label}.add[${index}] is invalid`)
+        return text.trim()
+    })
+    const replace = boundedArray(section.replace ?? [], `${label}.replace`, CANONICAL_EDIT_MAX_ITEMS).map((item, index) => {
+        if (!isRecord(item)) throw new Error(`${label}.replace[${index}] must be an object`)
+        exactKeys(item, ['index', 'text'], `${label}.replace[${index}]`)
+        if (!Number.isSafeInteger(item.index) || (item.index as number) < 0
+            || typeof item.text !== 'string' || !item.text.trim()) {
+            throw new Error(`${label}.replace[${index}] is invalid`)
+        }
+        return { index: item.index as number, text: item.text.trim() }
+    })
+    const remove = boundedArray(section.remove ?? [], `${label}.remove`, CANONICAL_EDIT_MAX_ITEMS).map((item, index) => {
+        if (!isRecord(item)) throw new Error(`${label}.remove[${index}] must be an object`)
+        exactKeys(item, ['index', 'reason', 'mergedInto'], `${label}.remove[${index}]`)
+        if (!Number.isSafeInteger(item.index) || (item.index as number) < 0
+            || !['superseded', 'merged', 'corrected'].includes(item.reason as string)
+            || (item.mergedInto !== null && (!Number.isSafeInteger(item.mergedInto) || (item.mergedInto as number) < 0))) {
+            throw new Error(`${label}.remove[${index}] is invalid`)
+        }
+        return {
+            index: item.index as number,
+            reason: item.reason as CanonicalUnitEdits['remove'][number]['reason'],
+            mergedInto: item.mergedInto as number | null,
+        }
+    })
+    return { add, replace, remove }
+}
+
 export function parseCanonicalBatch(
     output: string,
     candidateCount: number
@@ -662,10 +733,14 @@ export function parseCanonicalBatch(
                     `canonical batch documents[${index}].sections[${sectionIndex}] must be an object`
                 )
             }
+            const label = `canonical batch documents[${index}].sections[${sectionIndex}]`
+            // Older providers and prompts return only heading, operation and content.
             exactKeys(
                 section,
-                ['heading', 'operation', 'content'],
-                `canonical batch documents[${index}].sections[${sectionIndex}]`
+                Object.hasOwn(section, 'add') || Object.hasOwn(section, 'replace') || Object.hasOwn(section, 'remove')
+                    ? ['heading', 'operation', 'content', 'add', 'replace', 'remove']
+                    : ['heading', 'operation', 'content'],
+                label
             )
             if (typeof section.heading !== 'string'
                 || section.heading.length > 160
@@ -684,7 +759,8 @@ export function parseCanonicalBatch(
             headings.add(headingKey)
             const operation = section.operation
             if (operation !== 'upsert'
-                && operation !== 'delete') {
+                && operation !== 'delete'
+                && operation !== 'edit') {
                 throw new Error(
                     `canonical batch documents[${index}].sections[${sectionIndex}].operation is invalid`
                 )
@@ -696,16 +772,20 @@ export function parseCanonicalBatch(
             }
             const content = section.content.trim()
             if ((operation === 'upsert' && content.length === 0)
-                || (operation === 'delete' && content.length > 0)) {
+                || (operation === 'delete' && content.length > 0)
+                || (operation === 'edit' && heading.length === 0)) {
                 throw new Error(
                     `canonical batch documents[${index}].sections[${sectionIndex}].content does not match operation`
                 )
             }
-            return {
-                heading,
-                operation,
-                content,
+            if (operation !== 'edit') return { heading, operation, content }
+            const edits = parseCanonicalUnitEdits(section, label)
+            // An edit that carries only a body is a whole-section rewrite; the
+            // program's preservation check still applies to it.
+            if (content && edits.add.length + edits.replace.length + edits.remove.length === 0) {
+                return { heading, operation: 'upsert', content }
             }
+            return { heading, operation, content: '', edits }
         })
         used.add(item.candidateIndex as number)
         return {

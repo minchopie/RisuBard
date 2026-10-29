@@ -5,7 +5,7 @@
  */
 
 import type { SettingItem } from './types';
-import { getCurrentChat, getDatabase, loadTogglesFromChat } from '../storage/database.svelte';
+import { getCurrentChat, getDatabase, ensureChatOwnsToggleValues, loadTogglesFromChat } from '../storage/database.svelte';
 import { MAX_CHAT_PAGE_SIZE, MIN_CHAT_PAGE_SIZE } from '../chatPagination';
 
 export const accessibilitySettingsItems: SettingItem[] = [
@@ -337,7 +337,10 @@ export const accessibilitySettingsItems: SettingItem[] = [
         onChange: () => {
             if (!getDatabase().disableToggleBinding) {
                 const chat = getCurrentChat();
-                if (chat) loadTogglesFromChat(chat);
+                if (chat) {
+                    loadTogglesFromChat(chat);
+                    ensureChatOwnsToggleValues(chat);
+                }
             }
         }
     }

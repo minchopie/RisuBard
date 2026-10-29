@@ -264,3 +264,40 @@ describe('BardPainter gallery UI', () => {
         expect(document.body.textContent).toContain('42')
     })
 })
+
+describe('BardPainter gallery selection', () => {
+    const click = (id: string, init: MouseEventInit = {}) => document.querySelector<HTMLButtonElement>(`[data-gallery-image="${id}"]`)!.dispatchEvent(new MouseEvent('click', { bubbles: true, ...init }))
+    it('selects with Ctrl and Shift, selects all and deletes the selection after one confirmation', async () => {
+        await mount([item(1), item(2), item(3), item(4)])
+        click('image-4', { ctrlKey: true }); await settle()
+        expect(document.querySelector('[role="dialog"]')).toBeNull()
+        click('image-2', { shiftKey: true }); await settle()
+        expect(document.querySelector('[data-gallery-selection]')!.textContent).toContain('3장 선택')
+        // With a selection, a plain click toggles instead of opening the viewer.
+        click('image-3'); await settle()
+        expect(document.querySelector('[data-gallery-selection]')!.textContent).toContain('2장 선택')
+        const deleteButton = [...document.querySelectorAll<HTMLButtonElement>('[data-gallery-selection] button')].find(button => button.textContent?.includes('삭제'))!
+        deleteButton.click()
+        await vi.waitFor(() => expect(mocks.remove).toHaveBeenCalledTimes(2))
+        expect(mocks.confirm).toHaveBeenCalledOnce()
+        expect(mocks.remove.mock.calls.map(call => call[0]).sort()).toEqual(['image-2', 'image-4'])
+        const selectAll = [...document.querySelectorAll<HTMLButtonElement>('[data-gallery-selection] button')].find(button => button.textContent?.includes('모두 선택'))!
+        selectAll.click(); await settle()
+        expect(document.querySelector('[data-gallery-selection]')!.textContent).toContain('2장 선택')
+    })
+    it('filters by whether a chat still shows the image, reading unloaded chats without loading them', async () => {
+        bot.chats[0].message = [{ role: 'char', data: 'a {{inlay::image-1}}', swipes: ['b {{inlay::image-3}}'] }]
+        await mount([item(1), item(2), item(3)])
+        const select = document.querySelector<HTMLSelectElement>('[aria-label="본문 사용 여부"]')!
+        select.value = 'unused'; select.dispatchEvent(new Event('change', { bubbles: true }))
+        await vi.waitFor(() => expect([...document.querySelectorAll('[data-gallery-image]')].map(element => element.getAttribute('data-gallery-image'))).toEqual(['image-2']))
+        select.value = 'used'; select.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+        expect([...document.querySelectorAll('[data-gallery-image]')].map(element => element.getAttribute('data-gallery-image')).sort()).toEqual(['image-1', 'image-3'])
+    })
+    it('changes the thumbnail grid size', async () => {
+        await mount([item(1)])
+        const select = document.querySelector<HTMLSelectElement>('[aria-label="썸네일 크기"]')!
+        select.value = 'small'; select.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+        expect(document.querySelector('[data-gallery-image]')!.parentElement!.parentElement!.classList.contains('grid-cols-3')).toBe(true)
+    })
+})

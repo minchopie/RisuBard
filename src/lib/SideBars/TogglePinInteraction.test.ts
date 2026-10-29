@@ -3,7 +3,7 @@ import { mount, tick, unmount } from 'svelte'
 import { writable } from 'svelte/store'
 import Toggles from './Toggles.svelte'
 import { alertConfirmMulti } from 'src/ts/alert'
-import { pinToggleValuesToChat, unpinToggleValuesFromChat } from 'src/ts/storage/database.svelte'
+import { ensureChatOwnsToggleValues, pinToggleValuesToChat, unpinToggleValuesFromChat } from 'src/ts/storage/database.svelte'
 
 const { chat } = vi.hoisted(() => ({ chat: {
     useLocallySetGlobalVariables: true,
@@ -21,6 +21,7 @@ vi.mock('src/ts/storage/database.svelte', () => ({
     getActivePromptOverlayTemplate: () => null,
     getActivePromptOverlayToggleTemplate: () => '',
     fillMissingPinnedToggleValues: vi.fn(),
+    ensureChatOwnsToggleValues: vi.fn(),
     resetPinnedToggleValues: vi.fn(),
     saveTogglesToChat: vi.fn(),
     pinToggleValuesToChat: vi.fn(),
@@ -45,7 +46,7 @@ afterEach(async () => {
 })
 
 describe('pinned toggle button', () => {
-    test.each([0, 1, -1])('supports overwrite, unpin, and cancel (choice %s)', async (choice) => {
+    test.each([0, -1])('only offers overwriting the baseline (choice %s)', async (choice) => {
         vi.mocked(alertConfirmMulti).mockResolvedValue(choice)
         component = mount(Toggles, { target: document.body })
         await tick()
@@ -54,13 +55,15 @@ describe('pinned toggle button', () => {
         pin!.click()
         await tick()
 
-        expect(alertConfirmMulti).toHaveBeenCalledWith('toggleBindingLabel', [
-            'togglePinOverwrite',
-            { label: 'togglePinUnpin', variant: 'destructive' },
-        ])
+        expect(alertConfirmMulti).toHaveBeenCalledWith('toggleBindingLabel', ['togglePinOverwrite'])
         if (choice === 0) expect(pinToggleValuesToChat).toHaveBeenCalledWith(chat)
         else expect(pinToggleValuesToChat).not.toHaveBeenCalled()
-        if (choice === 1) expect(unpinToggleValuesFromChat).toHaveBeenCalledWith(chat)
-        else expect(unpinToggleValuesFromChat).not.toHaveBeenCalled()
+        expect(unpinToggleValuesFromChat).not.toHaveBeenCalled()
+    })
+
+    test('makes the open chat own its toggle values', async () => {
+        component = mount(Toggles, { target: document.body })
+        await tick()
+        expect(ensureChatOwnsToggleValues).toHaveBeenCalledWith(chat)
     })
 })

@@ -109,6 +109,8 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     const echo = { transaction: plan.transaction, chats: [], settings: Object.fromEntries(Object.keys(plan.settings).map(k => [k, applied[k] ?? null])), characters: [...plan.characters, ...plan.newCharacters.map((c: any) => { const { chatIds: _i, chats: _c, chatPage: _p, ...fields } = c; return { chaId: c.chaId, fields: { ...fields, chaId: c.chaId } } })], modules: plan.modules, plugins: plan.plugins, pluginEnabled: plan.pluginEnabled, keptDeletions: [] }
     const armed = await post('/arm', echo); expect(armed.ok, await armed.clone().text()).toBe(true)
     const noHeader = await write(applied); expect(noHeader.status).toBe(423); expect(await noHeader.json()).toMatchObject({ code: 'NAS_SYNC_BUSY', transaction: plan.transaction }) // real HTTP: armed plan names its transaction
+    const remoteConfig = await fetch(base + '/api/play-transfer/remote/nas/config', { method: 'POST', headers: headers(), body: '{}' })
+    expect(remoteConfig.status, await remoteConfig.clone().text()).toBe(200) // transport-only request remains authenticated but does not write the pending DB
     const wrongHeader = await write(applied, { 'x-nas-sync-id': 'another-transaction' }); expect(wrongHeader.status).toBe(423); expect((await wrongHeader.json()).code).toBe('NAS_SYNC_BUSY')
     const owned = await write(applied, { 'x-nas-sync-id': plan.transaction }); expect(owned.ok, await owned.clone().text()).toBe(true)
     const finished = await post('/finish', { transaction: plan.transaction, confirmed: true }); expect(finished.ok, await finished.clone().text()).toBe(true)
@@ -135,4 +137,47 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     if (snapped.committed) expect(report.failed).toEqual(expect.arrayContaining([expect.objectContaining({ sequence: snapped.committed.sequence })]))
     for (const f of await fs.readdir(join(dataRoot, 'nas-sync'))) expect(f).not.toMatch(/\.part$/)
     await stop()
+}, 180_000)
+
+test('a cold trash listing over a large card history runs on the reader thread: the real server answers / and status while it is still computing', async t => {
+    const root = await fs.mkdtemp(join(tmpdir(), 'bard-sync-http-trash-')), dataRoot = join(root, 'data')
+    t.onTestFinished(() => fs.rm(root, { recursive: true, force: true }))
+    // Synthetic history: one 600 KB card renamed 80 times (80 large character revisions), then three chats deleted in three operations.
+    const filler = 'x'.repeat(600_000), chats = ['h1', 'h2', 'h3'].map(id => ({ id, name: `대화-${id}`, note: '', localLore: [], message: [{ role: 'char', data: `본문-${id}` }] }))
+    const repository = createUserDataRepository({ dataRoot }), save = (db: any) => repository.importLegacyDatabase(db, { mode: 'sync' })
+    save({ language: 'ko', botPresets: [], modules: [], personas: [], loreBook: [], plugins: [], characters: [{ chaId: 'card', type: 'character', name: '이름0', desc: filler, chats }] })
+    await vaultMasterStore(dataRoot, androidProtector(DEVICE_KEY)).importMaster(MASTER)
+    const kv = createFileKv({ dataRoot })
+    const seed = createNasSyncService({ dataRoot, readDatabase: async () => repository.exportLegacyDatabase(), memory: createRuntimeMemoryService(dataRoot), storage: kv, secrets: {}, fetch: () => { throw new Error('No network permitted') }, protect: androidProtector(DEVICE_KEY) })
+    seed.enable({ workspaceId: 'ws-http-trash' }); await seed.snapshot()
+    for (let n = 1; n <= 80; n++) { const db = repository.exportLegacyDatabase(); db.characters[0].name = `이름${n}`; db.characters[0].desc = filler + n; save(db); await seed.snapshot() }
+    for (const id of ['h1', 'h2', 'h3']) { const db = repository.exportLegacyDatabase(); db.characters[0].chats = db.characters[0].chats.filter((c: any) => c.id !== id); save(db); await seed.snapshot() }
+    kv.kvSet('database/database.bin', encodeRisuSaveLegacyBuffer(repository.exportLegacyDatabase())); kv.kvSet('database/canonical-projection-revision', Buffer.from(repository.getProjectionRevision()))
+    await fs.writeFile(join(dataRoot, '__password'), 'synthetic-sync-test')
+    // The seeding service is not used again: from here the server process is the only writer.
+    let logs = '', base = ''
+    const child = spawn(process.execPath, [join(process.cwd(), 'server/node/server.cjs')], { cwd: root, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, RISUBARD_DATA_ROOT: dataRoot, RISUBARD_EMBEDDED_ANDROID: '1', RISUBARD_TRANSFER_KEY: DEVICE_KEY, PORT: '0', OPEN_BROWSER: '0', RISU_UPDATE_CHECK: 'false' } })
+    child.stdout!.on('data', b => { logs += b }); child.stderr!.on('data', b => { logs += b })
+    t.onTestFinished(async () => { if (child.exitCode === null && child.signalCode === null) { const ended = new Promise(resolve => child.once('exit', resolve)); child.kill(); await ended } })
+    for (let n = 0; !base; n++) {
+        if (child.exitCode !== null || n > 150) throw new Error('Server did not start: ' + logs)
+        try { base = `http://127.0.0.1:${JSON.parse(await fs.readFile(join(dataRoot, '.android-server.json'), 'utf8')).port}` } catch { await new Promise(resolve => setTimeout(resolve, 100)) }
+    }
+    const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'synthetic-sync-test' }) })
+    expect(login.ok, await login.clone().text()).toBe(true)
+    const headers = { 'risu-auth': (await login.json()).token, 'x-session-id': 'sync-http-trash' }
+    let done = false
+    const started = Date.now(), trash = fetch(base + '/api/nas-sync/trash', { headers }).then(async r => { const body = await r.json(); done = true; return { status: r.status, body, ms: Date.now() - started } })
+    await new Promise(resolve => setTimeout(resolve, 50)) // the listing request has reached the server
+    const page = await fetch(base + '/'), pageDuring = !done, pageMs = Date.now() - started
+    const status = await fetch(base + '/api/nas-sync/status', { headers }), statusDuring = !done, statusMs = Date.now() - started
+    const listed = await trash
+    const repeatStart = Date.now(), repeat = await fetch(base + '/api/nas-sync/trash', { headers }), repeatMs = Date.now() - repeatStart
+    console.info('[nas-sync trash reader]', JSON.stringify({ coldTrashMs: listed.ms, pageAnsweredAtMs: pageMs, statusAnsweredAtMs: statusMs, repeatTrashMs: repeatMs }))
+    expect(page.status).toBeGreaterThan(0); expect(pageDuring, 'GET / answered only after the listing finished').toBe(true)
+    expect(status.status).toBe(200); expect(statusDuring, 'status answered only after the listing finished').toBe(true)
+    expect(listed.status, JSON.stringify(listed.body)).toBe(200)
+    expect(listed.body.map((x: any) => x.title).sort()).toEqual(['이름80 · 대화-h1', '이름80 · 대화-h2', '이름80 · 대화-h3'])
+    expect(repeat.status).toBe(200); expect(await repeat.json()).toEqual(listed.body)
 }, 180_000)

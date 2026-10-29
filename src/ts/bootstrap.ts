@@ -11,7 +11,7 @@ import { get } from "svelte/store";
 import { setDatabase, defaultSdDataFunc, getDatabase, changeToThemePreset } from "./storage/database.svelte";
 import { chatDraftKey, sweepOrphanDrafts } from "./storage/chatDraft";
 import { checkRisuUpdate } from "./update";
-import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState } from "./stores.svelte";
+import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, accountImportBlocking } from "./stores.svelte";
 import { loadPlugins } from "./plugins/plugins.svelte";
 import { alertError, alertMd, alertTOS, waitAlert, alertConfirm, alertInput } from "./alert";
 import { characterURLImport } from "./characterCards";
@@ -51,6 +51,18 @@ export async function loadData() {
         const stage = (label: string) => advanceStartupStage(LoadingStatusState, label)
         try {
             applyEarlyLanguage()
+            // A started RisuAI account import will replace all data, so the
+            // app shows only its screen until it ends. Without one (or when
+            // the status cannot be read) the boot goes on as before; the
+            // server still refuses every write during an import.
+            try {
+                if ((await forageStorage.getRisuAccountImportStatus()).blocking) {
+                    accountImportBlocking.set(true)
+                    return
+                }
+            } catch (error) {
+                console.warn('[bootstrap] account import status failed:', error)
+            }
             let createdFreshDatabase = false
             {
                 await stage(language.startupLoading.storage)

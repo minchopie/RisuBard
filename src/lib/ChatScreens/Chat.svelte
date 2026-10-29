@@ -3,7 +3,8 @@
     import { ArrowLeft, ArrowLeftRightIcon, ArrowRight, BookmarkIcon, BotIcon, BookOpenCheck, CopyIcon, PowerOff, GitBranch, HamburgerIcon, LanguagesIcon, MenuIcon, PencilIcon, RefreshCcwIcon, SearchIcon, SplitIcon, TrashIcon, UserIcon, Volume2Icon, Scissors, EyeOff } from "@lucide/svelte"
     import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy'
     import { buildArcaClipboardHtml, exportArcaHtml, resolveArcaImageSource } from 'src/ts/arcaExport'
-    import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName, forageStorage, requestImmediateSave } from "src/ts/globalApi.svelte"
+    import { renderArcaComplexBlock } from 'src/ts/arcaSnapshot'
+    import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName, forageStorage, requestImmediateSave, trackChatForSave } from "src/ts/globalApi.svelte"
     import { retractWikiEventsBySourceMessages } from "src/ts/risubard/memoryWiki"
     import { announceRisuBardMemoryUpdated } from "src/ts/risubard/memoryEvents"
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork"
@@ -11,7 +12,7 @@
     import { resetImportedBardWikiState } from "src/ts/risubard/chatImportMemory"
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme"
     import { getModelInfo } from "src/ts/model/modellist"
-    import { runLuaButtonTrigger } from 'src/ts/process/scriptings'
+    import { runLuaButtonTrigger, runLuaInteractionTrigger } from 'src/ts/process/scriptings'
     import { risuChatParser } from "src/ts/process/scripts"
     import { runTrigger } from 'src/ts/process/triggers'
     import { sayTTS } from "src/ts/process/tts"
@@ -25,7 +26,8 @@
     import { alertClear, alertConfirm, alertConfirmMulti, alertInput, alertRequestData, alertWait, notifyError, notifyInfo, notifySuccess, type AlertAction } from "../../ts/alert"
     import { ParseMarkdown, type CbsConditions, type simpleCharacterArgument } from "../../ts/parser/parser.svelte"
     import { getLLMCache, setLLMCache } from "../../ts/translator/translator"
-    import { getCurrentCharacter, getCurrentChat, setCurrentChat, type MessageGenerationInfo, type StreamingDisplayOptimizationMode } from "../../ts/storage/database.svelte"
+    import { getCurrentCharacter, normalizeChat, type MessageGenerationInfo, type StreamingDisplayOptimizationMode } from "../../ts/storage/database.svelte"
+    import { captureGenerationTarget, createGenerationScope, type GenerationTarget } from 'src/ts/process/generationTarget'
     import { selectedCharID } from "../../ts/stores.svelte"
     import { HideIconStore, ReloadGUIPointer, selIdState } from "../../ts/stores.svelte"
     import AutoresizeArea from "../UI/GUI/TextAreaResizable.svelte"
@@ -44,10 +46,14 @@
     } from 'src/ts/firstMessageStudio'
     import type { character as Character } from 'src/ts/storage/database.svelte'
     import { createRisuTriggerActivation } from './risuTriggerActivation'
+    import { debugTiming } from 'src/ts/debugTiming'
+    import { mergeTriggerChat } from './triggerResultMerge'
+    import { getChatVar } from 'src/ts/parser/chatVar.svelte'
     import { Popover } from 'bits-ui'
     import { isMobile } from 'src/ts/platform'
 
     let viewportWidth = $state(window.innerWidth)
+    let inlineMessageActions = $derived(viewportWidth >= 640 || DBState.db.mobileMessageActionsInline === true)
     let mobileActionsOpen = $state(false)
     let translating = $state(false)
     let editMode = $state(false)
@@ -378,30 +384,44 @@
         if(!currentChar){
             return
         }
+        // A slow trigger (e.g. a Lightboard reroll) may finish after the user
+        // switched chats; its result belongs to the chat the button was in.
+        let target: GenerationTarget
+        try {
+            target = captureGenerationTarget(currentChar)
+        }
+        catch {
+            return
+        }
+        const triggerScope = createGenerationScope(() => DBState.db.characters, target)
+        const sourceChat = triggerScope.chat
 
         const triggerName = origin.getAttribute('risu-trigger')
         const triggerId = origin.getAttribute('risu-id')
         const btnEvent = origin.getAttribute('risu-btn')
 
+        debugTiming.click(triggerName || btnEvent || '?')
+        // To tell afterwards whether the click changed anything (variables are written live as the trigger runs).
+        const stateBefore = JSON.stringify(sourceChat?.scriptstate ?? {})
+        // A script may redraw this message itself (Lua reloadChat); then the redraw below would render it twice.
+        let reloadBefore: number | undefined
+        ReloadChatPointer.update((v) => { reloadBefore = v[idx]; return v })
         const triggerResult =
             triggerName ?
                 await runTrigger(currentChar, 'manual', {
-                    chat: getCurrentChat(),
+                    chat: sourceChat,
                     manualName: triggerName,
                     triggerId: triggerId || undefined,
                 }) :
             btnEvent ?
-                await runLuaButtonTrigger(currentChar, btnEvent) :
+                await runLuaButtonTrigger(currentChar, btnEvent, sourceChat) :
             null
 
-        if(triggerResult) {
-            setCurrentChat(triggerResult.chat)
-            ReloadChatPointer.update((v) => {
-                v[idx] = (v[idx] ?? 0) + 1
-                return v
-            })
-        }
-        
+        debugTiming.stage('trigger finished')
+        writeTriggerResult(target, triggerScope, triggerResult, stateBefore, reloadBefore)
+        debugTiming.stage('result written')
+        debugTiming.afterPaint('painted (two frames later)')
+
         if(triggerName && triggerId) {
             setTimeout(() => {
                 CurrentTriggerIdStore.set(null)
@@ -409,9 +429,98 @@
         }
     }
 
+    function writeTriggerResult(target: GenerationTarget, triggerScope: ReturnType<typeof createGenerationScope>, triggerResult: any, stateBefore?: string, reloadBefore?: number) {
+        if(!triggerResult?.chat) return
+        try {
+            const nextChat = normalizeChat(triggerResult.chat)
+            const merged = mergeTriggerChat(triggerScope.chat, nextChat)
+            if(!merged){
+                triggerScope.chat = nextChat
+            }
+            // The message redraws even when the chat looks unchanged: a script may keep its state outside the
+            // chat variables (global variables, Lua), and 0.9.80 skipping this left such buttons needing two clicks.
+            // Only a bot that opted in (chat variable __risubard_fast_buttons = 1) skips a click that changed nothing.
+            const fastButtons = getChatVar('__risubard_fast_buttons', undefined, triggerScope.chat) === '1'
+            if(fastButtons && merged === 'same' && stateBefore !== undefined && JSON.stringify(triggerScope.chat?.scriptstate ?? {}) === stateBefore){
+                debugTiming.stage('fast buttons: nothing changed, no redraw')
+                return
+            }
+            debugTiming.stage(merged ? 'chat merged (messages kept), redraw requested' : 'chat replaced, redraw requested')
+            // Only the chat on screen is tracked for saving; queue any other
+            // chat or the result is lost on reload.
+            const openChar = getCurrentCharacter()
+            const isOpen = openChar?.chaId === target.characterId
+                && openChar.chats[openChar.chatPage]?.id === target.chatId
+            if(!isOpen){
+                trackChatForSave(target.characterId, target.chatId)
+                void Promise.resolve(requestImmediateSave()).catch((error) => {
+                    console.warn('[button trigger] save request failed:', error)
+                })
+            }
+        }
+        catch (error) {
+            // The source chat was deleted while the trigger ran.
+            console.warn('[button trigger] result dropped:', error)
+        }
+        ReloadChatPointer.update((v) => {
+            if ((v[idx] ?? 0) !== (reloadBefore ?? 0)) {
+                debugTiming.stage('the script already redrew this message')
+                return v
+            }
+            v[idx] = (v[idx] ?? 0) + 1
+            return v
+        })
+    }
+
     const buttonTriggerActivation = createRisuTriggerActivation(activateButtonTrigger, {
         pointerDownFallback: navigator.userAgent.includes('Firefox/'),
     })
+
+    async function handleFormTriggerWithin(event: SubmitEvent) {
+        const form = event.target as HTMLFormElement
+        const submitter = event.submitter as HTMLButtonElement | HTMLInputElement | null
+        const method = submitter?.hasAttribute('formmethod') ? submitter.formMethod : form.method
+        // A form in a message must never navigate away, reload the page or post
+        // elsewhere. method="dialog" only closes its <dialog>, so it goes through.
+        if (method !== 'dialog') {
+            event.preventDefault()
+        }
+        if(readOnly) return
+
+        const formEvent = form.getAttribute('risu-form')
+        if (!formEvent) {
+            return
+        }
+        const currentChar = getCurrentCharacter()
+        if (!currentChar) {
+            return
+        }
+        let target: GenerationTarget
+        try {
+            target = captureGenerationTarget(currentChar)
+        }
+        catch {
+            return
+        }
+        const triggerScope = createGenerationScope(() => DBState.db.characters, target)
+
+        const data: Record<string, FormDataEntryValue | FormDataEntryValue[]> = Object.create(null)
+        for (const [key, value] of new FormData(form, event.submitter)) {
+            if (Object.hasOwn(data, key)) {
+                const prev = data[key]
+                if (Array.isArray(prev)) {
+                    prev.push(value)
+                } else {
+                    data[key] = [prev, value]
+                }
+            } else {
+                data[key] = value
+            }
+        }
+
+        const triggerResult = await runLuaInteractionTrigger('form', currentChar, formEvent, triggerScope.chat, { data })
+        writeTriggerResult(target, triggerScope, triggerResult)
+    }
 
     let isBookmarked = $derived(
         DBState.db.characters[selIdState.selId]
@@ -596,16 +705,21 @@
             {language.noMessage}
         </div>
     {:else}
-        {@const chatReloadPointer = $ReloadGUIPointer + ($ReloadChatPointer[idx] ?? 0)}
+        {@const chatReloadPointer = `${$ReloadGUIPointer}:${$ReloadChatPointer[idx] ?? 0}`}
         {@const totalLengthPointer = (idx > totalLength - 6) ? totalLength : 0}
+        <!-- chatReloadPointer is not a sum: a GUI reload resets every message pointer, so GUI+1 with pointer 1→0 kept the same key and skipped the redraw. -->
+
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span class="text chat-width chattext prose minw-0"
             data-painter-message={!readOnly && idx >= 0 && !isOptimizedStreamingMessage && !translated && !editMode ? idx : undefined}
             class:prose-invert={$ColorSchemeTypeStore === 'dark'}
             bind:this={bodyRoot}
-            onclick={() => {
-            if(!readOnly && DBState.db.clickToEdit && idx > -1 && !isOptimizedStreamingMessage && !window.getSelection()?.toString()){
+            onclick={(event) => {
+            // Controls a bot draws in the message (tabs as labels, inputs) are not a click on the text.
+            const clicked = event?.target
+            const control = clicked instanceof Element ? clicked.closest('button, label, input, select, textarea, a, summary, [risu-trigger], [risu-btn]') : null
+            if(!readOnly && DBState.db.clickToEdit && idx > -1 && !control && !isOptimizedStreamingMessage && !window.getSelection()?.toString()){
                 editMode = true
             }
         }}
@@ -653,6 +767,7 @@
         {#if isComment}
             <button
                 class="flex items-center hover:text-danger/80 transition-colors button-icon-remove"
+                aria-label={language.remove}
                 onclick={async () => {
                     await rm()
                 }}
@@ -662,13 +777,13 @@
             </button>
         {:else}
             <span class="text-xs">{statusMessage}</span>
-            <div class="flex items-center ml-2 gap-2 flex-wrap justify-end">
-                {#if viewportWidth >= 640}
+            <div class="flex items-center ml-2 gap-2 flex-wrap justify-end" class:mobile-message-inline={viewportWidth < 640 && inlineMessageActions}>
+                {#if inlineMessageActions}
                     {@render translationButton()}
                     {@render editButton()}
                     {@render majorIconButtonsBody(false)}
                     {#if DBState.db.characters[selIdState.selId] && idx > -1}
-                        <PopupButton>
+                        <PopupButton ariaLabel={language.messageMoreActions}>
                             {@render minorIconButtonsBody(true)}
                         </PopupButton>
                     {/if}
@@ -699,7 +814,7 @@
                         </Popover.Root>
                     </div>
                 {/if}
-                {#if viewportWidth >= 640}
+                {#if inlineMessageActions}
                     {@render firstMessageToggle()}
                     <div class="flex items-center gap-1">
                         {@render rerolls()}
@@ -713,7 +828,7 @@
 
 {#snippet firstMessageToggle(showNames = false)}
     {#if firstMessage}
-                    <button class={"flex items-center shrink-0 transition-colors " + (disabled === true ? 'text-danger hover:text-danger/80' : 'hover:text-primary')} onclick={async () => {
+                    <button aria-label={disabled === true ? language.messageFirstEnable : language.messageFirstDisable} class={"flex items-center shrink-0 transition-colors " + (disabled === true ? 'text-danger hover:text-danger/80' : 'hover:text-primary')} onclick={async () => {
                         await sleep(1)
                         const chat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage]
                         if(chat.firstMessageDisabled){
@@ -731,7 +846,7 @@
 
 {#snippet majorIconButtonsBody(showNames:boolean)}
     {#if !blankMessage}
-    <button class="flex items-center hover:text-primary transition-colors button-icon-copy" onclick={async ()=>{
+    <button aria-label={language.copy} class="flex items-center hover:text-primary transition-colors button-icon-copy" onclick={async ()=>{
         const copyText = renderRawStreaming
             ? risuChatParser(rawStreamingText, {chara: name, chatID: idx, rmVar: true, visualize: true, cbsConditions: getCbsCondition()})
             : msgDisplay
@@ -973,12 +1088,16 @@
                 return
             }
 
+            const exportRoot = bodyRoot
             alertWait(language.loading)
-            try {
-                const bodyHtml = await exportArcaHtml(bodyRoot, {
+            // Browsers only allow a clipboard write shortly after the click, and baking a picture-heavy
+            // message can take longer. Writing starts now and the item resolves once the copy is built.
+            const payload = (async () => {
+                const bodyHtml = await exportArcaHtml(exportRoot, {
                     imageWidthPercent: DBState.db.risuBardArcaChatImageWidthPercent,
                     paragraphSpacingPercent: DBState.db.risuBardArcaChatParagraphSpacingPercent,
                     semanticPalette: $ColorSchemeTypeStore,
+                    renderComplexBlock: renderArcaComplexBlock,
                 })
                 const isUserMessage = role === 'user'
                 const displayName = isUserMessage ? getUserName() : name
@@ -1027,13 +1146,16 @@
                 const plainTextContainer = document.createElement('div')
                 plainTextContainer.innerHTML = bodyHtml
                 const plainText = plainTextContainer.innerText.trim() || plainTextContainer.textContent?.trim() || msgDisplay
-
+                return { html, plainText }
+            })()
+            try {
                 await window.navigator.clipboard.write([
                     new ClipboardItem({
-                        'text/html': new Blob([html], { type: 'text/html' }),
-                        'text/plain': new Blob([plainText], { type: 'text/plain' }),
+                        'text/html': payload.then(({ html }) => new Blob([html], { type: 'text/html' })),
+                        'text/plain': payload.then(({ plainText }) => new Blob([plainText], { type: 'text/plain' })),
                     }),
                 ])
+                await payload
                 alertClear()
                 notifyInfo(language.copyForArcaDone)
             }
@@ -1052,7 +1174,7 @@
 {/if}
 {#if idx > -1}
     {#if DBState.db.characters[selIdState.selId].ttsMode !== 'none' && (DBState.db.characters[selIdState.selId].ttsMode)}
-        <button class="flex items-center hover:text-primary transition-colors button-icon-tts" onclick={()=>{
+        <button aria-label="TTS" class="flex items-center hover:text-primary transition-colors button-icon-tts" onclick={()=>{
             return sayTTS(null, isOptimizedStreamingMessage ? rawStreamingText : message)
         }}>
             <Volume2Icon size={20}/>
@@ -1061,7 +1183,7 @@
             {/if}
         </button>
     {/if}
-    <button class="flex items-center hover:text-danger/80 transition-colors button-icon-remove" onclick={rm}>
+    <button aria-label={language.remove} class="flex items-center hover:text-danger/80 transition-colors button-icon-remove" onclick={rm}>
         <TrashIcon size={20}/>
 
         {#if showNames}
@@ -1073,7 +1195,7 @@
 
 {#snippet translationButton(showNames = false)}
     {#if DBState.db.translator !== '' && !blankMessage && !isOptimizedStreamingMessage}
-        <button class={"flex items-center cursor-pointer hover:text-primary transition-colors button-icon-translate " + (translated ? 'text-info':'')} class:translating={translating} onclick={async () => {
+        <button aria-label={language.axModelTranslate} aria-pressed={translated} class={"flex items-center cursor-pointer hover:text-primary transition-colors button-icon-translate " + (translated ? 'text-info':'')} class:translating={translating} onclick={async () => {
             translated = !translated
         }}>
             <LanguagesIcon />
@@ -1113,18 +1235,18 @@
         && !memoryConfirming}
         {#if altGreeting}
             <!-- First message: ← counter → -->
-            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-unreroll" onclick={unReroll}>
+            <button aria-label={language.chatMessagePrevious} class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-unreroll" onclick={unReroll}>
                 <ArrowLeft size={22}/>
             </button>
             {#if !DBState.db.hideMessagePageCount}
                 <span class="flex items-center text-xs text-textcolor2 shrink overflow-hidden whitespace-nowrap min-w-0">{currentPage}/{totalPages}</span>
             {/if}
-            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" onclick={onReroll}>
+            <button aria-label={language.chatMessageNext} class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" onclick={onReroll}>
                 <ArrowRight size={22}/>
             </button>
         {:else}
             <!-- Normal messages: ← counter → ↻ -->
-            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-unreroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
+            <button aria-label={totalPages <= 1 ? language.reroll : language.chatMessagePrevious} class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-unreroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
                 if (totalPages <= 1) {
                     if (!DBState.db.confirmReroll || await alertConfirm(language.noSwipesRerollConfirm)) onReroll()
                 } else {
@@ -1136,7 +1258,7 @@
             {#if !DBState.db.hideMessagePageCount}
                 <span class="flex items-center text-xs text-textcolor2 shrink overflow-hidden whitespace-nowrap min-w-0" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'}>{currentPage}/{totalPages}</span>
             {/if}
-            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
+            <button aria-label={totalPages <= 1 ? language.reroll : language.chatMessageNext} class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
                 if (totalPages <= 1) {
                     if (!DBState.db.confirmReroll || await alertConfirm(language.noSwipesRerollConfirm)) onReroll()
                 } else {
@@ -1145,7 +1267,7 @@
             }}>
                 <ArrowRight size={22}/>
             </button>
-            <button data-hotkey-action="reroll" class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
+            <button aria-label={language.reroll} data-hotkey-action="reroll" class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
                 if (!DBState.db.confirmReroll || await alertConfirm(language.rerollConfirm)) onReroll()
             }}>
                 <RefreshCcwIcon size={20}/>
@@ -1621,7 +1743,8 @@
      data-chat-id={DBState.db.characters?.[selIdState.selId]?.chats?.[DBState.db.characters?.[selIdState.selId]?.chatPage]?.message?.[idx]?.chatId ?? ''}
      style={isLastMemory ? `border-top:${DBState.db.memoryLimitThickness}px solid color-mix(in srgb, var(--color-borderc) 70%, transparent);` : ''}
      onpointerdowncapture={buttonTriggerActivation.pointerdown}
-     onclickcapture={buttonTriggerActivation.click}>
+     onclickcapture={buttonTriggerActivation.click}
+     onsubmitcapture={handleFormTriggerWithin}>
     <div class="text-textcolor grow max-w-full {isMobile ? '' : 'sm:px-4'} py-4">
         {#if !blankMessage}
             {@const nodeOnlyWidthClass =
@@ -1673,7 +1796,8 @@
      data-chat-id={DBState.db.characters?.[selIdState.selId]?.chats?.[DBState.db.characters?.[selIdState.selId]?.chatPage]?.message?.[idx]?.chatId ?? ''}
      style={isLastMemory ? `border-top:${DBState.db.memoryLimitThickness}px solid color-mix(in srgb, var(--color-borderc) 70%, transparent);` : ''}
      onpointerdowncapture={buttonTriggerActivation.pointerdown}
-     onclickcapture={buttonTriggerActivation.click}>
+     onclickcapture={buttonTriggerActivation.click}
+     onsubmitcapture={handleFormTriggerWithin}>
     <div class="text-textcolor mt-1 ml-4 mr-4 mb-1 p-2 bg-transparent grow border-t-darkborderc border-opacity/30 border-transparent flexium items-start max-w-full" >
         {#if DBState.db.theme === 'mobilechat' && !blankMessage}
             <div class={role === 'user' ? "flex items-start w-full justify-end" : "flex items-start"}>
@@ -1819,7 +1943,13 @@
         justify-content: center;
         border-radius: 0.375rem;
     }
+    .mobile-message-inline :global(button) {
+        min-width: 44px;
+        min-height: 44px;
+        justify-content: center;
+    }
     :global(.mobile-message-flyout > button) {
+        flex-shrink: 0;
         min-height: 44px;
         width: 100%;
         padding: 0.5rem;

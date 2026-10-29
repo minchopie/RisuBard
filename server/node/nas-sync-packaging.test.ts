@@ -59,8 +59,18 @@ test('a staged copy of only the listed runtime parts (Android list AND Windows r
         const shims = ['nas-sync-vault', 'nas-sync-remote', 'nas-sync-store', 'nas-sync-service', 'transfer-remote', 'play-set-service', 'nas-route', 'transfer-windows', 'transfer-secrets'].every(n => require(${JSON.stringify(join(stage, 'server/node'))} + '/' + n + '.cjs') === require(${JSON.stringify(join(stage, 'server/node/transfer-sync'))} + '/' + n + '.cjs'));
         const v = vault.createVault(Buffer.alloc(32, 7));
         const out = v.project({ modelPresets: [{ id: 'p', profileSnapshot: { schema: [{ key: 'endpointUrl', mapsTo: { target: 'custom', path: 'endpointUrl' } }, { key: 'apiKey', secret: true }], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://static.example' } }, userValues: { endpointUrl: 'https://override.example/v1', apiKey: 'FIXTURE-KEY' } }] });
-        process.stdout.write(JSON.stringify({ origin: out.public.$syncSecrets[0].origin, leak: JSON.stringify(out.public).includes('FIXTURE-KEY'), remote: typeof remote.createSyncTransport, store: typeof store.createSyncStore, shims, service: typeof require(${JSON.stringify(join(stage, 'server/node/nas-sync-service.cjs'))}).createNasSyncService }));`
+        const loaded = { origin: out.public.$syncSecrets[0].origin, leak: JSON.stringify(out.public).includes('FIXTURE-KEY'), remote: typeof remote.createSyncTransport, store: typeof store.createSyncStore, shims, service: typeof require(${JSON.stringify(join(stage, 'server/node/nas-sync-service.cjs'))}).createNasSyncService };
+        // The staged revision reader thread really runs (not only a require): the staged store writes one synthetic revision, the thread reads it.
+        const core = require(${JSON.stringify(join(stage, 'server/node/transfer-sync/nas-sync-core.cjs'))}), nodeFs = require('node:fs');
+        const dir = nodeFs.mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'bard-reader-'));
+        const s = store.createSyncStore({ dataRoot: dir }), rev = core.makeRevision({ domain: 'library', type: 'character', root: 'card', content: { name: 'Sample', chatIds: ['chat'] } });
+        s.commit([rev]);
+        const reader = new (require('node:worker_threads').Worker)(${JSON.stringify(join(stage, 'server/node/transfer-sync/nas-sync-store.cjs'))}, { workerData: store.READER_THREAD });
+        reader.once('error', error => { process.stderr.write(String(error && error.stack || error)); process.exit(1); });
+        reader.once('message', m => { nodeFs.rmSync(dir, { recursive: true, force: true }); process.stdout.write(JSON.stringify({ ...loaded, reader: { meta: m.meta ? m.meta[rev.id] : null, error: m.error ?? null, thread: m.threadId > 0 } })); void reader.terminate(); });
+        reader.postMessage({ seq: 1, root: s.root, ids: [rev.id] });`
     const output = execFileSync(process.execPath, ['-e', probe], { cwd: stage, env: { ...process.env, NODE_PATH: join(repo, 'node_modules') }, encoding: 'utf8', timeout: 60_000 })
-    expect(JSON.parse(output), name).toEqual({ origin: 'https://override.example', leak: false, remote: 'function', store: 'function', shims: true, service: 'function' })
+    expect(JSON.parse(output), name).toEqual({ origin: 'https://override.example', leak: false, remote: 'function', store: 'function', shims: true, service: 'function',
+        reader: { meta: { name: 'Sample', chatIds: ['chat'] }, error: null, thread: true } })
   }
 })

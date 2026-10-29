@@ -1010,6 +1010,38 @@ function registerRisuBardMemoryRoutes(app, options) {
     )
 
     app.post(
+        '/api/risubard/memory/wiki/document/grade',
+        async (req, res, next) => {
+            try {
+                if (!await options.auth(req, res)) return
+                if (!hasExactKeys(req.body, [
+                    'characterId', 'chatId', 'documentId', 'grade',
+                    'gradeBy', 'expectedContentHash',
+                ])
+                    || !hasBoundedId(req.body.characterId)
+                    || !hasBoundedId(req.body.chatId)
+                    || !hasBoundedId(req.body.documentId)
+                    || !(req.body.grade === null
+                        || (Number.isInteger(req.body.grade)
+                            && req.body.grade >= 0 && req.body.grade <= 9))
+                    || !['user', 'ai'].includes(req.body.gradeBy)
+                    || !hasBoundedId(req.body.expectedContentHash)) {
+                    res.status(400).send({
+                        error: 'Invalid Markdown wiki grade request',
+                    })
+                    return
+                }
+                res.send(await options.service.setWikiDocumentGrade(
+                    req.body
+                ))
+            }
+            catch (error) {
+                next(error)
+            }
+        }
+    )
+
+    app.post(
         '/api/risubard/memory/wiki/event/retract-sources',
         async (req, res, next) => {
             try {

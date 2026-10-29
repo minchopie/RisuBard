@@ -779,7 +779,10 @@ function createCharacterAssets({ dataRoot, sourceSize, readOriginal, sourceVersi
         if (Object.hasOwn(state.characters, id)) publish({ schemaVersion: 1, characters: { ...state.characters, [id]: { ...state.characters[id], enabled: false } } });
         return status(id);
     }
-    return { migrate, sync, read, status, disable, reload, retirementCandidates,
+    // Asset keys with a folder copy, for status lines that report where the originals live.
+    const ownedKeys = id => (state.characters[id]?.entries || []).map(entry => entry?.key).filter(key => typeof key === 'string');
+    const moduleOwnedKeys = id => (moduleState.modules[id]?.entries || []).map(entry => entry?.key).filter(key => typeof key === 'string');
+    return { migrate, sync, read, status, disable, reload, retirementCandidates, ownedKeys, moduleOwnedKeys,
         migrateModule, prepareModuleCopy, copyModule, publishModuleCopy, releaseModuleCopy,
         disableModule, moduleStatus, scheduleModuleSync, moduleSyncIdle, moduleRetirementPlan, verifyModuleRetirement, moduleRetirementCandidates, overview, diagnostics: () => ({ scope: 'server-session', folderReads, ...counters }) };
 }

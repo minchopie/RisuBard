@@ -16,6 +16,8 @@ import {
     type MemoryRetrievalMetadata,
 } from './risubard-memory-metadata'
 
+export { eventSequences } from './risubard-event-sequence'
+
 export interface MarkdownWikiDocument {
     id: string
     type: MarkdownWikiDocumentType
@@ -29,8 +31,13 @@ export interface MarkdownWikiDocument {
     content: string
     links: string[]
     created?: string
+    /** Story order of an event, assigned once when it is first saved. */
+    sequence?: number
     authoring?: 'automatic' | 'ai-assisted' | 'manual'
     contextMode: MarkdownWikiContextMode
+    /** Optional importance score 0-9 (0-1 none, 2-3 D, 4-5 C, 6 B, 7 A, 8 S, 9 EX). */
+    grade?: number
+    gradeBy?: 'user' | 'ai'
     contentHash: string
     reviewStatus?: 'unreviewed' | 'reviewed'
     reviewBaseContent?: string
@@ -38,6 +45,11 @@ export interface MarkdownWikiDocument {
 }
 
 export type MarkdownWikiContextMode = 'always' | 'auto' | 'never'
+
+function isGradeScore(value: unknown): value is number {
+    return typeof value === 'number' && Number.isInteger(value)
+        && value >= 0 && value <= 9
+}
 
 export type MarkdownWikiDocumentType = 'event' | 'character' | 'location'
     | 'scene' | 'faction' | 'creature' | 'item' | 'concept' | 'other'
@@ -358,6 +370,25 @@ function prepareDocument(
     }
 }
 
+function nextEventSequence(documents: readonly MarkdownWikiDocument[]): number {
+    // Stored numbers sit above the legacy ranks; keep new ones above both.
+    const legacy = documents.filter((document) => document.type === 'event'
+        && document.status !== 'retracted' && document.sequence === undefined).length
+    const stored = documents.reduce((maximum, document) =>
+        document.type === 'event' && document.sequence !== undefined ? Math.max(maximum, document.sequence) : maximum, 0)
+    return Math.max(stored, legacy) + 1
+}
+
+// A repeated event title would make [[links]] to both ambiguous; number the new one.
+function distinctEventTitle(content: string, documents: readonly MarkdownWikiDocument[], id: string, sequence: number): string {
+    const title = content.match(/^##\s+(.+)$/m)?.[1]?.trim()
+    if (!title) return content
+    const key = (value: string) => value.normalize('NFKC').toLocaleLowerCase().trim()
+    const taken = documents.some((document) => document.id !== id && document.status !== 'retracted'
+        && [document.title, ...document.aliases].some((name) => key(name) === key(title)))
+    return taken ? content.replace(/^##\s+.+$/m, `## ${title} #${sequence}`) : content
+}
+
 function serializeDocument(
     document: Omit<MarkdownWikiDocument, 'contentHash'>
 ): string {
@@ -372,6 +403,9 @@ function serializeDocument(
         ...(document.created
             ? [`created: ${yamlString(document.created)}`]
             : []),
+        ...(document.sequence !== undefined
+            ? [`sequence: ${document.sequence}`]
+            : []),
         `updated: ${yamlString(document.updated)}`,
         ...(document.authoring
             ? [`authoring: ${document.authoring}`]
@@ -380,6 +414,12 @@ function serializeDocument(
             ? [`review_status: ${document.reviewStatus}`]
             : []),
         `context: ${document.contextMode}`,
+        ...(document.grade !== undefined
+            ? [`grade: ${document.grade}`]
+            : []),
+        ...(document.grade !== undefined && document.gradeBy
+            ? [`grade_by: ${document.gradeBy}`]
+            : []),
         'aliases:',
         ...document.aliases.map((alias) => `  - ${yamlString(alias)}`),
         'source_messages:',
@@ -443,9 +483,19 @@ function parseDocument(
         catch { return match[1].trim() }
     }
     const updated = scalar('updated')
+    const sequence = Number(optionalScalar('sequence'))
     const authoring = optionalScalar('authoring')
     const context = optionalScalar('context')
     const reviewStatus = optionalScalar('review_status')
+    const gradeRaw = optionalScalar('grade')
+    const gradeScore = typeof gradeRaw === 'number' ? gradeRaw : Number(gradeRaw)
+    const grade = gradeRaw !== undefined && isGradeScore(gradeScore)
+        ? gradeScore
+        : undefined
+    const gradeByRaw = optionalScalar('grade_by')
+    const gradeBy = grade !== undefined && (gradeByRaw === 'user' || gradeByRaw === 'ai')
+        ? gradeByRaw
+        : undefined
     const retrievalMetadata = normalizeMemoryRetrievalMetadata(
         optionalScalar('retrieval_metadata')
     )
@@ -481,6 +531,7 @@ function parseDocument(
         content: normalized.content,
         links: list('links'),
         created: optionalScalar('created') ?? updated,
+        ...(type === 'event' && Number.isSafeInteger(sequence) && sequence > 0 ? { sequence } : {}),
         authoring: (['automatic', 'ai-assisted', 'manual'].includes(
             authoring ?? ''
         ) ? authoring : type === 'event' ? 'automatic' : 'ai-assisted') as
@@ -493,6 +544,8 @@ function parseDocument(
             reviewStatus: reviewStatus as 'unreviewed' | 'reviewed',
         } : {}),
         ...(retrievalMetadata ? { retrievalMetadata } : {}),
+        ...(grade !== undefined ? { grade } : {}),
+        ...(gradeBy ? { gradeBy } : {}),
     }
 }
 
@@ -526,6 +579,7 @@ function computeHealth(documents: MarkdownWikiDocument[]): MarkdownWikiHealth {
         const pathWithoutExtension = document.relativePath.replace(/\.md$/i, '')
         const fileName = basename(pathWithoutExtension)
         for (const value of [
+            document.id,
             document.title,
             ...document.aliases,
             pathWithoutExtension,
@@ -751,24 +805,24 @@ export function createMarkdownNarrativeWiki(
                 ? '\\' : '/'}`)) {
             throw new Error('Wiki workspace escapes its memory workspace')
         }
-        let snapshotsStatus: Awaited<ReturnType<WikiFileSystem['lstat']>>
-        try {
-            snapshotsStatus = await fileSystem.lstat(
-                workspace.snapshotsDirectory
-            )
+        // Retired folder: whole-wiki snapshots. Per-document history is no longer
+        // written, but existing `.risubard-history` files are kept in place: they
+        // are user data that play-set/NAS captures still carry, so this fork does
+        // not delete them on read.
+        for (const retired of [workspace.snapshotsDirectory]) {
+            let status: Awaited<ReturnType<WikiFileSystem['lstat']>>
+            try {
+                status = await fileSystem.lstat(retired)
+            }
+            catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+                throw error
+            }
+            await fileSystem.rm(retired, {
+                recursive: !status.isSymbolicLink() && status.isDirectory(),
+                force: true,
+            })
         }
-        catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-            throw error
-        }
-        if (snapshotsStatus.isSymbolicLink()) {
-            await fileSystem.rm(workspace.snapshotsDirectory, { force: true })
-            return
-        }
-        await fileSystem.rm(workspace.snapshotsDirectory, {
-            recursive: snapshotsStatus.isDirectory(),
-            force: true,
-        })
     }
 
     const recoveryPaths = (workspace: MarkdownWikiWorkspace) => ({
@@ -1547,6 +1601,9 @@ export function createMarkdownNarrativeWiki(
                     addition,
                 ].filter(Boolean).join('\n\n'))
             }
+            const sequence = existingEvent?.sequence ?? nextEventSequence(knownDocuments)
+            normalized = normalizeMarkdown(distinctEventTitle(
+                normalized.content, knownDocuments, `event.${suffix}`, sequence))
             normalized = normalizeMarkdown(appendKnownDocumentLinks(
                 normalized.content,
                 knownDocuments,
@@ -1555,6 +1612,7 @@ export function createMarkdownNarrativeWiki(
             ))
             const prepared = prepareDocument({
                 id: `event.${suffix}`,
+                sequence,
                 type: 'event',
                 status: 'active',
                 title: normalized.title,
@@ -1568,6 +1626,8 @@ export function createMarkdownNarrativeWiki(
                 authoring: 'automatic',
                 contextMode: 'auto',
                 retrievalMetadata,
+                ...(existingEvent?.grade !== undefined ? { grade: existingEvent.grade } : {}),
+                ...(existingEvent?.gradeBy ? { gradeBy: existingEvent.gradeBy } : {}),
             })
             await writeAtomically(
                 fileSystem,
@@ -1660,16 +1720,6 @@ export function createMarkdownNarrativeWiki(
                     existing ? await fileSystem.readFile(file, 'utf8') : ''
                 )
             }
-            if (existing) {
-                const history = join(workspace.historyDirectory, existing.id)
-                await fileSystem.mkdir(history, { recursive: true })
-                const stamp = operationTime.replace(/[:.]/g, '-')
-                await writeAtomically(
-                    fileSystem,
-                    join(history, `${stamp}-${randomUUID().slice(0, 8)}.md`),
-                    await fileSystem.readFile(file, 'utf8')
-                )
-            }
             let normalized = normalizeMarkdown(input.markdown)
             const writingLanguage = normalizeWikiWritingLanguage(input.writingLanguage
                 ?? detectWikiWritingLanguage(normalized.content))
@@ -1715,6 +1765,8 @@ export function createMarkdownNarrativeWiki(
                     ? 'always'
                     : existing?.contextMode ?? 'auto',
                 retrievalMetadata,
+                ...(existing?.grade !== undefined ? { grade: existing.grade } : {}),
+                ...(existing?.gradeBy ? { gradeBy: existing.gradeBy } : {}),
             })
             await writeAtomically(fileSystem, file, prepared.contents)
             await rebuildIndex(input.characterId, input.chatId, writingLanguage, [relativePath])
@@ -1780,13 +1832,6 @@ export function createMarkdownNarrativeWiki(
                         deleted: true as const,
                     }
                 }
-                const history = join(workspace.historyDirectory, document.id)
-                await fileSystem.mkdir(history, { recursive: true })
-                await writeAtomically(
-                    fileSystem,
-                    join(history, `${now().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.md`),
-                    await fileSystem.readFile(file, 'utf8')
-                )
                 await writeAtomically(fileSystem, file, baseline)
             }
             else {
@@ -1882,16 +1927,6 @@ export function createMarkdownNarrativeWiki(
                 throw new Error('A wiki document already owns that path')
             }
             await fileSystem.mkdir(resolve(file, '..'), { recursive: true })
-            if (existing && oldFile) {
-                const history = join(workspace.historyDirectory, existing.id)
-                await fileSystem.mkdir(history, { recursive: true })
-                const stamp = operationTime.replace(/[:.]/g, '-')
-                await writeAtomically(
-                    fileSystem,
-                    join(history, `${stamp}-${randomUUID().slice(0, 8)}.md`),
-                    await fileSystem.readFile(oldFile, 'utf8')
-                )
-            }
             const normalized = normalizeMarkdown(input.markdown)
             const content = normalized.content.replace(
                 /^##\s+.+$/m,
@@ -1910,6 +1945,7 @@ export function createMarkdownNarrativeWiki(
                 relativePath,
                 sourceMessageIds: existing?.sourceMessageIds ?? [],
                 created: existing?.created ?? operationTime,
+                ...(existing?.sequence !== undefined ? { sequence: existing.sequence } : {}),
                 updated: operationTime,
                 authoring: 'manual',
                 content,
@@ -1920,6 +1956,8 @@ export function createMarkdownNarrativeWiki(
                     ? 'always'
                     : existing?.contextMode ?? 'auto',
                 retrievalMetadata,
+                ...(existing?.grade !== undefined ? { grade: existing.grade } : {}),
+                ...(existing?.gradeBy ? { gradeBy: existing.gradeBy } : {}),
             })
             await writeAtomically(fileSystem, file, prepared.contents)
             if (oldFile && oldFile !== file) {
@@ -1947,16 +1985,6 @@ export function createMarkdownNarrativeWiki(
                         links: linksFrom(changed),
                         updated: operationTime,
                     }
-                    const linkedHistory = join(
-                        workspace.historyDirectory,
-                        linked.id
-                    )
-                    await fileSystem.mkdir(linkedHistory, { recursive: true })
-                    await writeAtomically(
-                        fileSystem,
-                        join(linkedHistory, `${operationTime.replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.md`),
-                        await fileSystem.readFile(linkedFile, 'utf8')
-                    )
                     await writeAtomically(
                         fileSystem,
                         linkedFile,
@@ -2003,18 +2031,74 @@ export function createMarkdownNarrativeWiki(
                 ...document.relativePath.split('/')
             )
             const operationTime = now().toISOString()
-            const history = join(workspace.historyDirectory, document.id)
-            await fileSystem.mkdir(history, { recursive: true })
-            await writeAtomically(
-                fileSystem,
-                join(history, `${operationTime.replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.md`),
-                await fileSystem.readFile(file, 'utf8')
-            )
             const { contentHash: _contentHash, ...stored } = document
             const prepared = prepareDocument({
                 ...stored,
                 contextMode: input.contextMode,
                 updated: operationTime,
+            })
+            await writeAtomically(fileSystem, file, prepared.contents)
+            await rebuildIndex(input.characterId, input.chatId)
+            return prepared.document
+        },
+
+        async setDocumentGrade(input: {
+            characterId: string
+            chatId: string
+            documentId: string
+            /** 0-9, or null to clear the grade. */
+            grade: number | null
+            gradeBy?: 'user' | 'ai'
+            expectedContentHash?: string
+        }): Promise<MarkdownWikiDocument> {
+            const workspace = workspaceFor(input.characterId, input.chatId)
+            const document = (await loadDocuments(
+                input.characterId,
+                input.chatId
+            )).find((item) => item.id === required(
+                input.documentId,
+                'Document ID'
+            ))
+            if (!document) {
+                throw new Error('Canonical wiki document does not exist')
+            }
+            if (input.grade !== null && !isGradeScore(input.grade)) {
+                throw new Error('Invalid wiki grade')
+            }
+            if (input.gradeBy !== undefined
+                && input.gradeBy !== 'user' && input.gradeBy !== 'ai') {
+                throw new Error('Invalid wiki grade source')
+            }
+            if (input.expectedContentHash
+                && document.contentHash !== input.expectedContentHash) {
+                throw new Error(
+                    'Wiki document changed since the draft was created'
+                )
+            }
+            // A user-set grade is never overwritten by an AI grade.
+            if (document.gradeBy === 'user' && input.gradeBy === 'ai') {
+                throw new Error('Wiki grade was set by the user')
+            }
+            const gradeBy = input.gradeBy ?? 'ai'
+            if (input.grade === null
+                ? document.grade === undefined
+                : document.grade === input.grade && document.gradeBy === gradeBy) {
+                return document
+            }
+            // Grading is metadata: no history snapshot and no `updated` bump.
+            const file = join(
+                workspace.directory,
+                ...document.relativePath.split('/')
+            )
+            const {
+                contentHash: _contentHash,
+                grade: _grade,
+                gradeBy: _gradeBy,
+                ...stored
+            } = document
+            const prepared = prepareDocument({
+                ...stored,
+                ...(input.grade === null ? {} : { grade: input.grade, gradeBy }),
             })
             await writeAtomically(fileSystem, file, prepared.contents)
             await rebuildIndex(input.characterId, input.chatId)

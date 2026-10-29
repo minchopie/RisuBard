@@ -3,7 +3,7 @@ import { createMemoryAnalysisRunner, type MemoryAnalysisModelRequest } from './r
 import { canonicalTurnFailureWarning, canonicalTurnNeedsRetry } from '../../src/ts/risubard/canonicalTurnReceipt'
 import type { ModelResponse } from '../../packages/risubard-core/src/modelResponse'
 
-const statePatch = (content: string) => [{ heading: 'State', operation: 'upsert', content }]
+const statePatch = (content: string) => [{ heading: 'Current State', operation: 'upsert', content }]
 const batch = (documents: unknown[]) => JSON.stringify({ documents })
 const input = { characterId: 'character', chatId: 'chat',
     messages: [{ messageId: 'assistant-1', role: 'assistant' as const, content: 'Alice and the Village are now safe.' }] }
@@ -11,10 +11,10 @@ const input = { characterId: 'character', chatId: 'chat',
 function harness(generate: (request: MemoryAnalysisModelRequest) => Promise<string | ModelResponse>, malformed = false, inline = false) {
     const documents = [
         { id: 'character.alice', type: 'character' as const, title: 'Alice', relativePath: 'characters/Alice.md',
-            content: malformed ? '## Alice\n\n## Another title\n\nAmbiguous.' : '## Alice\n\n### State\n\nUnsafe.',
+            content: malformed ? '## Alice\n\n## Another title\n\nAmbiguous.' : '## Alice\n\n### Current State\n\nUnsafe.',
             contentHash: 'alice-original', sourceMessageIds: [] },
         { id: 'location.village', type: 'location' as const, title: 'Village', relativePath: 'locations/Village.md',
-            content: '## Village\n\n### State\n\nUnsafe.', contentHash: 'village-original', sourceMessageIds: [] },
+            content: '## Village\n\n### Current State\n\nUnsafe.', contentHash: 'village-original', sourceMessageIds: [] },
     ]
     const saved: Array<Record<string, any>> = []
     const saveCanonicalDocument = vi.fn(async (value: any) => {
@@ -46,7 +46,7 @@ function harness(generate: (request: MemoryAnalysisModelRequest) => Promise<stri
 describe('canonical recovery boundaries', () => {
     test.each(['noRetry', 'toolExecuted'])('honors %s on partially invalid provider output', async (flag) => {
         const { runner, analyze, saved } = harness(async () => ({ type: 'success', [flag]: true,
-            result: batch([{ candidateIndex: 0, sections: [{ heading: 'State', operation: 'delete', content: 'Invalid' }] },
+            result: batch([{ candidateIndex: 0, sections: [{ heading: 'Current State', operation: 'delete', content: 'Invalid' }] },
                 { candidateIndex: 1, sections: statePatch('Safe.') }]),
         }))
         const result = await runner.run(input)
@@ -63,8 +63,8 @@ describe('canonical recovery boundaries', () => {
             targets.push(current.map((entry: any) => entry.target.title))
             if (first) {
                 if (current.length > 1) return batch([
-                    { candidateIndex: 0, sections: disposition === 'saved' ? statePatch('Safe Alice.') : [{ heading: 'State', operation: 'delete', content: 'Invalid' }] },
-                    { candidateIndex: 1, sections: [{ heading: 'State', operation: 'delete', content: 'Invalid' }] },
+                    { candidateIndex: 0, sections: disposition === 'saved' ? statePatch('Safe Alice.') : [{ heading: 'Current State', operation: 'delete', content: 'Invalid' }] },
+                    { candidateIndex: 1, sections: [{ heading: 'Current State', operation: 'delete', content: 'Invalid' }] },
                 ])
                 if (current[0].target.title === 'Alice') return 'broken output'
                 throw new Error('timeout')
@@ -120,7 +120,7 @@ describe('canonical recovery boundaries', () => {
             const current = JSON.parse(request.input).targets
             targets.push(current.map((entry: any) => entry.target.title))
             if (current.length === 1) return 'broken output'
-            return batch([{ candidateIndex: 0, sections: [{ heading: 'State', operation: 'delete', content: 'Not empty' }] },
+            return batch([{ candidateIndex: 0, sections: [{ heading: 'Current State', operation: 'delete', content: 'Not empty' }] },
                 { candidateIndex: 1, sections: statePatch('Safe, retain this exact result.') }])
         })
         const result = await runner.run(input)
@@ -145,7 +145,7 @@ describe('canonical recovery boundaries', () => {
         const result = await runner.run(input)
         expect(targets).toEqual([['Alice', 'Village'], ['Village']])
         expect(saved.map((document) => document.markdown)).toEqual([
-            '## Alice\n\n### State\n\nAlice safe.', '## Village\n\n### State\n\nVillage safe.',
+            '## Alice\n\n### Current State\n\nAlice safe.', '## Village\n\n### Current State\n\nVillage safe.',
         ])
         expect(result.canonicalReceipt?.warnings).toEqual([])
     })

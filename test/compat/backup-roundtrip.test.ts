@@ -679,4 +679,57 @@ describe('malformed import safety', () => {
     const after = normalizeBackup(afterExport)
     expect(after.normalized.characterCount).toBe(1)
   })
+
+  test('import rejects an inlay entry whose id would escape the staging dir', async () => {
+    const srv = await spawnServer()
+    servers.push(srv)
+    const client = await createClient(srv.port, srv.password)
+
+    await client.importBackup(createSeedBackup({ characterCount: 1 }))
+    const before = normalizeBackup(await client.exportBackup())
+
+    // "\" separates paths on Windows: without the id check this entry would
+    // be written two directories above the inlay import staging dir.
+    const crafted = Buffer.concat([
+      createSeedBackup({ characterCount: 2 }),
+      encodeBackup([{ name: 'inlay/..\\..\\escaped.cjs', data: Buffer.from('module.exports = 1') }]),
+    ])
+
+    // A rejection mid-upload may surface as a connection reset instead of an error event.
+    let rejected = false
+    try {
+      const ndjson = await importViaNdjson(client, crafted)
+      rejected = ndjson.done === undefined
+        && ndjson.errors.some(e => e.message.includes('Invalid inlay backup entry name'))
+    } catch {
+      rejected = true
+    }
+    expect(rejected).toBe(true)
+
+    const { readdir } = await import('node:fs/promises')
+    expect((await readdir(srv.cwd)).filter(name => name.startsWith('escaped'))).toEqual([])
+    const after = normalizeBackup(await client.exportBackup())
+    expect(after.normalized.characters).toEqual(before.normalized.characters)
+  })
+
+  test('server survives a backup rejected mid-upload', async () => {
+    const srv = await spawnServer()
+    servers.push(srv)
+    const client = await createClient(srv.port, srv.password)
+
+    await client.importBackup(createSeedBackup({ characterCount: 1 }))
+    const before = normalizeBackup(await client.exportBackup())
+
+    const duplicated = Buffer.concat([
+      createSeedBackup({ characterCount: 2 }),
+      encodeBackup([
+        { name: 'dup-asset.png', data: Buffer.from('a') },
+        { name: 'dup-asset.png', data: Buffer.from('b') },
+      ]),
+    ])
+    await importViaNdjson(client, duplicated).catch(() => null)
+
+    const after = normalizeBackup(await client.exportBackup())
+    expect(after.normalized.characters).toEqual(before.normalized.characters)
+  })
 })

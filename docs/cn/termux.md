@@ -70,7 +70,7 @@ pkg install -y git && \
 
 ```
 Build OK. Start the server with:
-  node server/node/server.cjs
+  node --max-old-space-size=2048 server/node/server.cjs
 
 Then open this address in the phone's own browser:
   http://localhost:7777
@@ -84,8 +84,10 @@ Then open this address in the phone's own browser:
 从同一目录启动服务器:
 
 ```bash
-node server/node/server.cjs
+node --max-old-space-size=2048 server/node/server.cjs
 ```
+
+`--max-old-space-size=2048` 将 Node 的内存上限从默认的约 1GB 提高到 2GB。不加此选项时,数据较大的情况下服务器可能因 `JavaScript heap out of memory` 错误而退出。RAM 为 8GB 及以上的手机可提高到 `4096`,但如果超过手机实际 RAM,Android 会强制结束 Termux。
 
 服务器启动日志出现后,在手机浏览器(Chrome、Firefox 等)中访问:
 

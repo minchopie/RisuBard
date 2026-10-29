@@ -81,9 +81,8 @@ describe('ArcaChatLogDialog shell', () => {
         expect(component).toContain('new ClipboardItem')
         expect(component).toContain("'text/html'")
         expect(component).toContain("'text/plain'")
-        expect(component).toContain('renderComplexBlock: renderComplexArcaBlock')
-        expect(component).toContain('planArcaComplexSnapshots')
-        expect(component).toContain('target.excludeElements')
+        expect(component).toContain('renderComplexBlock: renderArcaComplexBlock')
+        expect(component).toContain("from 'src/ts/arcaSnapshot'")
     })
 
     test('keeps a responsive single-column mobile layout', () => {

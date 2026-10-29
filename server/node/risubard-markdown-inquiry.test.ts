@@ -1138,6 +1138,51 @@ describe('progressive Markdown inquiry', () => {
         expect(result.metrics.candidateCount).toBe(1)
     })
 
+    test('still falls back to recent conversation terms while a scene document is pinned', () => {
+        const scene = document({
+            id: 'scene', type: 'scene', title: '현재 장면', relativePath: 'current-scene.md',
+            content: '# 현재 장면\n\n비가 내리는 저녁.', contextMode: 'always',
+        })
+        const result = inquireMarkdownDocuments({
+            currentInput: '*고개를 끄덕인다*',
+            fallbackInput: '하니아는 침수된 도서관에서 은빛 열쇠를 들었다.',
+            documents: [scene, document({
+                id: 'flooded-library',
+                type: 'location',
+                title: '침수된 도서관',
+                relativePath: 'locations/flooded-library.md',
+                content: '# 침수된 도서관\n\n하니아가 은빛 열쇠를 발견한 장소다.',
+            })],
+        })
+
+        expect(result.sources.map((source) => source.id)).toContain(
+            'narrative-memory:wiki:locations/flooded-library.md'
+        )
+    })
+
+    test('keeps the two best lexical original matches without a history keyword', () => {
+        const match = (messageId: string, score: number, content: string) => ({
+            messageId, role: 'assistant' as const, content, score, occurredAt: Number(messageId.slice(-1)),
+        })
+        const result = inquireMarkdownDocuments({
+            documents: [],
+            currentInput: '은빛 반지를 바라본다.',
+            sourceMatches: [
+                match('turn-1', 4.2, '은빛 반지에는 비밀 장부의 위치가 새겨져 있다.'),
+                match('turn-2', 3.1, '은빛 반지를 하니아에게 건넸다.'),
+                match('turn-3', 2.5, '반지를 닦았다.'),
+                match('turn-4', 0.4, '그는 바라보았다.'),
+            ],
+            tokenBudget: { target: 1024, events: 512, perSource: 256, maximum: 2048 },
+        })
+        const picked = (messageId: string) => result.sources.some((source) =>
+            source.id.startsWith(`narrative-memory:source:${messageId}:`))
+        expect(picked('turn-1')).toBe(true)
+        expect(picked('turn-2')).toBe(true)
+        expect(picked('turn-3')).toBe(false)
+        expect(picked('turn-4')).toBe(false)
+    })
+
     test('does not use recent conversation fallback for a long unmatched query', () => {
         const result = inquireMarkdownDocuments({
             currentInput: 'unmatched deliberate request '.repeat(8),
@@ -1284,6 +1329,49 @@ describe('inquiry timeline', () => {
             '- [1 turn before] 마멀레이드 대화',
         ])
         expect(lines.join('\n')).not.toContain('정류장 만남')
+    })
+
+    test('ranks an event just outside the recent transcript above an equally matching older one', () => {
+        const recent = document({ id: 'recent', type: 'event', title: '정원 산책', updated: '2026-08-01T00:00:00.000Z',
+            relativePath: 'events/recent.md', content: '## 정원 산책\n\n카요가 장미를 꺾었다.', sourceMessageIds: ['a4'] })
+        const older = document({ id: 'older', type: 'event', title: '정원 산책', updated: '2026-09-01T00:00:00.000Z',
+            relativePath: 'events/older.md', content: '## 정원 산책\n\n카요가 장미를 꺾었다.', sourceMessageIds: ['a0'] })
+        const priorityOf = (result: ReturnType<typeof inquireMarkdownDocuments>, id: string) =>
+            result.sources.find((source) => source.id === `narrative-memory:wiki:events/${id}.md`)?.priority ?? -1
+
+        const withTimeline = inquireMarkdownDocuments({
+            contextSelection: 'auto', currentInput: '장미를 꺾은 정원 산책', documents: [older, recent], timeline,
+        })
+        expect(priorityOf(withTimeline, 'recent')).toBeGreaterThan(priorityOf(withTimeline, 'older'))
+        expect(priorityOf(withTimeline, 'older')).toBeGreaterThan(0)
+
+        const withoutTimeline = inquireMarkdownDocuments({
+            contextSelection: 'auto', currentInput: '장미를 꺾은 정원 산책', documents: [older, recent],
+        })
+        expect(priorityOf(withoutTimeline, 'recent')).toBe(priorityOf(withoutTimeline, 'older'))
+    })
+
+    test('guarantees the newest events for a current-state question that matches no event', () => {
+        const result = inquireMarkdownDocuments({
+            contextSelection: 'auto', currentInput: '지금 카요는 어디에 있어?', documents, timeline,
+        })
+        const ids = result.sources.map((source) => source.id)
+        expect(ids).toContain('narrative-memory:wiki:events/toast.md')
+        expect(ids).toContain('narrative-memory:wiki:events/wake.md')
+        expect(ids).not.toContain('narrative-memory:wiki:events/sleep.md')
+        expect(ids).not.toContain('narrative-memory:wiki:events/omelet.md')
+        // Without a timeline nothing is recent, so a current-state question still skips events.
+        const plain = inquireMarkdownDocuments({
+            contextSelection: 'auto', currentInput: '지금 카요는 어디에 있어?', documents,
+        })
+        expect(plain.sources.filter((source) => source.id.includes('/events/'))).toEqual([])
+    })
+
+    test('does not pull unmatched recent events into an ordinary query', () => {
+        const result = inquireMarkdownDocuments({
+            contextSelection: 'auto', currentInput: '카요가 하품했다.', documents, timeline,
+        })
+        expect(result.sources.filter((source) => source.id.includes('/events/'))).toEqual([])
     })
 
     test('omits the flow without a timeline and keeps only the newest items in a tiny budget', () => {

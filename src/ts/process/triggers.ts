@@ -16,6 +16,7 @@ import { generateAIImage } from "./stableDiff";
 import { writeInlayImage } from "./files/inlays";
 import { runScripted } from "./scriptings";
 import { calcString } from "./infunctions";
+import { debugTiming } from "../debugTiming";
 
 
 export interface triggerscript{
@@ -1213,9 +1214,14 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
         
         varChanged = true
         chat.scriptstate ??= {}
+        if (chat.scriptstate['$' + key] !== value) debugTiming.stage(`trigger variable ${key} set${('$' + key) in chat.scriptstate ? '' : ' (new)'}`)
         chat.scriptstate['$' + key] = value
+        // Write the one key: replacing the live object invalidated every message that reads any variable.
         const liveChat = getTargetChat()
-        if (liveChat) liveChat.scriptstate = chat.scriptstate
+        if (liveChat && liveChat.scriptstate !== chat.scriptstate) {
+            liveChat.scriptstate ??= {}
+            liveChat.scriptstate['$' + key] = value
+        }
     }
     
     
@@ -2783,9 +2789,20 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
         caculatedTokens += await tokenize(additonalSysPrompt.promptend)
     }
     if(varChanged){
-        const liveChat = getTargetChat()
-        if (liveChat) liveChat.scriptstate = chat.scriptstate
-        ReloadGUIPointer.set(get(ReloadGUIPointer) + 1)
+        // The live variables already took each key in setVar. Every message redraws, since bots show variables
+        // in other messages too (0.9.80 skipped this for Lua buttons and broke such bots). A bot that keeps its
+        // button state in chat variables and shows it only in the button's own message opts out with the chat
+        // variable __risubard_fast_buttons = 1; its Lua-only buttons then redraw that message alone (Chat.svelte).
+        const ran = triggers.filter((t) => {
+            const kind = t?.effect?.[0]?.type
+            return kind === 'triggerlua' || kind === 'triggercode' || (!!arg.manualName && t.comment === arg.manualName)
+        })
+        const luaOnly = ran.every((t) => (t?.effect ?? []).every((e) => e?.type === 'triggerlua'))
+        const fast = mode === 'manual' && luaOnly && getVar('__risubard_fast_buttons') === '1'
+        debugTiming.stage(fast ? 'variables changed, fast buttons: no redraw of every message' : 'variables changed, redraw every message')
+        if (!fast) {
+            ReloadGUIPointer.set(get(ReloadGUIPointer) + 1)
+        }
     }
 
     if (shouldSetTriggerId && mode !== 'manual') {

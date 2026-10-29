@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
     buildRisuBardChatSettingHelp,
+    risuBardCurrentChatSettingKeys,
     measureRisuBardChat,
 } from './chatSettingsHelp'
 
@@ -33,7 +34,7 @@ describe('BardWiki current-chat setting help', () => {
             profile,
         )
 
-        expect(help).toContain('현재 챗: 60턴 · 메시지 평균 1,200자')
+        expect(help).toContain('현재 챗: 60턴, 메시지 평균 1,200자')
         expect(help).toContain('기본 절약값은 4개')
         expect(help).toContain('2~3개')
     })
@@ -47,7 +48,8 @@ describe('BardWiki current-chat setting help', () => {
         expect(help).toContain('절약(검색 목표 3,000, 최대 5,500)')
         expect(help).toContain('보통(검색 목표 4,000, 최대 7,500)')
         expect(help).toContain('넉넉(검색 목표 6,000, 최대 10,500)')
-        expect(help).toContain('값을 하나라도 직접 고치면 커스텀이 됩니다')
+        expect(help).toContain('값을 하나라도 직접 고치면 사용자 지정이 됩니다')
+        expect(help).not.toContain('커스텀')
     })
 
     test.each([
@@ -85,5 +87,51 @@ describe('BardWiki current-chat setting help', () => {
         expect(help).toContain('4,000자 고정 상한이 없습니다')
         expect(help).toContain('공급자가 출력 한도 종료를 보고')
         expect(help).toContain('저장하지 않고 재시도')
+    })
+
+    const longProfile = () => measureRisuBardChat(Array.from(
+        { length: 120 },
+        (_, index) => ({
+            role: index % 2 === 0 ? 'user' as const : 'char' as const,
+            data: '가'.repeat(1_200),
+        }),
+    ))
+
+    test.each(['risuBardResponseExcludeUserMessages', 'risuBardAnalysisExcludeUserMessages'] as const)(
+        '%s help describes the include checkbox: checked means user messages go in', (key) => {
+            for (const profile of [longProfile(), measureRisuBardChat([])]) {
+                const help = buildRisuBardChatSettingHelp(key, profile)
+                expect(help).toContain('켜면')
+                expect(help).toContain('사용자 메시지도 넣습니다')
+                expect(help).not.toContain('제외합니다')
+            }
+        })
+
+    test('response count help counts AI responses and includes the user messages between them', () => {
+        const help = buildRisuBardChatSettingHelp('risuBardResponseMessageCount', measureRisuBardChat([]))
+        expect(help).toContain('AI 응답 수')
+        expect(help).toContain('사용자 메시지 넣기')
+        expect(help).toContain('사이의 사용자 메시지')
+        expect(buildRisuBardChatSettingHelp('risuBardRecentMessageCount', measureRisuBardChat([]))).toContain('AI 응답 수')
+    })
+
+    test('timeout help recommends keeping the maximum without contradicting itself', () => {
+        const help = buildRisuBardChatSettingHelp('risuBardInquiryTimeoutMs', measureRisuBardChat([]))
+        expect(help).toContain('10,000ms')
+        expect(help).toContain('그대로 두')
+        expect(help).not.toContain('상한을 유지하세요')
+    })
+
+    test('uses the plain setting names and no middle dot in any help text', () => {
+        const keys = [...risuBardCurrentChatSettingKeys, 'risuBardMemoryBudgetPreset'] as const
+        for (const profile of [longProfile(), measureRisuBardChat([])]) {
+            for (const key of keys) {
+                const help = buildRisuBardChatSettingHelp(key, profile)
+                expect(help, key).not.toContain('·')
+                expect(help, key).not.toContain('커스텀')
+                expect(help, key).not.toContain('분석 토큰 한도')
+            }
+        }
+        expect(buildRisuBardChatSettingHelp('risuBardDynamicMemoryMode', measureRisuBardChat([]))).toContain('위키 분석 최대 길이')
     })
 })

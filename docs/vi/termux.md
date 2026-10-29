@@ -70,7 +70,7 @@ Khi quá trình xây dựng hoàn tất, bạn sẽ thấy:
 
 ```
 Build OK. Start the server with:
-  node server/node/server.cjs
+  node --max-old-space-size=2048 server/node/server.cjs
 
 Then open this address in the phone's own browser:
   http://localhost:7777
@@ -84,8 +84,10 @@ Then open this address in the phone's own browser:
 Từ cùng thư mục, khởi động máy chủ:
 
 ```bash
-node server/node/server.cjs
+node --max-old-space-size=2048 server/node/server.cjs
 ```
+
+`--max-old-space-size=2048` nâng giới hạn bộ nhớ của Node từ mặc định khoảng 1 GB lên 2 GB. Nếu không có tùy chọn này, dữ liệu lớn có thể khiến máy chủ dừng với lỗi `JavaScript heap out of memory`. Điện thoại có RAM từ 8 GB trở lên có thể dùng đến `4096`, nhưng giá trị lớn hơn RAM thực của điện thoại sẽ khiến Android buộc dừng Termux.
 
 Sau khi nhật ký khởi động máy chủ xuất hiện, mở trình duyệt điện thoại (Chrome, Firefox, v.v.) và truy cập:
 

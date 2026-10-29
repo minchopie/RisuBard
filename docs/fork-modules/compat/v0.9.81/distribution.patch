@@ -1,17 +1,18 @@
 diff --git a/.gitignore b/.gitignore
-index 88962f0..19e1391 100644
+index 88962f0..56752d6 100644
 --- a/.gitignore
 +++ b/.gitignore
-@@ -52,6 +52,8 @@ dist.zip
+@@ -52,6 +52,9 @@ dist.zip
  !/scripts/portable-smoke.cjs
  !/scripts/portable/
  !/scripts/termux/
 +!/scripts/android/
++!/scripts/fork-modules/
 +!/scripts/transfer-sync/
  !/scripts/check-help-keys.mjs
  !/scripts/check-public-boundary.mjs
  !/scripts/check-public-boundary.test.ts
-@@ -75,3 +77,19 @@ test/fixtures/
+@@ -75,3 +78,19 @@ test/fixtures/
  
  # Local scratch output (backups, browser runs, reports); never released
  tmp/
@@ -60,7 +61,7 @@ index f62d88a..216d141 100644
 +included in the packaged runtime. Model weights are selected by the user and
 +are not included in the APK; their own licenses apply.
 diff --git a/package.json b/package.json
-index 2c62e8d..8c7d16d 100644
+index 2c62e8d..c07e6e0 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,7 +1,7 @@
@@ -68,7 +69,7 @@ index 2c62e8d..8c7d16d 100644
    "name": "risubard",
    "private": true,
 -  "version": "0.9.81",
-+  "version": "0.9.94",
++  "version": "0.9.101",
    "license": "GPL-3.0-only",
    "packageManager": "pnpm@10.34.1",
    "engines": {

@@ -1,10 +1,11 @@
+import { eventSequences } from './risubard-event-sequence'
 import { basename } from 'node:path'
 import { get_encoding, type Tiktoken } from '@dqbd/tiktoken'
 import type { MarkdownWikiDocument } from './risubard-markdown-wiki'
 import { createInquiryTimeline, type InquiryTimelineInput } from './risubard-inquiry-timeline'
 import { normalizeRisuBardInquiryTokenBudget } from '../../src/ts/risubard/risuBardSettings'
 import { selectMarkdownExcerpt } from './risubard-markdown-excerpt'
-import { isStoryArcTitle } from '../../src/ts/risubard/wikiWritingLanguage'
+import { isStoryArcChapterTitle, isStoryArcTitle } from '../../src/ts/risubard/wikiWritingLanguage'
 import { normalizeWikiRetrievalLimits, type WikiRetrievalLimits } from '../../src/ts/risubard/wikiRetrievalLimits'
 
 const MAX_SELECTED_DOCUMENTS = 12
@@ -23,6 +24,18 @@ const TRIMMED_CANON_MARKER = '[Partial canon excerpt trimmed to fit the memory b
 const DEFAULT_SELECTED_SOURCE_MESSAGES = 8
 const MAX_MAP_ANCHORS_BEFORE_EVENTS = 4
 const ROUTED_SOURCE_SCORE_BONUS = 12
+// Lexical matches that no selected event routed to still reach the answer
+// model when they are the strongest few and carry at least one rare term
+// (BM25-style weights: a term in roughly an eighth of history scores ~2).
+const MAX_UNROUTED_LEXICAL_SOURCES = 2
+const MIN_UNROUTED_LEXICAL_SCORE = 2
+// Events whose source sits within this many assistant turns before the recent
+// transcript are the story's immediate past. They always enter the candidate
+// pool, score higher the closer they are, and a current-state question that
+// matches no event still receives the newest few of them.
+const RECENT_EVENT_WINDOW_TURNS = 6
+const RECENT_EVENT_SCORE_BONUS = 4
+const RECENT_EVENT_GUARANTEE = 2
 const SEMANTIC_RRF_K = 60
 const SEMANTIC_RRF_SCALE = 480
 const ENTITY_HINT_SCORE = 10_000
@@ -164,6 +177,15 @@ interface Candidate {
     directScore: number
     hop: number
     linkScore: number
+    recencyBonus?: number
+}
+
+/** A recent event the query neither matched nor linked to: only the guarantee may select it. */
+function isRecencyOnly(candidate: Pick<Candidate, 'document' | 'directScore' | 'linkScore' | 'recencyBonus'>): boolean {
+    return candidate.document.type === 'event'
+        && (candidate.recencyBonus ?? 0) > 0
+        && candidate.directScore <= 0
+        && candidate.linkScore <= 0
 }
 
 interface NormalizedDocument {
@@ -214,19 +236,19 @@ function queryTerms(value: string): string[] {
 }
 
 function hasPastIntent(value: string): boolean {
-    return /(?:과거|예전|이전|당시|전날|어제|지난|그때|앞서|전에|처음|초반|원래|회상|떠올리|기억|past|previous|before|earlier|formerly|used to|昔|以前|当時)/i
+    return /(?:과거|예전|이전|당시|전날|어제|지난|그때|앞서|전에|처음|초반|원래|회상|떠올리|기억|past|previous|before|earlier|formerly|used to|昔|以前|当時|過去|过去|之前|當時|曾经|曾經|回忆|回憶|记得|記得)/i
         .test(value)
 }
 
 function hasHistoricalEvidenceIntent(value: string): boolean {
     const past = hasPastIntent(value)
-    const causalOrDetail = /(?:왜|원인|이유|계기|인과|영향|분석|세부|근거|why|cause|reason|trigger|analysis|detail|evidence)/i
+    const causalOrDetail = /(?:왜|원인|이유|계기|인과|영향|분석|세부|근거|why|cause|reason|trigger|analysis|detail|evidence|为什么|為什麼|为何|為何|原因|理由|细节|細節)/i
         .test(value)
     return past || causalOrDetail
 }
 
 function hasLinkedCharacterIntent(value: string): boolean {
-    return /(?:인물|누구|동료|관계|주변|함께|연결|people|who|companion|relationship|with whom|人物|誰|仲間|関係)/i
+    return /(?:인물|누구|동료|관계|주변|함께|연결|people|who|companion|relationship|with whom|人物|誰|仲間|関係|谁|关系|關係|同伴)/i
         .test(value)
 }
 
@@ -372,9 +394,15 @@ function candidateScore(
     currentIntent: boolean
 ): number {
     let score = candidate.directScore + candidate.linkScore
-    if (candidate.document.type === 'event') score += pastIntent ? 3 : 0
+    if (candidate.document.type === 'event') score += (pastIntent ? 3 : 0) + (candidate.recencyBonus ?? 0)
     else score += currentIntent ? 3 : 1
     return score
+}
+
+/** Full bonus one turn before the recent transcript, fading to nothing past the window. */
+function recentEventBonus(turnsBefore: number | undefined): number {
+    if (turnsBefore === undefined || turnsBefore > RECENT_EVENT_WINDOW_TURNS) return 0
+    return RECENT_EVENT_SCORE_BONUS * (RECENT_EVENT_WINDOW_TURNS - turnsBefore + 1) / RECENT_EVENT_WINDOW_TURNS
 }
 
 function arcRouteTargets(
@@ -383,7 +411,7 @@ function arcRouteTargets(
     byTarget: ReadonlyMap<string, MarkdownWikiDocument>,
 ): Set<string> {
     const targets = new Set<string>()
-    if (document.type !== 'other' || !isStoryArcTitle(document.title)) return targets
+    if (document.type !== 'other' || !(isStoryArcTitle(document.title) || isStoryArcChapterTitle(document.title))) return targets
     // Keep an action and its event link together; unrelated arcs must not win
     // merely because their links appear first in the document.
     for (const line of document.content.slice(0, MAX_SOURCE_CHARACTERS).split('\n')) {
@@ -405,6 +433,17 @@ function semanticExcerpt(document: MarkdownWikiDocument, start: number, end: num
     }
     return [`## ${document.title}`, ...headings.map(heading => heading.text),
         document.content.slice(start, end)].join('\n\n')
+}
+
+/** Event sources in story order; other sources keep their places. */
+function chronologicalEvents<T extends { document: MarkdownWikiDocument }>(
+    selected: readonly T[],
+    sequences: ReadonlyMap<string, number>,
+): T[] {
+    const events = selected.filter((item) => item.document.type === 'event')
+        .sort((left, right) => (sequences.get(left.document.id) ?? 0) - (sequences.get(right.document.id) ?? 0))
+    let next = 0
+    return selected.map((item) => item.document.type === 'event' ? events[next++] : item)
 }
 
 export function inquireMarkdownDocuments(
@@ -454,8 +493,26 @@ export function inquireMarkdownDocuments(
     const requiredDocuments = eligibleDocuments.filter((document) =>
         document.contextMode === 'always'
             || document.type === 'scene')
+    const timeline = createInquiryTimeline(input.timeline)
+    const recencyBonusOf = (document: MarkdownWikiDocument): number =>
+        document.type === 'event' && input.timeline
+            ? recentEventBonus(timeline.turnsBefore(document))
+            : 0
 
     const base = catalogBase(input.documents)
+    const sequences = eventSequences(input.documents)
+    const latestSequence = Math.max(0, ...sequences.values())
+    // Hub pages link to many events; expand toward relevant, then recent ones.
+    const neighborRank = new Map<string, number>()
+    const rankNeighbor = (id: string): number => {
+        let rank = neighborRank.get(id)
+        if (rank === undefined) {
+            const neighbor = byId.get(id)
+            rank = neighbor ? lexicalScore(neighbor, normalizedQuery, terms, characterAnchorTerms, termWeights) : -1
+            neighborRank.set(id, rank)
+        }
+        return rank
+    }
     const byId = new Map(eligibleDocuments.map((document) =>
         [document.id, document]))
 
@@ -538,8 +595,9 @@ export function inquireMarkdownDocuments(
             directScore: (existing?.directScore ?? 0) + ENTITY_HINT_SCORE,
         })
     }
+    // Required pages (the pinned scene among them) are read separately, so
+    // they never decide whether a short input falls back to recent dialogue.
     if (directById.size === 0
-        && requiredDocuments.length === 0
         && input.currentInput.trim().length
             <= MAX_FALLBACK_CURRENT_INPUT_CHARACTERS
         && input.fallbackInput?.trim()) {
@@ -601,17 +659,32 @@ export function inquireMarkdownDocuments(
             linkScore: 0,
         })
     }
+    // The immediate past is always in the pool, however the query is worded.
+    for (const document of eligibleDocuments) {
+        const recencyBonus = recencyBonusOf(document)
+        if (recencyBonus <= 0 || candidates.has(document.id)) continue
+        if (candidates.size >= candidateLimit) break
+        candidates.set(document.id, {
+            document,
+            directScore: directById.get(document.id)?.directScore
+                ?? lexicalScore(document, normalizedQuery, terms, characterAnchorTerms, termWeights),
+            hop: 0,
+            linkScore: 0,
+            recencyBonus,
+        })
+    }
     for (const item of hybridDirect) {
         if (candidates.size >= candidateLimit) break
         candidates.set(item.document.id, {
             ...item,
             hop: 0,
             linkScore: 0,
+            recencyBonus: recencyBonusOf(item.document),
         })
     }
 
     let inspectedEdgeCount = 0
-    const chronologyIntent = /(?:작중\s*행적|행적|모험|여정|연대기|시간\s*순|순서대로|지금까지|journey|adventures?|chronolog|timeline|story\s+history)/i
+    const chronologyIntent = /(?:작중\s*행적|행적|모험|여정|연대기|시간\s*순|순서대로|지금까지|journey|adventures?|chronolog|timeline|story\s+history|经历|經歷|时间顺序|時間順序)/i
         .test(input.currentInput)
     for (let hop = 0; hop < MAX_HOPS; hop += 1) {
         const expandable = [...candidates.values()]
@@ -628,6 +701,9 @@ export function inquireMarkdownDocuments(
                 candidate.document.id
             ) ?? [])]
                 .filter((id) => arcTargets.size === 0 || arcTargets.has(id))
+                .sort((left, right) => rankNeighbor(right) - rankNeighbor(left)
+                    || (sequences.get(right) ?? 0) - (sequences.get(left) ?? 0)
+                    || left.localeCompare(right))
                 .slice(0, MAX_EDGES_PER_DOCUMENT)
             for (const neighborId of neighbors) {
                 if (inspectedEdgeCount >= MAX_INSPECTED_EDGES) break
@@ -656,6 +732,7 @@ export function inquireMarkdownDocuments(
                     ),
                     hop: hop + 1,
                     linkScore,
+                    recencyBonus: recencyBonusOf(neighbor),
                 })
             }
             if (inspectedEdgeCount >= MAX_INSPECTED_EDGES) break
@@ -664,14 +741,14 @@ export function inquireMarkdownDocuments(
     }
 
     const pastIntent = hasPastIntent(input.currentInput)
-    const currentIntent = /(?:현재|지금|최신|상태|current|now|latest|status|現在|今)/i
+    const currentIntent = /(?:현재|지금|최신|상태|current|now|latest|status|現在|今|现在|目前|当前|當前|状态|狀態)/i
         .test(input.currentInput)
-    const stateTopicIntent = /(?:상태|목표|관계|위치|어디|소지품|보유|능력|지식|state|status|goal|relationship|location|where|inventory|ability|knowledge|状態|目標|関係|位置)/i
+    const stateTopicIntent = /(?:상태|목표|관계|위치|어디|소지품|보유|능력|지식|state|status|goal|relationship|location|where|inventory|ability|knowledge|状態|目標|関係|位置|状态|狀態|目标|关系|關係|哪里|哪裡|能力|知识|知識)/i
         .test(input.currentInput)
     const stateHistoryIntent = pastIntent
-        || /(?:상태\s*변화|왜|원인|이유|계기|변해|바뀌|했|였|됐|갔|왔|던|데려간|사라진|향했|cause|reason|changed?|became|変化|理由|原因)/i
+        || /(?:상태\s*변화|왜|원인|이유|계기|변해|바뀌|했|였|됐|갔|왔|던|데려간|사라진|향했|cause|reason|changed?|became|変化|理由|原因|变化|變化|为什么|為什麼)/i
             .test(input.currentInput)
-    const explicitEventIntent = /(?:사건|이벤트|발생|일어났|벌어졌|event|incident|happened|occurred|事件|発生)/i
+    const explicitEventIntent = /(?:사건|이벤트|발생|일어났|벌어졌|event|incident|happened|occurred|事件|発生|发生|發生)/i
         .test(input.currentInput)
         || eligibleDocuments.some((document) => document.type === 'event'
             && [document.title, ...(document.aliases ?? [])].some((title) =>
@@ -706,12 +783,14 @@ export function inquireMarkdownDocuments(
         input.tokenBudget?.events,
         input.tokenBudget?.perSource,
     )
-    const timeline = createInquiryTimeline(input.timeline)
     const prepared = [
         ...(input.contextSelection === 'auto' ? [] : requiredDocuments).map((document) => ({
             document,
             score: 100,
             hop: candidates.get(document.id)?.hop ?? 0,
+            directScore: candidates.get(document.id)?.directScore ?? 0,
+            linkScore: 0,
+            recencyBonus: 0,
         })),
         ...automatic,
     ].map((candidate) => {
@@ -749,9 +828,12 @@ export function inquireMarkdownDocuments(
                 }
             }
         }
+        const sequence = sequences.get(candidate.document.id)
         const labels = candidate.document.type === 'event'
             ? [
                 timeline.sourceLabel(candidate.document),
+                sequence === undefined ? undefined
+                    : `[Story order: event #${sequence} of ${latestSequence}${sequence === latestSequence ? ', the latest' : ''}]`,
                 candidate.document.retrievalMetadata?.storyTime
                     ? `[Story day relative to first recorded event: ${candidate.document.retrievalMetadata.storyTime.day ?? 'unknown'}; calendar date unspecified]`
                     : undefined,
@@ -854,6 +936,7 @@ export function inquireMarkdownDocuments(
         for (const candidate of prepared.filter((item) =>
             !requiredIds.has(item.document.id)
             && item.document.type === 'event'
+            && !isRecencyOnly(item)
         )) {
             addOptionalIfFits(candidate, 'event')
         }
@@ -862,9 +945,22 @@ export function inquireMarkdownDocuments(
         for (const candidate of prepared.filter((item) =>
             !requiredIds.has(item.document.id)
             && item.document.type === 'event'
+            && !isRecencyOnly(item)
         )) {
             addOptionalIfFits(candidate, 'map')
         }
+    }
+    if (currentStateIntent) {
+        // "Where are we now" is answered by what just happened, so the newest
+        // events before the transcript come along even without a word in common.
+        const newest = prepared
+            .filter((item) => !requiredIds.has(item.document.id)
+                && item.document.type === 'event' && (item.recencyBonus ?? 0) > 0)
+            .sort((left, right) => (right.recencyBonus ?? 0) - (left.recencyBonus ?? 0)
+                || right.score - left.score
+                || left.document.id.localeCompare(right.document.id))
+            .slice(0, RECENT_EVENT_GUARANTEE)
+        for (const candidate of newest) addOptionalIfFits(candidate, 'event')
     }
     const sourceLimit = Number.isSafeInteger(input.sourceLimit)
         ? Math.max(0, Math.min(MAX_SOURCE_MATCHES, input.sourceLimit as number))
@@ -888,6 +984,15 @@ export function inquireMarkdownDocuments(
             ...(semanticEventSourceDocuments.has(messageId)
                 ? { documentId: semanticEventSourceDocuments.get(messageId)! } : {}),
         }))
+    const strongLexicalSourceIds = new Set((input.sourceMatches ?? [])
+        .filter((match) => match.retrieval !== 'semantic'
+            && !selectedEventSources.has(match.messageId)
+            && match.score >= MIN_UNROUTED_LEXICAL_SCORE)
+        .sort((left, right) => right.score - left.score
+            || right.occurredAt - left.occurredAt
+            || left.messageId.localeCompare(right.messageId))
+        .slice(0, MAX_UNROUTED_LEXICAL_SOURCES)
+        .map((match) => match.messageId))
     const preparedSourceMatches = (input.sourceMatches ?? [])
         .slice(0, MAX_SOURCE_MATCHES)
         .map((match) => {
@@ -924,7 +1029,8 @@ export function inquireMarkdownDocuments(
                 tokens: countInquiryTokens(content),
             }
         })
-        .filter((match) => historicalEvidenceIntent || match.routed || match.retrieval === 'semantic')
+        .filter((match) => historicalEvidenceIntent || match.routed
+            || match.retrieval === 'semantic' || strongLexicalSourceIds.has(match.messageId))
         .sort((left, right) =>
             Number(right.routed) - Number(left.routed)
             || right.effectiveScore - left.effectiveScore
@@ -964,7 +1070,7 @@ export function inquireMarkdownDocuments(
                 priority: 190,
                 displayName: '직전 흐름',
             }] : []),
-            ...selected.map((candidate) => ({
+            ...chronologicalEvents(selected, sequences).map((candidate) => ({
                 id: `narrative-memory:wiki:${candidate.document.relativePath}`,
                 kind: 'memory' as const,
                 role: 'system' as const,

@@ -7,6 +7,7 @@ import './polyfill' // registers globalThis.safeStructuredClone used by the conv
 vi.mock(import('src/ts/stores.svelte'), () => ({
     DBState: { db: { characters: [], enabledModules: [], modules: [] } },
     selIdState: { selId: 0 },
+    selectedCharID: { subscribe: (run: (value: number) => void) => { run(-1); return () => {} } },
 } as any))
 
 import {

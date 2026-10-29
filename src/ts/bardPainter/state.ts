@@ -25,7 +25,8 @@ export function reconcilePainterSubjects(subjects: PainterSubject[], identities:
         if (!id) id = v4()
         used.add(id)
         const locked = previous.find((item) => item.id === id && item.locked)
-        return locked ? { ...locked, aliases: [...locked.aliases] } : { ...subject, id }
+        // A locked block keeps its text but still answers to the planner's plan entry for interactions.
+        return locked ? { ...locked, aliases: [...locked.aliases], ...(subject.planKey ? { planKey: subject.planKey } : {}) } : { ...subject, id }
     })
     previous.forEach((subject, index) => {
         if (subject.locked && !used.has(subject.id)) {
@@ -49,9 +50,15 @@ export function applyPainterPresets(subjects: PainterSubject[], presets: Painter
         if (source.locked) return source
         const subject: PainterSubject = { ...source, aliases: [...source.aliases] }
         delete subject.presetMatch; delete subject.appearanceEdited; delete subject.outfitEdited; delete subject.manual; delete subject.prompt
+        delete subject.poseEdited; delete subject.stateEdited
         const identity = subject.kind === 'character' ? presets.find((item) => item.id === subject.id) : undefined
         const before = previous.find((item) => item.id === subject.id)
         if (before?.manual) subject.manual = true
+        if (!subject.sex && before?.sex) subject.sex = before.sex
+        if (before?.poseEdited) {
+            subject.pose = before.pose
+            subject.poseEdited = true
+        }
         const outfit = identity && subject.outfitId ? outfitsFor(identity.id).find((item) => item.id === subject.outfitId) : undefined
         if (!outfit) delete subject.outfitId
         if (identity) {
@@ -69,6 +76,11 @@ export function applyPainterPresets(subjects: PainterSubject[], presets: Painter
             subject.clothing = edited ? before.clothing : outfit.clothing
             subject.state = joinTags(edited ? before.state : outfit.state, subject.state)
             if (edited) subject.outfitEdited = true
+        }
+        // Hand-edited state text belongs to the outfit it was written for, like edited clothing.
+        if (before?.stateEdited && before.outfitId === subject.outfitId) {
+            subject.state = before.state
+            subject.stateEdited = true
         }
         if (!subject.appearance.trim()) {
             if (!before?.appearance.trim()) throw new Error(`「${subject.name}」의 외형이 비어 있습니다. 캐릭터 프리셋에 기본 외형을 저장하거나 다시 작성해 주세요.`)

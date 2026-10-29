@@ -56,6 +56,7 @@ export function buildMergedChat(
             message.chatId = createId()
             delete message.risubardMemoryConfirmed
             delete message.risubardCanonicalReceipt
+            delete message.risubardWikiPending
             if (oldId && sourceBookmarks.has(oldId)) {
                 bookmarks.push(message.chatId)
                 if (source.bookmarkNames?.[oldId]) bookmarkNames[message.chatId] = source.bookmarkNames[oldId]

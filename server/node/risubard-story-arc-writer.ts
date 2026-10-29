@@ -1,4 +1,5 @@
 import {
+    isStoryArcChapterTitle,
     isStoryArcTitle,
     wikiWritingLocales,
     type WikiWritingLanguage,
@@ -42,9 +43,11 @@ export interface StoryArcUpdatePlan {
     }
     events: StoryArcWriterDocument[]
     checkpointEventId: string
+    /** The stored checkpoint was missing, so the plan resumed after the last linked event. */
+    checkpointRecovered?: boolean
 }
 
-export { isStoryArcTitle }
+export { isStoryArcChapterTitle, isStoryArcTitle }
 
 export function isStoryArcCandidate(candidate: {
     type: string
@@ -166,7 +169,6 @@ export function buildStoryArcUpdatePlan(input: {
     const checkpoint = existing
         ? readStoryArcCheckpoint(existing.content)
         : undefined
-    if (existing && !checkpoint) return undefined
     const checkpointIndex = checkpoint
         ? ordered.findIndex((document) => document.id === checkpoint)
         : -1
@@ -177,9 +179,16 @@ export function buildStoryArcUpdatePlan(input: {
             && document.type === 'event'
             && document.status !== 'retracted' && document.status !== 'superseded'
             && hasOnlyInheritedSources(document))
-    if (checkpoint && checkpointIndex < 0 && !inheritedCheckpoint) return undefined
-    const pending = ordered.slice(checkpointIndex + 1)
-    const repairEvents = existing && checkpoint
+    // A checkpoint whose event was deleted, or a marker removed by an edit,
+    // must not stop the plot for good: resume after the last event it links,
+    // or from now when it links none.
+    const checkpointRecovered = existing !== undefined
+        && (!checkpoint || (checkpointIndex < 0 && !inheritedCheckpoint))
+    const resumeIndex = checkpointRecovered
+        ? lastLinkedEventIndex(existing.content, ordered) ?? ordered.length - 1
+        : checkpointIndex
+    const pending = ordered.slice(resumeIndex + 1)
+    const repairEvents = !checkpointRecovered && existing && checkpoint
         && checkpointIndex >= 0
         && !hasStoryArcEventLink(existing.content, ordered)
         ? ordered.slice(
@@ -209,6 +218,65 @@ export function buildStoryArcUpdatePlan(input: {
         },
         events,
         checkpointEventId: repairEvents ? checkpoint! : events.at(-1)!.id,
+        ...(checkpointRecovered ? { checkpointRecovered } : {}),
+    }
+}
+
+function lastLinkedEventIndex(markdown: string, ordered: readonly StoryArcWriterDocument[]): number | undefined {
+    const linked = new Set([...markdown.matchAll(wikiLinkPattern)]
+        .map((match) => identityKey(match[1].split('|')[0]?.split('#')[0] ?? '')))
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+        const event = ordered[index]
+        if ([event.title, ...(event.aliases ?? [])].some((name) => linked.has(identityKey(name)))) return index
+    }
+    return undefined
+}
+
+/** Title of a closed arc chapter that keeps its arcs out of later rewrites. */
+export function storyArcChapterTitle(title: string, chapter: number): string {
+    return `${title} (${chapter})`
+}
+
+/**
+ * When the live plot is full, its arcs move to a closed chapter document and
+ * the live plot restarts from a link to it, keeping the open threads. Closed
+ * chapters are never summarized again.
+ */
+export function planStoryArcChapter(input: {
+    markdown: string
+    title: string
+    chapterTitle: string
+    writingLanguage: WikiWritingLanguage
+    settings?: Partial<ArcPlotterSettings>
+}): { chapterMarkdown: string; liveMarkdown: string } | undefined {
+    const settings = normalizeArcPlotterSettings(input.settings)
+    const arc = wikiWritingLocales[input.writingLanguage].storyArc
+    const overviewHeadings = Object.values(wikiWritingLocales).map((locale) => locale.storyArc.overview)
+    const openHeadings = Object.values(wikiWritingLocales).map((locale) => locale.storyArc.openThreads)
+    const unmarked = input.markdown.replace(checkpointPattern, '')
+    const sectionUnits = (headings: string[]) => {
+        const lines = unmarked.split('\n')
+        const keys = new Set(headings.map(identityKey))
+        const start = lines.findIndex((line) => {
+            const heading = /^#{3,6}[\t ]+(.+?)[\t ]*$/u.exec(line)
+            return heading !== null && keys.has(identityKey(heading[1]))
+        })
+        if (start < 0) return { start, body: [] as string[] }
+        let end = start + 1
+        while (end < lines.length && !/^#{1,3}[\t ]/u.test(lines[end])) end += 1
+        return { start, body: lines.slice(start + 1, end).filter((line) => line.trim()) }
+    }
+    const overview = sectionUnits(overviewHeadings)
+    if (overview.body.filter((line) => /^[-*][\t ]/u.test(line)).length < settings.maxArcs) return undefined
+    const body = input.markdown.replace(checkpointPattern, '').replace(/^#{1,2}[\t ]+.+$/mu, '').trim()
+    const openThreads = sectionUnits(openHeadings).body
+    return {
+        chapterMarkdown: `## ${input.chapterTitle}\n\n${body}`,
+        liveMarkdown: [
+            `## ${input.title}`, '',
+            `### ${arc.overview}`, '', `- [[${input.chapterTitle}]]`,
+            ...(openThreads.length > 0 ? ['', `### ${arc.openThreads}`, '', ...openThreads] : []),
+        ].join('\n'),
     }
 }
 

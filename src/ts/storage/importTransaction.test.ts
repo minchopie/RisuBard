@@ -13,6 +13,15 @@ function setup(existing: string[] = []) {
     return { tx: new ImportTransaction(new Set(existing), deps), deps, events }
 }
 describe('import rollback', () => {
+    test('undoes in-memory changes to existing bots before removing new owners', async () => {
+        const { tx, deps, events } = setup()
+        await tx.write([{ key: 'assets/base.json', value: new Uint8Array() }])
+        tx.onRollback(() => { events.push('undo-first') })
+        tx.onRollback(() => { events.push('undo-second') })
+        await tx.rollback()
+        expect(events).toEqual(['write', 'undo-second', 'undo-first', 'owners', 'cleanup'])
+        expect(deps.cleanup).toHaveBeenCalledWith(['assets/base.json'], tx.id)
+    })
     test('journals before writes and preserves pre-existing keys', async () => {
         const { tx, deps } = setup(['assets/shared.png'])
         await tx.write([{ key: 'assets/shared.png', value: new Uint8Array() }, { key: 'assets/new.png', value: new Uint8Array() }])

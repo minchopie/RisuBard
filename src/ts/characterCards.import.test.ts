@@ -91,6 +91,8 @@ vi.mock('./globalApi.svelte', () => ({
 vi.mock('./process/modules', () => ({
     exportModuleLegacy: vi.fn(),
     readModule: vi.fn(),
+    prepareImportedModule: vi.fn(),
+    installImportedModule: vi.fn(async (module: any) => { state.db.modules.push(module) }),
 }))
 
 vi.mock('./stores.svelte', () => ({ selectedCharID: { set: vi.fn() } }))
@@ -100,6 +102,7 @@ vi.mock('./parser/parser.svelte', () => ({ hasher: vi.fn(), risuChatParser: vi.f
 vi.mock('./process/files/inlays', () => ({ reencodeImage: vi.fn() }))
 vi.mock('./characterVault', () => ({ pinCharacterVaultQuickAccess: vi.fn() }))
 vi.mock('./characters', () => ({ characterFormatUpdate: vi.fn() }))
+vi.mock('./characterUpdateFlow.svelte', () => ({ tryUpdateExistingCharacter: vi.fn(async () => null) }))
 vi.mock('src/lang', async () => ({
     language: {
         importInstall: (await import('src/lang/en')).languageEnglish.importInstall,
@@ -120,6 +123,8 @@ import { inspectCharx } from './charxPreflight'
 import { alertConfirmMulti, alertError } from './alert'
 import { selectedCharID } from './stores.svelte'
 import { createBardLoreSettings, fingerprintLegacyLore, upgradeLegacyLorebook } from './lorebook/bardLore'
+import { tryUpdateExistingCharacter } from './characterUpdateFlow.svelte'
+import { BOT_LINEAGE_KEY } from './characterUpdate'
 
 beforeEach(() => {
     state.cardPayload = undefined
@@ -197,6 +202,19 @@ describe('Realm installation results', () => {
         expect(state.db.characters).toHaveLength(2)
         expect(selectedCharID.set).toHaveBeenCalledWith(1)
     })
+    test('records the RisuRealm id on a downloaded CHARX so the next download can update it', async () => {
+        vi.mocked(alertConfirmMulti).mockResolvedValueOnce(1)
+        vi.mocked(tryUpdateExistingCharacter).mockClear()
+        await downloadRisuHub('realm-item', { forceRedirect: true })
+        expect(vi.mocked(tryUpdateExistingCharacter).mock.calls[0][0].extentions).toMatchObject({ risuRealmImportId: 'realm-item' })
+    })
+    test('selects the updated bot instead of adding one when the user updates an installed bot', async () => {
+        vi.mocked(alertConfirmMulti).mockResolvedValueOnce(1)
+        vi.mocked(tryUpdateExistingCharacter).mockResolvedValueOnce(0)
+        await downloadRisuHub('test', { forceRedirect: true })
+        expect(state.db.characters).toHaveLength(1)
+        expect(selectedCharID.set).toHaveBeenCalledWith(0)
+    })
     test('preserves the original import error and stack for the error dialog', async () => {
         const error = new Error('Invalid CHARX ZIP entry')
         vi.mocked(inspectCharx).mockRejectedValueOnce(error)
@@ -262,6 +280,23 @@ describe('character import localization', () => {
         const source = readFileSync('src/ts/characterCards.ts', 'utf8')
         expect(source).not.toMatch(/Loading\.\.\. \((Reading|Loading Emotions|Loading Assets|Assets)\)/)
         expect(source).not.toContain('alertError("Error while importing")')
+    })
+})
+
+describe('bot updates on import', () => {
+    test('returns the updated bot from a card import without adding a new one', async () => {
+        state.db.characters = [{ chaId: 'installed', name: 'Legacy card' }] as any
+        vi.mocked(tryUpdateExistingCharacter).mockResolvedValueOnce(0)
+        const index = await importCharacterProcess({ name: 'card.json', data: Buffer.from(JSON.stringify(cardFixture('chara_card_v3', undefined))) })
+        expect(index).toBe(0)
+        expect(state.db.characters).toHaveLength(1)
+    })
+    test('exports a stable bot id that a later import carries', async () => {
+        const card = createBaseV3({ name: 'Lineage', chaId: 'origin', globalLore: [], loreExt: {} } as any)
+        expect((card.data.extensions as any)[BOT_LINEAGE_KEY]).toBe('origin')
+        const imported = await importFixture(card as any)
+        expect(imported.extentions[BOT_LINEAGE_KEY]).toBe('origin')
+        expect((createBaseV3(imported).data.extensions as any)[BOT_LINEAGE_KEY]).toBe('origin')
     })
 })
 

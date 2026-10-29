@@ -1,4 +1,4 @@
-import { themePresetLocalFields } from '../../../shared/play-set/protocol'
+import { hashLocalJson, themePresetLocalFields } from '../../../shared/play-set/protocol'
 import { get } from 'svelte/store'
 import { forageStorage, requestImmediateSave, checkCharOrder, pendingTrackedChanges } from '../globalApi.svelte'
 import { getDatabase, normalizeChat, type Chat, type character } from '../storage/database.svelte'
@@ -11,6 +11,8 @@ import { doingChat, isAnyGenerating } from '../process/generationState'
 import { importSession } from '../importSession'
 import { transferBusy, transferStatus, syncSaveHold, syncBusyOwned, syncApplyRecovery } from './transferState'
 import { safeStructuredClone } from '../polyfill'
+import { writePartialSyncResume } from '../storage/syncRecoveryWriter'
+import { normalizeJSON } from '../storage/risuSave'
 
 /**
  * Client side of NAS sync. The server never writes the live database; this module drives the plan through the ordinary
@@ -38,7 +40,7 @@ export async function syncRequest(path = '', init: RequestInit = {}) {
     const response = await forageStorage.realStorage.syncRequest(path, init)
     if (!response.ok) {
         const data = await response.json().catch(() => ({}))
-        throw Object.assign(new Error(data.error || `동기화 요청 실패 (${response.status})`), { code: data.code, status: response.status })
+        throw Object.assign(new Error(data.error || `동기화 요청 실패 (${response.status})`), { code: data.code, status: response.status, detail: data.detail })
     }
     return response
 }
@@ -75,6 +77,8 @@ export const syncConflicts = async () => (await syncRequest('/conflicts')).json(
 export const syncOverview = async () => (await syncRequest('/overview')).json()
 export const resolveSyncConflict = (root: string, keep: string) => post('/resolve', { root, keep })
 export const syncTrash = async () => (await syncRequest('/trash')).json()
+/** Tells the service which kind of device this is so other devices can label it (display only). */
+export const reportSyncProfile = (profile: { kind: 'pc' | 'tablet' | 'phone'; name?: string }) => post('/profile', profile)
 export const restoreSyncTrash = (id: string) => post('/trash/restore', { id })
 /** The chat kept open through a remote deletion: restore it (its state is published first) or accept the deletion locally. */
 /** Both actions mutate the open chat across awaits: they are admitted only when nothing else is running (generation, import,
@@ -320,7 +324,7 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
             restoreSelection(selection)
             checkCharOrder()
             transferStatus.set('동기화 변경을 저장하는 중…')
-            await requestImmediateSave({ chats: plan!.chats.map(row => [row.characterId, row.chat.id!] as [string, string]), flushServer: 'canonical', rejectOnFailure: true, syncOwned: true })
+            await requestImmediateSave({ chats: plan!.chats.map(row => [row.characterId, row.chat.id!] as [string, string]), characters: [...plan!.characters, ...plan!.newCharacters].map(c => c.chaId), flushServer: 'canonical', rejectOnFailure: true, syncOwned: true })
         } catch (error) { saveError = error }
         const result = await finishWithRetry(plan!.transaction, saveError === null)
         if (result?.state === 'applied') {
@@ -365,6 +369,104 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
         if (tookBusy) { transferBusy.set(syncOwnsBusy); syncBusyOwned.set(syncOwnsBusy) }
     }
 }
+interface PartialSyncUnit {
+    kind: 'setting' | 'character' | 'chat' | 'module' | 'plugin' | 'pluginEnabled' | 'deletion'
+    id: string; key?: string; characterId?: string; state: 'expected' | 'before' | 'other'
+    fields?: string[]; expectedHash: string | null; beforeHash: string | null; currentHash: string | null
+}
+/** Reconstruct only missing units from the original armed plan; its expected hashes are never rearmed or weakened. */
+async function resumePartialSync(transaction: string, detail: { resumable?: boolean; units?: PartialSyncUnit[] } | undefined, startup: boolean) {
+    if (!detail?.resumable || !Array.isArray(detail.units) || detail.units.some(u => u.state === 'other')) throw new Error('Sync recovery requires review')
+    const missing = detail.units.filter(u => u.state === 'before')
+    if (!missing.length || missing.some(u => u.kind === 'deletion' || u.kind === 'pluginEnabled')) throw new Error('Sync recovery cannot reconstruct these changes')
+    const memoryBefore = startup ? JSON.stringify(getDatabase()) : undefined
+    const original: SyncPlan = await post('/plan')
+    if (original.transaction !== transaction || original.phase !== 'saving' || activityBlocksSync() || foreignBusy()) throw new Error('Sync recovery state changed')
+    const partial: SyncPlan = { ...original, settings: {}, characters: [], newCharacters: [], chats: [], modules: [], plugins: [], deletions: [], pluginEnabled: null }
+    const db = getDatabase() as any
+    const hash = (v: unknown) => hashLocalJson(JSON.parse(JSON.stringify(v)))
+    const project = (v: any, fields: string[] | undefined) => v && fields && fields.every(k => v[k] !== undefined) ? Object.fromEntries(fields.map(k => [k, v[k]])) : undefined
+    for (const unit of missing) {
+        let value: any, local: any
+        if (unit.kind === 'setting') {
+            if (!(unit.id in original.settings)) throw new Error('Sync recovery setting is missing')
+            value = original.settings[unit.id]
+            if (unit.id === 'themePresets' && Array.isArray(value)) value = withLocalThemeLayout(value, db.themePresets)
+            partial.settings[unit.id] = value
+            local = unit.id in db ? db[unit.id] : null
+        } else if (unit.kind === 'character') {
+            const update = original.characters.find(c => c.chaId === unit.id)
+            const added = original.newCharacters.find(c => c.chaId === unit.id)
+            if (update) { value = update.fields; partial.characters.push(update) }
+            else if (added) {
+                const { chatIds: _i, chats: _c, chatPage: _p, ...fields } = added as any
+                value = { ...fields, chaId: added.chaId }; partial.newCharacters.push(added)
+            } else throw new Error('Sync recovery character is missing')
+            if (!unit.fields || Object.keys(value).length !== unit.fields.length || !unit.fields.every(k => Object.hasOwn(value, k))) throw new Error('Sync recovery character fields changed')
+            local = project(db.characters.find((c: any) => c.chaId === unit.id), unit.fields)
+        } else if (unit.kind === 'chat') {
+            const row = original.chats.find(r => r.characterId === unit.characterId && r.chat.id === unit.id)
+            if (!row) throw new Error('Sync recovery chat is missing')
+            const chat = normalizeChat(row.chat)
+            if (!unit.fields || Object.keys(JSON.parse(JSON.stringify(chat))).length !== unit.fields.length || !unit.fields.every(k => Object.hasOwn(chat, k))) throw new Error('Sync recovery chat fields changed')
+            value = chat; partial.chats.push({ ...row, chat })
+            local = project(db.characters.find((c: any) => c.chaId === unit.characterId)?.chats?.find((c: any) => c.id === unit.id), unit.fields)
+        } else if (unit.kind === 'module' || unit.kind === 'plugin') {
+            const list = unit.kind === 'module' ? original.modules : original.plugins
+            value = list.find(c => (unit.kind === 'module' ? c.id : c.name) === unit.id)
+            if (!value) throw new Error('Sync recovery resource is missing')
+            ;(unit.kind === 'module' ? partial.modules : partial.plugins).push(value)
+            local = (db[unit.kind + 's'] ?? []).find((c: any) => (unit.kind === 'module' ? c.id : c.name) === unit.id)
+        }
+        if (value === undefined || await hash(value) !== unit.expectedHash) throw new Error('Sync recovery material does not match the armed version')
+        // Live retry never overwrites memory: only the values already applied by this client may be saved again.
+        if (!startup && (local === undefined || await hash(local) !== unit.expectedHash)) throw new Error('Sync recovery preserves newer unsaved edits')
+    }
+    if (activityBlocksSync() || foreignBusy() || (startup && JSON.stringify(getDatabase()) !== memoryBefore)) throw new Error('Sync recovery state changed')
+    const before = startup ? captureBefore({ ...partial, settings: { ...partial.settings, characterOrder: db.characterOrder } }) : undefined
+    let wrote = false
+    forageStorage.realStorage.syncTransaction = transaction
+    try {
+        if (startup) {
+            const selection = captureSelection()
+            applyPlanToDatabase(partial, selection)
+            restoreSelection(selection)
+            checkCharOrder()
+        }
+        const scope = { transaction, characters: [...partial.characters, ...partial.newCharacters].map(c => c.chaId), chats: partial.chats.map(row => [row.characterId, row.chat.id!] as [string, string]) }
+        if (startup) {
+            const valueOf = async (database: any, unit: PartialSyncUnit, remote: boolean): Promise<any> => {
+                const character = database.characters?.find((c: any) => c.chaId === (unit.characterId ?? unit.id))
+                if (unit.kind === 'setting') return Object.hasOwn(database, unit.id) ? database[unit.id] : undefined
+                if (unit.kind === 'character') return character ? Object.fromEntries(Object.entries(character).filter(([k]) => k !== 'chats')) : undefined
+                if (unit.kind === 'chat') {
+                    const index = character?.chats?.findIndex((c: any) => c.id === unit.id) ?? -1
+                    if (index < 0) return undefined
+                    return remote ? (await forageStorage.realStorage.fetchRawChatContent(unit.characterId!, index, unit.id)) ?? undefined : character.chats[index]
+                }
+                if (unit.kind === 'pluginEnabled') return Object.fromEntries((database.plugins ?? []).filter((p: any) => p.name in (original.pluginEnabled ?? {})).map((p: any) => [p.name, p.enabled ?? false]))
+                if (unit.kind === 'deletion') return unit.key === 'chat' ? !!character?.chats?.some((c: any) => c.id === unit.id) : unit.key === 'character' ? !!character : (database[unit.key + 's'] ?? []).some((c: any) => (unit.key === 'plugin' ? c.name : c.id) === unit.id)
+                return (database[unit.kind + 's'] ?? []).find((c: any) => (unit.kind === 'plugin' ? c.name : c.id) === unit.id)
+            }
+            const fingerprint = async (value: unknown) => value === undefined ? null : hash(normalizeJSON(value))
+            const allowed = await Promise.all(detail.units.map(async unit => ({ unit, hashes: [unit.currentHash,
+                ...(unit.state === 'before' ? [await fingerprint(await valueOf(getDatabase(), unit, false))] : [])] })))
+            await writePartialSyncResume(scope, async baseline => {
+                for (const { unit, hashes } of allowed) {
+                    if (!hashes.includes(await fingerprint(await valueOf(baseline, unit, true)))) throw new Error('Sync recovery canonical data changed')
+                }
+            })
+        }
+        else await requestImmediateSave({ characters: scope.characters, chats: scope.chats, flushServer: 'canonical', rejectOnFailure: true, syncOwned: true })
+        wrote = true
+        const result = await finishWithRetry(transaction, true)
+        if (result?.state !== 'applied') throw new Error(result?.error ?? 'Sync recovery completion is unconfirmed')
+        return result
+    } catch (error) {
+        if (before && !wrote && !(error as any)?.persisted) restoreBefore(before)
+        throw error
+    } finally { forageStorage.realStorage.syncTransaction = undefined }
+}
 /** Retry only this client's unresolved transaction; the server must prove saved or untouched before any hold is released. */
 export function retrySyncApply(): Promise<SyncApplyOutcome> {
     if (applying || !unresolvedApply || !syncOwnsBusy || !get(syncSaveHold)) return Promise.resolve({ state: 'busy' })
@@ -372,7 +474,8 @@ export function retrySyncApply(): Promise<SyncApplyOutcome> {
     syncApplyRecovery.set('running')
     transferStatus.set('이전 동기화 적용 결과를 확인하는 중…')
     applying = (async (): Promise<SyncApplyOutcome> => {
-        const result = await finishWithRetry(pending.transaction, false)
+        let result = await finishWithRetry(pending.transaction, false)
+        if (result?.state === 'partial' && result.detail?.resumable) result = await resumePartialSync(pending.transaction, result.detail, false)
         // A lost rollback response leaves no server plan. Only a client that never mutated may safely unlock without a receipt.
         if (result?.state === 'idle' && !pending.before) result.state = 'rolled-back'
         if (result?.state !== 'applied' && result?.state !== 'rolled-back') {
@@ -398,7 +501,7 @@ async function finishWithRetry(transaction: string, confirmed: boolean) {
     for (let attempt = 0; attempt < 3; attempt++) {
         try { return await post('/finish', { transaction, confirmed }) }
         catch (error: any) {
-            if (error.code === 'NAS_SYNC_PARTIAL') return { state: 'partial', error: String(error) }
+            if (error.code === 'NAS_SYNC_PARTIAL') return { state: 'partial', error: String(error), detail: error.detail }
             if (error.status && error.status !== 423 && error.status < 500) return { state: 'retained', error: String(error) }
             await new Promise(r => setTimeout(r, 300 * (attempt + 1)))
         }
@@ -424,7 +527,11 @@ export async function recoverSync() {
     try {
         for (const record of pending) {
             try { forageStorage.realStorage.syncTransaction = record.transaction; await post('/finish', { transaction: record.transaction }) }
-            catch (error) {
+            catch (error: any) {
+                if (error.code === 'NAS_SYNC_PARTIAL' && error.detail?.resumable) {
+                    try { await resumePartialSync(record.transaction, error.detail, true); continue }
+                    catch (resumeError) { error = resumeError }
+                }
                 transferStatus.set(String(error))
                 // The confirmation dialog renders inside the inert <main>: release the own app-wide busy while the user decides (the
                 // save hold stays, so nothing persists meanwhile) and take it back for the hold request. A manual transfer's busy is untouched.

@@ -38,12 +38,14 @@ const getVips = () => {
 const { kvGet, kvSet, kvSetMany, kvSetManyAsync, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, preparePrefixReplacementFromFilesAsync, reloadManifest, kvReplaceAllAsync, kvDel, kvDelMany, kvList,
         kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue,
         gcChunks, reclaimableChunkBytes, objectStoreBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository, compatibilityCache, characterAssets,
-        retireAssets, restoreRetiredAssets, retiredStatus, retiredSummary } = require('./db.cjs');
+        retireAssets, restoreRetiredAssets, retiredStatus, retiredSummary,
+        removeAssetStoreKeys, assetStoreStatus, assetStoreShare, convertToAssetStore, revertAssetStore } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
     logger, installProcessHandlers, expressErrorMiddleware,
 } = require('./logs.cjs');
 const { createRequestLogs } = require('./request-logs.cjs');
+const upstreamPluginStorage = require('./upstream-plugin-storage.cjs');
 const { createSaveObservation } = require('./save-observation.cjs');
 const { createProjectionShadow } = require('./projection-shadow.cjs');
 const { generateStorageDiagnosticReport } = require('./storage-diagnostic-report.cjs');
@@ -51,7 +53,7 @@ const { atomicWriteFile, commitTransaction, moveToTrash, observeWrites } = requi
 const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs');
 const { openServerBrowser } = require('./open-server-browser.cjs');
 const { releaseToUpdateInfo } = require('./release-update.cjs');
-const { createChatContentPage } = require('./chat-content-page.cjs');
+const { createChatContentPage, createChatPreview } = require('./chat-content-page.cjs');
 const { createChatContentUploads, MAX_CHUNK_BYTES: CHAT_UPLOAD_MAX_CHUNK_BYTES } = require('./chat-content-upload.cjs');
 const chatContentUploads = createChatContentUploads();
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
@@ -115,6 +117,8 @@ let dbCache = {};
 let saveTimers = {};
 const SAVE_INTERVAL = 5000;
 let fullChatStore = null; // Map<chaId, Map<chatId, chatObject>> — lazy-initialized
+// Chat bodies posted before the database listed the chat; see carryUnlistedChatPosts.
+const unlistedChatPosts = new Map(); // `${chaId}\0${chatId}` -> { chaId, chatId }
 
 // ETag for database.bin
 let dbEtag = null;
@@ -345,6 +349,7 @@ function invalidateDbCache() {
     directWriteTracker.clear(DB_HEX_KEY);
     delete dbCache[DB_HEX_KEY];
     fullChatStore = null;
+    unlistedChatPosts.clear();
     canonicalProjectionReady = false;
     if (saveTimers[DB_HEX_KEY]) {
         clearTimeout(saveTimers[DB_HEX_KEY]);
@@ -426,6 +431,13 @@ function prepareDatabaseWithPersistentChatIds(dbObj, { runMaintenance = false, m
         }
     }
 
+    // Same one-time path for upstream's cold-storage-backed plugin storage.
+    const coldPluginResult = restoreColdPluginStorageInDb(dbObj);
+    if (coldPluginResult) {
+        needsPersist = true;
+        logPluginStorageRestore(coldPluginResult);
+    }
+
     if (needsPersist) {
         kvSet('database/database.bin', encodeRisuSaveLegacyBuffer(dbObj));
         persistCanonicalProjection(dbObj, { preserveCharacterLayout: true });
@@ -433,6 +445,7 @@ function prepareDatabaseWithPersistentChatIds(dbObj, { runMaintenance = false, m
     }
     if (migrationResult) {
         migrationResult.coldStorageFailed = coldRestoreResult.failed;
+        migrationResult.pluginStorageColdFailed = coldPluginResult?.failed || 0;
     }
     if (!canonicalProjectionReady) {
         persistCanonicalProjection(dbObj, { preserveCharacterLayout: true });
@@ -476,6 +489,7 @@ function chatToStub(chat) {
  * reproduce the hybrid on disk.
  */
 function initChatStore(dbObj) {
+    const previous = fullChatStore;
     fullChatStore = new Map();
     if (!dbObj?.characters) return;
     for (const char of dbObj.characters) {
@@ -499,6 +513,63 @@ function initChatStore(dbObj) {
         if (charChats.size > 0) {
             fullChatStore.set(char.chaId, charChats);
         }
+    }
+    carryUnlistedChatPosts(previous, dbObj);
+}
+
+// Chat bodies posted while the database did not list the chat: a chat created
+// on the client reaches the server before the patch that adds its entry. Every
+// store rebuild (a persist, a full write, a read) keeps only listed chats and
+// disk has no copy of these, so carry them across until the database lists
+// them. Unlisted bodies are never written, so a post whose entry never follows
+// only stays in memory until the cache is invalidated. unlistedChatPosts is
+// declared next to fullChatStore.
+
+function isChatListed(dbObj, chaId, chatId) {
+    const char = Array.isArray(dbObj?.characters) ? dbObj.characters.find((c) => c?.chaId === chaId) : null;
+    return Array.isArray(char?.chats) && char.chats.some((chat) => chat?.id === chatId);
+}
+
+function recordChatPost(chaId, chatId) {
+    if (isChatListed(dbCache[DB_HEX_KEY], chaId, chatId)) return;
+    unlistedChatPosts.set(`${chaId}\0${chatId}`, { chaId, chatId });
+}
+
+// Once the database lists a posted chat, its body is persisted like any other.
+// A delete that follows before the next rebuild must not find the post still
+// on record and carry the deleted body across it.
+function forgetListedChatPosts(dbObj) {
+    if (unlistedChatPosts.size === 0) return;
+    for (const [key, post] of unlistedChatPosts) {
+        if (isChatListed(dbObj, post.chaId, post.chatId)) unlistedChatPosts.delete(key);
+    }
+}
+
+function carryUnlistedChatPosts(previous, dbObj) {
+    if (unlistedChatPosts.size === 0) return;
+    for (const [key, post] of unlistedChatPosts) {
+        if (isChatListed(dbObj, post.chaId, post.chatId)) {
+            unlistedChatPosts.delete(key);
+            continue;
+        }
+        const body = previous?.get(post.chaId)?.get(post.chatId);
+        if (!body) continue;
+        if (!fullChatStore.has(post.chaId)) fullChatStore.set(post.chaId, new Map());
+        fullChatStore.get(post.chaId).set(post.chatId, body);
+    }
+}
+
+// A cold /api/patch rebuilds the store from disk, but a store that already
+// exists is never behind disk: every disk write refreshes or drops it. Bodies
+// saved while the cache was cold (right after a restart or an import) live
+// only there until the debounced persist, or after a persist failed, so keep
+// them over the disk copies.
+function keepChatBodiesAheadOfDisk(previous) {
+    if (!previous || !fullChatStore) return;
+    for (const [chaId, chats] of previous) {
+        if (!fullChatStore.has(chaId)) fullChatStore.set(chaId, new Map());
+        const target = fullChatStore.get(chaId);
+        for (const [chatId, chat] of chats) target.set(chatId, chat);
     }
 }
 
@@ -1086,6 +1157,7 @@ let liveFilesChatPrevious = [];
 let liveFilesPendingWrites = false;
 let liveFilesAdoption = null;
 let liveFilesRecovery = null;
+let liveFilesRecoveryNotice = null;
 const externalChangeReview = createExternalChangeReview({ repository: userDataRepository, dataRoot: savePath });
 
 // Files edited outside the app while it holds state. Resumed adoptions keep their old path.
@@ -1110,6 +1182,7 @@ if (interruptedLiveAdoption) {
         baseline: interruptedLiveAdoption.record.baseline,
         recovery: interruptedLiveAdoption.info,
         recoverySaved: true,
+        withoutBaseline: Boolean(interruptedLiveAdoption.record.pending && !interruptedLiveAdoption.record.baseline),
     };
     liveCharacterFiles.invalidate();
 }
@@ -1246,31 +1319,37 @@ function persistCanonicalProjection(databaseObject, observationContext = {}) {
     }
 }
 
-function adoptExternallyChangedCanonicalProjection(liveOnly = false) {
+// scanned: a reconcile result already produced by an explicit asset-folder scan.
+function adoptExternallyChangedCanonicalProjection(liveOnly = false, scanned = null) {
     if (!canonicalProjectionReady) return null
     // Disabling watchers/polls must not disable mandatory revision reconciliation
     // on ordinary reads and saves (including a missing/stale acceptance record).
     // An interrupted adoption still resumes regardless of the monitoring setting.
     if (liveOnly && !liveCharacterFiles.isEnabled() && !liveFilesAdoption) return null
     try {
-    const fresh = (liveCharacterFiles.isEnabled()
+    const fresh = scanned || (liveCharacterFiles.isEnabled()
         ? liveCharacterFiles.reconcile({ verifyMetadata: liveOnly }) : null)
         || (!liveOnly && canonicalProjectionSync.loadExternalChanges())
     if (!fresh && !liveFilesAdoption) return null
-    // The checksum-validated fallback has no old metadata baseline. It cannot
-    // safely merge acknowledged writes: leave them queued instead of replacing
-    // the cache and cancelling their save during adoption.
-    if (fresh && !liveFilesAdoption && liveFilesPendingWrites && !fresh.previous) {
-        const error = new Error('Canonical files changed while acknowledged saves are pending; a merge baseline is unavailable')
-        error.code = 'CANONICAL_FILES_CHANGED'
-        throw error
-    }
     if (!liveFilesAdoption) {
         liveFilesAdoption = {
             changed: fresh,
             pending: liveFilesPendingWrites
                 ? normalizeJSON(reassembleFullDb(dbCache[DB_HEX_KEY] || stripChatsFromDb(fresh.database))) : null,
             baseline: fresh.previous,
+        }
+        // The checksum-validated fallback has no old metadata baseline. Keep the
+        // acknowledged app state in a recovery file first, then keep it wherever
+        // only character or lorebook files changed (the review's accept).
+        // Otherwise the edited files win and the recovery file holds the rest.
+        const { pending } = liveFilesAdoption
+        if (pending && !fresh.previous) {
+            liveFilesAdoption.recovery = preserveLiveFileRecovery({ pending, baseline: null, conflicts: [], externalRevision: fresh.revision })
+            liveFilesAdoption.recoverySaved = true
+            liveFilesAdoption.withoutBaseline = true
+            const review = externalChangeReview.inspect(userDataRepository.getProjectionRevision(), dbCache[DB_HEX_KEY], canonicalProjectionSync.changedFiles())
+            externalChangeReview.clear()
+            if (!review.reload && !review.errors.length) liveFilesAdoption.reviewMerge = normalizeJSON(externalChangeReview.applyExternal(pending, review))
         }
     } else if (fresh) {
         liveFilesAdoption.changed = fresh
@@ -1290,6 +1369,15 @@ function adoptExternallyChangedCanonicalProjection(liveOnly = false) {
             liveFilesAdoption.recovery = preserveLiveFileRecovery({ pending, baseline, conflicts, externalRevision: changed.revision })
             liveFilesAdoption.recoverySaved = true
         }
+        const saved = persistCanonicalProjection(fullDb, { trigger: 'live-files-merge', externalRevision: changed.revision, adoptingLiveFiles: true })
+        acceptedRevision = saved.acceptedRevision
+        if (!acceptedRevision) {
+            const error = new Error('Canonical files changed during live file adoption')
+            error.code = 'CANONICAL_FILES_CHANGED'
+            throw error
+        }
+    } else if (!liveFilesAdoption.readyDb && liveFilesAdoption.reviewMerge) {
+        fullDb = liveFilesAdoption.reviewMerge
         const saved = persistCanonicalProjection(fullDb, { trigger: 'live-files-merge', externalRevision: changed.revision, adoptingLiveFiles: true })
         acceptedRevision = saved.acceptedRevision
         if (!acceptedRevision) {
@@ -1317,6 +1405,8 @@ function adoptExternallyChangedCanonicalProjection(liveOnly = false) {
     liveCharacterFiles.accept(fullDb, acceptedRevision)
     liveFileRecovery.complete()
     liveFilesRecovery = liveFilesAdoption.recovery || null
+    // The next page load tells the user where the app state was kept.
+    if (liveFilesAdoption.withoutBaseline) liveFilesRecoveryNotice = liveFilesRecovery?.path || null
     liveFilesPendingWrites = false
     liveFilesAdoption = null
     liveFilesRevision = nodeCrypto.randomUUID()
@@ -2021,7 +2111,72 @@ async function checkDiskSpace(requiredBytes) {
 const { createSessionLock } = require('./session-lock.cjs');
 const sessionLock = createSessionLock();
 
-function checkActiveSession(req, res) {
+// ── RisuAI account import ───────────────────────────────────────────────────
+// Downloads a risuai.xyz account (database, assets, cold storage) to a staging
+// folder, then applies it through importBackupFromSource. Logic lives in
+// risu-account-import.cjs. Only a started import (the user confirmed it, kept
+// in account_import_staging/meta.json) blocks anything: checkActiveSession
+// then refuses every data write. RISUBARD_RISU_ACCOUNT_URL points tests at a
+// fake account server and RISUBARD_RISU_ACCOUNT_GAP_MS shortens the pause
+// between account requests there.
+const { createRisuAccountImport, AccountImportError } = require('./risu-account-import.cjs');
+const risuAccountImport = (() => {
+    const urlOverride = process.env.RISUBARD_RISU_ACCOUNT_URL;
+    const gapOverride = Number(process.env.RISUBARD_RISU_ACCOUNT_GAP_MS);
+    return createRisuAccountImport({
+        baseUrl: urlOverride && URL.canParse(urlOverride) ? urlOverride : hubURL,
+        requestGapMs: process.env.RISUBARD_RISU_ACCOUNT_GAP_MS && Number.isFinite(gapOverride) && gapOverride >= 0 ? gapOverride : undefined,
+        stagingDir: path.join(savePath, 'account_import_staging'),
+        logger,
+        decodeRisuSave,
+        encodeRisuSaveLegacy: (data, compression) => encodeRisuSaveLegacyBuffer(data, compression),
+        checkDiskSpace,
+        applyEntries: applyRisuAccountEntries,
+    });
+})();
+
+// The swap goes through the regular backup import (validation, atomic
+// publish, cache invalidation, cold storage restore), like a .bin restore.
+async function applyRisuAccountEntries(entries, { totalBytes, onProgress }) {
+    if (importInProgress) {
+        throw new AccountImportError('Another import is already in progress', 'ACCOUNT_IMPORT_BUSY', 409);
+    }
+    importInProgress = true;
+    try {
+        // Writes accepted before the import started may still wait in the
+        // storage queue; they run before the swap, not after it. New ones are
+        // refused while the import blocks.
+        await queueStorageOperation(async () => {});
+        const disk = await checkDiskSpace(totalBytes * BACKUP_DISK_HEADROOM);
+        if (!disk.ok) {
+            throw new AccountImportError('Not enough free disk space to apply the import', 'ACCOUNT_DISK_FULL', 507);
+        }
+        try {
+            return await importBackupFromSource(entries, { totalBytes, onProgress });
+        } finally {
+            // Every page loaded before the swap holds the old data in memory.
+            // Also after a failure, which may come after the new data was
+            // committed (inlay folder swap).
+            sessionLock.revokeAll();
+        }
+    } finally {
+        importInProgress = false;
+    }
+}
+
+function refuseDuringAccountImport(res) {
+    if (!risuAccountImport.isBlocking()) return false;
+    res.status(423).json({ error: 'A RisuAI account import is in progress', code: 'ACCOUNT_IMPORT_ACTIVE' });
+    return true;
+}
+
+function checkActiveSession(req, res, { allowDuringAccountImport = false } = {}) {
+    // A started RisuAI account import will replace all data: nothing may
+    // write until it ends. Its own routes work from any open import screen.
+    if (risuAccountImport.isBlocking()) {
+        if (allowDuringAccountImport) return true
+        return !refuseDuringAccountImport(res)
+    }
     try { playTransfer.assertWrite(req); nasSync.assertWrite(req); }
     catch (error) { res.status(423).json({ error: error.message, code: error.code, ...(error.transaction ? { transaction: error.transaction } : {}) }); return false; }
     const context = storageWriteContext.getStore();
@@ -2780,11 +2935,21 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     let atomicRestorePublished = false;
     let restoreMarked = null;
 
+    // Entry ids become file names here. Ids are validated before use, and
+    // this check keeps a crafted name from writing outside the staging dir
+    // even if a parser misses one (e.g. "\" separators on Windows).
+    const resolvedStagingDir = path.resolve(stagingDir) + path.sep;
+    function assertInsideStagingDir(filePath) {
+        if (!path.resolve(filePath).startsWith(resolvedStagingDir)) {
+            throw new Error(`Path escapes inlay import staging directory: ${filePath}`);
+        }
+        return filePath;
+    }
     function stagingInlayFilePath(id, ext) {
-        return path.join(stagingDir, `${id}.${normalizeInlayExt(ext)}`);
+        return assertInsideStagingDir(path.join(stagingDir, `${id}.${normalizeInlayExt(ext)}`));
     }
     function stagingSidecarPath(id) {
-        return path.join(stagingDir, `${id}.meta.json`);
+        return assertInsideStagingDir(path.join(stagingDir, `${id}.meta.json`));
     }
     function writeStagingInlayFileSync(id, ext, buffer, info) {
         const normalizedExt = normalizeInlayExt(ext);
@@ -2857,6 +3022,11 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     if (isGeneratedInlayFile(name.slice('inlay/'.length))) {
                         await fs.rm(sourcePath, { force: true });
                         return;
+                    }
+                    // parseInlayBackupName only rejects "/"; an id with "\"
+                    // or ".." would escape the staging dir on Windows.
+                    if (!isSafeInlayId(inlayRaw.id)) {
+                        throw new Error(`Invalid inlay backup entry name: ${name}`);
                     }
                     importedInlayIds.add(inlayRaw.id);
                     if (inlayRaw.ext) {
@@ -2979,7 +3149,9 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 canonicalDirectories: CANONICAL_BACKUP_DIRECTORIES,
                 manifestBytes: preparedKv.manifestBytes,
                 retiredBytes: preparedKv.retiredBytes,
-                store: { reloadManifest },
+                assetStoreDirectory: preparedKv.assetStoreDirectory,
+                assetStoreKeys: preparedKv.assetStoreKeys,
+                store: { reloadManifest, removeAssetStoreKeys },
                 restoreId,
             });
             atomicRestorePublished = true;
@@ -2998,6 +3170,11 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     }
     await fs.rm(canonicalStagingDir, { recursive: true, force: true }).catch(() => {});
     await fs.rm(entryStagingDir, { recursive: true, force: true }).catch(() => {});
+
+    // The new database is committed: drop what describes the old one now. A
+    // failure in the inlay swap below throws past the rest of this function,
+    // and a store left behind would be flushed back over the import.
+    invalidateDbCache();
 
     if (onPhase) onPhase('finalizing');
     if (atomicRestorePublished) {
@@ -3021,7 +3198,6 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
         }
     }
 
-    invalidateDbCache();
     if (canonicalEntriesRestored > 0) {
         canonicalProjectionSync.accept();
         liveCharacterFiles.reset();
@@ -3036,6 +3212,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     // Trigger cold storage migration now so import result includes failure count.
     const dbRaw = kvGet('database/database.bin');
     let coldStorageFailed = 0;
+    let pluginStorageColdFailed = 0;
     if (dbRaw) {
         const migration = {};
         const dbObj = await decodeDatabaseWithPersistentChatIds(dbRaw, {
@@ -3043,6 +3220,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
             migrationResult: migration,
         });
         coldStorageFailed = migration.coldStorageFailed || 0;
+        pluginStorageColdFailed = migration.pluginStorageColdFailed || 0;
         initChatStore(dbObj);
     }
 
@@ -3050,7 +3228,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     if (coldStorageFailed > 0) {
         logger.error(`[Backup Import] ${coldStorageFailed} cold storage character(s) could not be restored`);
     }
-    return { assetsRestored, bytesReceived, coldStorageFailed };
+    return { assetsRestored, bytesReceived, coldStorageFailed, pluginStorageColdFailed };
 }
 
 app.get('/', async (req, res, next) => {
@@ -3650,6 +3828,12 @@ app.post('/api/token/refresh', async (req, res) => {
 app.get('/api/session/lock-status', async (req, res) => {
     if (!await checkAuth(req, res)) return
     const id = req.headers['x-session-id']
+    // During an account import every page loaded before it holds data that
+    // is about to be replaced, so each one pauses its saving.
+    if (risuAccountImport.isBlocking()) {
+        res.json({ state: 'stale', code: 'ACCOUNT_IMPORT_ACTIVE' })
+        return
+    }
     res.json({ state: sessionLock.peek(typeof id === 'string' ? id : '') })
 })
 
@@ -3659,6 +3843,41 @@ app.get('/api/external-edit/status', async (req, res) => {
 })
 
 app.get('/api/live-files/events', sessionAuthMiddleware, (req, res) => liveFileEvents.connect(req, res))
+
+// Reads one character's assets folder once (external monitoring is retired): files
+// added or replaced there become that character's assets. The client reloads after a change.
+app.post('/api/live-files/scan-assets', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return
+    const characterId = req.body?.characterId
+    if (typeof characterId !== 'string' || !characterId) return res.status(400).json({ error: 'characterId is required' })
+    if (!checkActiveSession(req, res)) return
+    try {
+        await queueStorageOperation(async () => {
+            if (externalEditSession.isActive() || liveFilesAdoption) {
+                return res.status(409).json({ code: 'LIVE_FILES_BUSY', error: 'Finish external editing or pending recovery before scanning assets' })
+            }
+            // Persist acknowledged writes first so the scan's baseline is the saved state.
+            await flushPendingDbWithinQueue({ materialize: false })
+            if (liveFilesPendingWrites) {
+                return res.status(409).json({ code: 'LIVE_FILES_PENDING', error: 'Finish pending saves before scanning assets' })
+            }
+            let scanned
+            try { scanned = liveCharacterFiles.scanCharacterAssets(characterId) }
+            catch (error) {
+                if (error?.code === 'CHARACTER_NOT_FOUND') return res.status(404).json({ code: error.code, error: error.message })
+                throw error
+            }
+            if (!scanned) return res.json({ changed: false })
+            const adopted = adoptExternallyChangedCanonicalProjection(false, scanned)
+            liveFileEvents.notify()
+            // The open tab merges this character's metadata in place instead of reloading.
+            const snapshot = metadataSnapshot(dbCache[DB_HEX_KEY] || userDataRepository.exportLegacyDatabase({ metadataOnly: true }))
+            snapshot.characters = snapshot.characters.filter(character => character.chaId === characterId)
+            delete snapshot.chatMetadata
+            res.json({ changed: true, etag: adopted?.etag ?? dbEtag, snapshot })
+        })
+    } catch (error) { next(error) }
+})
 
 app.get('/api/live-files/monitoring', async (req, res) => {
     if (!await checkAuth(req, res)) return
@@ -3694,7 +3913,9 @@ app.post('/api/live-files/monitoring', async (req, res, next) => {
 app.post('/api/live-files/sync', async (req, res, next) => {
     if (!await checkAuth(req, res)) return
     // Polling must not advance lastWriteAt or steal/deactivate another tab.
-    if (sessionLock.peek(req.headers['x-session-id']) === 'stale') {
+    // A started account import refuses it too: adopting live file changes
+    // would write into the data being replaced.
+    if (risuAccountImport.isBlocking() || sessionLock.peek(req.headers['x-session-id']) === 'stale') {
         return res.status(409).json({ code: 'LIVE_FILES_INACTIVE', error: 'This session is no longer the active writer' })
     }
     try {
@@ -4201,6 +4422,10 @@ app.get('/api/read', async (req, res, next) => {
                     return res.status(304).end();
                 }
                 res.setHeader('x-db-etag', prepared.etag);
+                if (liveFilesRecoveryNotice) {
+                    res.setHeader('x-live-files-recovery', liveFilesRecoveryNotice);
+                    liveFilesRecoveryNotice = null;
+                }
             }
             if (value.length > 0) {
                 res.setHeader('x-item-etag', computeBufferEtag(Buffer.from(value)));
@@ -4487,7 +4712,7 @@ require('./character-package-routes.cjs').registerCharacterPackageRoutes(app, {
     repository: userDataRepository,
     assets: characterAssets,
     readSource: kvGet,
-    kv: { retireAssets, restoreRetiredAssets, retiredStatus },
+    kv: { retireAssets, restoreRetiredAssets, retiredStatus, assetStoreShare },
     prepare: async () => {
         if (externalEditSession.isActive() || !canonicalProjectionReady || canonicalProjectionSync.hasExternalChanges()) return null;
         await flushPendingDbWithinQueue({ materialize: false });
@@ -4496,13 +4721,21 @@ require('./character-package-routes.cjs').registerCharacterPackageRoutes(app, {
     },
 });
 
+require('./asset-store-routes.cjs').registerAssetStoreRoutes(app, {
+    auth: checkAuth,
+    activeSession: checkActiveSession,
+    queue: queueStorageOperation,
+    recordTransition: event => saveObservation.record(event),
+    kv: { assetStoreStatus, convertToAssetStore, revertAssetStore },
+});
+
 require('./module-asset-routes.cjs').registerModuleAssetRoutes(app, {
     auth: checkAuth,
     activeSession: checkActiveSession,
     queue: queueStorageOperation,
     recordTransition: event => saveObservation.record(event),
     assets: characterAssets,
-    kv: { retireAssets, restoreRetiredAssets, retiredStatus, retiredSummary },
+    kv: { retireAssets, restoreRetiredAssets, retiredStatus, retiredSummary, assetStoreShare },
     prepare: async () => {
         if (externalEditSession.isActive() || !canonicalProjectionReady || canonicalProjectionSync.hasExternalChanges()) return null;
         await flushPendingDbWithinQueue({ materialize: false });
@@ -4545,7 +4778,7 @@ const playTransfer = require('./play-set-service.cjs').createPlaySetService({
         if (!file) return null;
         const metadata = await readInlaySidecar(id) || await readInlayLegacyInfo(id);
         if (!metadata) throw new Error('Missing inlay metadata: ' + id);
-        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(file, { type: getMimeFromExt(metadata.ext) }) };
+        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(path.toNamespacedPath(file), { type: getMimeFromExt(metadata.ext) }) };
     },
     installInlay: async (entry, staging) => {
         if (!isSafeInlayId(entry.id)) throw new Error('Invalid inlay identity');
@@ -4598,7 +4831,7 @@ const nasSync = require('./nas-sync-service.cjs').createNasSyncService({
         if (!file) return null;
         const metadata = await readInlaySidecar(id) || await readInlayLegacyInfo(id);
         if (!metadata) throw new Error('Missing inlay metadata: ' + id);
-        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(file, { type: getMimeFromExt(metadata.ext) }) };
+        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(path.toNamespacedPath(file), { type: getMimeFromExt(metadata.ext) }) };
     },
     installInlay: async (entry, staging) => {
         if (!isSafeInlayId(entry.id)) throw new Error('Invalid inlay identity');
@@ -4925,7 +5158,9 @@ app.post('/api/patch', async (req, res, next) => {
                 }
                 if (decoded) {
                     if (decodedKey === 'database/database.bin') {
-                        if (!fullChatStore) initChatStore(decoded);
+                        const previousChatStore = fullChatStore;
+                        initChatStore(decoded);
+                        keepChatBodiesAheadOfDisk(previousChatStore);
                         dbCache[filePath] = normalizeJSON(stripChatsFromDb(decoded));
                     } else {
                         dbCache[filePath] = decoded;
@@ -5000,6 +5235,7 @@ app.post('/api/patch', async (req, res, next) => {
                 throw patchErr;
             }
             dbCache[filePath] = snapshot;
+            if (decodedKey === 'database/database.bin') forgetListedChatPosts(snapshot);
             if (decodedKey === 'database/database.bin') liveFilesPendingWrites = true;
             if (decodedKey === 'database/database.bin') directWriteTracker.observe(filePath, patch, snapshot);
 
@@ -5141,6 +5377,13 @@ app.post('/api/assets/bulk-write', async (req, res, next) => {
         const entries = req.body; // {key: string, value: base64}[]
         if(!Array.isArray(entries)){
             res.status(400).send({ error: 'Body must be a JSON array of {key, value}' });
+            return;
+        }
+        // database.bin goes through /api/write. Written here it would skip
+        // every guard and leave dbCache and the chat store describing the
+        // old one, which the next flush writes back over it.
+        if(entries.some((entry) => entry?.key === 'database/database.bin')){
+            res.status(400).send({ error: 'database/database.bin cannot be written through bulk-write' });
             return;
         }
         for(let i = 0; i < entries.length; i += BULK_WRITE_BATCH){
@@ -5511,6 +5754,7 @@ app.post('/api/backup/import', async (req, res, next) => {
                 ok: true,
                 assetsRestored: result.assetsRestored,
                 coldStorageFailed: result.coldStorageFailed,
+                pluginStorageColdFailed: result.pluginStorageColdFailed,
             }) + '\n');
             res.end();
         } else {
@@ -5519,6 +5763,7 @@ app.post('/api/backup/import', async (req, res, next) => {
                 ok: true,
                 assetsRestored: result.assetsRestored,
                 coldStorageFailed: result.coldStorageFailed,
+                pluginStorageColdFailed: result.pluginStorageColdFailed,
             });
         }
     } catch (error) {
@@ -5536,6 +5781,78 @@ app.post('/api/backup/import', async (req, res, next) => {
         if (requestServer && prevRequestTimeout !== undefined) {
             requestServer.requestTimeout = prevRequestTimeout;
         }
+    }
+});
+
+// ── RisuAI account import routes (see risuAccountImport above) ──────────────
+
+function sendAccountImportError(res, error, next) {
+    if (error?.code && typeof error.status === 'number') {
+        res.status(error.status).json({ error: error.message, code: error.code });
+        return;
+    }
+    next(error);
+}
+
+app.get('/api/risu-account/config', async (req, res) => {
+    if (!await checkAuth(req, res)) { return; }
+    res.json(risuAccountImport.config());
+});
+
+app.get('/api/risu-account/status', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    try {
+        res.json(await risuAccountImport.status());
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.post('/api/risu-account/prepare', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    if (!checkActiveSession(req, res, { allowDuringAccountImport: true })) return;
+    try {
+        // Reads the account database in the background; the client polls
+        // status for the summary (or the error).
+        risuAccountImport.prepare({ token: req.body?.token, id: req.body?.id });
+        res.json({ ok: true });
+    } catch (error) {
+        sendAccountImportError(res, error, next);
+    }
+});
+
+// The first call starts the import: from then on RisuBard is blocked until
+// it is applied or cancelled.
+app.post('/api/risu-account/download', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    if (!checkActiveSession(req, res, { allowDuringAccountImport: true })) return;
+    try {
+        res.json(risuAccountImport.startDownload());
+    } catch (error) {
+        sendAccountImportError(res, error, next);
+    }
+});
+
+app.post('/api/risu-account/cancel', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    if (!checkActiveSession(req, res, { allowDuringAccountImport: true })) return;
+    try {
+        await risuAccountImport.cancel();
+        res.json({ ok: true });
+    } catch (error) {
+        sendAccountImportError(res, error, next);
+    }
+});
+
+// Applies a download with missing items once the user accepts them (one
+// without missing items applies by itself). Runs in the background.
+app.post('/api/risu-account/apply', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    if (!checkActiveSession(req, res, { allowDuringAccountImport: true })) return;
+    try {
+        res.json(risuAccountImport.startApply());
+    } catch (error) {
+        sendAccountImportError(res, error, next);
     }
 });
 
@@ -5709,10 +6026,13 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
     }
     importInProgress = true;
 
-    const prevRequestTimeout = req.socket.server?.requestTimeout;
+    // Keep the server reference: req.socket can be detached by the time the
+    // finally block runs (client abort), and reading it there threw.
+    const httpServer = req.socket.server;
+    const prevRequestTimeout = httpServer?.requestTimeout;
     req.socket.setTimeout(0);
     req.socket.setKeepAlive(true);
-    if (req.socket.server) req.socket.server.requestTimeout = 0;
+    if (httpServer) httpServer.requestTimeout = 0;
     let heartbeatTimer = null;
 
     try {
@@ -5769,6 +6089,7 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
             ok: true,
             assetsRestored: result.assetsRestored,
             coldStorageFailed: result.coldStorageFailed,
+            pluginStorageColdFailed: result.pluginStorageColdFailed,
         }) + '\n');
         res.end();
     } catch (error) {
@@ -5781,8 +6102,8 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
     } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         importInProgress = false;
-        if (req.socket.server && prevRequestTimeout !== undefined) {
-            req.socket.server.requestTimeout = prevRequestTimeout;
+        if (httpServer && prevRequestTimeout !== undefined) {
+            httpServer.requestTimeout = prevRequestTimeout;
         }
     }
 });
@@ -5913,6 +6234,55 @@ function promoteFailedColdStorageStub(char) {
     delete char.coldStoragedChats;
 }
 
+// Upstream keeps v3 pluginStorage values in cold storage: cad8595a leaves a
+// key -> cold id map in pluginCustomStorage._coldplugin, and 68b5d032c
+// (v2026.10.210+) a _coldpluginIndex pointer to one index item. Fold both back
+// into plain inline keys (see upstream-plugin-storage.cjs). Cold storage KV
+// entries are never deleted. What cannot be restored is recorded in
+// nodeOnlyPluginStorageRecovery (a name shared with other forks, kept for shared data),
+// outside the plugin key space, so a reserved key never reaches a plugin or an
+// export to upstream, where it would be read as a live pointer.
+const PLUGIN_STORAGE_RECOVERY_KEY = 'nodeOnlyPluginStorageRecovery';
+
+function readColdPluginItem(coldId) {
+    try {
+        const entry = readColdStorageJsonEntry(coldId, { migrateLegacy: true });
+        return entry ? entry.coldData : undefined;
+    } catch (err) {
+        logger.error(`[ColdStorage] plugin storage item ${coldId} could not be read:`, err.message);
+        throw err;
+    }
+}
+
+function logPluginStorageRestore(result) {
+    if (result.restored > 0) {
+        logger.info(`[ColdStorage] Restored ${result.restored} plugin storage key(s) from cold storage`);
+    }
+    if (result.failed > 0) {
+        logger.error(`[ColdStorage] ${result.failed} plugin storage item(s) could not be restored; details are kept in ${PLUGIN_STORAGE_RECOVERY_KEY}. Cold storage KV data is preserved.`);
+    }
+}
+
+function restoreColdPluginStorageInDb(dbObj) {
+    const storage = dbObj?.pluginCustomStorage;
+    if (!upstreamPluginStorage.hasReservedKeys(storage)) return null;
+    const resolved = upstreamPluginStorage.resolveUpstreamPluginStorage(storage, {
+        readCold: readColdPluginItem,
+        isPresent: (key) => Object.prototype.hasOwnProperty.call(storage, key),
+        source: 'database',
+    });
+    for (const key of upstreamPluginStorage.RESERVED_KEYS) delete storage[key];
+    for (const [key, value] of resolved.assign) {
+        // defineProperty keeps a "__proto__" key an own property.
+        Object.defineProperty(storage, key, { value, enumerable: true, writable: true, configurable: true });
+    }
+    if (resolved.record) {
+        const existing = Array.isArray(dbObj[PLUGIN_STORAGE_RECOVERY_KEY]) ? dbObj[PLUGIN_STORAGE_RECOVERY_KEY] : [];
+        dbObj[PLUGIN_STORAGE_RECOVERY_KEY] = [...existing, resolved.record];
+    }
+    return resolved;
+}
+
 function restoreColdStorageCharactersInDb(dbObj) {
     const result = { restored: 0, failed: 0, failedNames: [] };
     if (!Array.isArray(dbObj?.characters)) return result;
@@ -6008,6 +6378,47 @@ app.get('/api/chat-content/:chaId/:chatIndex/page', async (req, res, next) => {
         const encoded = encodeRisuSaveLegacyBuffer(page);
         res.setHeader('Content-Type', 'application/octet-stream');
         res.send(encoded);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// GET /api/chat-preview/:chaId/:chatIndex — persona binding and last message for the chat list hover card.
+app.get('/api/chat-preview/:chaId/:chatIndex', async (req, res, next) => {
+    if (!await checkAuth(req, res)) { return; }
+    try {
+        const chaId = req.params.chaId;
+        const chatIndex = parseInt(req.params.chatIndex, 10);
+        const expectedChatId = req.headers['x-chat-id'];
+        let preview = null;
+        if (!fullChatStore && canonicalProjectionReady && isRemoteMigrationDone()
+            && !externalEditSession.isActive() && !canonicalProjectionSync.hasExternalChanges()) {
+            try {
+                preview = userDataRepository.loadIndexedChatPreview(chaId, chatIndex);
+            } catch (error) {
+                logger.warn('[Read] Canonical chat preview unavailable; using compatibility reader', error?.code || error?.name);
+            }
+        }
+        if (!preview) {
+            let chat = null;
+            await ensureChatStore();
+            const charChats = fullChatStore.get(chaId);
+            if (charChats && expectedChatId) chat = charChats.get(expectedChatId) || null;
+            if (!chat) {
+                const raw = kvGet('database/database.bin');
+                if (!raw) return res.status(404).json({ error: 'Database not found' });
+                const dbObj = await decodeRisuSave(raw);
+                chat = dbObj.characters?.find(c => c?.chaId === chaId)?.chats?.[chatIndex] || null;
+            }
+            if (!chat) return res.status(404).json({ error: 'Chat not found' });
+            // A cold-stored chat keeps its messages elsewhere; show no message rather than restoring it.
+            const messages = Array.isArray(chat.message) && !isColdStorageChat(chat) ? chat.message : [];
+            preview = createChatPreview(chat, messages[messages.length - 1] ?? null);
+        }
+        if (expectedChatId && preview.id !== expectedChatId) {
+            return res.status(409).json({ error: 'Chat ID mismatch — index may have shifted' });
+        }
+        res.json(preview);
     } catch (error) {
         next(error);
     }
@@ -6117,6 +6528,7 @@ async function saveChatContentHandler(req, res, next) {
                 fullChatStore.set(chaId, new Map());
             }
             fullChatStore.get(chaId).set(expectedChatId, chatData);
+            recordChatPost(chaId, expectedChatId);
             liveFilesPendingWrites = true;
             directWriteTracker.observeChat(DB_HEX_KEY, chaId, expectedChatId);
 
@@ -6307,8 +6719,10 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
 
     req.socket.setTimeout(0);
     req.socket.setKeepAlive(true);
-    const prevRequestTimeout = req.socket.server?.requestTimeout;
-    if (req.socket.server) req.socket.server.requestTimeout = 0;
+    // Same as /api/backup/import: req.socket can be detached by the finally block.
+    const httpServer = req.socket.server;
+    const prevRequestTimeout = httpServer?.requestTimeout;
+    if (httpServer) httpServer.requestTimeout = 0;
 
     try {
         const chunks = [];
@@ -6359,8 +6773,8 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
         res.status(400).json({ error: error.message || 'Import failed' });
     } finally {
         importInProgress = false;
-        if (req.socket.server && prevRequestTimeout !== undefined) {
-            req.socket.server.requestTimeout = prevRequestTimeout;
+        if (httpServer && prevRequestTimeout !== undefined) {
+            httpServer.requestTimeout = prevRequestTimeout;
         }
     }
 });
@@ -7687,7 +8101,9 @@ app.post('/api/local-shutdown', (req, res) => {
 app.use(expressErrorMiddleware);
 app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
-    res.status(err?.code === 'TRANSFER_BUSY' ? 423 : 500).json({ error: err?.message || 'internal server error', ...(err?.code === 'TRANSFER_BUSY' ? { code: err.code } : {}) });
+    // Keep upstream body-size errors and the existing transfer write-gate response.
+    const status = err?.type === 'entity.too.large' ? 413 : err?.code === 'TRANSFER_BUSY' ? 423 : 500;
+    res.status(status).json({ error: err?.message || 'internal server error', ...(err?.code === 'TRANSFER_BUSY' ? { code: err.code } : {}) });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

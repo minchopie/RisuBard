@@ -6,6 +6,7 @@ function registerCharacterPackageRoutes(app, { auth, activeSession, queue, prepa
         ...repository.characterDirectoryStatus(characterId),
         assets: assets.status(characterId),
         kv: kv ? kv.retiredStatus(characterId) : { retired: 0, bytes: 0 },
+        store: kv?.assetStoreShare && assets.ownedKeys ? kv.assetStoreShare(assets.ownedKeys(characterId)) : { stored: 0, bytes: 0 },
         diagnostics: assets.diagnostics(),
     });
     // V4 pilot restore reads only digest-verified folder copies when an object is missing.

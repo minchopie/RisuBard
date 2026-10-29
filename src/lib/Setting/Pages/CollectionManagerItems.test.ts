@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 
 const modules = readFileSync(resolve(process.cwd(), 'src/lib/Setting/Pages/Module/ModuleSettings.svelte'), 'utf8')
+const moduleRemoval = readFileSync(resolve(process.cwd(), 'src/ts/process/moduleRemoval.ts'), 'utf8')
 const plugins = readFileSync(resolve(process.cwd(), 'src/lib/Setting/Pages/PluginSettings.svelte'), 'utf8')
 const organizer = readFileSync(resolve(process.cwd(), 'src/lib/UI/CollectionOrganizerList.svelte'), 'utf8')
 const settingPage = readFileSync(resolve(process.cwd(), 'src/lib/UI/GUI/SettingPage.svelte'), 'utf8')
@@ -52,9 +53,10 @@ describe('collection manager item layout', () => {
 
     test('connects manager bulk deletion to domain cleanup', () => {
         expect(modules).toContain('onDeleteItems={deleteModules}')
-        expect(modules).toContain('DBState.db.enabledModules = DBState.db.enabledModules.filter')
-        expect(modules).toContain('normalizeAssignments()')
-        expect(modules).toMatch(/modules:\s*normalizeCollectionOrganizerState\(/)
+        expect(modules).toContain('removeModules(moduleIds)')
+        expect(moduleRemoval).toContain('db.enabledModules = (db.enabledModules ?? []).filter')
+        expect(moduleRemoval).toContain('db.personaEnabledModules = normalizePersonaEnabledModules(')
+        expect(moduleRemoval).toMatch(/modules:\s*normalizeCollectionOrganizerState\(/)
         expect(plugins).toContain('onDeleteItems={deletePlugins}')
         expect(plugins).toContain('[...pluginProviderOwners.entries()]')
         expect(plugins).toContain('customProviderStore.update')

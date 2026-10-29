@@ -24,6 +24,8 @@
     import { setDatabase } from "../../ts/storage/database.svelte";
     import { characterEditorJumpRequest, DBState, MobileSideBar, risuBardGalleryOpen, SizeStore } from 'src/ts/stores.svelte';
     import BarIcon from "./BarIcon.svelte";
+    import { onMount } from "svelte";
+    import { assetStorePending, refreshAssetStorePending } from "../../ts/storage/assetStorePending.svelte";
     import SidebarIndicator from "./SidebarIndicator.svelte";
     import {
     ShellIcon,
@@ -688,6 +690,9 @@
       }
     }
   }
+
+  // The home button blinks while assets still wait for the storage upgrade.
+  onMount(() => { void refreshAssetStorePending() })
 </script>
 {#if DBState.db.menuSideBar}
 <div
@@ -712,7 +717,10 @@
     OpenRealmStore.set(false)
   }}
 >
-  <HomeIcon />
+  <span class="relative">
+    <HomeIcon />
+    {#if assetStorePending.convertible > 0}<span class="absolute -top-1 -right-1 size-2.5 rounded-full bg-warning animate-pulse" aria-hidden="true"></span>{/if}
+  </span>
   <span class="text-xs">{language.home}</span>
 </button>
 <button
@@ -815,7 +823,7 @@
           selectedCharID.set(-1)
           PlaygroundStore.set(0)
           OpenRealmStore.set(false)
-        }}><HomeIcon /></BarIcon>
+        }} attention={assetStorePending.convertible > 0} title={assetStorePending.convertible > 0 ? (DBState.db.language === 'ko' ? '시작 화면에서 저장 구조 전환을 기다리고 있습니다' : 'A storage upgrade is waiting on the home screen') : undefined}><HomeIcon /></BarIcon>
       <div class="mt-2"></div>
       <BarIcon
         onClick={() => {
@@ -1287,7 +1295,7 @@
           selectedCharID.set(-1)
           PlaygroundStore.set(0)
           OpenRealmStore.set(false)
-        }}><HomeIcon /></BarIcon>
+        }} attention={assetStorePending.convertible > 0} title={assetStorePending.convertible > 0 ? (DBState.db.language === 'ko' ? '시작 화면에서 저장 구조 전환을 기다리고 있습니다' : 'A storage upgrade is waiting on the home screen') : undefined}><HomeIcon /></BarIcon>
       <div class="mt-2"></div>
       <BarIcon
         onClick={() => {

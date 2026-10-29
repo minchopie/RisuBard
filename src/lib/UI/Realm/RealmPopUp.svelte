@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { BookIcon, DownloadIcon, FlagIcon, FolderIcon, FileIcon, ArrowLeftIcon, ImageIcon, LinkIcon, LoaderCircleIcon, PackageIcon, SmileIcon, TrashIcon } from '@lucide/svelte';
+    import { BanIcon, BookIcon, DownloadIcon, FlagIcon, FolderIcon, FileIcon, ArrowLeftIcon, ImageIcon, LinkIcon, LoaderCircleIcon, PackageIcon, SmileIcon, TrashIcon } from '@lucide/svelte';
     import { onDestroy } from 'svelte';
     import { language } from 'src/lang';
     import { alertConfirm, alertInput, alertNormal, notifyInfo } from 'src/ts/alert';
@@ -12,6 +12,7 @@
     import { tooltip } from 'src/ts/gui/tooltip';
     import { downloadProtonModule, findSingleProtonLink, type ProtonModuleFolder } from 'src/ts/realm/protonModule';
     import { importRisum } from 'src/ts/process/modules';
+    import { addBlockedRealmCreator } from 'src/ts/realmBlocking';
 
     interface Props {
         openedData: hubType;
@@ -108,10 +109,24 @@
         openedData = null;
     }
 
+    async function blockCreator() {
+        const creatorId = openedData.creator;
+        if (!creatorId || busy) return;
+        const creatorName = openedData.authorname ?? openedData.creatorName ?? creatorId;
+        const conf = await alertConfirm(language.blockRealmCreatorConfirm.replace('{{creator}}', creatorName));
+        if (!conf) return;
+        DBState.db.blockedRealmCreators = addBlockedRealmCreator(
+            DBState.db.blockedRealmCreators ?? [],
+            { id: creatorId, name: creatorName },
+        );
+        openedData = null;
+        alertNormal(language.realmCreatorBlockedSuccess);
+    }
+
     async function getCharacter() {
         if (busy) return;
         characterBusy = true;
-        try { await downloadRisuHub(openedData.id); }
+        try { await downloadRisuHub(openedData.id, { creator: openedData.creator }); }
         finally { characterBusy = false; }
     }
 
@@ -247,6 +262,10 @@
                     });
                     alertNormal(await response.text());
                 }}><FlagIcon size={18} /></ShButton>
+
+                {#if openedData.creator && (DBState.db.account?.token?.split('-') ?? [])[1] !== openedData.creator}
+                    <ShButton variant="ghost" size="icon" aria-label={language.blockRealmCreator} className="text-danger" disabled={busy} onclick={blockCreator}><BanIcon size={18} /></ShButton>
+                {/if}
 
                 {#if (DBState.db.account?.token?.split('-') ?? [])[1] === openedData.creator}
                     <ShButton variant="ghost" size="icon" aria-label={ui.remove} className="text-danger" onclick={async () => {

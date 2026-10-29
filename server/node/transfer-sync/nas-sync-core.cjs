@@ -62,13 +62,48 @@ function addOrdered(list, target) {
     return results;
 }
 
-function createGraph(revisions = []) {
+function freezeHeader(value) {
+    for (const child of Object.values(value)) if (child && typeof child === 'object') freezeHeader(child);
+    return Object.freeze(value);
+}
+function storedHeader(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !Array.isArray(raw.parents) || !raw.dependencies
+        || typeof raw.contentHash !== 'string' || typeof raw.id !== 'string' || !DIGEST.test(raw.contentHash) || !DIGEST.test(raw.id)) throw new Error('Invalid stored revision header');
+    const { content, ...checked } = makeRevision({ ...raw, content: null });
+    checked.contentHash = raw.contentHash;
+    checked.id = revisionId(checked);
+    if (checked.id !== raw.id || checked.dependencyHash !== raw.dependencyHash
+        || checked.tombstone && raw.contentHash !== hashJson(null)) throw new Error('Revision hash mismatch');
+    for (const key of Object.keys(raw)) if (!Object.hasOwn(checked, key)) throw new Error('Unknown revision field: ' + key);
+    return freezeHeader(checked);
+}
+function createGraph(revisions = []) { return graphRuntime(revisions); }
+// Saved bodies remain on disk. New incoming revisions still use add's full validation.
+function createStoredGraph(headers, loadRevision) {
+    if (typeof loadRevision !== 'function') throw new Error('Stored revision reader is required');
+    return graphRuntime(headers, loadRevision);
+}
+function graphRuntime(revisions = [], loadRevision = null) {
     const byId = new Map(), roots = new Map(), children = new Map();
-    const get = id => byId.get(id);
+    const get = id => {
+        const revision = byId.get(id);
+        if (!revision || !loadRevision) return revision;
+        return Object.freeze({ ...revision, get content() {
+            const loaded = loadRevision(id);
+            const text = canonical(loaded.content);
+            if (loaded.id !== revision.id || loaded.contentHash !== revision.contentHash || loaded.dependencyHash !== revision.dependencyHash || sha256(text) !== revision.contentHash) throw new Error('Revision hash mismatch');
+            return JSON.parse(text);
+        } });
+    };
     /** Returns 'identical' when already known. Parents must be known first; the caller defers otherwise. */
     function add(rev) {
         // Structural validation (names, parents, dependency digests, tombstone base) plus every hash, before any lookup.
         if (makeRevision(rev).id !== rev.id || hashJson(rev.content) !== rev.contentHash || hashJson(rev.dependencies) !== rev.dependencyHash) throw new Error('Revision hash mismatch');
+        if (!loadRevision) return addVerified(rev);
+        const { content, ...header } = rev;
+        return addVerified(storedHeader(header));
+    }
+    function addVerified(rev) {
         if (byId.has(rev.id)) return 'identical';
         for (const parent of rev.parents) {
             const p = byId.get(parent);
@@ -84,7 +119,8 @@ function createGraph(revisions = []) {
     }
     /** All-or-nothing: a trial copy validates the whole batch before this graph changes. */
     function addAll(list) {
-        const trial = createGraph(); for (const rev of byId.values()) trial.add(rev);
+        const trial = loadRevision ? createStoredGraph([...byId.values()], loadRevision) : createGraph();
+        if (!loadRevision) for (const rev of byId.values()) trial.add(rev);
         addOrdered(list, trial);
         return addOrdered(list, { add });
     }
@@ -193,12 +229,14 @@ function createGraph(revisions = []) {
     function fromBackup({ domain, type, root, content, dependencies, base }) {
         return makeRevision({ domain, type, root, parents: base && byId.has(base) ? [base] : [], content, dependencies });
     }
-    addOrdered(revisions, { add });
+    addOrdered(revisions, { add: loadRevision ? raw => addVerified(storedHeader(raw)) : add });
     return { add, addAll, get, heads, isAncestor, classify, containerState, branchSegments, edit, resolve, tombstones, restore, bootstrapResolution, fromBackup,
-        revisions: () => [...byId.values()], rootKeys: () => [...roots.keys()] };
+        revisions: () => loadRevision ? [...byId.keys()].map(get) : [...byId.values()], rootKeys: () => [...roots.keys()],
+        ...(loadRevision ? { fork: () => createStoredGraph([...byId.values()], loadRevision) } : {}) };
+
 }
 /** Ancestry does not imply runtime compatibility: every pinned dependency must be present. */
 function missingDependencies(rev, available) {
     return Object.entries(rev.dependencies).filter(([, hash]) => !available.has(hash)).map(([key]) => key);
 }
-module.exports = { makeRevision, revisionId, encodeRevision, decodeRevision, createGraph, missingDependencies, hashJson, rootKey };
+module.exports = { makeRevision, revisionId, encodeRevision, decodeRevision, createGraph, createStoredGraph, missingDependencies, hashJson, rootKey };

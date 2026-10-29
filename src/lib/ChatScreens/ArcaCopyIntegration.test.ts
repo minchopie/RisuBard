@@ -9,9 +9,13 @@ describe('Arca-compatible chat copy connection', () => {
         expect(chatSource).toContain("from 'src/ts/arcaExport'");
         expect(chatSource).toContain('button-icon-copy-arca');
         expect(chatSource).toContain('language.copyForArca');
-        expect(chatSource).toContain('await exportArcaHtml(bodyRoot, {');
-        expect(chatSource).toContain("'text/html': new Blob([html]");
-        expect(chatSource).toContain("'text/plain': new Blob([plainText]");
+        expect(chatSource).toContain('await exportArcaHtml(exportRoot, {');
+        // The clipboard write must start before the slow export, or the click's user activation expires.
+        expect(chatSource.indexOf('await window.navigator.clipboard.write([')).toBeLessThan(chatSource.indexOf('await payload'));
+        expect(chatSource).toContain("'text/html': payload.then(");
+        expect(chatSource).toContain('renderComplexBlock: renderArcaComplexBlock');
+        expect(chatSource).toContain("new Blob([html], { type: 'text/html' })");
+        expect(chatSource).toContain("new Blob([plainText], { type: 'text/plain' })");
     });
 
     it('reads the global saver layout settings for every chat action', () => {

@@ -18,6 +18,7 @@ const { createCharacterPackageManifest, validateCharacterPackageManifest } = req
 const { inspectCharacterPackageOwnership } = require('./character-package-preflight.cjs');
 const { allocateSegment, planDirectoryMapping } = require('./friendly-paths.cjs');
 const { collectNestedAssetReferences } = require('./orphan-cleanup.cjs');
+const { createChatPreview, readLastJsonlRecord } = require('./chat-content-page.cjs');
 
 const COLLECTIONS = [
     ['botPresets', 'presets'],
@@ -76,8 +77,33 @@ function jsonBytes(value) {
     return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+const CHECKPOINT_FIELDS = new Set(['scriptstateCheckpoint', 'scriptstateSwipeCheckpoints']);
+const hasCheckpoint = message => !!message && typeof message === 'object'
+    && [...CHECKPOINT_FIELDS].some(field => Object.prototype.hasOwnProperty.call(message, field));
+
+// Chat-variable checkpoints only serve rerolling the latest response. Versions
+// before 0.9.78 kept a full copy on every response, which can push a single
+// message past the JSON string limit and block every save, including the one
+// that would clean it up. Drop the older copies here, and drop the latest one
+// too if it alone cannot be serialized.
+function serializeMessage(message, keepCheckpoint) {
+    if (!keepCheckpoint) return JSON.stringify(without(message, CHECKPOINT_FIELDS));
+    try {
+        return JSON.stringify(message) ?? '';
+    } catch (error) {
+        if (!(error instanceof RangeError) || !hasCheckpoint(message)) throw error;
+        return JSON.stringify(without(message, CHECKPOINT_FIELDS));
+    }
+}
+
 function* messageChunks(messages) {
-    for (const message of messages) yield Buffer.from(`${JSON.stringify(message) ?? ''}\n`, 'utf8');
+    let latest = messages.length - 1;
+    while (latest >= 0 && !hasCheckpoint(messages[latest])) latest -= 1;
+    for (let index = 0; index < messages.length; index += 1) {
+        const message = messages[index];
+        const keepCheckpoint = index === latest || !hasCheckpoint(message);
+        yield Buffer.from(`${serializeMessage(message, keepCheckpoint)}\n`, 'utf8');
+    }
 }
 
 function parseMessageBytes(bytes, relativePath, errorCode) {
@@ -1154,6 +1180,17 @@ function createUserDataRepository(options = {}) {
         return chat ? loadChat(summary.id, chat.id) : null;
     }
 
+    // Chat list hover card: chat metadata plus only the last message line.
+    function loadIndexedChatPreview(characterId, chatIndex) {
+        if (!Number.isInteger(chatIndex) || chatIndex < 0) return null;
+        const summary = loadSidebarIndex().characters.find(character => character.id === characterId);
+        const chat = summary?.chats?.[chatIndex];
+        if (!chat) return null;
+        const metadata = readJson(chatMetadataPath(summary.id, chat.id));
+        const lastMessage = readLastJsonlRecord(resolveInside(dataRoot, messagesPath(summary.id, chat.id)));
+        return createChatPreview({ ...metadata, id: metadata?.id ?? chat.id }, lastMessage);
+    }
+
     if (collectCanonicalSourcePaths().length > 0) {
         try {
             reconcileCanonicalProjection({ includeDatabase: false, preserveSidebarTimestamps: true, externalEditing: options.liveExternalEditing === true });
@@ -1194,6 +1231,7 @@ function createUserDataRepository(options = {}) {
         collectionItemPath: (directory, id) => path.join(directory, `${stableId(id, directory.slice(0, -1))}.json`),
         loadChat,
         loadIndexedChat,
+        loadIndexedChatPreview,
         loadStartupDatabase,
         loadMessages,
         loadSidebarIndex,

@@ -5,6 +5,7 @@
     import type { getPainterSession } from 'src/ts/bardPainter/runtime.svelte'
     import type { PainterStyle } from 'src/ts/bardPainter/types'
     import { PAINTER_STYLES } from 'src/ts/bardPainter/styles'
+    import { isPainterLoreStyle } from 'src/ts/bardPainter/lorePresets'
 
     let { session, disabled = false, onDirtyChange = () => {} }: {
         session: ReturnType<typeof getPainterSession>; disabled?: boolean; onDirtyChange?: (dirty: boolean) => void
@@ -20,8 +21,10 @@
     let locked = $derived(disabled || busy)
     let original = $derived(session.styles.find(item => item.id === selected))
     let builtIn = $derived(PAINTER_STYLES.some(item => item.id === selected))
-    let customIndex = $derived(session.styles.filter(item => !PAINTER_STYLES.some(base => base.id === item.id)).findIndex(item => item.id === selected))
-    let customCount = $derived(session.styles.length - PAINTER_STYLES.length)
+    let fromLore = $derived(isPainterLoreStyle(selected))
+    let custom = $derived(session.styles.filter(item => !PAINTER_STYLES.some(base => base.id === item.id) && !isPainterLoreStyle(item.id)))
+    let customIndex = $derived(custom.findIndex(item => item.id === selected))
+    let customCount = $derived(custom.length)
     let filtered = $derived(session.styles.filter(item => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())))
     let pages = $derived(Math.max(1, Math.ceil(filtered.length / 16)))
     let canCopy = $derived(!!draft.name.trim() && (!original || draft.name.trim().toLocaleLowerCase() !== original.name.trim().toLocaleLowerCase()))
@@ -48,10 +51,8 @@
     async function select(style: PainterStyle) {
         if (style.id === selected) return
         await perform(async () => {
-            const current = session, previous = current.data.settings.styleId
-            current.data.settings.styleId = style.id
-            await current.persist()
-            if (current.state.error) { current.data.settings.styleId = previous; throw new Error(current.state.error) }
+            const current = session
+            if (!await current.chooseStyle(style.id)) throw new Error(current.state.error || '화풍을 바꾸지 못했습니다.')
             if (current === session) load(style)
         })
     }
@@ -100,18 +101,19 @@
             <input type="search" aria-label="화풍 검색" placeholder="화풍 이름 검색" bind:value={query} oninput={() => page = 0} />
             <div class="list">
                 {#each filtered.slice(page * 16, (page + 1) * 16) as style (style.id)}
-                    <button type="button" class="preset" class:chosen={selected === style.id} aria-pressed={selected === style.id} data-painter-style={style.id} disabled={locked} onclick={() => { if (selected !== style.id) guard(() => select(style)) }}><span>{style.name}</span>{#if session.defaultStyle?.id === style.id}<small>기본 화풍</small>{/if}{#if session.data.settings.styleId === style.id}<small>사용 중</small>{/if}</button>
+                    <button type="button" class="preset" class:chosen={selected === style.id} aria-pressed={selected === style.id} data-painter-style={style.id} disabled={locked} onclick={() => { if (selected !== style.id) guard(() => select(style)) }}><span>{style.name}</span>{#if isPainterLoreStyle(style.id)}<small>{session.botDefaultStyle?.id === style.id ? '봇 기본' : '봇 로어'}</small>{:else if session.defaultStyle?.id === style.id}<small>기본 화풍</small>{/if}{#if session.style.id === style.id}<small>사용 중</small>{/if}</button>
                 {:else}<p class="hint">검색 결과가 없습니다.</p>{/each}
             </div>
             {#if pages > 1}<div class="pagination"><button type="button" aria-label="이전 화풍 페이지" disabled={page === 0} onclick={() => page--}>이전</button><span>{page + 1} / {pages}</span><button type="button" aria-label="다음 화풍 페이지" disabled={page + 1 >= pages} onclick={() => page++}>다음</button></div>{/if}
             <div class="list-footer"><span class="hint">선택한 화풍 순서</span><button type="button" class="icon" aria-label="화풍 위로 이동" title="위로 이동" disabled={locked || customIndex <= 0} onclick={() => move(-1)}><ArrowUp size={15} /></button><button type="button" class="icon" aria-label="화풍 아래로 이동" title="아래로 이동" disabled={locked || customIndex < 0 || customIndex + 1 >= customCount} onclick={() => move(1)}><ArrowDown size={15} /></button></div>
         </aside>
         <section class="editor" aria-label="화풍 편집">
-            <div class="editor-heading"><h3>{original?.name || '새 화풍'}</h3><span class="hint">{dirty ? '저장하지 않은 변경' : builtIn ? '기본 제공' : '개인 프리셋'}</span>{#if original && !builtIn}<button type="button" class="icon danger" title="화풍 삭제" aria-label="화풍 삭제" disabled={locked} onclick={() => deleting = true}><Trash2 size={16} /></button>{/if}</div>
+            <div class="editor-heading"><h3>{original?.name || '새 화풍'}</h3><span class="hint">{dirty ? '저장하지 않은 변경' : builtIn ? '기본 제공' : fromLore ? '봇 로어' : '개인 프리셋'}</span>{#if original && !builtIn && !fromLore}<button type="button" class="icon danger" title="화풍 삭제" aria-label="화풍 삭제" disabled={locked} onclick={() => deleting = true}><Trash2 size={16} /></button>{/if}</div>
             {#if deleting}<div class="confirm" role="alert"><p>「{original?.name}」을 삭제할까요? 사용 중인 화풍은 기본으로 바뀝니다. 생성한 그림과 기록은 유지됩니다.</p><div class="actions"><button type="button" class="danger" disabled={locked} onclick={remove}>삭제 확인</button><button type="button" disabled={locked} onclick={() => deleting = false}>취소</button></div></div>{/if}
             <fieldset disabled={locked}>
                 <label>프리셋 이름<input aria-label="화풍 프리셋 이름" bind:value={draft.name} placeholder="새 화풍 이름" /></label>
                 {#if builtIn}<p class="hint">기본 프리셋에는 화풍 태그가 없습니다. 이름을 바꾸고 새 프리셋으로 저장하세요.</p>{/if}
+                {#if fromLore}<p class="hint">이 봇의 로어북에서 온 화풍입니다. 고치려면 로어북의 바드페인터 항목을 수정하거나, 이름을 바꿔 개인 프리셋으로 저장하세요.</p>{/if}
                 <label>그림체와 작가 태그<BardPainterPromptInput aria-label="화풍 작가 태그" rows={3} spellcheck="false" bind:value={draft.artist}></BardPainterPromptInput></label>
                 <label>그림 스타일<BardPainterPromptInput aria-label="화풍 그림 스타일" rows={3} spellcheck="false" bind:value={draft.rendering}></BardPainterPromptInput></label>
                 <label>네거티브 프롬프트<BardPainterPromptInput rows={2} spellcheck="false" bind:value={draft.negative}></BardPainterPromptInput></label>
@@ -123,9 +125,9 @@
                 </div></details>
             </fieldset>
             <div class="save-bar">
-                {#if original}<button type="button" disabled={locked || dirty || session.defaultStyle?.id === selected} onclick={setDefault}>기본 화풍으로 지정</button>{/if}
-                {#if original && !builtIn}<button type="button" class="primary" disabled={locked || !dirty || !draft.name.trim()} onclick={() => save(false)}>덮어쓰기</button>{/if}
-                <button type="button" class:primary={!original || builtIn} disabled={locked || !canCopy} onclick={() => save(true)}>{original ? '새 이름으로 저장' : '새 프리셋 저장'}</button>
+                {#if original && !fromLore}<button type="button" disabled={locked || dirty || session.defaultStyle?.id === selected} onclick={setDefault}>기본 화풍으로 지정</button>{/if}
+                {#if original && !builtIn && !fromLore}<button type="button" class="primary" disabled={locked || !dirty || !draft.name.trim()} onclick={() => save(false)}>덮어쓰기</button>{/if}
+                <button type="button" class:primary={!original || builtIn || fromLore} disabled={locked || !canCopy} onclick={() => save(true)}>{original ? '새 이름으로 저장' : '새 프리셋 저장'}</button>
                 {#if dirty && original}<button type="button" disabled={locked} onclick={() => guard(() => load(original!))}>되돌리기</button>{/if}
                 {#if original}<p class="hint">새 이름으로 저장하면 원본은 그대로 남습니다.</p>{/if}
             </div>

@@ -117,7 +117,7 @@ it.each(['success', 'off', 'balanced', 'strong'])('keeps %s response and streami
         runInlayScreen:(_:unknown,text:string)=>({text}),
         dispatchCommittedChatOutput:async()=>{},pluginV2:{chatOutput:[]},
         findMessageIndexByChatId:(chat:any,id:string)=>chat.message.findIndex((m:any)=>m.chatId===id),
-        attachScriptstateCheckpoint:()=>{},snapshotChatScriptstate:()=>({}),scriptstateBeforeResponse:{},
+        attachOutputScriptstateCheckpoint:()=>{},
         endGeneration:()=>{},throwError:()=>{},getPartialPresetStreamText:()=>undefined,
         setTimeout,clearTimeout,requestAnimationFrame:(fn:()=>void)=>setTimeout(fn,0),cancelAnimationFrame:clearTimeout,
     }

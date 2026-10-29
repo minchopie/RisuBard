@@ -28,7 +28,7 @@ export async function handleNativeInboxEntry(entry: { id: string }, io: { post: 
     return result?.share ? String(result.state) : 'queued'
 }
 
-export interface TransferEntry { id: string; name: string; direction: 'send' | 'receive'; state: string; bytes?: number; error?: string; trusted?: boolean; nativeId?: string }
+export interface TransferEntry { id: string; name: string; direction: 'send' | 'receive'; state: string; bytes?: number; error?: string; trusted?: boolean; applyRequested?: boolean; nativeId?: string }
 export const transferQueue = writable<TransferEntry[]>([])
 export async function transferRequest(path = '', init: RequestInit = {}) {
     await forageStorage.Init()
@@ -36,11 +36,27 @@ export async function transferRequest(path = '', init: RequestInit = {}) {
     if (!response.ok) {
         const data = await response.json().catch(() => ({}))
         // Structured gate answers (423 NAS_SYNC_BUSY / TRANSFER_BUSY) keep their code and status so callers can tell a write-gate race from a real failure.
-        throw Object.assign(new Error(data.error || `전송 요청 실패 (${response.status})`), { status: response.status, ...(typeof data.code === 'string' ? { code: data.code } : {}) })
+        throw Object.assign(new Error(data.error || `전송 요청 실패 (${response.status})`), { status: response.status, ...(typeof data.code === 'string' ? { code: data.code } : {}), ...(typeof data.transaction === 'string' ? { transaction: data.transaction } : {}) })
     }
     return response
 }
 const post = async (path: string, body: unknown = {}) => (await transferRequest(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
+export async function requestRemoteTransfer(kind: 'nas' | 'github', operation: string, input: unknown = {}) {
+    await forageStorage.Init()
+    const storage = forageStorage.realStorage
+    const identity = () => `${storage.syncTransaction ?? ''}\u0000${storage.transferTransaction ?? ''}`
+    const started = identity(), ordinary = !storage.syncTransaction && !storage.transferTransaction, until = Date.now() + 30_000
+    for (;;) {
+        try { return await post(`/remote/${kind}/${operation}`, input) }
+        catch (error: any) {
+            // Only retry a pre-handler rejection: never replay a network failure or a durable apply transaction.
+            if (error.status !== 423 || error.code !== 'NAS_SYNC_BUSY' || error.transaction || !ordinary || identity() !== started || Date.now() >= until) throw error
+            transferStatus.set('동기화 작업이 끝나면 전송을 계속해요…')
+            await new Promise(resolve => setTimeout(resolve, 500))
+            if (identity() !== started) throw error
+        }
+    }
+}
 export async function refreshTransfers() { transferQueue.set(await (await transferRequest()).json()) }
 export function transferUnavailable() {
     return get(transferBusy) || get(syncSaveHold) || get(doingChat) || get(isAnyGenerating) || get(importSession).phase !== 'idle'
@@ -76,7 +92,7 @@ export async function receiveTransfer(key: string, automatic = false) {
     const inspection = await (await transferRequest(`/${key}/inspect`)).json()
     const targets: Record<string, string> = {}
     for (const c of inspection.characters) if (c.candidates.length > 1) {
-        if (automatic) { transferStatus.set('같은 이름의 캐릭터가 여러 개예요. 수신 목록에서 대상을 선택해 주세요.'); return }
+        if (automatic) { await post(`/${key}/apply-request`, { requested: false }); transferStatus.set('같은 이름의 캐릭터가 여러 개예요. 수신 목록에서 대상을 선택해 주세요.'); await refreshTransfers(); return }
         const choice = await alertSelect(c.candidates.map((item: { name: string; id: string }) => `${item.name} (${item.id.slice(0, 8)})`), `${c.name}의 대화를 받을 캐릭터`)
         if (choice === undefined || Number(choice) < 0 || !c.candidates[Number(choice)]) return
         targets[c.id] = c.candidates[Number(choice)].id
@@ -173,22 +189,24 @@ export function startTransferInbox() {
     const gateHeld = () => get(transferBusy) || get(syncSaveHold)
     const poll = async () => {
         try {
-            if (get(loadedStore) && playSetAvailable() && !document.hidden && !gateHeld()) {
-                await playNative('network.start'); if (gateHeld()) return
-                await playNative('usb.start'); if (gateHeld()) return
-                const incoming = await playNative<{ id: string }[]>('inbox.list')
-                for (const entry of incoming) {
+            try {
+                if (get(loadedStore) && playSetAvailable() && !document.hidden && !gateHeld()) {
+                    await playNative('network.start'); if (gateHeld()) return
+                    await playNative('usb.start'); if (gateHeld()) return
+                    const incoming = await playNative<{ id: string }[]>('inbox.list')
+                    for (const entry of incoming) {
+                        if (gateHeld()) return
+                        try { await handleNativeInboxEntry(entry, { post, native: playNative, send: sendNative }) }
+                        catch (error: any) { if (!gateRace(error)) transferStatus.set(String(error)) }
+                    }
                     if (gateHeld()) return
-                    try { await handleNativeInboxEntry(entry, { post, native: playNative, send: sendNative }) }
-                    catch (error: any) { if (!gateRace(error)) transferStatus.set(String(error)) }
+                    await refreshTransfers(); if (gateHeld()) return
+                    await playNative('state.write', { key: 'queue', value: get(transferQueue).filter(entry => entry.nativeId).map(entry => ({ id: entry.nativeId, state: entry.state })) })
                 }
-                if (gateHeld()) return
-                await refreshTransfers(); if (gateHeld()) return
-                await playNative('state.write', { key: 'queue', value: get(transferQueue).filter(entry => entry.nativeId).map(entry => ({ id: entry.nativeId, state: entry.state })) })
-            }
+            } catch (error: any) { if (!gateRace(error)) transferStatus.set(String(error)) } // A USB/Wi-Fi bridge failure must not block NAS/GitHub's durable inbox.
             if (get(loadedStore) && !transferUnavailable() && get(alertStore).type === 'none') {
                 await refreshTransfers()
-                const next = get(transferQueue).find(item => item.direction === 'receive' && item.state === 'waiting' && item.trusted)
+                const next = get(transferQueue).find(item => item.direction === 'receive' && item.state === 'waiting' && (item.applyRequested ?? item.trusted))
                 if (next) await receiveTransfer(next.id, true)
             }
         } catch (error: any) { if (!gateRace(error)) transferStatus.set(String(error)) } // a gate race is expected and silent; real network/IO errors are shown as before

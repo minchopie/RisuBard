@@ -12,6 +12,7 @@
         PlusIcon,
         SaveIcon,
         SearchIcon,
+        StarIcon,
         TrashIcon,
         UploadIcon,
         XIcon,
@@ -24,6 +25,7 @@
     import {
         applyTogglePresetToChat,
         getCurrentChat,
+        setNewChatTogglePreset,
         setPinnedTogglePresetBaseline,
         snapshotCurrentToggleValues,
         type TogglePreset,
@@ -215,6 +217,7 @@
         if (index < 0) return
         const copy = $state.snapshot(preset)
         copy.name = `${preset.name} (Copy)`
+        delete copy.applyToNewChats
         const next = [...DBState.db.togglePresets!]
         next.splice(index + 1, 0, copy)
         commit(next)
@@ -225,6 +228,16 @@
         const data = { name: preset.name, values: preset.values, promptPresetName: preset.promptPresetName }
         downloadFile(`${preset.name}_toggle.json`, Buffer.from(JSON.stringify(data, null, 2), 'utf-8'))
         notifySuccess((language.togglePresetExported as any)(preset.name))
+    }
+
+    function toggleNewChatPreset(preset: TogglePreset) {
+        if (preset.applyToNewChats) {
+            setNewChatTogglePreset(null)
+            notifySuccess(language.togglePresetAutoApplyOff)
+        } else {
+            setNewChatTogglePreset(preset)
+            notifySuccess((language.togglePresetAutoApplyOn as any)(preset.name))
+        }
     }
 
     async function deletePreset(preset: TogglePreset) {
@@ -384,6 +397,15 @@
                                             onclick={() => applyPreset(preset)}
                                         >{preset.name}</button>
                                         <div class="flex items-center shrink-0 gap-0.5">
+                                            <ShButton
+                                                variant="ghost"
+                                                size="icon-xs"
+                                                className={preset.applyToNewChats ? 'text-primary hover:text-primary' : 'text-textcolor2'}
+                                                title={preset.applyToNewChats ? language.togglePresetAutoApplyActive : language.togglePresetAutoApply}
+                                                aria-label={language.togglePresetAutoApply}
+                                                aria-pressed={!!preset.applyToNewChats}
+                                                onclick={() => toggleNewChatPreset(preset)}
+                                            ><StarIcon fill={preset.applyToNewChats ? 'currentColor' : 'none'} /></ShButton>
                                             {#if group.entries.length > 1}
                                                 <div class="hidden pointer-coarse:flex items-center gap-0.5">
                                                     <ShButton variant="ghost" size="icon-xs" disabled={i === 0} title={language.togglePresetMoveUp} aria-label={language.togglePresetMoveUp} onclick={() => reorderGroup(group, i, i - 1)}><ArrowUpIcon /></ShButton>

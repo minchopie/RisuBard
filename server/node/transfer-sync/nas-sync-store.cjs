@@ -13,15 +13,23 @@ const fs = require('node:fs');
 const { join } = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { atomicWriteJson, atomicWriteFileChunks, resolveInside } = require('../file-store.cjs');
-const { createGraph, decodeRevision, encodeRevision, hashJson, makeRevision, rootKey } = require('./nas-sync-core.cjs');
+const { createStoredGraph, decodeRevision, encodeRevision, hashJson, makeRevision, rootKey } = require('./nas-sync-core.cjs');
 const { canonical } = require('../../../shared/play-set/protocol.ts');
 
 const RETRY_SECONDS = [5, 15, 60, 300];
 const CHECKPOINT_EVERY = 256;
 const TRASH_DAYS = 30;
+/** Restorable deletions offered per device: only the newest TRASH_KEEP deletion operations (each operation is one cohort deleted
+ *  together). Older ones leave the list and can no longer be restored from it; their tombstones, history and NAS data are untouched. */
+const TRASH_KEEP = 3;
 /** Physical deletion stays off until real WebDAV LOCK semantics are verified on the NAS; trash is logical only. */
 const PHYSICAL_PURGE = false;
 const DIGEST = /^[a-f0-9]{64}$/;
+/** Display-only device profile carried by new commits so peers can show "PC / 태블릿 / 스마트폰" instead of an id. Never trusted for
+ *  anything else; malformed values are dropped. */
+const DEVICE_KINDS = ['pc', 'tablet', 'phone'];
+const deviceProfile = value => value && typeof value === 'object' && DEVICE_KINDS.includes(value.kind)
+    ? { kind: value.kind, ...(typeof value.name === 'string' && value.name.trim() ? { name: value.name.trim().replace(/[\u0000-\u001f]/g, '').slice(0, 40) } : {}) } : null;
 const commitIdOf = ids => hashJson([...ids].sort());
 const peerKey = (device, incarnation) => `${device}/${incarnation}`;
 const pair = (sequence, commitId) => `${sequence}_${commitId}`;
@@ -29,6 +37,17 @@ const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const bySequence = (a, b) => Number(a.split('_')[0]) - Number(b.split('_')[0]);
 const clone = v => JSON.parse(JSON.stringify(v));
 const header = rev => { const { content, ...rest } = rev; return rest; };
+const blobPath = hash => { if (!DIGEST.test(hash)) throw new Error('Invalid blob hash'); return `blobs/${hash.slice(0, 2)}/${hash}`; };
+const headerPath = id => { if (!DIGEST.test(id)) throw new Error('Invalid revision id'); return `revisions/${id}.json`; };
+/** Stored revision `id` under a store root: header + content blob, fully decoded (every hash recomputed) and bound to the requested id,
+ *  so a different valid revision placed at this path is rejected too. Shared by the store's graph and its reader thread (below). */
+function readRevision(root, id) {
+    const h = JSON.parse(fs.readFileSync(resolveInside(root, headerPath(id)), 'utf8'));
+    const content = JSON.parse(fs.readFileSync(resolveInside(root, blobPath(h.contentHash)), 'utf8'));
+    const rev = decodeRevision(JSON.stringify({ ...h, content }));
+    if (rev.id !== id) throw new Error('Revision hash mismatch');
+    return rev;
+}
 
 function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomUUID, writeJson = atomicWriteJson, checkpointEvery = CHECKPOINT_EVERY }) {
     const root = join(dataRoot, 'nas-sync');
@@ -58,6 +77,7 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
         writeManifest(state);
     }
     let broken = null; // fail closed after an ambiguous write whose authoritative state could not be reloaded
+    const assertHealthy = () => { if (broken) throw Object.assign(new Error('nas-sync store needs recovery: ' + broken.message), { code: 'STORE_BROKEN' }); };
     /** The sidecar lives outside backups (canonical marker = manifest). A manifest with history but no matching sidecar is a
      *  restored copy of another install and gets a new incarnation before it may publish anything. */
     const writeSidecar = () => writeJson(sidecarRoot, 'identity.json', { version: 1, deviceId: state.deviceId, incarnationId: state.incarnationId });
@@ -66,10 +86,8 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
     if (!sidecar) { if (fresh) writeSidecar(); else restoredIncarnation = 'missing identity sidecar'; }
     else if (sidecar.incarnationId !== state.incarnationId || sidecar.deviceId !== state.deviceId) restoredIncarnation = 'identity sidecar mismatch';
 
-    const blobPath = hash => { if (!DIGEST.test(hash)) throw new Error('Invalid blob hash'); return `blobs/${hash.slice(0, 2)}/${hash}`; };
     const hasBlob = hash => fs.existsSync(file(blobPath(hash)));
     const blobFile = hash => file(blobPath(hash));
-    const headerPath = id => { if (!DIGEST.test(id)) throw new Error('Invalid revision id'); return `revisions/${id}.json`; };
     /** Stream a local file into the blob store, verifying the hash on the way; existing blobs are never rewritten. */
     function importBlob(hash, sourcePath) {
         if (hasBlob(hash)) return false;
@@ -90,11 +108,6 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
             if (!fs.existsSync(file(headerPath(rev.id)))) writeJson(root, headerPath(rev.id), header(rev));
         }
     }
-    function readRevision(id) {
-        const h = JSON.parse(fs.readFileSync(file(headerPath(id)), 'utf8'));
-        const content = JSON.parse(fs.readFileSync(blobFile(h.contentHash), 'utf8'));
-        return decodeRevision(JSON.stringify({ ...h, content }));
-    }
     /** `envelope:` dependencies are semantic secret identities (epoch/slot/version/origin), mapped to physical ciphertext blobs
      *  through the envelope index; every other dependency value is a blob hash that must be present. */
     const isEnvelopeDep = key => key.startsWith('envelope:');
@@ -105,23 +118,29 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
     const envelopePhysical = semantic => (state.envelopeIndex?.[semantic] ?? []).filter(hasBlob);
 
     const referenced = () => new Set([...state.commits.flatMap(c => c.revisions), ...Object.values(state.peers).flatMap(p => Object.values(p.admittedRevisions ?? {}).flat())]);
-    let graph = createGraph([...referenced()].map(readRevision));
+    const loadGraph = () => createStoredGraph([...referenced()].map(id => {
+        const header = JSON.parse(fs.readFileSync(file(headerPath(id)), 'utf8'));
+        if (header.id !== id) throw new Error('Revision header id does not match its path');
+        return header;
+    }), id => readRevision(root, id));
+    let graph = loadGraph();
     /** Draft → durable manifest → swap. Revisions join the live graph only after the manifest named them. When the write
      *  throws, the outcome is ambiguous (rename may have happened), so the authoritative manifest is reloaded from disk and
      *  the graph rebuilt before anything else may mutate; if even that fails the store fails closed until reopened. */
     function transact(mutate) {
-        if (broken) throw Object.assign(new Error('nas-sync store needs recovery: ' + broken.message), { code: 'STORE_BROKEN' });
+        assertHealthy();
         const draft = clone(state), added = [];
         const result = mutate(draft, added);
         if (added.length) writeRevisionFiles(added);
-        try { writeManifest(draft); }
-        catch (error) {
-            try { state = loadManifest() ?? state; graph = createGraph([...referenced()].map(readRevision)); }
+        try {
+            writeManifest(draft);
+            state = draft;
+            if (added.length) graph.addAll(added);
+        } catch (error) {
+            try { state = loadManifest() ?? state; graph = loadGraph(); }
             catch (reloadError) { broken = reloadError; }
             throw error;
         }
-        state = draft;
-        if (added.length) graph.addAll(added);
         return result;
     }
     const peerOf = (s, device, incarnation) => s.peers[peerKey(device, incarnation)] ??= { admitted: {}, accepted: {}, admittedRevisions: {}, quarantined: {}, waiting: {}, held: {}, pendingApply: [], lastSeen: -1, rotation: 0, ambiguous: null, resolution: null };
@@ -135,7 +154,7 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
     }
     /** Local commit. `blobs` maps dependency hash → local file for material the revisions pin (assets, Wiki, slots, envelopes). */
     function commit(revisions, { blobs = {}, envelopes = {} } = {}) {
-        const trial = createGraph(graph.revisions()), results = trial.addAll(revisions);
+        const trial = graph.fork(), results = trial.addAll(revisions);
         const added = results.filter(([, r]) => r === 'added').map(([rev]) => rev);
         if (!added.length) return null;
         for (const [hash, path] of Object.entries(blobs)) importBlob(hash, path);
@@ -155,14 +174,18 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
             for (const [semantic, physical] of Object.entries(mapping)) if (!(s.envelopeIndex[semantic] ??= []).includes(physical)) s.envelopeIndex[semantic].push(physical);
             const blobList = [...new Set([...added.map(r => r.contentHash), ...blobDeps(added), ...Object.values(mapping)])].sort(compare);
             const entry = { incarnationId: s.incarnationId, sequence: ++s.sequence, commitId: commitIdOf(added.map(r => r.id)), revisions: added.map(r => r.id).sort(compare),
-                blobs: blobList, sizes: Object.fromEntries(blobList.map(h => [h, hasBlob(h) ? fs.statSync(blobFile(h)).size : Buffer.byteLength(canonical(added.find(r => r.contentHash === h).content))])), envelopes: mapping, published: null, attempts: 0, nextAt: 0, error: null }; // content blobs are written by transact right after this draft
+                ...(s.profile ? { device: clone(s.profile) } : {}), blobs: blobList, sizes: Object.fromEntries(blobList.map(h => [h, hasBlob(h) ? fs.statSync(blobFile(h)).size : Buffer.byteLength(canonical(added.find(r => r.contentHash === h).content))])), envelopes: mapping, published: null, attempts: 0, nextAt: 0, error: null }; // content blobs are written by transact right after this draft
             s.commits.push(entry); noteTrash(s, added);
             return clone(entry);
         });
     }
     /** Commit metadata only: revision headers; content, dependencies and envelope ciphertexts travel as blobs. */
     const commitObject = entry => ({ v: 1, workspaceId: state.workspaceId, deviceId: state.deviceId, incarnationId: entry.incarnationId, sequence: entry.sequence, commitId: entry.commitId,
-        revisions: entry.revisions.map(id => header(JSON.parse(encodeRevision(graph.get(id))))), blobs: entry.blobs, sizes: entry.sizes ?? {}, envelopes: entry.envelopes ?? {} });
+        revisions: entry.revisions.map(id => header(JSON.parse(encodeRevision(graph.get(id))))), blobs: entry.blobs, sizes: entry.sizes ?? {}, envelopes: entry.envelopes ?? {},
+        // Only commits drafted after the profile was set carry it, so an already drafted commit re-uploads byte-identically.
+        ...(entry.device ? { device: entry.device } : {}) });
+    /** This device's display profile for future commits (kind + optional short name). */
+    const setProfile = value => { const profile = deviceProfile(value); if (!profile) throw new Error('Invalid device profile'); if (JSON.stringify(state.profile ?? null) !== JSON.stringify(profile)) transact(s => { s.profile = profile; }); return clone(profile); };
     const dueCommits = (at = now()) => clone(state.commits.filter(c => !c.published && c.nextAt <= at));
     const publishedCommits = () => clone(state.commits.filter(c => c.published));
     const unpublishedBlobs = entry => entry.blobs.filter(h => !state.blobs[h]);
@@ -287,7 +310,7 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
         const blobs = missingCommitBlobs(object);
         if (blobs.length) return wait('missing blobs: ' + blobs.join(','), blobs);
         let revisions, results;
-        try { revisions = materialize(object); results = createGraph(graph.revisions()).addAll(revisions); }
+        try { revisions = materialize(object); results = graph.fork().addAll(revisions); }
         catch (error) {
             if (error.code === 'MISSING_PARENT') return wait(error.message);
             return quarantine(object, error, device, incarnation, sequence, commitId);
@@ -300,6 +323,7 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
             s.envelopeIndex ??= {};
             for (const [semantic, physical] of Object.entries(object.envelopes ?? {})) if (!(s.envelopeIndex[semantic] ??= []).includes(physical)) s.envelopeIndex[semantic].push(physical);
             q.admittedRevisions[key] = revisions.map(r => r.id); q.pendingApply.push({ sequence, commitId });
+            const profile = deviceProfile(object.device); if (profile) q.profile = profile;
             delete q.waiting[key]; delete q.held[key]; q.lastSeen = Math.max(q.lastSeen, sequence); noteTrash(s, added);
         });
         try { fs.rmSync(file(incomingPath(device, incarnation, sequence, commitId)), { force: true }); } catch {}
@@ -383,19 +407,43 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
     const peer = (device, incarnation) => clone(peerOf(clone(state), device, incarnation));
     /** Rotating window over older buckets: `count` of them per scan, advancing each call. */
     const rotateBuckets = (device, incarnation, older, count) => { if (!older.length) return []; const start = (state.peers[peerKey(device, incarnation)]?.rotation ?? 0) % older.length; const chosen = Array.from({ length: Math.min(count, older.length) }, (_, i) => older[(start + i) % older.length]); transact(s => { peerOf(s, device, incarnation).rotation = (start + chosen.length) % older.length; }); return chosen; };
-    /** Logical trash: tombstone heads with their recoverable-until time. Nothing is physically removed. */
+    /** Logical trash: tombstone heads of the newest TRASH_KEEP deletion operations with their recoverable-until time. Read-only:
+     *  nothing is physically removed and older operations simply stop being offered. */
     function trash(at = now()) {
-        return Object.entries(state.trash).filter(([id]) => { const r = graph.get(id); return r && graph.heads(rootKey(r)).includes(id); })
+        // The kept operations are chosen over the whole deletion history (restored ones included), so restoring a recent deletion
+        // never brings an older one back into the list.
+        const known = Object.entries(state.trash).filter(([id]) => graph.get(id));
+        const operationOf = id => graph.get(id).tombstone?.operation ?? id, latest = new Map();
+        for (const [id, deletedAt] of known) latest.set(operationOf(id), Math.max(latest.get(operationOf(id)) ?? 0, deletedAt));
+        const kept = new Set([...latest].sort((a, b) => b[1] - a[1] || compare(a[0], b[0])).slice(0, TRASH_KEEP).map(([operation]) => operation));
+        return known.filter(([id]) => kept.has(operationOf(id)) && graph.heads(rootKey(graph.get(id))).includes(id))
             .map(([id, deletedAt]) => ({ id, root: graph.get(id).root, deletedAt, recoverableUntil: deletedAt + TRASH_DAYS * 86400000, expired: at > deletedAt + TRASH_DAYS * 86400000 }));
     }
     const status = () => ({ deviceId: state.deviceId, incarnationId: state.incarnationId, workspaceId: state.workspaceId, sequence: state.sequence, publications: state.publications, rotations: state.rotations.length, recovery, broken: broken ? String(broken.message) : null,
         outbox: { pending: state.commits.filter(c => !c.published).map(({ sequence, commitId, attempts, nextAt, error }) => ({ sequence, commitId, attempts, nextAt, error })), published: state.commits.filter(c => c.published).length },
-        incoming: Object.fromEntries(Object.entries(state.peers).map(([key, p]) => [key, { admitted: Object.keys(p.admitted).length + Object.keys(p.accepted).length, pendingApply: p.pendingApply.length, applied: Object.keys(state.applied[key] ?? {}).length, waiting: Object.keys(p.waiting).length, held: Object.keys(p.held).length, quarantined: Object.values(p.quarantined).flat().length, ambiguous: p.ambiguous, resolution: p.resolution, lastSeen: p.lastSeen }])),
+        profile: state.profile ?? null,
+        incoming: Object.fromEntries(Object.entries(state.peers).map(([key, p]) => [key, { profile: p.profile ?? null, admitted: Object.keys(p.admitted).length + Object.keys(p.accepted).length, pendingApply: p.pendingApply.length, applied: Object.keys(state.applied[key] ?? {}).length, waiting: Object.keys(p.waiting).length, held: Object.keys(p.held).length, quarantined: Object.values(p.quarantined).flat().length, ambiguous: p.ambiguous, resolution: p.resolution, lastSeen: p.lastSeen }])),
         trash: trash().length, physicalPurge: PHYSICAL_PURGE });
     const resumed = resumeResolutions();
-    return { root, graph: { get: id => graph.get(id), heads: k => graph.heads(k), classify: k => graph.classify(k), rootKeys: () => graph.rootKeys(), revisions: () => graph.revisions(), isAncestor: (a, b) => graph.isAncestor(a, b), branchSegments: k => graph.branchSegments(k), containerState: (k, op) => graph.containerState(k, op), bootstrapResolution: (a, b) => graph.bootstrapResolution(a, b), tombstones: (op, targets) => graph.tombstones(op, targets), restore: id => graph.restore(id), resolve: r => graph.resolve(r) }, resumed,
-        setWorkspace, commit, commitObject, dueCommits, publishedCommits, unpublishedBlobs, markBlobPublished, markPublished, noteNasTimes, markPublishFailed, rotateIncarnation, needsCheckpoint, checkpointObject, recordCheckpoint, recordBase,
+    const publicGraph = { get: id => graph.get(id), heads: k => graph.heads(k), classify: k => graph.classify(k), rootKeys: () => graph.rootKeys(), revisions: () => graph.revisions(), isAncestor: (a, b) => graph.isAncestor(a, b), branchSegments: k => graph.branchSegments(k), containerState: (k, op) => graph.containerState(k, op), bootstrapResolution: (a, b) => graph.bootstrapResolution(a, b), tombstones: (op, targets) => graph.tombstones(op, targets), restore: id => graph.restore(id), resolve: r => graph.resolve(r) };
+    for (const [name, read] of Object.entries(publicGraph)) publicGraph[name] = (...args) => { assertHealthy(); return read(...args); };
+    return { root, graph: publicGraph, resumed,
+        setWorkspace, setProfile, commit, commitObject, dueCommits, publishedCommits, unpublishedBlobs, markBlobPublished, markPublished, noteNasTimes, markPublishFailed, rotateIncarnation, needsCheckpoint, checkpointObject, recordCheckpoint, recordBase,
         validateCommitObject, missingCommitBlobs, admitRemote, waitingEntries, retryWaiting, resolveAmbiguity, resumeResolutions, pendingApply, markApplied, ackObject, ackChanged, markAckPublished, knownRemote, isWaiting, rotateBuckets, peer, trash, status,
         hasBlob, blobFile, blobPath, storeBlobFromFile: importBlob, envelopePhysical, missingBlobs, identity: () => ({ deviceId: state.deviceId, incarnationId: state.incarnationId, workspaceId: state.workspaceId }), state: () => clone(state) };
 }
-module.exports = { createSyncStore, commitIdOf, RETRY_SECONDS, CHECKPOINT_EVERY, TRASH_DAYS, PHYSICAL_PURGE };
+module.exports = { createSyncStore, commitIdOf, RETRY_SECONDS, CHECKPOINT_EVERY, TRASH_DAYS, TRASH_KEEP, PHYSICAL_PURGE, deviceProfile, readRevision, READER_THREAD: 'nas-sync-revision-reader' };
+
+/** Reader thread (started by nas-sync-service.cjs with this marker only): given a store root and revision ids, reads each immutable
+ *  revision through readRevision above and answers only its `name`/`chatIds`. It opens no store or manifest, writes nothing, holds no
+ *  keys; any failure answers an error for the whole request. Loading this file anywhere else does nothing. */
+const threads = require('node:worker_threads');
+if (!threads.isMainThread && threads.workerData === module.exports.READER_THREAD) {
+    threads.parentPort.on('message', ({ seq, root, ids }) => {
+        try {
+            const meta = {};
+            for (const id of ids) { const { content } = readRevision(root, id); meta[id] = { name: content?.name, chatIds: content?.chatIds }; }
+            threads.parentPort.postMessage({ seq, meta, threadId: threads.threadId });
+        } catch (error) { threads.parentPort.postMessage({ seq, error: String(error?.message ?? error) }); }
+    });
+}

@@ -549,4 +549,25 @@ describe('BardWiki memory writer skill', () => {
         }))
         expect(hasMemoryWriterContent(draft)).toBe(false)
     })
+
+    test('parses unit edits beside the older three-field sections', () => {
+        const parse = (sections: unknown[]) => parseCanonicalBatch(JSON.stringify({
+            documents: [{ candidateIndex: 0, sections }],
+        }), 1).documents[0].sections
+        expect(parse([{ heading: 'A', operation: 'upsert', content: '- x' }]))
+            .toEqual([{ heading: 'A', operation: 'upsert', content: '- x' }])
+        expect(parse([{ heading: 'A', operation: 'edit', content: '', add: ['y'],
+            replace: [{ index: 0, text: 'z' }], remove: [{ index: 1, reason: 'merged', mergedInto: 0 }] }]))
+            .toEqual([{ heading: 'A', operation: 'edit', content: '', edits: {
+                add: ['y'], replace: [{ index: 0, text: 'z' }], remove: [{ index: 1, reason: 'merged', mergedInto: 0 }],
+            } }])
+        // A body sent with edit is treated as a rewrite, which the program still guards.
+        expect(parse([{ heading: 'A', operation: 'edit', content: '- x' }]))
+            .toEqual([{ heading: 'A', operation: 'upsert', content: '- x' }])
+        expect(parse([{ heading: 'A', operation: 'upsert', content: '- x', add: [], replace: [], remove: [] }]))
+            .toEqual([{ heading: 'A', operation: 'upsert', content: '- x' }])
+        expect(() => parse([{ heading: 'A', operation: 'edit', content: '', add: [], replace: [],
+            remove: [{ index: 0, reason: 'forgotten', mergedInto: null }] }])).toThrow(/remove\[0\]/)
+        expect(() => parse([{ heading: '', operation: 'edit', content: '', add: ['y'], replace: [], remove: [] }])).toThrow()
+    })
 })

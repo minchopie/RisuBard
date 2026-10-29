@@ -61,35 +61,35 @@ if (!verifyOnly) {
 // Verification — every check recorded, any failure fails the run.
 const report = { version, apk: `RisuBard-${version}.apk`, sha256: sha256(readFileSync(apk)), checks: {} };
 const scratch = mkdtempSync(join(tmpdir(), 'risubard-apk-'));
-// aapt cannot open a non-ASCII workspace path ("Illegal byte sequence"); it reads an identical copy in the ASCII temp dir.
-const asciiApk = join(scratch, 'app.apk'); copyFileSync(apk, asciiApk);
-report.checks.asciiCopy = { sha256Equal: sha256(readFileSync(asciiApk)) === report.sha256 };
-if (!report.checks.asciiCopy.sha256Equal) throw new Error('Temporary APK copy differs from the output APK');
-// Identity from the APK's own manifest, not from assumptions.
-const badging = tool(join(buildTools, exe('aapt')), ['dump', 'badging', asciiApk]);
-writeFileSync(join(outDir, `RisuBard-${version}-badging.log`), badging.out);
-report.identity = parseBadging(badging.out);
-report.checks.identity = { ok: badging.ok && report.identity.applicationId === 'app.risubard.personal' && report.identity.versionName === version && report.identity.versionCode > 1 && !report.identity.debuggable };
-const certs = tool(join(buildTools, 'apksigner.bat'), ['verify', '--print-certs', '-v', apk]);
-writeFileSync(join(outDir, `RisuBard-${version}-sign.log`), certs.out);
-const expectedFingerprint = certificateSummary(password).match(/SHA256:\s*([0-9A-F:]+)/i)?.[1]?.replace(/:/g, '').toLowerCase();
-const signer = parseSignerOutput(certs.out);
-report.checks.signature = { ...signer, matchesReleaseKey: !!signer.certSha256 && signer.certSha256 === expectedFingerprint, ok: certs.ok };
-const align = tool(join(buildTools, exe('zipalign')), ['-c', '-P', '16', '-v', '4', apk]);
-writeFileSync(join(outDir, `RisuBard-${version}-align.log`), align.out);
-report.checks.zipalign16k = { ok: align.ok && /Verification succes?sful/i.test(align.out) };
-// Native libraries and the packaged runtime, read back from the APK itself.
-const expectedNode = JSON.parse(readFileSync(join(root, 'android-app/app/src/main/assets/runtime-binaries.json'), 'utf8'));
-const natives = {}, assets = {};
-await readEntries(apk, async (entry, bytes) => {
-    const m = entry.fileName.match(/^lib\/([^/]+)\/libnode\.so$/);
-    if (m) { const elf = inspectElf(bytes); natives[m[1]] = { sha256: sha256(bytes), machine: elf.machine, matchesRuntimeLock: sha256(bytes) === expectedNode[m[1]]?.sha256, pageAligned16k: true }; }
-    if (entry.fileName.startsWith('assets/runtime')) assets[entry.fileName] = bytes;
-});
-report.checks.natives = natives;
-report.checks.nativesOk = Object.keys(natives).sort().join() === Object.keys(expectedNode).sort().join() && Object.values(natives).every(n => n.matchesRuntimeLock);
-const runtimeZip = assets['assets/runtime.zip'], runtimeHash = assets['assets/runtime.sha256']?.toString('utf8').trim();
 try {
+    // aapt cannot open a non-ASCII workspace path ("Illegal byte sequence"); it reads an identical copy in the ASCII temp dir.
+    const asciiApk = join(scratch, 'app.apk'); copyFileSync(apk, asciiApk);
+    report.checks.asciiCopy = { sha256Equal: sha256(readFileSync(asciiApk)) === report.sha256 };
+    if (!report.checks.asciiCopy.sha256Equal) throw new Error('Temporary APK copy differs from the output APK');
+    // Identity from the APK's own manifest, not from assumptions.
+    const badging = tool(join(buildTools, exe('aapt')), ['dump', 'badging', asciiApk]);
+    writeFileSync(join(outDir, `RisuBard-${version}-badging.log`), badging.out);
+    report.identity = parseBadging(badging.out);
+    report.checks.identity = { ok: badging.ok && report.identity.applicationId === 'app.risubard.personal' && report.identity.versionName === version && report.identity.versionCode > 1 && !report.identity.debuggable };
+    const certs = tool(join(buildTools, 'apksigner.bat'), ['verify', '--print-certs', '-v', apk]);
+    writeFileSync(join(outDir, `RisuBard-${version}-sign.log`), certs.out);
+    const expectedFingerprint = certificateSummary(password).match(/SHA256:\s*([0-9A-F:]+)/i)?.[1]?.replace(/:/g, '').toLowerCase();
+    const signer = parseSignerOutput(certs.out);
+    report.checks.signature = { ...signer, matchesReleaseKey: !!signer.certSha256 && signer.certSha256 === expectedFingerprint, ok: certs.ok };
+    const align = tool(join(buildTools, exe('zipalign')), ['-c', '-P', '16', '-v', '4', apk]);
+    writeFileSync(join(outDir, `RisuBard-${version}-align.log`), align.out);
+    report.checks.zipalign16k = { ok: align.ok && /Verification succes?sful/i.test(align.out) };
+    // Native libraries and the packaged runtime, read back from the APK itself.
+    const expectedNode = JSON.parse(readFileSync(join(root, 'android-app/app/src/main/assets/runtime-binaries.json'), 'utf8'));
+    const natives = {}, assets = {};
+    await readEntries(apk, async (entry, bytes) => {
+        const m = entry.fileName.match(/^lib\/([^/]+)\/libnode\.so$/);
+        if (m) { const elf = inspectElf(bytes); natives[m[1]] = { sha256: sha256(bytes), machine: elf.machine, matchesRuntimeLock: sha256(bytes) === expectedNode[m[1]]?.sha256, pageAligned16k: true }; }
+        if (entry.fileName.startsWith('assets/runtime')) assets[entry.fileName] = bytes;
+    });
+    report.checks.natives = natives;
+    report.checks.nativesOk = Object.keys(natives).sort().join() === Object.keys(expectedNode).sort().join() && Object.values(natives).every(n => n.matchesRuntimeLock);
+    const runtimeZip = assets['assets/runtime.zip'], runtimeHash = assets['assets/runtime.sha256']?.toString('utf8').trim();
     const zipFile = join(scratch, 'runtime.zip'); writeFileSync(zipFile, runtimeZip);
     const sources = { compared: 0, mismatched: [], missing: [], skipped: 0 };
     let entries = 0, crcFailures = 0;

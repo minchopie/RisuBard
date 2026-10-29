@@ -786,7 +786,9 @@ export async function importCharacterPackage(): Promise<void> {
             }
             const result = await importCharacterProcess({
                 name: manifest.character.file.split('/').pop() || 'package.charx',
-                data: charxBytes
+                data: charxBytes,
+                // The package brings its own chats into a new bot; never merge into an installed one.
+                updateExisting: false,
             })
             if (result === undefined || result === null) {
                 alertError('Failed to import character from package')

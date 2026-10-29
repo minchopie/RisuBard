@@ -293,6 +293,11 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
             input.chatId,
             () => wiki.setDocumentContextMode(input)
         ),
+        setWikiDocumentGrade: (input) => serialized(
+            input.characterId,
+            input.chatId,
+            () => wiki.setDocumentGrade(input)
+        ),
         trashWikiDocument: (input) => serialized(
             input.characterId,
             input.chatId,

@@ -10,12 +10,8 @@
     } from '@lucide/svelte'
     import { mount, tick, unmount } from 'svelte'
     import { language } from 'src/lang'
-    import {
-        exportArcaHtml,
-        planArcaComplexSnapshots,
-        resolveArcaImageSource,
-        shouldIncludeArcaSnapshotNode,
-    } from 'src/ts/arcaExport'
+    import { exportArcaHtml, resolveArcaImageSource } from 'src/ts/arcaExport'
+    import { renderArcaComplexBlock } from 'src/ts/arcaSnapshot'
     import {
         normalizeArcaChatFontSizePx,
         normalizeArcaChatDialogSize,
@@ -190,44 +186,6 @@
         return body
     }
 
-    async function renderComplexArcaBlock(element: HTMLElement): Promise<readonly string[]> {
-        const { toPng } = await import('html-to-image')
-        const snapshotPlan = planArcaComplexSnapshots(element)
-        const pixelRatio = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
-        const images: string[] = []
-        const failures: unknown[] = []
-
-        for (const target of snapshotPlan) {
-            const rect = target.element.getBoundingClientRect()
-            try {
-                images.push(await toPng(target.element, {
-                    cacheBust: false,
-                    pixelRatio,
-                    skipFonts: true,
-                    width: target.kind === 'panel' ? Math.min(760, Math.max(220, rect.width)) : undefined,
-                    filter: node => shouldIncludeArcaSnapshotNode(node, target.excludeElements),
-                    style: target.kind === 'panel' ? {
-                        position: 'relative',
-                        inset: 'auto',
-                        top: 'auto',
-                        right: 'auto',
-                        bottom: 'auto',
-                        left: 'auto',
-                        transform: 'none',
-                        opacity: '1',
-                        visibility: 'visible',
-                        pointerEvents: 'auto',
-                    } : undefined,
-                }))
-            }
-            catch (cause) {
-                failures.push(cause)
-            }
-        }
-        if (images.length === 0 && failures.length > 0) throw failures[0]
-        return images
-    }
-
     function resetAppearanceDraft(): void {
         draftFontSizePx = normalizeArcaChatFontSizePx(DBState.db.risuBardArcaChatFontSizePx)
         draftParagraphSpacingPercent = normalizeArcaChatParagraphSpacingPercent(
@@ -347,7 +305,7 @@
                         imageWidthPercent: DBState.db.risuBardArcaChatImageWidthPercent,
                         paragraphSpacingPercent: DBState.db.risuBardArcaChatParagraphSpacingPercent,
                         semanticPalette: $ColorSchemeTypeStore,
-                        renderComplexBlock: renderComplexArcaBlock,
+                        renderComplexBlock: renderArcaComplexBlock,
                     })
                     const plainText = body.innerText.trim() || body.textContent?.trim() || source.data
                     const isUser = source.role === 'user'
@@ -648,14 +606,15 @@
     .arca-log-mode-grid strong, .arca-log-mode-grid span { display: block; }
     .arca-log-mode-grid strong { font-size: .8125rem; }
     .arca-log-mode-grid span { margin-top: .3rem; overflow: hidden; color: var(--color-textcolor2); font-size: .6875rem; white-space: nowrap; text-overflow: ellipsis; }
-    .arca-log-range-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(7.5rem, .48fr); align-items: stretch; gap: .5rem; }
+    .arca-log-range-row { display: flex; flex-wrap: wrap; align-items: stretch; gap: .5rem; }
+    .arca-log-range, .arca-log-range-placeholder { flex: 1 1 11rem; min-width: 0; }
     .arca-log-range { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: .5rem; }
     .arca-log-range label { color: var(--color-textcolor2); font-size: .6875rem; }
     .arca-log-range input { width: 100%; height: 2.5rem; margin-top: .35rem; padding: 0 .65rem; border: 1px solid var(--color-darkborderc); border-radius: .625rem; background: var(--color-bgcolor); color: var(--color-textcolor); font-variant-numeric: tabular-nums; }
     .arca-log-range input:focus-visible { outline: 2px solid var(--color-borderc); outline-offset: 2px; }
     .arca-log-range > span { padding-bottom: .7rem; color: var(--color-textcolor2); }
     .arca-log-range-placeholder { display: flex; align-items: center; min-height: 3.5rem; padding: 0 .75rem; border: 1px solid var(--color-darkborderc); border-radius: .75rem; background: var(--color-bgcolor); color: var(--color-textcolor2); font-size: .75rem; }
-    .arca-log-user-toggle { min-width: 0; padding: .65rem .7rem; border: 1px solid var(--color-darkborderc); border-radius: .75rem; background: var(--color-bgcolor); color: var(--color-textcolor); text-align: left; transition: border-color .15s ease, background .15s ease; }
+    .arca-log-user-toggle { flex: 1 0 7.5rem; min-width: 0; padding: .65rem .7rem; border: 1px solid var(--color-darkborderc); border-radius: .75rem; background: var(--color-bgcolor); color: var(--color-textcolor); text-align: left; transition: border-color .15s ease, background .15s ease; }
     .arca-log-user-toggle:hover { border-color: var(--color-borderc); }
     .arca-log-user-toggle:disabled { cursor: wait; opacity: .58; }
     .arca-log-user-toggle.active { border-color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 12%, var(--color-bgcolor)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 35%, transparent); }
@@ -695,7 +654,6 @@
         .arca-log-workspace.sidebar-collapsed { grid-template-rows: minmax(18rem, 1fr); }
         .arca-log-settings { overflow: visible; }
         .arca-log-mode-grid { grid-template-columns: repeat(3, minmax(5.25rem, 1fr)); overflow-x: auto; padding-bottom: .2rem; }
-        .arca-log-range-row { grid-template-columns: minmax(0, 1fr) 7.5rem; }
         .arca-log-preview-panel { min-height: 22rem; }
         .arca-log-note { margin-top: 0 !important; }
     }

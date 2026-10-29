@@ -152,4 +152,59 @@ describe('BardPainter scene-plan compilation', () => {
         mutate(input)
         expect(() => parsePainterDraft(JSON.stringify(input))).toThrow()
     })
+
+    it('parses a version 3 plan into a rendered draft with positional plan keys', () => {
+        const v3 = {
+            version: 3, size: '', rendering: '', negative: '',
+            scene: { modifiers: { 'scene.time': ['night'], 'camera.view': ['bogus'] }, freeTags: { 'scene.location': ['Kitchen'] }, notes: '' },
+            subjects: [
+                { id: '', name: 'Me', aliases: [], kind: 'character', sex: 'male', evidence: '', appearance: 'x', outfitId: '', clothing: '', state: '', stateIds: [], modifiers: {}, freeTags: {}, notes: { placement: '', action: '' }, negative: '' },
+                { id: '', name: 'Aria', aliases: [], kind: 'character', sex: 'female', evidence: 'Aria smiles', appearance: 'red hair', outfitId: '', clothing: '', state: 'wet', stateIds: ['trembling', 'nope'],
+                    modifiers: { 'expression.general': ['smile'], 'gaze.direction': ['looking_at_another'] }, freeTags: { 'action.held': ['holding cup'] }, notes: { placement: 'left', action: '' }, negative: '' },
+            ],
+            interactions: [{ source: 0, target: 1, acts: ['headpat'], description: 'A hand rests on her head.', sourceAction: 'pats', targetAction: 'leans in' }],
+        }
+        const draft = parsePainterDraft(JSON.stringify(v3), new Set(['me']), 'first-person')
+        expect(draft.scene).toBe('1girl, solo, pov, night, kitchen')
+        expect(draft.subjects).toHaveLength(1)
+        expect(draft.subjects[0]).toMatchObject({ name: 'Aria', sex: 'female', state: 'wet, trembling', pose: 'looking at viewer, smile, holding cup, target#headpat\nleft' })
+        expect(draft.plan).toMatchObject({
+            version: 3,
+            scene: { modifiers: { 'scene.time': ['night'] }, freeTags: { 'scene.location': ['kitchen'] } },
+            subjects: { '#0': { stateIds: ['trembling'], evidence: 'Aria smiles' } },
+            interactions: [{ source: 'viewer#0', target: '#0', acts: ['headpat'] }],
+        })
+    })
+
+    it('sends character coordinates only when every block has a position', () => {
+        const draft = parsePainterDraft(JSON.stringify(plan()))
+        draft.subjects[0].center = { x: 0.3, y: 0.7 }
+        const unplaced = buildPainterImageRequest(draft, PAINTER_STYLES[0], createPainterSettings(), 1).parameters
+        expect(unplaced.v4_prompt.use_coords).toBe(false)
+        expect(unplaced.characterPrompts.map(item => item.center)).toEqual([{ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }])
+        draft.subjects[1].center = { x: 0.7, y: 0.5 }
+        const placed = buildPainterImageRequest(draft, PAINTER_STYLES[0], createPainterSettings(), 1).parameters
+        expect(placed.use_coords).toBe(true)
+        expect(placed.v4_prompt.use_coords).toBe(true)
+        expect(placed.characterPrompts.map(item => item.center)).toEqual([{ x: 0.3, y: 0.7 }, { x: 0.7, y: 0.5 }])
+        expect(placed.v4_prompt.caption.char_captions.map(item => item.centers)).toEqual([[{ x: 0.3, y: 0.7 }], [{ x: 0.7, y: 0.5 }]])
+        expect(placed.v4_negative_prompt.caption.char_captions.map(item => item.centers)).toEqual([[{ x: 0.3, y: 0.7 }], [{ x: 0.7, y: 0.5 }]])
+        const left = buildPainterImageRequest(draft, PAINTER_STYLES[0], { ...createPainterSettings(), positionMode: 'novelai' }, 1).parameters
+        expect(left.v4_prompt.use_coords).toBe(false)
+        expect(left.characterPrompts.map(item => item.center)).toEqual([{ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }])
+    })
+
+    it('rejects a version 3 plan without modifier objects', () => {
+        const input = { ...plan(), version: 3, scene: { modifiers: {}, freeTags: {}, notes: '' } }
+        expect(() => parsePainterDraft(JSON.stringify(input))).toThrow('장면 계획 형식')
+    })
+
+    it('keeps a valid planner sex and drops an unknown value', () => {
+        const input = plan()
+        Object.assign(input.subjects[0], { sex: 'female' })
+        Object.assign(input.subjects[1], { sex: 'robot' })
+        const draft = parsePainterDraft(JSON.stringify(input))
+        expect(draft.subjects[0].sex).toBe('female')
+        expect(draft.subjects[1]).not.toHaveProperty('sex')
+    })
 })

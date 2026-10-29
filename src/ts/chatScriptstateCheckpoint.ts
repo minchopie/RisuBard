@@ -6,6 +6,21 @@ export interface ChatScriptstateCheckpoint {
     after: ChatScriptstateSnapshot
 }
 
+/** Chat-variable changes from a base state; `cleared` means the state was removed. */
+export interface ChatScriptstateDelta {
+    set?: ChatScriptstate
+    unset?: string[]
+    cleared?: true
+}
+
+/** A swipe sharing `before` with swipe `base`; `afterChanges` are relative to that swipe's `after`. */
+export interface CompactChatScriptstateCheckpoint {
+    base: number
+    afterChanges: ChatScriptstateDelta
+}
+
+export type StoredSwipeScriptstateCheckpoint = ChatScriptstateCheckpoint | CompactChatScriptstateCheckpoint | null
+
 export interface ChatScriptstateCarrier {
     scriptstate?: ChatScriptstate
 }
@@ -13,7 +28,7 @@ export interface ChatScriptstateCarrier {
 export interface ChatScriptstateCheckpointMessage {
     swipeId?: number
     scriptstateCheckpoint?: ChatScriptstateCheckpoint
-    scriptstateSwipeCheckpoints?: Array<ChatScriptstateCheckpoint | null>
+    scriptstateSwipeCheckpoints?: StoredSwipeScriptstateCheckpoint[]
 }
 
 export function snapshotChatScriptstate(state: ChatScriptstate | undefined): ChatScriptstateSnapshot {
@@ -77,12 +92,71 @@ export function restoreScriptstateBeforeReroll(
     return true
 }
 
+function sameSnapshot(a: ChatScriptstateSnapshot, b: ChatScriptstateSnapshot): boolean {
+    if(a === null || b === null) return a === b
+    const keys = Object.keys(a)
+    return keys.length === Object.keys(b).length
+        && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key])
+}
+
+function diffSnapshot(base: ChatScriptstateSnapshot, target: ChatScriptstateSnapshot): ChatScriptstateDelta {
+    if(target === null) return { cleared: true }
+    const set: ChatScriptstate = {}
+    for(const [key, value] of Object.entries(target)){
+        if(base === null || !Object.hasOwn(base, key) || base[key] !== value) set[key] = value
+    }
+    const unset = base === null ? [] : Object.keys(base).filter((key) => !Object.hasOwn(target, key))
+    return {
+        ...(Object.keys(set).length ? { set } : {}),
+        ...(unset.length ? { unset } : {}),
+    }
+}
+
+function applyDelta(base: ChatScriptstateSnapshot, delta: ChatScriptstateDelta): ChatScriptstateSnapshot {
+    if(delta.cleared) return null
+    const result: ChatScriptstate = base === null ? {} : { ...base }
+    for(const key of delta.unset ?? []) delete result[key]
+    return { ...result, ...delta.set }
+}
+
+function expandSwipeCheckpoint(
+    stored: StoredSwipeScriptstateCheckpoint[],
+    index: number,
+): ChatScriptstateCheckpoint | null {
+    const checkpoint = stored[index]
+    if(!checkpoint) return null
+    if(!('base' in checkpoint)) return cloneCheckpoint(checkpoint)
+    const base = stored[checkpoint.base]
+    if(!base || 'base' in base) return null
+    return {
+        before: cloneSnapshot(base.before),
+        after: applyDelta(base.after, checkpoint.afterChanges),
+    }
+}
+
+// Rerolls of one response start from the same chat state and the same scripts
+// run on it, so swipes store one full checkpoint and keep only how their result
+// differs from it. Otherwise every reroll adds two full copies of the chat
+// variables to the message.
+export function compactSwipeScriptstateCheckpoints(
+    checkpoints: Array<ChatScriptstateCheckpoint | null>,
+): StoredSwipeScriptstateCheckpoint[] {
+    const baseIndex = checkpoints.findIndex((checkpoint) => checkpoint !== null)
+    const base = checkpoints[baseIndex]
+    return checkpoints.map((checkpoint, index) => {
+        if(!checkpoint) return null
+        if(index === baseIndex || !sameSnapshot(checkpoint.before, base.before)) return cloneCheckpoint(checkpoint)
+        return { base: baseIndex, afterChanges: diffSnapshot(base.after, checkpoint.after) }
+    })
+}
+
 export function getSwipeScriptstateCheckpoints(
     message: ChatScriptstateCheckpointMessage,
     swipeCount: number,
 ): Array<ChatScriptstateCheckpoint | null> {
-    const checkpoints = message.scriptstateSwipeCheckpoints
-        ? message.scriptstateSwipeCheckpoints.map((checkpoint) => checkpoint ? cloneCheckpoint(checkpoint) : null)
+    const stored = message.scriptstateSwipeCheckpoints
+    const checkpoints = stored
+        ? stored.map((_, index) => expandSwipeCheckpoint(stored, index))
         : []
 
     while(checkpoints.length < swipeCount){
@@ -102,14 +176,14 @@ export function restoreSelectedSwipeScriptstate(
 ): boolean {
     const checkpoints = message.scriptstateSwipeCheckpoints
     const checkpoint = checkpoints
-        ? checkpoints[message.swipeId ?? 0]
+        ? expandSwipeCheckpoint(checkpoints, message.swipeId ?? 0)
         : message.scriptstateCheckpoint
     if(!checkpoint) {
         delete message.scriptstateCheckpoint
         return false
     }
 
-    const activeCheckpoint = cloneCheckpoint(checkpoint)
+    const activeCheckpoint = checkpoints ? checkpoint : cloneCheckpoint(checkpoint)
     message.scriptstateCheckpoint = activeCheckpoint
     restoreChatScriptstate(chat, activeCheckpoint.after)
     return true

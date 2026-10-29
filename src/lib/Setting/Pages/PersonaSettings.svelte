@@ -529,12 +529,10 @@
                         <span class="field-label">{language.name} <Help key="personaName" /></span>
                         <TextInput className="field-input" placeholder="User" bind:value={editingPersona.name} />
                     </label>
-                    {#if DBState.db.personaNote}
-                        <label data-persona-field="note" class="field-row">
-                            <span class="field-label">{language.note} <Help key="personaNote" /></span>
-                            <TextInput className="field-input" bind:value={editingPersona.note} placeholder="Alternate persona" />
-                        </label>
-                    {/if}
+                    <label data-persona-field="note" class="field-row">
+                        <span class="field-label">{language.note} <Help key="personaNote" /></span>
+                        <TextInput className="field-input" bind:value={editingPersona.note} placeholder={language.personaNotePlaceholder} />
+                    </label>
                 </div>
                 <section data-persona-description class="description-section">
                     <div class="description-heading">

@@ -124,3 +124,54 @@ it('does not include character lore when the option is off or no entries match',
         expect(JSON.parse(call[0].formated[1].content).references.some((source: { name: string }) => source.name === 'characterLorebook')).toBe(false)
     }
 })
+
+it('indexes only lorebook presets named in the scene and fills their saved text verbatim', async () => {
+    const char = mocks.db.characters[0]
+    const preset = (id: string, name: string, look: string) => ({ ...lore(id, '', `@@dont_activate\n[bardpainter character: ${id}]\nname: ${name}\ndefault outfit: dress\n[appearance]\n${look}\n[outfit: dress | 드레스]\n1.2::white dress::`) })
+    char.globalLore.push(preset('aria_p', 'Aria', 'girl, 0.9::aria::, silver hair'), preset('zelda_p', 'Zelda', 'girl, blonde hair'))
+    mocks.request.mockResolvedValue({ type: 'success', result: JSON.stringify({ version: 2, size: '', rendering: '', scene: { tags: '1girl', location: 'garden', framing: '', camera: '' }, negative: '',
+        subjects: [{ id: 'lore:aria_p', name: 'Aria', aliases: [], kind: 'character', appearance: '', outfitId: 'lore:aria_p:dress', clothing: '', state: '', stateIds: [], pose: { tags: '', placement: '', posture: '', action: '', expression: '', gaze: '' }, negative: '' }], interactions: [] }) })
+    const session = new PainterSession('bot', 'chat')
+    expect(await session.prepare()).toBe(true)
+    const payload = JSON.parse(mocks.request.mock.calls[0][0].formated[1].content)
+    expect(payload.identities.map((item: any) => item.id)).toEqual(['lore:aria_p'])
+    expect(payload.identities[0].outfits).toEqual([{ id: 'lore:aria_p:dress', name: '드레스' }])
+    expect(JSON.stringify(payload.references)).not.toContain('bardpainter')
+    const subject = session.data.draft!.subjects[0]
+    expect(subject.appearance).toBe('girl, 0.9::aria::, silver hair')
+    expect(subject.clothing).toBe('1.2::white dress::')
+    expect(char.bardPainter.identities).toEqual([])
+})
+
+it('uses the bot lorebook default style until the chat picks another style', async () => {
+    const char = mocks.db.characters[0]
+    char.globalLore.push(lore('style', '', '@@dont_activate\n[bardpainter style: bot_style]\nname: 봇 화풍\ndefault: true\n[artist]\nartist:bot'))
+    const session = new PainterSession('bot', 'chat')
+    await session.refreshLorePresets()
+    expect(session.style.id).toBe('lore-style:bot_style')
+    expect(await session.chooseStyle('default')).toBe(true)
+    expect(session.style.id).toBe('default')
+    expect(session.data.styleChosen).toBe(true)
+    expect(await session.setDefaultStyle('lore-style:bot_style')).toBe(false)
+})
+
+it('prefers the personal default style over the bot lorebook default until the chat picks one', async () => {
+    const char = mocks.db.characters[0]
+    char.globalLore.push(lore('style', '', '@@dont_activate\n[bardpainter style: bot_style]\nname: 봇 화풍\ndefault: true\n[artist]\nplaceholder'))
+    const personal = { id: 'mine', name: '내 화풍', artist: 'artist:mine', rendering: '', negative: '', steps: 28, scale: 5, cfgRescale: 0, sampler: 'k_euler_ancestral' }
+    Object.assign(mocks.db, { bardPainterStyles: [personal], bardPainterDefaultStyleId: 'mine' })
+    try {
+        const session = new PainterSession('bot', 'chat')
+        session.data.settings.styleId = 'mine'
+        await session.refreshLorePresets()
+        expect(session.style.id).toBe('mine')
+        expect(session.styles.map(item => item.id)).toEqual(['default', 'lore-style:bot_style', 'mine'])
+        expect(await session.chooseStyle('lore-style:bot_style')).toBe(true)
+        expect(session.style.id).toBe('lore-style:bot_style')
+        mocks.db.bardPainterDefaultStyleId = 'default'
+        session.data.styleChosen = undefined
+        expect(session.style.id).toBe('lore-style:bot_style')
+    } finally {
+        Object.assign(mocks.db, { bardPainterStyles: undefined, bardPainterDefaultStyleId: undefined })
+    }
+})

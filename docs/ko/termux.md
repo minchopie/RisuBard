@@ -68,7 +68,7 @@ pkg install -y git && \
 
 ```
 Build OK. Start the server with:
-  node server/node/server.cjs
+  node --max-old-space-size=2048 server/node/server.cjs
 
 Then open this address in the phone's own browser:
   http://localhost:7777
@@ -82,8 +82,10 @@ Then open this address in the phone's own browser:
 빌드가 끝난 디렉터리에서 서버를 실행합니다.
 
 ```bash
-node server/node/server.cjs
+node --max-old-space-size=2048 server/node/server.cjs
 ```
+
+`--max-old-space-size=2048`은 Node의 메모리 한도를 기본값 약 1GB에서 2GB로 올립니다. 이 옵션 없이 실행하면 데이터가 큰 경우 `JavaScript heap out of memory` 오류로 서버가 꺼질 수 있습니다. RAM이 8GB 이상인 폰은 `4096`까지 올려도 되지만, 폰의 실제 RAM보다 크게 잡으면 안드로이드가 Termux를 강제 종료합니다.
 
 서버 부팅 로그가 표시되면 폰의 브라우저(Chrome, Firefox 등)에서 다음 주소를 엽니다.
 

@@ -108,7 +108,7 @@ export const helpEn = {
         showPresetInSidebar: "Show the active prompt preset name in the sidebar for quick reference.",
         showPersonaInSidebar: "Show the active persona name in the sidebar for quick reference.",
         disableMobileDragDrop: "Disable drag-and-drop for chat reordering on mobile devices. Enable this if you experience accidental drags while scrolling.",
-        disableToggleBinding: "Disable the toggle binding feature that pins toggle values to individual chats. When disabled, the bind/save/preset buttons are hidden and previously bound values are not restored on chat switch.",
+        disableToggleBinding: "When on, every chat uses the same toggle values, as in RisuAI, and the chat baseline and preset buttons are hidden. When off, each chat keeps its own toggle values and a new chat starts from the chat you were viewing.",
         useExperimental: "If enabled, it will show some experimental features.",
         forceProxyAsOpenAI: "If enabled, it will force to use OpenAI format when using reverse proxy.",
         forcePlainFetch: "If enabled, it will use the browser Fetch API instead of the native HTTP request. This can cause CORS errors.",
@@ -234,7 +234,7 @@ export const helpEn = {
             "- **File Attachments**: Searching within PDF/TXT/XML attachments",
         keepSessionAlive:
             "Keeps the tab active and prevents the session from expiring due to inactivity in browsers. This may require refresh to take effect.\n\n" +
-            "- **Via Sound**: Plays a silent audio at regular intervals to keep the session alive. This method is known as most compatible and effective in most browsers.\n",
+            "- **Via Sound**: Loops an inaudible low-frequency tone to keep the session alive. This method is known as most compatible and effective in most browsers. On Android, a media notification is shown while it is active, and other music apps may pause.\n",
         reSummarizationPrompt:
             "The prompt used when merging multiple selected summaries into one via bulk edit. If blank, the default prompt is used. The summary output is split by double newlines (\\n\\n) into chunks for similarity search.",
         hypaV3MemoryTokensRatio:
@@ -298,6 +298,7 @@ export const helpEn = {
         enableBlockPartialEdit: "Show per-block edit controls when hovering over a paragraph/block in a message.",
         longPressToPopupEditor: "Open the popup editor when long-pressing a message.",
         showInputActionBar: "Show a bottom toolbar on multiline text fields with copy, reset, and expand-to-editor buttons.",
+        mobileMessageActionsInline: "Show translation, reroll, and other main message actions directly on screens narrower than 640px. Off by default to keep them in the more-actions menu. Desktop layout is unchanged.",
         enableDragPartialEdit: "Allow editing only the text selected by dragging inside a message.",
         botSettingAtStart: "Open the bot settings page automatically whenever the app starts.",
         showMenuChatList: "Show the current character's chat list directly in the sidebar menu.",
@@ -456,10 +457,6 @@ export const helpEn = {
             "Sets the six wiki search budget values at once: search target, event search, per-source search, search maximum, and the long-term memory dynamic limit with its ceiling.\n\n**Economy** (search target 3,000 / events 2,000 / per source 1,500 / maximum 5,500): holds about two main character cards and a little other memory per response to save tokens.\n\n**Standard** (4,000 / 3,000 / 2,000 / 7,500): the default. Two main character cards plus room for other memory and event documents.\n\n**Generous** (6,000 / 4,000 / 2,500 / 10,500, balanced dynamic limit): puts more memory into each response for long chats with many characters and events. It uses the most tokens.\n\nEditing any value yourself switches to Custom. Choose Custom to see and edit the individual values.",
         risuBardInquiryTargetTokenBudget:
             "Target number of tokens for related documents in an ordinary wiki inquiry. It is not filled when fewer documents are relevant.",
-        risuBardBardChanEnabled:
-            "When candidate scores are close, the selected model reranks one compact set of candidate cards. It is off by default; if the model call fails, the original deterministic result is used.",
-        risuBardBardChanModelMode:
-            "Selects the model used for Bard-chan's reranking request. The auxiliary model saves cost, while the main model can improve judgment between ambiguous candidates.",
         risuBardInquiryEventTokenBudget:
             "Separate budget for detailed event documents reached through character turning-point maps and the Story Arc Plot during historical, causal, detail, and chronology queries. Current-state queries alone do not activate it, and the whole inquiry stays below the absolute limit.",
         risuBardInquirySourceTokenBudget:
@@ -491,7 +488,7 @@ export const helpEn = {
         risuBardResponseExcludeUsers:
             "Exclude earlier user messages from response context. The current user request is always retained.",
         risuBardHideOocTurns: "Hide OOC replies and their user inputs from the main chat list. Off by default. Read the live transcript in BardWiki's OOC notepad. Applies to all chats without changing saved messages, AI context or wiki analysis settings.",
-        risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. The current narrative baseline stays in the description position. Turn it off to restore the previous order.",
+        risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. Keeps the original character description and active lorebook text without also inserting their summarized narrative baseline. Turn it off to restore the previous order.",
         risuBardAnalysisExcludeUsers:
             "Exclude user messages from the confirmed turn and recent raw context used for BardWiki analysis, leaving assistant responses only.",
         customBackground: "A custom image used as the chat background.",
@@ -700,7 +697,7 @@ export const helpEn = {
         personaName:
             "Name of the current persona. This fills the `{{user}}` variable in chats and is the name the character uses to address you.",
         personaNote:
-            "A memo / identifier for this persona (only shown when Advanced → personaNote is enabled). Useful for distinguishing multiple personas that share the same display name.",
+            "A memo / identifier for this persona. Useful for distinguishing multiple personas that share the same display name. It is not included in prompts.",
         personaDescription:
             "Persona information. Embedded into the system prompt sent to the model so it recognizes who the user is. Example: \"<user> is a 20 year old woman who normally speaks calmly.\"",
         personaLargePortrait:

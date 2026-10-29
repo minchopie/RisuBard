@@ -1,4 +1,5 @@
 import { v4 } from "uuid"
+import { sha256Digest } from "../../secureCrypto"
 import { fetchNative, openURL } from "../../globalApi.svelte"
 import { alertInput } from "../../alert";
 
@@ -674,7 +675,7 @@ export class MCPClient{
         const clientData = await registerResponse.json()
 
         const code_verifier = (v4() + v4()).replace(/-/g, "")
-        const sha256 = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code_verifier))
+        const sha256 = await sha256Digest(new TextEncoder().encode(code_verifier))
         const code_challenge = Buffer.from(sha256).toString('base64').replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_")
 
         const authUrl = new URL(discoveryURLS.authorization_endpoint)

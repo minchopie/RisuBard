@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import { createMemoryAnalysisRunner, type MemoryAnalysisModelRequest } from './risubard-memory-analysis'
 import { combinedMemoryInstruction, combinedMemorySchema, parseCombinedMemory } from './risubard-combined-memory'
+import { annotateCanonicalUnits } from './risubard-canonical-unit-edit'
 
 const existing = {
     id: 'character.gilbert', type: 'character' as const, title: 'Gilbert', aliases: [],
@@ -134,7 +135,9 @@ describe('combined semantic and canonical writing', () => {
             } },
         }))
         const input = JSON.parse(result.analyze.mock.calls[0][0].input)
-        expect(input.completeCanonicalDocuments[0].completeText).toBe(existing.content)
+        // Units are numbered so the model can edit them by reference.
+        expect(input.completeCanonicalDocuments[0].completeText).toBe(annotateCanonicalUnits(existing.content))
+        expect(input.completeCanonicalDocuments[0].completeText).toContain('[0] A knight.')
     })
     test('creates initial canon and day-zero origin with one call', async () => {
         const result = await run({ create: true })
@@ -147,7 +150,7 @@ describe('combined semantic and canonical writing', () => {
         expect(result.analyze).toHaveBeenCalledTimes(1)
         const input = JSON.parse(result.analyze.mock.calls[0][0].input)
         expect(input.completeCanonicalDocuments).toEqual([
-            { id: existing.id, type: existing.type, title: existing.title, completeText: existing.content },
+            { id: existing.id, type: existing.type, title: existing.title, completeText: annotateCanonicalUnits(existing.content) },
         ])
         expect(result.saveCanonicalDocument).toHaveBeenCalledWith(expect.objectContaining({
             expectedContentHash: 'old-hash',

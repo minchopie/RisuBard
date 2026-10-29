@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import markdownit from 'markdown-it'
 import {
+    countWikiBacklinks,
     describeWikiLinkTarget,
     normalizeWikiLinkKey,
     resolveWikiLinkTarget,
@@ -71,6 +72,35 @@ describe('resolveWikiLinkTarget', () => {
         expect(describeWikiLinkTarget('공통', [document('공통', ['공통'])])).toMatchObject({
             status: 'resolved', document: { title: '공통' },
         })
+    })
+})
+
+describe('document id link targets', () => {
+    const location = { id: 'location._Y9aUPRcvN-thmz2s26URj2y', title: '검은 이끼 골짜기', aliases: [] } as never
+    const other = { id: 'location.other', title: 'location._y9aUPRcvN-thmz2s26URj2y', aliases: [] } as never
+
+    test('resolves an exact internal id even when another title normalizes to it', () => {
+        expect(describeWikiLinkTarget('location._Y9aUPRcvN-thmz2s26URj2y', [location, other]))
+            .toEqual({ status: 'resolved', document: location })
+    })
+
+    test('renders an id link as a resolved link that keeps its display text', () => {
+        const md = markdownit({ html: false, breaks: false, linkify: false })
+        md.use(wikiLinkPlugin, {
+            resolve: (target: string) => describeWikiLinkTarget(target, [location]).status === 'resolved'
+                ? { status: 'resolved' } : { status: 'missing' },
+        })
+        const html = md.render('[[location._Y9aUPRcvN-thmz2s26URj2y|검은 이끼 골짜기]]에 도착했다.')
+        expect(html).toContain('data-wikilink-status="resolved"')
+        expect(html).toContain('>검은 이끼 골짜기</a>에 도착했다.')
+        expect(html).not.toContain('[[')
+    })
+
+    test('counts backlinks written with the id', () => {
+        expect(countWikiBacklinks(
+            { id: 'location._Y9aUPRcvN-thmz2s26URj2y', title: '검은 이끼 골짜기' },
+            [{ id: 'event.a', links: ['location._Y9aUPRcvN-thmz2s26URj2y|검은 이끼 골짜기'] }]
+        )).toBe(1)
     })
 })
 
@@ -157,5 +187,20 @@ describe('wikiLinkPlugin', () => {
 describe('normalizeWikiLinkKey', () => {
     test('collapses whitespace and lowercases', () => {
         expect(normalizeWikiLinkKey('  Foo   Bar ')).toBe('foo bar')
+    })
+})
+
+describe('countWikiBacklinks', () => {
+    test('counts links to the title or any alias with normalized keys, excluding the target itself', () => {
+        const target = { id: 'lavian', title: '라비안 스타폴', aliases: ['기사님'], links: [] }
+        const documents = [
+            target,
+            { id: 'a', title: 'A', aliases: [], links: ['라비안  스타폴'] },
+            { id: 'b', title: 'B', aliases: [], links: ['기사님|그 사람'] },
+            { id: 'c', title: 'C', aliases: [], links: ['기사님#과거'] },
+            { id: 'd', title: 'D', aliases: [], links: ['다른 사람'] },
+            { id: 'lavian', title: '라비안 스타폴', aliases: [], links: ['기사님'] },
+        ]
+        expect(countWikiBacklinks(target, documents)).toBe(3)
     })
 })

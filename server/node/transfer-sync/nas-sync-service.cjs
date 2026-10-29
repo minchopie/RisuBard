@@ -12,11 +12,14 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
-const { join, dirname, relative, isAbsolute, sep } = require('node:path');
+const { join, dirname, basename, relative, isAbsolute, sep, toNamespacedPath } = require('node:path');
+// fs.mkdtemp lacks Node's Windows long-path handling (>260 chars): create through the namespaced prefix, return the plain path.
+const mkdtempLong = async prefix => join(dirname(prefix), basename(await fsp.mkdtemp(toNamespacedPath(prefix))));
 const { createHash, randomUUID } = require('node:crypto');
+const { Worker } = require('node:worker_threads');
 const { atomicWriteJson, resolveInside } = require('../file-store.cjs');
 const { canonical } = require('../../../shared/play-set/protocol.ts');
-const { createSyncStore } = require('./nas-sync-store.cjs');
+const { createSyncStore, READER_THREAD } = require('./nas-sync-store.cjs');
 const { createVault, vaultMasterStore, REFS } = require('./nas-sync-vault.cjs');
 const { createSyncRemote, createSyncTransport } = require('./nas-sync-remote.cjs');
 const { createManifest } = require('./nas-sync-manifest.cjs');
@@ -54,6 +57,36 @@ async function safeParents(root, path) {
 }
 async function syncDir(path) { let fd; try { fd = await fsp.open(path, 'r'); await fd.sync(); } catch (error) { if (process.platform !== 'win32') throw error; } finally { await fd?.close(); } }
 async function hashFile(path) { const digest = createHash('sha256'); for await (const chunk of fs.createReadStream(path)) digest.update(chunk); return digest.digest('hex'); }
+// One process-wide revision reader thread (nas-sync-store.cjs) shared by every service instance; each request carries its store root.
+// It is ref'd only while a read is pending, so an idle thread never keeps the process alive and services created in bulk never add
+// threads. A thread that errors or exits rejects every read it still owes and is replaced by the next request; nothing falls back here.
+let readerThread = null, readerSeq = 0;
+const readerPending = new Map();
+function revisionReader() {
+    if (readerThread) return readerThread;
+    const worker = readerThread = new Worker(join(__dirname, 'nas-sync-store.cjs'), { workerData: READER_THREAD });
+    const fail = error => { if (readerThread === worker) readerThread = null; for (const [seq, p] of readerPending) if (p.worker === worker) { readerPending.delete(seq); p.reject(error); } };
+    worker.on('message', ({ seq, meta, threadId, error }) => {
+        const p = readerPending.get(seq); if (!p || p.worker !== worker) return;
+        readerPending.delete(seq);
+        if (![...readerPending.values()].some(x => x.worker === worker)) worker.unref();
+        if (error) p.reject(new Error(error)); else p.resolve({ meta, threadId });
+    });
+    worker.on('error', fail);
+    worker.on('exit', code => fail(new Error(`Revision reader thread stopped (${code})`)));
+    worker.unref();
+    return worker;
+}
+const readOnThread = (worker, root, ids) => new Promise((resolve, reject) => {
+    if (worker !== readerThread) { reject(new Error('Revision reader thread stopped')); return; }
+    const seq = ++readerSeq; readerPending.set(seq, { worker, resolve, reject });
+    worker.ref();
+    try { worker.postMessage({ seq, root, ids }); } catch (error) {
+        readerPending.delete(seq);
+        if (![...readerPending.values()].some(x => x.worker === worker)) worker.unref();
+        reject(error);
+    }
+});
 
 function createNasSyncService({ dataRoot, readDatabase, memory, storage, readColdChat = async () => null, readInlay = async () => null, installInlay = async () => {}, removeInlay = async () => {}, inlayMeta = async () => null, secrets, fetch, protect, nasRoute = null, identityDir = null, secretsDir = null, transfers = null, now = Date.now, hooks = {} }) {
     const root = join(dataRoot, 'nas-sync');
@@ -123,11 +156,43 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
      *  Clients treat that answer as "wait and resend" (nodeStorage.saveRequest), so a write landing in such a window is delayed, not lost. */
     function assertWrite(req) {
         if (req.path?.startsWith('/api/nas-sync')) return;
+        // Archive transport never writes the app DB; export/prepare/arm/finish and connection edits still use the gate.
+        if (/^\/api\/play-transfer\/remote\/(?:nas|github)\/(?:config|list|upload|download)$/.test(req.path)) return;
         const plan = service().plan, active = plan && ['saving', 'committed'].includes(plan.phase) ? plan.transaction : undefined;
         const token = req.headers['x-nas-sync-id'];
         if (token ? token !== active : active || operating) { const error = new Error('NAS sync apply must finish before saving'); error.status = 423; error.code = 'NAS_SYNC_BUSY'; if (active) error.transaction = active; throw error; } // `transaction`: an armed plan (recovery settles it), not a transient step
     }
     const differenceCache = new Map();
+    // Verified `name`/`chatIds` of stored revisions by id (an id is its content hash, so an entry never goes stale), read on the shared
+    // reader thread. One read runs at a time per service; a caller arriving during it waits, then reads only what is still missing.
+    // A failed read rejects every caller waiting on it; only a later call reads again.
+    const metaCache = new Map();
+    let metaRead = null;
+    async function readMeta(ids) {
+        for (;;) {
+            if (metaRead) await metaRead;
+            const missing = ids.filter(id => !metaCache.has(id));
+            if (!missing.length) return;
+            if (metaRead) continue;
+            metaRead = (async () => {
+                const worker = revisionReader();
+                await hooks.beforeMetaRead?.({ ids: missing, worker });
+                const { meta } = await readOnThread(worker, openStore().root, missing);
+                for (const id of missing) metaCache.set(id, meta[id]);
+            })().finally(() => { metaRead = null; });
+            await metaRead;
+        }
+    }
+    /** Runs the synchronous `compute(meta)` until one pass needs no unread metadata and returns that pass, so a result reflects a single
+     *  graph state even when commits land while metadata is read. Unread metadata is never guessed and never read on this thread. */
+    async function withMeta(compute) {
+        for (;;) {
+            const need = new Set(), result = compute(id => { if (metaCache.has(id)) return metaCache.get(id); need.add(id); return undefined; });
+            if (!need.size) return result;
+            await readMeta([...need]);
+        }
+    }
+    const nameOf = (meta, rev) => rev ? meta(rev.id)?.name : undefined;
     const branchesPreserved = (s, key, c) => key.startsWith('play\nchat\n') && c.state === 'diverged' && !chatDifference(c.liveHeads.map(id => s.graph.get(id))).sameMessages && c.variants.every(ids => ids.some(id => Object.values(service().lineage).includes(id)));
     const conflictCount = s => s.graph.rootKeys().filter(k => { if (k === 'settings\ngroup\nuserNote') return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
     // `workspaceId`/`role` are reported even while disabled so a reopened panel resumes the saved setup instead of defaults.
@@ -228,11 +293,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const [key, p] of Object.entries(state.peers)) if (Object.values(p.admittedRevisions ?? {}).some(ids => ids.includes(revisionId))) return { device: key.split('/')[0], self: false };
         return { device: null, self: false };
     }
-    function rootTitle(s, key) {
+    function rootTitle(s, key, meta) {
         const [, type, id] = key.split('\n'), r = s.graph.get(s.graph.classify(key).liveHeads[0]);
-        if (type !== 'chat') return r?.content?.name ?? id;
-        const owner = s.graph.revisions().find(r => r.type === 'character' && r.content?.chatIds?.includes(id));
-        return [owner?.content?.name, r?.content?.name || '이름 없는 대화'].filter(Boolean).join(' · ');
+        if (type !== 'chat') return nameOf(meta, r) ?? id;
+        const owner = s.graph.revisions().find(r => r.type === 'character' && meta(r.id)?.chatIds?.includes(id));
+        return [nameOf(meta, owner), nameOf(meta, r) || '이름 없는 대화'].filter(Boolean).join(' · ');
     }
     function chatDifference(heads) {
         const key = heads[0].root, signature = heads.map(h => h.id).sort().join(':');
@@ -251,14 +316,16 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         differenceCache.set(key, { signature, result });
         return result;
     }
-    function conflicts() {
-        const s = openStore(), out = [];
+    async function conflicts() {
+        const s = openStore();
+        await withMeta(meta => { for (const key of s.graph.rootKeys()) if (key !== 'settings\ngroup\nuserNote' && s.graph.classify(key).state === 'diverged') rootTitle(s, key, meta); }); // titles first, so the listing below normally runs once
+        return withMeta(meta => { const out = [];
         for (const key of s.graph.rootKeys()) {
             if (key === 'settings\ngroup\nuserNote') continue; // legacy selected-persona mirror remains in history, never a user-facing library conflict
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
             if (c.state === 'diverged') {
                 const versions = c.variants.map(ids => s.graph.get(ids[0]));
-                out.push({ root: key, domain, type, id: rootId, title: rootTitle(s, key), state: branchesPreserved(s, key, c) ? 'branches-preserved' : c.state,
+                out.push({ root: key, domain, type, id: rootId, title: rootTitle(s, key, meta), state: branchesPreserved(s, key, c) ? 'branches-preserved' : c.state,
                     ...(type === 'chat' ? chatDifference(versions) : {}),
                     variants: c.variants.map(heads => { const r = s.graph.get(heads[0]); return { heads, source: sourceOf(s, heads[0]),
                         ...(type === 'chat' ? { messages: r.content?.message?.length ?? 0, wikiFiles: Object.keys(r.dependencies).filter(k => k.startsWith('bard:')).length } : { content: r.content }),
@@ -266,11 +333,15 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             }
             else if (c.state === 'delete-pending') out.push({ root: key, domain, type, id: rootId, state: c.state, liveHeads: c.liveHeads, tombstoneHeads: c.tombstoneHeads });
         }
-        return out;
+        return out; });
     }
     /** Last captured/applied revision only: a published revision is not a receipt from another device. */
     async function overview() {
-        const s = requireEnabled(), db = await readDatabase(), state = s.state(), lineage = service().lineage;
+        const s = requireEnabled(), db = await readDatabase();
+        // Titles of roots without a local chat row are read first (off-thread), so the listing below normally runs once.
+        const chatRoots = new Set((db?.characters ?? []).flatMap(c => (c.chats ?? []).map(ch => `play\nchat\n${service().branches[ch.id]?.root ?? ch.id}`)));
+        await withMeta(meta => { for (const key of s.graph.rootKeys()) if (key !== 'settings\ngroup\nuserNote' && !chatRoots.has(key)) rootTitle(s, key, meta); });
+        return withMeta(meta => { const state = s.state(), lineage = service().lineage;
         const rows = [], commitsByRevision = new Map();
         for (const commit of state.commits) for (const id of commit.revisions ?? []) { if (!commitsByRevision.has(id)) commitsByRevision.set(id, []); commitsByRevision.get(id).push(commit); }
         for (const character of db?.characters ?? []) for (const chat of character.chats ?? []) {
@@ -304,12 +375,12 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const [, type, id] = key.split('\n'), c = s.graph.classify(key), heads = nasHeads.get(key) ?? [];
             const dates = heads.map(id => state.nasTimes?.[id] ? { at: state.nasTimes[id], kind: 'modified' } : times.get(id));
             const dated = dates.length && dates.every(x => Number.isSafeInteger(x?.at) && x.at > 0) ? dates.reduce((a, b) => a.at >= b.at ? a : b) : null;
-            return (chatRows.get(key) ?? [null]).map(chat => ({ root: key, type, id, title: chat ? `${chat.character} · ${chat.name}` : rootTitle(s, key),
+            return (chatRows.get(key) ?? [null]).map(chat => ({ root: key, type, id, title: chat ? `${chat.character} · ${chat.name}` : rootTitle(s, key, meta),
                 nasAt: dated?.at ?? null, nasTimeKind: dated?.kind ?? null,
                 state: chat?.state ?? (c.state === 'diverged' || c.state === 'delete-pending' ? 'review' : c.state === 'deleted' ? 'deleted' : !heads.length ? 'upload-pending' : c.heads.some(id => !known.has(id)) ? 'upload-pending' : 'recorded'),
                 ...(chat ? { wikiFiles: chat.wikiFiles, slots: chat.slots, pages: chat.pages } : {}) }));
         });
-        return { chats: rows, items, personas: (db?.personas ?? []).map(p => ({ name: p.name || '이름 없는 페르소나' })), localIssues: [personaMirrorIssue(db ?? {})].filter(Boolean), peerApplied: 'unconfirmed' };
+        return { chats: rows, items, personas: (db?.personas ?? []).map(p => ({ name: p.name || '이름 없는 페르소나' })), localIssues: [personaMirrorIssue(db ?? {})].filter(Boolean), peerApplied: 'unconfirmed' }; });
     }
     /** Resolution parents every head (core resolve) with the kept head's content; the plan then materializes it locally. */
     async function resolveConflict({ root, keep }) {
@@ -367,10 +438,24 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             throw error;
         }
     }
-    function trashList() { const s = requireEnabled(); return s.trash().map(t => { const r = s.graph.get(t.id); return { ...t, domain: r.domain, type: r.type, operation: r.tombstone.operation, cohort: s.graph.revisions().filter(x => x.tombstone?.operation === r.tombstone.operation).length }; }); }
-    /** Restores the exact deletion cohort (core restore) and queues the roots for local materialization. */
+    /** Readable name of a deleted item: the name its last live state carried (chats also show their character). */
+    function deletedTitle(s, r, meta) {
+        const base = r.tombstone?.base ? s.graph.get(r.tombstone.base) : null, name = nameOf(meta, base);
+        if (r.type !== 'chat') return name || null;
+        // The owner is found through past membership; its name is read from that character's current head (a deleted character's
+        // last name is its tombstone base), so a rename recorded together with the chat deletion still shows the new name.
+        const owners = s.graph.revisions().filter(x => x.type === 'character' && meta(x.id)?.chatIds?.includes(r.root));
+        const nameAt = id => { const h = s.graph.get(id); return nameOf(meta, h?.tombstone ? s.graph.get(h.tombstone.base) : h); };
+        const ownerName = [...new Set(owners.map(x => `${x.domain}\n${x.type}\n${x.root}`))].flatMap(k => s.graph.heads(k)).map(nameAt).find(Boolean) ?? nameOf(meta, owners.at(-1));
+        return [ownerName, name || '이름 없는 대화'].filter(Boolean).join(' · ');
+    }
+    async function trashList() { const s = requireEnabled(); return withMeta(meta => s.trash().map(t => { const r = s.graph.get(t.id); return { ...t, domain: r.domain, type: r.type, title: deletedTitle(s, r, meta), operation: r.tombstone.operation, cohort: s.graph.revisions().filter(x => x.tombstone?.operation === r.tombstone.operation).length }; })); }
+    /** Restores the exact deletion cohort (core restore) and queues the roots for local materialization. Only deletions still offered
+     *  in the trash list (the newest few operations) can be restored. */
     async function restoreTrash({ id }) {
-        const s = requireEnabled(), batch = s.graph.restore(id);
+        const s = requireEnabled();
+        if (!s.trash().some(t => t.id === id)) throw new Error('This deletion is no longer in the trash');
+        const batch = s.graph.restore(id);
         await commitWithIntent(s, batch, batch.map(r => `${r.domain}\n${r.type}\n${r.root}`));
         return { restored: batch.map(r => ({ root: r.root, type: r.type, revision: r.id })) };
     }
@@ -530,18 +615,31 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         return status();
     }
     // Omitting chat bodies is an upload preference, never a deletion or an empty-chat replacement.
+    // A character in the app's trash (`trashTime`, the same test as checkCharacterOrder; upstream's automatic pre-update backup copy is
+    // created this way) is not published at all: `trashTime` is a local field the projection strips, so publishing it would make the
+    // copy an ordinary visible card on every peer. Its card root and every chat root it is known to own are PRESERVED instead, so a
+    // previously published card keeps its lineage, heads and media without a tombstone, a never-published copy creates no root, and
+    // untrashing simply returns the card to the ordinary projection where its recorded lineage continues. Removing a character from
+    // the database (explicit deletion, trash purge) is still a deletion.
+    const trashed = c => !!c?.trashTime;
     function cardOnlyProjection(db, s) {
-        const memberships = new Map(), preserved = new Set();
-        const characters = (db.characters ?? []).map(c => {
-            if (!(service().cardOnlyUploads ?? []).includes(c.chaId)) return c;
-            const key = `library\ncharacter\n${c.chaId}`, known = service().lineage[key + '#' + c.chaId];
-            const ids = new Set([...(known ? s.graph.get(known)?.content?.chatIds ?? [] : []),
-                ...s.graph.classify(key).liveHeads.flatMap(id => s.graph.get(id)?.content?.chatIds ?? [])]);
+        const memberships = new Map(), preserved = new Set(), characters = [];
+        const knownChatRoots = c => { const key = `library\ncharacter\n${c.chaId}`, known = service().lineage[key + '#' + c.chaId]; return new Set([...(known ? s.graph.get(known)?.content?.chatIds ?? [] : []), ...s.graph.classify(key).liveHeads.flatMap(id => s.graph.get(id)?.content?.chatIds ?? [])]); };
+        for (const c of db.characters ?? []) {
+            if (trashed(c)) {
+                const ids = knownChatRoots(c);
+                for (const chat of c.chats ?? []) if (typeof chat?.id === 'string') ids.add(service().branches[chat.id]?.root ?? chat.id); // a fresh backup's id-less empty chat is nothing to preserve
+                preserved.add(`library\ncharacter\n${c.chaId}`);
+                for (const id of ids) preserved.add(`play\nchat\n${id}`);
+                continue;
+            }
+            if (!(service().cardOnlyUploads ?? []).includes(c.chaId)) { characters.push(c); continue; }
+            const ids = knownChatRoots(c);
             memberships.set(c.chaId, [...ids]);
             for (const chat of c.chats ?? []) ids.add(service().branches[chat.id]?.root ?? chat.id);
             for (const id of ids) preserved.add(`play\nchat\n${id}`);
-            return { ...c, chats: [] };
-        });
+            characters.push({ ...c, chats: [] });
+        }
         return { database: { ...db, characters }, memberships, preserved };
     }
     /** Snapshot: hydrated canonical DB → changed revisions committed with their blobs. Rejects while a plan is active. */
@@ -551,7 +649,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const original = await readDatabase();
         if (!original) throw new Error('Database unavailable');
         const { database: db, memberships, preserved } = cardOnlyProjection(original, s);
-        const work = await fsp.mkdtemp(join(root, 'snapshot-')), captures = new Map(), cleanups = [];
+        const work = await mkdtempLong(join(root, 'snapshot-')), captures = new Map(), cleanups = [];
         try {
             for (const character of db.characters ?? []) {
                 const chatIds = (character.chats ?? []).map(c => c.id).filter(Boolean);
@@ -787,10 +885,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const row of result.newCharacters) for (const id of row.chatIds) chatOwner.set(id, row.chaId);
         // A chat restored from the trash is no longer in its owner's CURRENT membership: the owner is the character whose recorded
         // membership history (typed `chatIds` content of its revisions) listed the chat; a character still present locally wins.
-        const ownerFromHistory = chatRoot => {
-            const owners = [...new Set(s.graph.revisions().filter(r => r.type === 'character' && (r.content?.chatIds ?? []).includes(chatRoot)).map(r => r.root))];
+        const ownerFromHistory = chatRoot => withMeta(meta => {
+            const owners = [...new Set(s.graph.revisions().filter(r => r.type === 'character' && (meta(r.id)?.chatIds ?? []).includes(chatRoot)).map(r => r.root))];
             return owners.find(id => (db.characters ?? []).some(c => c.chaId === id) || result.newCharacters.some(c => c.chaId === id)); // a pending (e.g. vault) owner leaves the chat 'owner unknown'
-        };
+        });
         // Pins are compared in the same secret-stripped public form the sender used, on the database as this plan will leave it.
         const futureView = v.project(planView(db, result)).public;
         for (const key of touched.keys()) {
@@ -818,7 +916,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 const localId = continuing ? continuing.chat.id : (!taken.has(rootId) ? rootId : `${rootId}~${sha256(segment).slice(0, 8)}`);
                 if (!continuing && taken.has(localId)) { result.pending.push({ root: key, head: head.id, reason: 'local id collision', localId }); rootApplied = false; continue; }
                 taken.add(localId);
-                const characterId = continuing?.character.chaId ?? chatOwner.get(rootId) ?? chatOwner.get(localId) ?? ownerFromHistory(rootId);
+                const characterId = continuing?.character.chaId ?? chatOwner.get(rootId) ?? chatOwner.get(localId) ?? await ownerFromHistory(rootId);
                 if (!characterId) { result.pending.push({ root: key, head: head.id, reason: 'owner unknown' }); rootApplied = false; continue; }
                 const knownHead = continuing ? s.graph.get(lineage[key + '#' + continuing.chat.id]) : null;
                 if (knownHead && (variant.includes(knownHead.id) || (knownHead.contentHash === head.contentHash && knownHead.dependencyHash === head.dependencyHash))) { result.lineage[key + '#' + localId] = head.id; continue; } // already at this head or equal content: nothing to apply
@@ -908,7 +1006,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const key of touched.keys()) if (scoped.preserved.has(key)) edited.add(key);
         const known = [...touched.keys()].filter(key => Object.keys(lineage).some(k => k.startsWith(key + '#')));
         if (!known.length) return edited;
-        const work = await fsp.mkdtemp(join(root, 'plan-check-')), captures = new Map(), cleanups = [];
+        const work = await mkdtempLong(join(root, 'plan-check-')), captures = new Map(), cleanups = [];
         try {
             const chatRoots = new Set(known.filter(k => k.startsWith('play\nchat\n')).map(k => k.split('\n')[2]));
             for (const character of db.characters ?? []) {
@@ -969,6 +1067,58 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         await fsp.rename(source, destination);
         return true;
     }
+    /** Read-only resume evidence. Expected takes precedence when a value also equals its baseline. */
+    function classifySaved(current, db) {
+        const e = current.expected, b = current.baseline, units = [];
+        if (!e || !b) return { resumable: false, units };
+        // Missing entities have a null baseline; unrepresentable values never become a missing-entity match.
+        const fingerprint = value => { try { return { hash: value === undefined ? null : localHash(value), valid: true }; } catch { return { hash: null, valid: false }; } };
+        const append = (unit, expected, actual, beforeHash, hasBefore = true) => units.push({ ...unit,
+            state: expected ? 'expected' : hasBefore && actual.valid && actual.hash === beforeHash ? 'before' : 'other', beforeHash, currentHash: actual.valid ? actual.hash : null });
+        const chatOf = (characterId, chatId) => (db.characters ?? []).find(c => c.chaId === characterId)?.chats?.find(ch => ch.id === chatId);
+        const fieldsMatch = (value, fields, expectedHash) => value && !fields.some(field => value[field] === undefined)
+            && fingerprint(Object.fromEntries(fields.map(field => [field, value[field]]))).hash === expectedHash;
+        for (const [key, expectedHash] of Object.entries(e.settings)) {
+            const actual = fingerprint(key in db ? db[key] : undefined);
+            let expected = expectedHash === null ? current.settings[key] === null && !(key in db) : fingerprint(key in db ? db[key] : null).hash === expectedHash;
+            if (!expected && key === 'characterOrder' && fingerprint(current.settings[key]).hash === expectedHash) {
+                // Exactly the same retained-local-card normalization accepted by verifySaved; no alternate reorder is admitted.
+                const normalized = { characters: db.characters ?? [], characterOrder: clone(current.settings[key]) };
+                checkCharacterOrder(normalized);
+                expected = fingerprint(key in db ? db[key] : null).hash === fingerprint(normalized.characterOrder).hash;
+            }
+            append({ kind: 'setting', id: key, key, expectedHash }, expected, actual, b.settings?.[key] ?? null, Object.hasOwn(b.settings ?? {}, key));
+        }
+        for (const [index, row] of e.chats.entries()) {
+            const chat = chatOf(row.characterId, row.chatId);
+            append({ kind: 'chat', id: row.chatId, characterId: row.characterId, fields: row.fields, expectedHash: row.hash }, fieldsMatch(chat, row.fields, row.hash), fingerprint(chat), b.chats?.[index] ?? null, index < (b.chats?.length ?? 0));
+        }
+        for (const row of e.characters) {
+            const index = [...current.characters, ...current.newCharacters].findIndex(item => item.chaId === row.chaId);
+            const character = (db.characters ?? []).find(c => c.chaId === row.chaId);
+            const metadata = character && Object.fromEntries(Object.entries(character).filter(([key]) => key !== 'chats'));
+            append({ kind: 'character', id: row.chaId, fields: row.fields, expectedHash: row.hash }, fieldsMatch(character, row.fields, row.hash), fingerprint(metadata), b.characters?.[index] ?? null, index >= 0 && index < (b.characters?.length ?? 0));
+        }
+        for (const [kind, rows, baseline, collection, idKey, planned] of [
+            ['module', e.modules, b.modules, db.modules, 'id', current.modules], ['plugin', e.plugins, b.plugins, db.plugins, 'name', current.plugins],
+        ]) for (const row of rows) {
+            const index = planned.findIndex(item => item[idKey] === row[idKey]);
+            const id = row[idKey], value = (collection ?? []).find(item => item[idKey] === id), actual = fingerprint(value);
+            append({ kind, id, expectedHash: row.hash }, value && actual.valid && actual.hash === row.hash, actual, baseline?.[index] ?? null, index >= 0 && index < (baseline?.length ?? 0));
+        }
+        if (e.pluginEnabled) {
+            const actual = fingerprint(Object.fromEntries((db.plugins ?? []).filter(p => p.name in current.pluginEnabled).map(p => [p.name, p.enabled ?? false])));
+            append({ kind: 'pluginEnabled', id: 'pluginEnabled', expectedHash: e.pluginEnabled }, actual.valid && actual.hash === e.pluginEnabled, actual, null, false);
+        }
+        for (const row of e.deletions) {
+            const exists = row.kind === 'chat' ? !!chatOf(row.characterId, row.id) : row.kind === 'character' ? (db.characters ?? []).some(c => c.chaId === row.id) : (db[row.kind + 's'] ?? []).some(item => (row.kind === 'plugin' ? item.name : item.id) === row.id);
+            const index = current.deletions.findIndex(d => d.kind === row.kind && d.id === row.id && d.characterId === row.characterId);
+            const before = b.deletions?.[index], actual = fingerprint(exists);
+            append({ kind: 'deletion', id: row.id, key: row.kind, ...(row.characterId ? { characterId: row.characterId } : {}), expectedHash: localHash(false) }, !exists, actual, typeof before === 'boolean' ? localHash(before) : null, typeof before === 'boolean');
+        }
+        // Deletion baselines record existence, not the entity's contents. A still-present target may have been edited.
+        return { resumable: current.phase === 'saving' && units.length > 0 && units.every(unit => unit.state !== 'other' && !(unit.kind === 'deletion' && unit.state === 'before')), units };
+    }
     function verifySaved(current, db) {
         const e = current.expected; if (!e) return false;
         const chatOf = (characterId, chatId) => (db.characters ?? []).find(c => c.chaId === characterId)?.chats?.find(ch => ch.id === chatId);
@@ -982,7 +1132,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             checkCharacterOrder(normalized);
             return localHash(k in db ? db[k] : null) === localHash(normalized.characterOrder);
         });
-        const characters = e.characters.every(x => { const c = (db.characters ?? []).find(y => y.chaId === x.chaId); return c && localHash(Object.fromEntries(x.fields.map(f => [f, c[f]]))) === x.hash; });
+        const characters = e.characters.every(x => { const c = (db.characters ?? []).find(y => y.chaId === x.chaId); return c && !x.fields.some(f => c[f] === undefined) && localHash(Object.fromEntries(x.fields.map(f => [f, c[f]]))) === x.hash; });
         const modules = e.modules.every(x => { const m = (db.modules ?? []).find(y => y.id === x.id); return m && localHash(m) === x.hash; });
         const plugins = e.plugins.every(x => { const p = (db.plugins ?? []).find(y => y.name === x.name); return p && localHash(p) === x.hash; });
         const pluginEnabled = !e.pluginEnabled || localHash(Object.fromEntries((db.plugins ?? []).filter(p => p.name in current.pluginEnabled).map(p => [p.name, p.enabled ?? false]))) === e.pluginEnabled;
@@ -1006,10 +1156,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const db = await readDatabase();
             if (current.phase === 'saving' && verifySaved(current, db)) { await step(c => { c.phase = 'committed'; }); manifest.transact(x => { x.plan.phase = 'committed'; }); }
             else {
-                if (confirmed) throw new Error('Saved state does not match the prepared sync apply; recovery retained');
+                if (confirmed) throw Object.assign(new Error('Saved state does not match the prepared sync apply; recovery retained'), { detail: classifySaved(current, db) });
                 // Roll back only when every planned entity is provably still in its pre-apply state; anything mixed or unknown keeps the plan and the write gate.
                 const untouched = current.phase === 'prepared' || (current.baseline && canonical(entityHashes(current, db), true) === canonical(current.baseline, true));
-                if (!untouched) throw Object.assign(new Error('Part of the sync apply may have been saved; recovery retained'), { code: 'NAS_SYNC_PARTIAL' });
+                if (!untouched) throw Object.assign(new Error('Part of the sync apply may have been saved; recovery retained'), { code: 'NAS_SYNC_PARTIAL', detail: classifySaved(current, db) });
                 for (const item of current.media) if (item.installed) { if (item.kind === 'inlay') await removeInlay(item.id).catch(() => {}); else storage.kvDel(item.key); }
                 manifest.transact(x => { x.plan = null; (x.rolledBack ??= []).push({ transaction, at: now() }); });
                 await fsp.rm(file(planPath(transaction)), { force: true }); await fsp.rm(staging, { recursive: true, force: true });
@@ -1085,11 +1235,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         return { state: 'recovery-held', transaction };
     }
     const recovery = async () => { await sweepShares(); return service().plan ? [{ transaction: service().plan.transaction, phase: service().plan.phase }] : []; };
-    // Single-flight: a client that dropped its HTTP wait (deadline, pause) and calls again joins the run still in progress instead of
-    // starting a duplicate; a rejected run is not sticky; a run in flight finishes after disable (its uploads are immutable), while
-    // the next call is refused by requireEnabled until re-enable.
-    const inFlight = { publish: null, pull: null };
+    // A dropped HTTP wait does not stop server work: retries join the running snapshot/network operation instead of queueing duplicates.
+    // A rejected run is not sticky; the next snapshot still captures fresh edits and checks enabled state inside its exclusive lane.
+    const inFlight = { snapshot: null, publish: null, pull: null };
     const singleFlight = (name, run) => inFlight[name] ??= run().finally(() => { inFlight[name] = null; });
+    const takeSnapshot = async () => { requireEnabled(); return singleFlight('snapshot', () => exclusive(snapshot)); };
     // The NAS route (home/external) is pinned for the whole run: one publish or pull never mixes endpoints mid PUT/verify/MOVE.
     const pinned = fn => nasRoute ? nasRoute.run(fn) : fn();
     const publish = () => { requireEnabled(); return singleFlight('publish', () => pinned(() => openTransport().publish())); };
@@ -1100,7 +1250,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             try {
                 if (!await auth(req, res) || method !== 'get' && !activeSession(req, res)) return;
                 res.json(await handler(req));
-            } catch (error) { if (!res.headersSent) res.status(error.status ?? 400).json({ error: error.message, code: error.code }); }
+            } catch (error) { if (!res.headersSent) res.status(error.status ?? 400).json({ error: error.message, code: error.code, ...(error.detail ? { detail: error.detail } : {}) }); }
         });
         route('get', '/status', () => status());
         // Home/external route: the client (Android native bridge) reports the live network before each cycle; Windows detects itself.
@@ -1112,7 +1262,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/enable', req => enable(req.body));
         route('post', '/disable', () => disable());
         route('post', '/card-only-upload', req => exclusive(() => setCardOnlyUpload(req.body)));
-        route('post', '/snapshot', () => exclusive(snapshot));
+        route('post', '/snapshot', () => takeSnapshot());
         route('post', '/bootstrap', req => exclusive(() => bootstrap(req.body)));
         route('post', '/publish', () => publish());
         route('post', '/pull', () => pull());
@@ -1129,12 +1279,14 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/resolve', req => exclusive(() => resolveConflict(req.body)));
         route('post', '/restore-revision', req => exclusive(() => restoreRevision(req.body)));
         route('get', '/trash', () => trashList());
+        // Display-only: the client reports what kind of device this is (PC / tablet / phone) for labels on other devices.
+        route('post', '/profile', req => service().enabled ? exclusive(() => openStore().setProfile(req.body ?? {})) : null);
         route('post', '/trash/restore', req => exclusive(() => restoreTrash(req.body)));
         route('post', '/open-deletion/restore', req => exclusive(() => restoreOpenDeletion(req.body)));
         route('post', '/open-deletion/accept', req => exclusive(() => acceptOpenDeletion(req.body)));
     }
     return { assertWrite, status, pendingRoots, enable, disable, setCardOnlyUpload: input => exclusive(() => setCardOnlyUpload(input)), markRestore, clearRestore, shareRequest: () => exclusive(shareRequest), detectShare, consumed, consumedAll, receiveForeign: (...a) => exclusive(() => receiveForeign(...a)), acceptPendingGrant: (...a) => exclusive(() => acceptPendingGrant(...a)), discardShare, sweepShares,
-        conflicts, overview, resolveConflict: (...a) => exclusive(() => resolveConflict(...a)), restoreRevision: (...a) => exclusive(() => restoreRevision(...a)), trashList, restoreTrash: (...a) => exclusive(() => restoreTrash(...a)), restoreOpenDeletion: (...a) => exclusive(() => restoreOpenDeletion(...a)), acceptOpenDeletion, snapshot: () => exclusive(snapshot), bootstrap: (...a) => exclusive(() => bootstrap(...a)), plan: () => exclusive(plan), currentPlan: () => exclusive(currentPlan), arm: (...a) => exclusive(() => arm(...a)), finish: (...a) => exclusive(() => finish(...a)), hold: (...a) => exclusive(() => hold(...a)), recovery, publish, pull, registerRoutes,
+        conflicts, overview, resolveConflict: (...a) => exclusive(() => resolveConflict(...a)), restoreRevision: (...a) => exclusive(() => restoreRevision(...a)), trashList, restoreTrash: (...a) => exclusive(() => restoreTrash(...a)), restoreOpenDeletion: (...a) => exclusive(() => restoreOpenDeletion(...a)), acceptOpenDeletion, snapshot: takeSnapshot, bootstrap: (...a) => exclusive(() => bootstrap(...a)), plan: () => exclusive(plan), currentPlan: () => exclusive(currentPlan), arm: (...a) => exclusive(() => arm(...a)), finish: (...a) => exclusive(() => finish(...a)), hold: (...a) => exclusive(() => hold(...a)), recovery, publish, pull, registerRoutes,
         store: () => openStore(), transport: () => openTransport(), vault: () => openVault(), state: () => manifest.view() };
 }
 module.exports = { createNasSyncService };

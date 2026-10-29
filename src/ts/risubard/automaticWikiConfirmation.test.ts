@@ -45,6 +45,21 @@ describe('automatic BardWiki confirmation', () => {
         expect(screenSource).toContain('onReanalyzeMemory={reanalyzeNarrativeMessage}')
     })
 
+    test('serializes confirmations per chat and analyzes the queued backlog in story order', () => {
+        const processSource = readFileSync('src/ts/process/index.svelte.ts', 'utf8')
+
+        expect(processSource).toContain('enqueueNarrativeConfirmation(')
+        expect(processSource).toContain('projectMemoryBacklog(')
+        const trigger = processSource.search(/shouldAutomaticallyConfirmNarrativeTurn\(\s*requestSettings\.risuBardAutoWikiEnabled/)
+        expect(trigger).toBeGreaterThan(0)
+        const block = processSource.slice(trigger, trigger + 800)
+        expect(block).toContain('processNarrativeBacklog({')
+        expect(block).toContain('targetMessageId: narrativeTurnToConfirm.targetMessageId')
+        // A turn that does not confirm stops the pass so that no later turn overtakes it.
+        const runner = processSource.slice(processSource.indexOf('async function runNarrativeBacklog('))
+        expect(runner.slice(0, 1600)).toMatch(/risubardMemoryConfirmed !== true\) break/)
+    })
+
     test('keeps configurable confirmation delay out of the product path', () => {
         const processSource = readFileSync('src/ts/process/index.svelte.ts', 'utf8')
         const currentChatSettings = readFileSync(

@@ -542,3 +542,28 @@ test('replacing an A1 replica preserves the original KV bytes used by other char
     expect(store.kvGet('assets/portrait.png').toString()).toBe('first')
     expect(createFileKv({ dataRoot: root }).kvGet('assets/portrait.png').toString()).toBe('first')
 })
+
+test('a one-shot asset scan adopts only the requested character folder, once', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bard-live-files-')); roots.push(root)
+    const repository = createUserDataRepository({ dataRoot: root })
+    const character = (chaId: string, name: string) => ({ chaId, type: 'character', name, desc: '', globalLore: [], additionalAssets: [], emotionImages: [], chats: [{ id: 'chat', name: 'Chat', message: [] }] })
+    repository.importLegacyDatabase({ botPresets: [], modules: [], personas: [], loreBook: [], characters: [character('one', 'One'), character('two', 'Two')] }, { mode: 'sync' })
+    // Written like an outside tool (no checksum sidecar): app-made copies with a valid sidecar are ignored.
+    for (const [dir, name, body] of [['one', 'guide.webp', 'new art'], ['two', 'stray.webp', 'not requested']]) {
+        fs.mkdirSync(path.join(root, 'characters', dir, 'assets'), { recursive: true })
+        fs.writeFileSync(path.join(root, 'characters', dir, 'assets', name), body)
+    }
+    const written: string[] = []
+    const monitor = createLiveFileMonitoring({ repository, writeAsset: (key: string) => written.push(key) })
+    try {
+        expect(() => monitor.scanCharacterAssets('missing')).toThrow('Character not found')
+        const result = monitor.scanCharacterAssets('one')
+        const [one, two] = result.database.characters
+        expect(one.additionalAssets).toEqual([['guide', expect.stringMatching(/^assets\/live-.*\.webp$/), 'webp']])
+        expect(two.additionalAssets).toEqual([])
+        expect(written).toHaveLength(1)
+        // Nothing new on a second read; the monitor itself stays off.
+        expect(monitor.scanCharacterAssets('one')).toBeNull()
+        expect(monitor.isEnabled()).toBe(false)
+    } finally { monitor.close() }
+})

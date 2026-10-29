@@ -271,6 +271,14 @@ async function prepareOpenAiBody(
         delete prepared.body.parallel_tool_calls
         delete prepared.body.tool_choice
     }
+    if (options.sessionId && options.sessionId.length <= 256
+        && !('session_id' in prepared.body)
+        && !('prompt_cache_key' in prepared.body)
+        && !Object.keys(prepared.headers).some((key) => key.toLowerCase() === 'x-session-id')) {
+        let hostname = ''
+        try { hostname = new URL(prepared.url).hostname } catch {}
+        if (hostname === 'openrouter.ai') prepared.body.session_id = options.sessionId
+    }
     return prepared
 }
 

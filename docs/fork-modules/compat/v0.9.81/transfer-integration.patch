@@ -1,7 +1,8 @@
 diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index dded849..8d8a41c 100644
 --- a/.github/workflows/release.yml
 +++ b/.github/workflows/release.yml
-@@ -89,6 +89,11 @@
+@@ -89,6 +89,11 @@ jobs:
              server/
              packages/risubard-core/
              src/ts/risubard/
@@ -13,7 +14,7 @@ diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
              package.json
              pnpm-lock.yaml
              pnpm-workspace.yaml
-@@ -123,6 +128,7 @@
+@@ -123,6 +128,7 @@ jobs:
          with:
            sparse-checkout: |
              scripts
@@ -21,11 +22,10 @@ diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
  
        - name: Setup pnpm
          uses: pnpm/action-setup@v6
-@@ -249,6 +255,16 @@
-           "$GCC_DIR/windres" launcher.rc -O coff -o launcher.res
+@@ -250,6 +256,16 @@ jobs:
            gcc -municode -O2 -o ../../portable/RisuBard.exe launcher.c launcher.res -lshell32
            rm -f launcher.res icon.ico
-+
+ 
 +      - name: Build bundled Windows transfer companion
 +        if: matrix.platform == 'win'
 +        shell: pwsh
@@ -35,10 +35,12 @@ diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
 +          dotnet publish desktop-transfer/src/RisuAI.ChatTransfer.WinForms/RisuAI.ChatTransfer.WinForms.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true "-p:AdbToolsPath=$adbTools" -o transfer-publish
 +          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 +          Copy-Item -LiteralPath transfer-publish/RisuAI-Chat-Transfer.exe -Destination portable/RisuAI-Chat-Transfer.exe
- 
++
        - name: Create macOS app bundle
          if: matrix.platform == 'macos'
+         shell: bash
 diff --git a/package.json b/package.json
+index 6d4f522..2c62e8d 100644
 --- a/package.json
 +++ b/package.json
 @@ -105,7 +105,9 @@
@@ -53,14 +55,13 @@ diff --git a/package.json b/package.json
    "devDependencies": {
      "@rollup/plugin-strip": "^3.0.4",
 diff --git a/server/node/file-kv.cjs b/server/node/file-kv.cjs
+index d4b034b..3f05ac3 100644
 --- a/server/node/file-kv.cjs
 +++ b/server/node/file-kv.cjs
-@@ -241,6 +241,19 @@
-         try { value = fs.readFileSync(objectPath); } catch { return null; }
-         if (digest(value) !== entry.object) throw new Error(`Content object checksum mismatch for ${key}`);
+@@ -243,6 +243,19 @@ function createFileKv(options = {}) {
          return value;
-+    }
-+
+     }
+ 
 +    async function kvExportFile(key, destination) {
 +        const entry = entryOf(key);
 +        if (!entry) return false;
@@ -72,10 +73,12 @@ diff --git a/server/node/file-kv.cjs b/server/node/file-kv.cjs
 +            throw new Error(`Content object changed while exporting ${key}`);
 +        }
 +        return true;
-     }
- 
++    }
++
      function kvSet(key, value) {
-@@ -616,6 +629,7 @@
+         const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
+         const hash = digest(data);
+@@ -616,6 +629,7 @@ function createFileKv(options = {}) {
  
      return {
          kvGet,
@@ -84,6 +87,7 @@ diff --git a/server/node/file-kv.cjs b/server/node/file-kv.cjs
          kvSetMany,
          kvSetManyAsync,
 diff --git a/server/node/queued-save-debounce.cjs b/server/node/queued-save-debounce.cjs
+index cdc1c5e..27d1fdf 100644
 --- a/server/node/queued-save-debounce.cjs
 +++ b/server/node/queued-save-debounce.cjs
 @@ -1,22 +1,42 @@
@@ -134,9 +138,10 @@ diff --git a/server/node/queued-save-debounce.cjs b/server/node/queued-save-debo
  
  module.exports = { createQueuedSaveDebounce };
 diff --git a/server/node/risubard-memory-runtime.cjs b/server/node/risubard-memory-runtime.cjs
+index c737172..e26887e 100644
 --- a/server/node/risubard-memory-runtime.cjs
 +++ b/server/node/risubard-memory-runtime.cjs
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,7 @@ const {
  } = require('./risubard-memory-save.ts')
  const { revealLocalFile } = require('./reveal-local-file.cjs')
  const { inheritWikiWorkspace, importWikiWorkspace } = require('./risubard-wiki-transfer.ts')
@@ -144,7 +149,7 @@ diff --git a/server/node/risubard-memory-runtime.cjs b/server/node/risubard-memo
  
  function createRuntimeMemoryService(userDataDirectory, options = {}) {
      const memory = createNarrativeMemoryService(userDataDirectory)
-@@ -113,6 +114,11 @@
+@@ -113,6 +114,11 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
      )
      return {
          ...memory,
@@ -156,7 +161,7 @@ diff --git a/server/node/risubard-memory-runtime.cjs b/server/node/risubard-memo
          inheritWiki: (input) => serializedMany([
              [input.characterId, input.sourceChatId],
              [input.characterId, input.destinationChatId],
-@@ -200,11 +206,10 @@
+@@ -200,11 +206,10 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
              memorySaveWorkspaceId(input.saveId),
              () => previewSaveSlot({ userDataDirectory, ...input })
          ),
@@ -173,9 +178,10 @@ diff --git a/server/node/risubard-memory-runtime.cjs b/server/node/risubard-memo
              [input.characterId, memorySaveWorkspaceId(input.saveId)],
              [input.characterId, SAVE_STORE_LANE],
 diff --git a/server/node/risubard-memory-save.ts b/server/node/risubard-memory-save.ts
+index 7156406..d478224 100644
 --- a/server/node/risubard-memory-save.ts
 +++ b/server/node/risubard-memory-save.ts
-@@ -82,7 +82,7 @@
+@@ -82,7 +82,7 @@ function parseEventPreview(value: unknown): MemorySaveEventPreview {
      return { title: value.title, excerpt: value.excerpt }
  }
  
@@ -184,7 +190,7 @@ diff --git a/server/node/risubard-memory-save.ts b/server/node/risubard-memory-s
      if (!isRecord(value)) throw new Error('Invalid memory save manifest')
      const hasEvent = value.latestEvent !== undefined
      const hasLatestMessageId = value.latestMessageId !== undefined
-@@ -203,7 +203,7 @@
+@@ -203,7 +203,7 @@ async function validatedSave(
      const chatPath = join(workspace.directory, SAVE_CHAT)
      await safeFile(fileSystem, manifestPath, 'Memory save manifest')
      await safeFile(fileSystem, chatPath, 'Memory save chat')
@@ -193,7 +199,7 @@ diff --git a/server/node/risubard-memory-save.ts b/server/node/risubard-memory-s
          await fileSystem.readFile(manifestPath, 'utf8')
      ))
      if (manifest.saveId !== saveId) {
-@@ -373,7 +373,7 @@
+@@ -373,7 +373,7 @@ export async function listMemorySaveSlots(input: {
          try {
              await safeFile(fileSystem, manifestPath, 'Memory save manifest')
              await safeFile(fileSystem, chatPath, 'Memory save chat')
@@ -202,7 +208,7 @@ diff --git a/server/node/risubard-memory-save.ts b/server/node/risubard-memory-s
                  await fileSystem.readFile(manifestPath, 'utf8')
              ))
              if (manifest.sourceChatId !== sourceChatId) continue
-@@ -460,7 +460,7 @@
+@@ -460,7 +460,7 @@ export async function prepareMemorySaveLoad(input: {
      const chatPath = join(workspace.directory, SAVE_CHAT)
      await safeFile(fileSystem, manifestPath, 'Memory save manifest')
      await safeFile(fileSystem, chatPath, 'Memory save chat')
@@ -212,9 +218,10 @@ diff --git a/server/node/risubard-memory-save.ts b/server/node/risubard-memory-s
      ))
      const chatBytes = Buffer.from(await fileSystem.readFile(chatPath))
 diff --git a/server/node/risubard-source-workspace.ts b/server/node/risubard-source-workspace.ts
+index 1b160b7..0de05e3 100644
 --- a/server/node/risubard-source-workspace.ts
 +++ b/server/node/risubard-source-workspace.ts
-@@ -55,7 +55,7 @@
+@@ -55,7 +55,7 @@ export function resolveSourceSnapshotWorkspace(
      }
  }
  
@@ -224,6 +231,7 @@ diff --git a/server/node/risubard-source-workspace.ts b/server/node/risubard-sou
      characterId: string,
      chatId: string
 diff --git a/server/node/server.cjs b/server/node/server.cjs
+index 3af6f31..a73ea30 100644
 --- a/server/node/server.cjs
 +++ b/server/node/server.cjs
 @@ -1,6 +1,12 @@
@@ -239,7 +247,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  const http = require('http');
  const https = require('https');
  const path = require('path');
-@@ -126,7 +132,12 @@
+@@ -126,7 +132,12 @@ function computeDatabaseEtagFromObject(databaseObject) {
  
  let storageOperationQueue = Promise.resolve();
  function queueStorageOperation(operation) {
@@ -253,7 +261,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      storageOperationQueue = operationRun.catch(() => {});
      return operationRun;
  }
-@@ -139,6 +150,10 @@
+@@ -139,6 +150,10 @@ const scheduleStoragePersist = createQueuedSaveDebounce({
          logger.error('[Storage] Queued persist failed:', error);
          recordPersistFailure(error, 'queued-persist');
      },
@@ -264,7 +272,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  });
  
  // ─── Persist failure tracking (Stage 1 visibility) ───────────────────────────
-@@ -376,7 +391,10 @@
+@@ -376,7 +391,10 @@ async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
          const fresh = kvGet('database/database.bin');
          if (fresh) raw = fresh;
      }
@@ -276,7 +284,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      let needsPersist = false;
  
      const hadMissingIds = assignMissingChatIds(dbObj);
-@@ -696,23 +714,33 @@
+@@ -696,23 +714,33 @@ async function migrateRemoteBlocksIfNeeded() {
      return { ran: true, characterCount, backupKey };
  }
  
@@ -321,7 +329,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  }
  
  // Stub metadata fields a JSON Patch may legitimately touch on a `chats[i]`
-@@ -856,7 +884,8 @@
+@@ -856,7 +884,8 @@ async function persistChatStoreWithoutCache(trigger, observationContext = {}) {
      let data;
      try {
          let phaseStartedAt = performance.now();
@@ -331,7 +339,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
          metrics.decodeMs = elapsedMs(phaseStartedAt);
          errorStage = 'reassemble';
          phaseStartedAt = performance.now();
-@@ -1058,7 +1087,7 @@
+@@ -1058,7 +1087,7 @@ app.use((req, res, next) => {
  });
  app.use((req, res, next) => {
      // Skip express.raw() for backup import — it must stream, not buffer into memory
@@ -340,7 +348,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      const isChatUpload = req.path.startsWith('/api/chat-content-upload/');
      // Fixed ceiling admits older in-flight uploads after the app changes its setting.
      // The staging store validates each request against that upload's chosen size.
-@@ -1069,6 +1098,8 @@
+@@ -1069,6 +1098,8 @@ app.use((req, res, next) => {
      });
  });
  app.use(express.text({ limit: '100mb' }));
@@ -349,7 +357,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  const {pipeline} = require('stream/promises')
  const sslPath = path.join(process.cwd(), 'server/node/ssl/certificate');
  const hubURL = 'https://sv.risuai.xyz';
-@@ -1375,7 +1406,7 @@
+@@ -1375,7 +1406,7 @@ externalEditSession = createExternalEditSession({
  // Configurable at runtime via the kv key `config/server-backup-path`. When the
  // user changes the path the old directory is left in place (existing backups
  // stay where they were); only future backups land at the new path.
@@ -358,7 +366,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  const BACKUP_PATH_CONFIG_KEY = 'config/server-backup-path';
  const MANAGED_BACKUP_PATH_ROOTS = new Set(['server', 'dist', 'scripts', 'bin', 'node_modules', '.update-tmp']);
  // Plaintext marker the updater reads to preserve a custom in-tree backup dir
-@@ -1556,7 +1587,7 @@
+@@ -1556,7 +1587,7 @@ function stopTunnel() {
  }
  
  // ── Update check ─────────────────────────────────────────────────────────────
@@ -367,7 +375,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  const GITHUB_REPO = 'rpaddict/RisuBard';
  const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL || `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
  
-@@ -2111,6 +2142,10 @@
+@@ -2111,6 +2142,10 @@ function checkActiveSession(req, res, { allowDuringAccountImport = false } = {})
          if (allowDuringAccountImport) return true
          return !refuseDuringAccountImport(res)
      }
@@ -378,7 +386,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      const clientSessionId = req.headers['x-session-id']
      // The client attaches x-user-active only when a real user gesture happened
      // recently — automatic writes (boot housekeeping, flush-on-hide) carry no
-@@ -2863,6 +2898,7 @@
+@@ -2863,6 +2898,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
      await fs.mkdir(entryStagingDir, { recursive: true });
      let canonicalEntriesRestored = 0;
      let atomicRestorePublished = false;
@@ -386,7 +394,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  
      // Entry ids become file names here. Ids are validated before use, and
      // this check keeps a crafted name from writing outside the staging dir
-@@ -3058,6 +3094,13 @@
+@@ -3058,6 +3094,13 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
              }
          }
          if (onPhase) onPhase('publishing');
@@ -400,7 +408,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
          const replacedPrefixes = [
              'assets/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/',
              'coldstorage/', 'drafts/', 'remotes/', REMOTE_MIGRATION_MARKER_KEY,
-@@ -3079,6 +3122,9 @@
+@@ -3079,6 +3122,9 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
              await kvReplacePrefixesFromFilesAsync(stagedKvEntries, replacedPrefixes);
          }
      } catch (error) {
@@ -410,7 +418,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
          await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
          await fs.rm(backupInlayDir, { recursive: true, force: true }).catch(() => {});
          await fs.rm(canonicalStagingDir, { recursive: true, force: true }).catch(() => {});
-@@ -4456,7 +4502,7 @@
+@@ -4456,7 +4502,7 @@ app.get('/api/remove', async (req, res, next) => {
      if(!await checkAuth(req, res)){
          return;
      }
@@ -419,7 +427,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      const filePath = req.headers['file-path'];
      if (!filePath) {
          res.status(400).send({ error:'File path required' });
-@@ -4671,6 +4717,92 @@
+@@ -4671,6 +4717,92 @@ app.delete('/api/logs', async (req, res, next) => {
  const requestLogs = createRequestLogs({ saveDir: savePath });
  requestLogs.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
  const narrativeMemoryService = createRuntimeMemoryService(savePath);
@@ -437,7 +445,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
 +        if (!file) return null;
 +        const metadata = await readInlaySidecar(id) || await readInlayLegacyInfo(id);
 +        if (!metadata) throw new Error('Missing inlay metadata: ' + id);
-+        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(file, { type: getMimeFromExt(metadata.ext) }) };
++        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(path.toNamespacedPath(file), { type: getMimeFromExt(metadata.ext) }) };
 +    },
 +    installInlay: async (entry, staging) => {
 +        if (!isSafeInlayId(entry.id)) throw new Error('Invalid inlay identity');
@@ -489,7 +497,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
 +        if (!file) return null;
 +        const metadata = await readInlaySidecar(id) || await readInlayLegacyInfo(id);
 +        if (!metadata) throw new Error('Missing inlay metadata: ' + id);
-+        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(file, { type: getMimeFromExt(metadata.ext) }) };
++        return { metadata, data: metadata.type === 'signature' ? await fs.readFile(file, 'utf8') : await require('node:fs').openAsBlob(path.toNamespacedPath(file), { type: getMimeFromExt(metadata.ext) }) };
 +    },
 +    installInlay: async (entry, staging) => {
 +        if (!isSafeInlayId(entry.id)) throw new Error('Invalid inlay identity');
@@ -512,7 +520,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  registerRisuBardMemoryRoutes(app, {
      auth: checkAuth,
      service: narrativeMemoryService,
-@@ -4962,11 +5094,13 @@
+@@ -4962,11 +5094,13 @@ app.post('/api/patch', async (req, res, next) => {
              // Load database into memory if not already cached
              // For database.bin, cache holds the STRIPPED version (stubs only)
              if (!dbCache[filePath]) {
@@ -531,7 +539,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
                      if (decodedKey === 'database/database.bin') {
                          const previousChatStore = fullChatStore;
                          initChatStore(decoded);
-@@ -7236,6 +7370,8 @@
+@@ -7236,6 +7370,8 @@ app.post('/api/db/snapshots/restore', async (req, res, next) => {
              // /api/db/optimize. Without this, an in-flight save could land
              // after kvCopyValue and overwrite the restored snapshot.
              await flushPendingDbWithinQueue();
@@ -540,7 +548,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
              kvCopyValue(key, DB_BLOB_KEY);
              invalidateDbCache();
              // Snapshot may pre-date the remote-block migration. Clear the marker
-@@ -7444,6 +7580,7 @@
+@@ -7444,6 +7580,7 @@ app.get('/api/update-check', async (req, res) => {
  let selfUpdateInProgress = false;
  
  app.post('/api/self-update', async (req, res) => {
@@ -548,7 +556,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      if (!await checkAuth(req, res)) return;
  
      if (deploymentType !== 'portable') {
-@@ -7783,6 +7920,7 @@
+@@ -7783,6 +7920,7 @@ app.get('/api/tunnel/status', async (req, res) => {
  });
  
  app.post('/api/tunnel/start', async (req, res) => {
@@ -556,7 +564,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
      if (!await checkAuth(req, res)) return;
      if (TUNNEL_DISABLED) return res.status(403).json({ error: 'Tunnel is disabled via RISU_TUNNEL_DISABLED' });
      if (tunnelStatus === 'running' || tunnelStatus === 'starting' || tunnelStatus === 'downloading') {
-@@ -7955,7 +8093,7 @@
+@@ -7955,7 +8093,7 @@ async function startServer() {
              // HTTPS
              server = https.createServer(httpsOptions, app);
              setupProxyStreamWebSocket(server);
@@ -565,7 +573,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
                  console.log("[Server] HTTPS server is running.");
                  const url = `https://localhost:${port}/`;
                  console.log(`[Server] ${url}`);
-@@ -7967,7 +8105,7 @@
+@@ -7967,7 +8105,7 @@ async function startServer() {
              // HTTP
              server = http.createServer(app);
              setupProxyStreamWebSocket(server);
@@ -574,7 +582,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
                  console.log("[Server] HTTP server is running.");
                  const url = `http://localhost:${port}/`;
                  console.log(`[Server] ${url}`);
-@@ -7979,6 +8117,7 @@
+@@ -7979,6 +8117,7 @@ async function startServer() {
          // No time limit for receiving a request: large bot saves on a busy disk can
          // take longer than Node's 5-minute default, and waiting is not a failure.
          server.requestTimeout = 0;
@@ -582,7 +590,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
          // Written only once bound, so a server that lost the port race keeps the owner's token intact.
          server.once('listening', () => writeFileSync(localShutdownTokenPath, localShutdownToken, { mode: 0o600 }));
          // Move BardWiki vectors out of the KV in the background once serving.
-@@ -7989,7 +8128,7 @@
+@@ -7989,7 +8128,7 @@ async function startServer() {
          }, 10_000));
          // Remove folders older self-updates left in the system temp folder. A
          // separate low-priority process keeps the deletion off this server.
@@ -591,7 +599,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
              try {
                  spawn(process.execPath, [path.join(__dirname, 'portable-update.cjs'), '--cleanup'], {
                      detached: true, windowsHide: true, stdio: 'ignore',
-@@ -8008,20 +8147,47 @@
+@@ -8008,20 +8147,47 @@ let shuttingDown = false;
  async function shutdownGracefully(reason) {
      if (shuttingDown) return;
      shuttingDown = true;
@@ -648,6 +656,7 @@ diff --git a/server/node/server.cjs b/server/node/server.cjs
  (async () => {
      // Proxy stream job garbage collection
 diff --git a/src/App.svelte b/src/App.svelte
+index c617b83..5bcebe2 100644
 --- a/src/App.svelte
 +++ b/src/App.svelte
 @@ -1,6 +1,8 @@
@@ -696,6 +705,7 @@ diff --git a/src/App.svelte b/src/App.svelte
 +        </div>
 +    {/if}
 diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/DefaultChatScreen.svelte
+index eed1d74..3a9aa1c 100644
 --- a/src/lib/ChatScreens/DefaultChatScreen.svelte
 +++ b/src/lib/ChatScreens/DefaultChatScreen.svelte
 @@ -1,5 +1,7 @@
@@ -706,7 +716,7 @@ diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/
      import Suggestion from './Suggestion.svelte';
      import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, FileTextIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, BookOpenIcon, WandSparklesIcon, Undo2Icon, LoaderCircleIcon } from "@lucide/svelte";
      import { runInputAssistant } from "src/ts/risubard/inputAssistantRunner";
-@@ -1294,7 +1296,16 @@
+@@ -1294,7 +1296,16 @@ import { isMobile } from 'src/ts/platform'
  
  <div class="w-full h-full relative flex overflow-hidden" data-chat-wiki-workspace style={customStyle}>
      <main class="relative z-0 h-full min-w-0 flex-1" data-chat-pane use:trackNavigatorViewport>
@@ -725,6 +735,7 @@ diff --git a/src/lib/ChatScreens/DefaultChatScreen.svelte b/src/lib/ChatScreens/
          <div
              data-chat-scroll-navigator
 diff --git a/src/lib/Setting/Pages/SystemBackup.svelte b/src/lib/Setting/Pages/SystemBackup.svelte
+index 9ce8cd6..ba1180b 100644
 --- a/src/lib/Setting/Pages/SystemBackup.svelte
 +++ b/src/lib/Setting/Pages/SystemBackup.svelte
 @@ -1,4 +1,5 @@
@@ -733,16 +744,17 @@ diff --git a/src/lib/Setting/Pages/SystemBackup.svelte b/src/lib/Setting/Pages/S
      import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
      import { DownloadIcon, UploadIcon, SettingsIcon } from '@lucide/svelte'
      import { alertConfirm } from 'src/ts/alert'
-@@ -42,6 +43,8 @@
-         SavePartialLocalBackup()
+@@ -43,6 +44,8 @@
      }
  </script>
-+
-+<TransferPanel />
  
++<TransferPanel />
++
  <p class="text-textcolor2 text-sm mb-4">{language.backupTabDesc}</p>
  
+ <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
 diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
+index 7e93ded..7af9c72 100644
 --- a/src/ts/bootstrap.ts
 +++ b/src/ts/bootstrap.ts
 @@ -1,5 +1,9 @@
@@ -755,7 +767,7 @@ diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
  import { v4 as uuidv4 } from 'uuid';
  import { get } from "svelte/store";
  import { setDatabase, defaultSdDataFunc, getDatabase, changeToThemePreset } from "./storage/database.svelte";
-@@ -97,6 +101,10 @@
+@@ -97,6 +101,10 @@ export async function loadData() {
                      }
                  }
  
@@ -766,7 +778,7 @@ diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
                  if (getDatabase().didFirstSetup) {
                      characterURLImport()
                  }
-@@ -186,6 +194,9 @@
+@@ -186,6 +194,9 @@ export async function loadData() {
              assignIds()
              registerModelDynamic()
              loadedStore.set(true)
@@ -777,9 +789,10 @@ diff --git a/src/ts/bootstrap.ts b/src/ts/bootstrap.ts
              moduleUpdate()
              // cleanChunks는 화면 진입 후 유휴 시간에 실행 (부트 블로킹 제거)
 diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
+index 4e391fe..e056492 100644
 --- a/src/ts/globalApi.svelte.ts
 +++ b/src/ts/globalApi.svelte.ts
-@@ -270,11 +270,13 @@
+@@ -270,11 +270,13 @@ export let requiresFullEncoderReload = $state({
  })
  
  let requestImmediateSaveImpl: ((options?: {
@@ -793,7 +806,7 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
  }) => Promise<void> | void) = () => {}
  let trackChatForSaveImpl: (chaId: string, chatId: string) => void = () => {}
  let patchSyncBaseline: Database | null = null
-@@ -380,8 +382,12 @@
+@@ -380,8 +382,12 @@ export function previewPersistFailureToast() {
      })
  }
  
@@ -806,20 +819,20 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
      flushServer?: boolean | 'canonical' | 'canonical-background'
      // Waits for the flush without the write timeout; abort to stop waiting.
      flushSignal?: AbortSignal
-@@ -397,6 +403,12 @@
-  */
- export function trackChatForSave(chaId: string, chatId: string) {
+@@ -399,6 +405,12 @@ export function trackChatForSave(chaId: string, chatId: string) {
      trackChatForSaveImpl(chaId, chatId)
-+}
-+
+ }
+ 
 +let trackedChangesImpl: (() => toSaveType | null) = () => null
 +/** Read-only copy of the changes the save runtime has tracked but not yet persisted (null before the runtime starts). */
 +export function pendingTrackedChanges(): toSaveType | null {
 +    return trackedChangesImpl()
- }
- 
++}
++
  export function setPatchSyncBaseline(data: Database | null) {
-@@ -905,6 +917,7 @@
+     patchSyncBaseline = data ? safeStructuredClone(data) as Database : null
+ }
+@@ -905,6 +917,7 @@ export async function saveDb() {
          }
          document.addEventListener('visibilitychange', handleVisibilityFlush);
          window.addEventListener('pagehide', flushImmediate);
@@ -827,7 +840,7 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
  
          $effect(() => {
              for (const key in DBState.db) {
-@@ -915,8 +928,11 @@
+@@ -915,8 +928,11 @@ export async function saveDb() {
                      deepTouch(DBState.db[key])
                  }
              }
@@ -841,7 +854,7 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
              if (botPresetMirrored) changeTracker.botPreset = true
              if (!didInitRootEffect) {
                  didInitRootEffect = true
-@@ -1054,6 +1070,7 @@
+@@ -1054,6 +1070,7 @@ export async function saveDb() {
              unsubscribeSelectedCharacter()
              document.removeEventListener('visibilitychange', handleVisibilityFlush)
              window.removeEventListener('pagehide', flushImmediate)
@@ -849,7 +862,7 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
          }
      })
      saveRuntime.addCleanup(disposeSaveEffects)
-@@ -1573,12 +1590,18 @@
+@@ -1573,12 +1590,18 @@ export async function saveDb() {
          skipBroadcast?: boolean
          rejectOnFailure?: boolean
          refresh?: boolean
@@ -868,7 +881,7 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
  
          if (gotChannel) {
              if (options?.rejectOnFailure) throw new Error(language.sessionSavePausedTitle)
-@@ -1614,8 +1637,13 @@
+@@ -1614,8 +1637,13 @@ export async function saveDb() {
                      changed = true
                  }
                  if (result === 'saved') {
@@ -882,7 +895,7 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
                      // Node clients use the server lock. A failed/passive save
                      // must not kick another tab through a second authority.
                      if (!supportsPatchSync && channel && !options?.skipBroadcast) {
-@@ -1686,12 +1714,19 @@
+@@ -1686,12 +1714,19 @@ export async function saveDb() {
              void sessionHandoff.show()
              throw new Error(language.sessionSavePausedTitle)
          }
@@ -902,7 +915,7 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
          })
          if (options?.flushServer === 'canonical-background' && supportsPatchSync) {
              // The server already holds the patch; durable files follow without
-@@ -1703,8 +1738,9 @@
+@@ -1703,8 +1738,9 @@ export async function saveDb() {
      }
  
      let savetrys = 0
@@ -913,7 +926,7 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
              await sleep(200)
              continue
          }
-@@ -3229,6 +3265,8 @@
+@@ -3229,6 +3265,8 @@ export function changeChatTo(IdOrIndex: string | number) {
      chatDeselected.set(false)
      const char = DBState.db.characters[selIdState.selId]
      char.chatPage = index
@@ -923,9 +936,10 @@ diff --git a/src/ts/globalApi.svelte.ts b/src/ts/globalApi.svelte.ts
      if(newChat){
          if(newChat._placeholder){
 diff --git a/src/ts/importSession.ts b/src/ts/importSession.ts
+index 4cc6894..713480a 100644
 --- a/src/ts/importSession.ts
 +++ b/src/ts/importSession.ts
-@@ -6,6 +6,7 @@
+@@ -6,6 +6,7 @@ import { getDatabase } from './storage/database.svelte'
  import { alertStore } from './stores.svelte'
  import { ImportCancelled, ImportTransaction, type ImportJournal, type ImportOwner } from './storage/importTransaction'
  import { startImportProgress, stopImportProgress, beginImportSave, receiveImportProgress, loseImportProgress } from './importProgress'
@@ -933,7 +947,7 @@ diff --git a/src/ts/importSession.ts b/src/ts/importSession.ts
  
  const JOURNAL_KEY = 'risubard-pending-import-v1'
  const RESET_KEY = 'risubard-reset-import-v1'
-@@ -112,7 +113,7 @@
+@@ -112,7 +113,7 @@ export async function retryImportRollback() {
  }
  
  export async function runImport<T>(work: (transaction: ImportTransaction) => Promise<T>): Promise<T | null> {
@@ -943,9 +957,10 @@ diff --git a/src/ts/importSession.ts b/src/ts/importSession.ts
          throw new Error(language.importInstall.busy)
      }
 diff --git a/src/ts/preset/adapter/buildRequest.ts b/src/ts/preset/adapter/buildRequest.ts
+index 67cb708..b6e1708 100644
 --- a/src/ts/preset/adapter/buildRequest.ts
 +++ b/src/ts/preset/adapter/buildRequest.ts
-@@ -90,7 +90,7 @@
+@@ -90,7 +90,7 @@ function isSchemaValueValid(
      return true
  }
  
@@ -955,6 +970,7 @@ diff --git a/src/ts/preset/adapter/buildRequest.ts b/src/ts/preset/adapter/build
      userValues: Record<string, unknown>,
      serviceAccountJson?: string,
 diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
+index 664f5c6..65e00b9 100644
 --- a/src/ts/process/index.svelte.ts
 +++ b/src/ts/process/index.svelte.ts
 @@ -1,4 +1,5 @@
@@ -963,7 +979,7 @@ diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
  import { isOocAssistantTurn, isOocToggleActive } from '../risubard/oocTurns'
  import { captureChatContext } from '../risubard/chatContextCapture'
  import { createRequiredWikiMessage, reserveRequiredWikiBudget } from '../risubard/requiredWikiContext'
-@@ -37,6 +38,7 @@
+@@ -37,6 +38,7 @@ import { getModuleAssets, getModuleLorebooksWithSources, getModuleToggles } from
  import { forageStorage, readImage, refreshLiveFiles } from "../globalApi.svelte";
  import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
  import { waitForSendSync } from './sendPreparation';
@@ -971,7 +987,7 @@ diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
  import {
      buildBoundedNarrativeInquiryFallback,
      createStoredResponseMemoryAnalysis,
-@@ -1205,6 +1207,7 @@
+@@ -1205,6 +1207,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
      target?: GenerationTarget
      requestSettings?: Database
  } = {}):Promise<boolean> {
@@ -979,7 +995,7 @@ diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
      const requestSettings = arg.requestSettings ?? { ...DBState.db }
      const target = arg.target ?? captureGenerationTarget(DBState.db.characters[get(selectedCharID)])
      const generationScope = createGenerationScope(() => DBState.db.characters, target)
-@@ -1228,7 +1231,10 @@
+@@ -1228,7 +1231,10 @@ export async function sendChat(chatProcessIndex = -1,arg:{
  
      chatProcessStage.set(0)
      const abortSignal = arg.signal ?? (new AbortController()).signal
@@ -991,7 +1007,7 @@ diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
      // NOTE: `throwError()` can be called before these are populated (e.g. HypaV3 early validation errors).
      // Keep them declared up-front to avoid TDZ ReferenceErrors in production builds.
      let currentChar:character
-@@ -1335,6 +1341,7 @@
+@@ -1335,6 +1341,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
              return false
          }
      }
@@ -1000,6 +1016,7 @@ diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
      startGeneration(genKey, generationId)
      if(chatProcessIndex === -1 && requestSettings.presetChain){
 diff --git a/src/ts/risubard/memorySaveSlots.ts b/src/ts/risubard/memorySaveSlots.ts
+index e1e1e6c..63271fb 100644
 --- a/src/ts/risubard/memorySaveSlots.ts
 +++ b/src/ts/risubard/memorySaveSlots.ts
 @@ -1,13 +1,9 @@
@@ -1018,7 +1035,7 @@ diff --git a/src/ts/risubard/memorySaveSlots.ts b/src/ts/risubard/memorySaveSlot
  const MEMORY_SAVE_REQUEST_TIMEOUT_MS = 10 * 60_000
  
  export interface MemorySaveEventPreview {
-@@ -143,15 +139,7 @@
+@@ -143,15 +139,7 @@ export function shouldConfirmMemorySaveLoad(
          || newest.latestMessageId !== currentLatestMessageId
  }
  
@@ -1036,9 +1053,10 @@ diff --git a/src/ts/risubard/memorySaveSlots.ts b/src/ts/risubard/memorySaveSlot
      for (const key of [
          'bindedPersona', 'bindedBotPreset', 'usePromptPresetParams',
 diff --git a/src/ts/storage/database.svelte.ts b/src/ts/storage/database.svelte.ts
+index 47812f8..e6bdc30 100644
 --- a/src/ts/storage/database.svelte.ts
 +++ b/src/ts/storage/database.svelte.ts
-@@ -2905,6 +2905,7 @@
+@@ -2905,6 +2905,7 @@ export function normalizeChat(chat: Partial<Chat>): Chat {
  }
  
  export interface Chat{
@@ -1047,9 +1065,10 @@ diff --git a/src/ts/storage/database.svelte.ts b/src/ts/storage/database.svelte.
      message: Message[]
      note:string
 diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
+index 52d804c..45965e4 100644
 --- a/src/ts/storage/nodeStorage.ts
 +++ b/src/ts/storage/nodeStorage.ts
-@@ -286,6 +286,9 @@
+@@ -286,6 +286,9 @@ export class NodeStorage{
      private liveMonitoringGeneration = 0
      private liveSnapshotRequired = false
      pendingSaveRequests = 0
@@ -1059,7 +1078,7 @@ diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
  
      private connectionFetch(path: string, init: RequestInit) {
          // No time limit: a busy server answers late, it is not broken.
-@@ -297,10 +300,33 @@
+@@ -297,11 +300,34 @@ export class NodeStorage{
      private async saveRequest(path: string, init: RequestInit) {
          this.pendingSaveRequests++
          try {
@@ -1085,16 +1104,17 @@ diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
          } finally {
              this.pendingSaveRequests--
          }
-+    }
+     }
 +    static SYNC_BUSY_RETRY_MS = 500
 +    static SYNC_BUSY_WAIT_MS = 10 * 60 * 1000 // an exclusive sync step is bounded by its own network limits; after this the 423 surfaces as before
 +    /** Transient exclusive step (snapshot/bootstrap/plan…): wait. An armed plan (`transaction` present) is settled by recovery, never by waiting. */
 +    private static async isSyncBusy(response: Response) {
 +        try { const body = await response.clone().json(); return body?.code === 'NAS_SYNC_BUSY' && !body?.transaction } catch { return false }
-     }
++    }
  
      async flushDatabase(keepalive = false, canonicalOnly = false, signal?: AbortSignal): Promise<void> {
-@@ -465,6 +491,8 @@
+         const path = canonicalOnly ? '/api/db/flush?mode=canonical' : '/api/db/flush'
+@@ -465,6 +491,8 @@ export class NodeStorage{
          headers.set('risu-auth', await this.createAuth())
          init.signal?.throwIfAborted()
          headers.set('x-session-id', NodeStorage.sessionId)
@@ -1103,7 +1123,7 @@ diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
          if (this.importProgressId) headers.set('x-import-id', this.importProgressId)
          if (isUserActive()) headers.set('x-user-active', '1')
  
-@@ -475,12 +503,9 @@
+@@ -475,12 +503,9 @@ export class NodeStorage{
          init.signal?.throwIfAborted()
  
          if (response.status === 423) {
@@ -1119,12 +1139,10 @@ diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
          }
  
          if(retry && await this.shouldRetryAuth(response)){
-@@ -492,6 +517,16 @@
-         }
- 
+@@ -494,6 +519,16 @@ export class NodeStorage{
          return response
-+    }
-+
+     }
+ 
 +
 +    async syncRequest(path: string, init: RequestInit = {}): Promise<Response> {
 +        if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid sync route')
@@ -1133,6 +1151,8 @@ diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
 +    async transferRequest(path: string, init: RequestInit = {}): Promise<Response> {
 +        if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid transfer route')
 +        return this.authFetch('/api/play-transfer' + path, init)
-     }
- 
++    }
++
      async setItem(key:string, value:Uint8Array, etag?:string): Promise<string | null> {
+         const headers: Record<string, string> = {
+             'content-type': 'application/octet-stream',

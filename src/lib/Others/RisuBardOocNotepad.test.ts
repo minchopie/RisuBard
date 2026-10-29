@@ -70,6 +70,8 @@ describe('OOC live notepad', () => {
         document.querySelector<HTMLButtonElement>('[data-ooc-help]')!.click()
         await tick()
         expect(document.querySelector('[role="dialog"]')?.textContent).toContain('<!-- OOC_turn -->')
+        expect(document.querySelector('[role="dialog"]')?.textContent).toContain('답변에 그대로 넣을 최근 응답 수')
+        expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('최근 메시지 수')
     })
     test('uses chat typography and quote markup for formatted OOC replies', async () => {
         component = createClassComponent({

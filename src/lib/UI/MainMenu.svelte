@@ -1,6 +1,7 @@
 <script lang="ts">
     import { nodeOnlyVer } from '../../ts/storage/database.svelte';
     import Hub from './Realm/RealmMain.svelte';
+    import AssetStoreTransition from './AssetStoreTransition.svelte';
 </script>
 
 <div class="flex h-full w-full flex-col items-center overflow-y-auto">
@@ -12,7 +13,8 @@
         <span class="text-lg font-semibold tracking-tight">RisuBard</span>
         <span class="text-xs font-medium opacity-60">v{nodeOnlyVer}</span>
     </header>
-    <main class="flex w-full max-w-4xl flex-col p-4 text-textcolor">
+    <main class="flex w-full max-w-4xl flex-col gap-4 p-4 text-textcolor">
+        <AssetStoreTransition placement="home" />
         <Hub />
     </main>
 </div>

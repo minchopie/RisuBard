@@ -47,9 +47,9 @@
         title: string
     }> = [
         { key: 'wiki', label: '위키', title: '현재 BardWiki 문서' },
-        { key: 'chat', label: '챗', title: '설정된 개수의 최근 사용자·AI 메시지' },
+        { key: 'chat', label: '챗', title: '설정된 개수의 최근 사용자와 AI 메시지' },
         { key: 'systemPrompt', label: '시스템', title: '현재 시스템 프롬프트' },
-        { key: 'characterDescription', label: '캐릭터', title: '캐릭터 설명·성격·시나리오' },
+        { key: 'characterDescription', label: '캐릭터', title: '캐릭터 설명, 성격, 시나리오' },
         { key: 'persona', label: '페르소나', title: '현재 챗에 연결된 페르소나' },
         { key: 'characterLorebook', label: '캐릭터 로어', title: '명령에 반응한 캐릭터 로어북' },
         { key: 'moduleLorebook', label: '모듈 로어', title: '활성 모듈 로어북' },
@@ -292,19 +292,19 @@
     <footer>
         <div class="terminal-status" aria-live="polite" data-wiki-command-result>
             {#if error}
-                <span class="failure">실행 실패 · {error}</span>
+                <span class="failure">실행 실패: {error}</span>
             {:else if result}
                 <span class:failure={result.failed.length > 0}>
                     적용 {result.applied.length}건
                     {#if result.applied.length > 0}
-                        · {result.applied.map((item) => item.title).join(', ')}
+                        : {result.applied.map((item) => item.title).join(', ')}
                     {/if}
                 </span>
                 {#each result.failed as item}
-                    <span class="failure">미적용 · {item.title}: {item.reason}</span>
+                    <span class="failure">적용하지 못함: {item.title} ({item.reason})</span>
                 {/each}
             {:else}
-                <span>Ctrl+Enter로 실행 · 변경 전 history/trash와 hash 충돌 검사는 유지됩니다.</span>
+                <span>Ctrl+Enter로 실행합니다. 바꾸기 전 문서는 기록되어 되돌릴 수 있고, 다른 작업과 겹치면 저장하지 않습니다.</span>
             {/if}
         </div>
     </footer>

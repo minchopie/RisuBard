@@ -17,6 +17,14 @@ describe('removing an image from a message', () => {
     test('compares IDs literally without interpreting regex characters', () => {
         expect(removeInlayOccurrence('{{inlay::a.b}} {{inlay::axb}}', 'a.b', 0)).toBe(' {{inlay::axb}}')
     })
+
+    test('takes the blank lines of an inserted image along and keeps the neighboring image intact', () => {
+        const data = 'Stairs.\n\n{{inlay::blue}}\n\n\n\n{{inlay::red}}\n\n\n\nMomo turned.'
+        expect(removeInlayOccurrence(data, 'red', 0)).toBe('Stairs.\n\n{{inlay::blue}}\n\nMomo turned.')
+        expect(removeInlayOccurrence(data, 'blue', 0)).toBe('Stairs.\n\n{{inlay::red}}\n\n\n\nMomo turned.')
+        expect(removeInlayOccurrence('Line\n{{inlay::a}}\nnext', 'a', 0)).toBe('Line\nnext')
+        expect(removeInlayOccurrence('Text\n\n{{inlay::a}}\n\n', 'a', 0)).toBe('Text')
+    })
 })
 
 test('attaches controls to asynchronously loaded images and removes controls when editing is disabled', async () => {

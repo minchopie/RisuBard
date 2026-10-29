@@ -36,7 +36,16 @@ export function endWikiGeneration(operationId: string): void {
     })
 }
 
+// Queued analyses that have not started yet hold no controller; they compare
+// this counter to the value they captured when queued and skip after a cancel.
+let cancellationEpoch = 0
+
+export function wikiCancellationEpoch(): number {
+    return cancellationEpoch
+}
+
 export function cancelWikiGeneration(): void {
+    cancellationEpoch += 1
     for (const controller of wikiGenerationControllers.values()) {
         controller.abort()
     }

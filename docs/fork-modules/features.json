@@ -92,6 +92,7 @@
         "desktop-transfer/tests/RisuAI.PlaySet.Interop/TransportInterop.cs",
         "desktop-transfer/tests/fixtures/device-smoke-chat.json",
         "docs/transfer-sync/CODEX_REVIEW.md",
+        "docs/transfer-sync/DIRECT-APP-RECEIVE-20261025.md",
         "docs/transfer-sync/IN-APP-SYNC-CROSSOVER-20261024.md",
         "docs/transfer-sync/MODULE.md",
         "docs/transfer-sync/SYNC-UX-20261022.md",
@@ -224,7 +225,8 @@
         "src/ts/transferState.ts",
         "src/ts/transferSyncPanel.test.ts",
         "src/ts/transferSyncShims.test.ts",
-        "shared/play-set/characterOrder.ts"
+        "shared/play-set/characterOrder.ts",
+        "server/node/file-kv-export.test.ts"
       ]
     },
     {
@@ -268,7 +270,10 @@
         "src/ts/process/request/request.ts",
         "src/ts/tokenizer.ts",
         "src/ts/translator/translator.ts",
-        "server/node/logs.test.ts"
+        "server/node/logs.test.ts",
+        "src/ts/preset/adapter/types.ts",
+        "src/lang/help.ko.ts",
+        "src/lang/help.en.ts"
       ],
       "files": [
         "src/ts/process/request/googleAndroidRequest.test.ts",
@@ -277,7 +282,8 @@
         "src/ts/translator/googleAndroidHtml.test.ts",
         "src/ts/translator/googleAndroidRetry.test.ts",
         "src/ts/translator/privateMobileGoogleTranslate.test.ts",
-        "src/ts/translator/privateMobileGoogleTranslate.ts"
+        "src/ts/translator/privateMobileGoogleTranslate.ts",
+        "src/ts/process/cacheFriendlyContextContract.test.ts"
       ]
     },
     {
@@ -290,7 +296,16 @@
         "src/ts/process/lorebookRecursion.test.ts",
         "src/ts/process/scriptings.ts"
       ],
-      "files": []
+      "files": [
+        "src/ts/parser/tests/cbs/lifestyle100.test.ts",
+        "src/ts/parser/tests/cbs/narrative100.test.ts",
+        "src/ts/process/lifestylePacked100.test.ts",
+        "src/ts/process/narrativePacked100.test.ts",
+        "src/ts/parser/tests/fixtures/lifestyle-a100.json",
+        "src/ts/parser/tests/fixtures/lifestyle-b100.json",
+        "src/ts/parser/tests/fixtures/narrative100.json",
+        "src/ts/parser/tests/fixtures/core-sentinel.json"
+      ]
     },
     {
       "id": "storage-recovery",
@@ -319,7 +334,16 @@
         "src/ts/storage/liveFileSyncRuntime.test.ts",
         "src/ts/storage/nodeStorage.bulkWrite.test.ts",
         "src/ts/storage/saveRetryPersistence.test.ts",
-        "src/ts/storage/serverDbFlush.test.ts"
+        "src/ts/storage/serverDbFlush.test.ts",
+        "server/node/no-sqlite-runtime.test.ts",
+        "src/ts/storage/nodeStorage.connection.test.ts",
+        "src/ts/storage/chatContentPage.test.ts",
+        "src/ts/storage/chatContentPagingConnections.test.ts",
+        "server/node/risubard-graph-service.test.ts",
+        "server/node/risubard-narrative-inquiry.test.ts",
+        "server/node/risubard-memory-runtime.test.ts",
+        "server/node/risubard-markdown-wiki.ts",
+        "server/node/live-files-http.test.ts"
       ],
       "files": [
         "server/node/full-write-failure-http.test.ts",
@@ -331,7 +355,11 @@
         "server/node/uncached-chat-flush-http.test.ts",
         "src/ts/presetMirrorWindow.test.ts",
         "src/ts/storage/nodeStorage.syncBusy.test.ts",
-        "src/ts/storage/nodeStorage.syncGate.test.ts"
+        "src/ts/storage/nodeStorage.syncGate.test.ts",
+        "src/ts/storage/nodeStorage.chatPaging.test.ts",
+        "src/ts/storage/syncRecoveryWriter.ts",
+        "src/ts/storage/syncRecoveryWriter.test.ts",
+        "server/node/risubard-markdown-wiki-history-preservation.test.ts"
       ]
     },
     {
@@ -372,7 +400,13 @@
       ],
       "files": [
         "patchnote/0.9.93.md",
-        "patchnote/0.9.94.md"
+        "patchnote/0.9.94.md",
+        "patchnote/0.9.95.md",
+        "patchnote/0.9.96.md",
+        "patchnote/0.9.98.md",
+        "patchnote/0.9.99.md",
+        "patchnote/0.9.100.md",
+        "patchnote/0.9.101.md"
       ]
     },
     {
@@ -556,6 +590,17 @@
         "src/ts/transfer-sync/downloadRouting.test.ts",
         "docs/transfer-sync/ANDROID-FILE-EXPORT-20261024.md"
       ]
+    },
+    {
+      "id": "bardwiki-cache-prefix",
+      "name": "BardWiki 서브 호출 캐시 접두 공유",
+      "hosts": [
+        "src/ts/process/request/structuredOutputFallback.test.ts",
+        "src/ts/process/request/structuredOutputFallback.ts",
+        "src/ts/risubard/memoryAnalysisClient.test.ts",
+        "src/ts/risubard/memoryAnalysisClient.ts"
+      ],
+      "files": []
     }
   ],
   "tooling": [
@@ -563,7 +608,12 @@
     "scripts/fork-modules/module-stack.node-test.mjs",
     "docs/fork-modules/README.md",
     "docs/fork-modules/CROSSOVER-20261024.md",
-    "docs/fork-modules/features.json"
+    "docs/fork-modules/features.json",
+    "scripts/fork-modules/cleanup-workdirs.mjs",
+    "scripts/fork-modules/cleanup-workdirs.node-test.mjs",
+    "scripts/fork-modules/workdir-lifecycle.node-test.mjs",
+    "scripts/fork-modules/workdir-tree.ps1",
+    "scripts/fork-modules/workdir-keep.json"
   ],
   "notes": "All modules assemble together; shared host bridges depend on the feature layers. No runtime toggle or automatic deployment.",
   "compatibility": [
@@ -574,7 +624,7 @@
         {
           "module": "transfer-integration",
           "path": "docs/fork-modules/compat/v0.9.81/transfer-integration.patch",
-          "sourceSha256": "261ec089f226a2506f2ea2089d6744daf1293d679c97e7cf538ce6173adb02ec"
+          "sourceSha256": "f629bd265e9e60abacd8ca8fe9902036e3d45eef9f0fb6a1d195f930663566df"
         },
         {
           "module": "mobile-ui",
@@ -587,19 +637,19 @@
           "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742"
         },
         {
+          "module": "storage-recovery",
+          "path": "docs/fork-modules/compat/v0.9.81/storage-recovery.patch",
+          "sourceSha256": "ba8da34b6ba00080782b1800285fe96f4b5fff84ab6900836082d7a5fe567d1e"
+        },
+        {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "dae7b9dc93b6f7bf336e2146c61cebe4e3ccb7e832cadb80216e617ed3a21af8"
+          "sourceSha256": "2bb59cdf7552e5d6ba10740a7f3d76d570beacb171309f404aae72cf351634e9"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "6333375882a1dbef4339fd654c71e1ae66eefaee8b0e606b199c4765c13029d4"
-        },
-        {
-          "module": "storage-recovery",
-          "path": "docs/fork-modules/compat/v0.9.81/storage-recovery.patch",
-          "sourceSha256": "9d6b60266cf4c984ddbb6683d2e5a9c59b1add4a5331dbf619aca74efea45953"
+          "sourceSha256": "af27115de17ea3daf37f9bd07d26f324dd799852d0b2c4a510b73176472e0480"
         }
       ],
       "payloadTargets": {
@@ -642,6 +692,136 @@
         ],
         "src/lib/ChatScreens/DefaultChatScreen.svelte": [
           "runInputAssistant"
+        ]
+      }
+    },
+    {
+      "tag": "v0.9.84",
+      "targetSha": "434abf970fa679d3871c22f615351e854b1529e0",
+      "patches": [
+        {
+          "module": "transfer-integration",
+          "path": "docs/fork-modules/compat/v0.9.84/transfer-integration.patch",
+          "sourceSha256": "f629bd265e9e60abacd8ca8fe9902036e3d45eef9f0fb6a1d195f930663566df"
+        },
+        {
+          "module": "mobile-ui",
+          "path": "docs/fork-modules/compat/v0.9.84/mobile-ui.patch",
+          "sourceSha256": "80772f2e16f9c65627df8db974ea53a70047976732def7a36217d22bd03257cc"
+        },
+        {
+          "module": "storage-recovery",
+          "path": "docs/fork-modules/compat/v0.9.84/storage-recovery.patch",
+          "sourceSha256": "ba8da34b6ba00080782b1800285fe96f4b5fff84ab6900836082d7a5fe567d1e",
+          "targetHosts": [
+            {
+              "path": "server/node/risubard-story-order.test.ts",
+              "sha256": "76395b6770051a5801bcb8314fb619086c025ec93237915955e2cabed3f894e5"
+            }
+          ]
+        },
+        {
+          "module": "distribution",
+          "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
+          "sourceSha256": "2bb59cdf7552e5d6ba10740a7f3d76d570beacb171309f404aae72cf351634e9"
+        },
+        {
+          "module": "lore-lua",
+          "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
+          "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742"
+        },
+        {
+          "module": "host-bridges",
+          "path": "docs/fork-modules/compat/v0.9.84/host-bridges.patch",
+          "sourceSha256": "af27115de17ea3daf37f9bd07d26f324dd799852d0b2c4a510b73176472e0480"
+        },
+        {
+          "module": "file-export",
+          "path": "docs/fork-modules/compat/v0.9.84/file-export.patch",
+          "sourceSha256": "353f0ca7403d9bc5e522753ed3dd9097ef339f9a66c9988717bb16082aa3bc5b"
+        },
+        {
+          "module": "bardwiki-cache-prefix",
+          "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
+          "sourceSha256": "76619cabf56c0b01e6761d5236dddc92f8df650b628c71274f1d8e370d938b9e"
+        }
+      ],
+      "payloadTargets": {
+        "patchnote/0.9.72.md": "docs/fork-modules/history/patchnote/0.9.72.md",
+        "patchnote/0.9.73.md": "docs/fork-modules/history/patchnote/0.9.73.md",
+        "patchnote/0.9.74.md": "docs/fork-modules/history/patchnote/0.9.74.md",
+        "patchnote/0.9.75.md": "docs/fork-modules/history/patchnote/0.9.75.md",
+        "patchnote/0.9.76.md": "docs/fork-modules/history/patchnote/0.9.76.md",
+        "patchnote/0.9.77.md": "docs/fork-modules/history/patchnote/0.9.77.md",
+        "patchnote/0.9.78.md": "docs/fork-modules/history/patchnote/0.9.78.md",
+        "patchnote/0.9.79.md": "docs/fork-modules/history/patchnote/0.9.79.md",
+        "patchnote/0.9.80.md": "docs/fork-modules/history/patchnote/0.9.80.md",
+        "patchnote/0.9.81.md": "docs/fork-modules/history/patchnote/0.9.81.md",
+        "patchnote/0.9.82.md": "docs/fork-modules/history/patchnote/0.9.82.md",
+        "patchnote/0.9.83.md": "docs/fork-modules/history/patchnote/0.9.83.md",
+        "patchnote/0.9.84.md": "docs/fork-modules/history/patchnote/0.9.84.md",
+        "src/ts/viewportHeight.test.ts": "src/ts/viewportHeight.fork.test.ts"
+      },
+      "probes": {
+        "server/node/server.cjs": [
+          "allowDuringAccountImport",
+          "const risuAccountImport =",
+          "keepChatBodiesAheadOfDisk",
+          "liveFilesAdoption.reviewMerge",
+          "err?.type === 'entity.too.large'",
+          "registerAssetStoreRoutes",
+          "removeAssetStoreKeys",
+          "assetStoreDirectory: preparedKv.assetStoreDirectory"
+        ],
+        "src/ts/globalApi.svelte.ts": [
+          "trackChatForSave",
+          "trackCharacterForSaveImpl",
+          "export function trackCharacterForSave"
+        ],
+        "src/ts/storage/nodeStorage.ts": [
+          "risu-session-deactivated",
+          "assetStoreTransition"
+        ],
+        "src/lib/ChatScreens/Chat.svelte": [
+          "onsubmitcapture={handleFormTriggerWithin}",
+          "mobileMessageActionsInline"
+        ],
+        "src/ts/viewportHeight.ts": [
+          "'focusout'",
+          "'resize'",
+          "isEditable"
+        ],
+        "src/ts/process/lorebook.svelte.ts": [
+          "regex.lastIndex = 0"
+        ],
+        "src/lib/ChatScreens/DefaultChatScreen.svelte": [
+          "runInputAssistant",
+          "retryNarrativeBacklog",
+          "skipNarrativeBacklogTurn"
+        ],
+        "server/node/file-kv.cjs": [
+          "convertToAssetStore",
+          "revertAssetStore",
+          "assetStore.pathOf"
+        ],
+        "src/ts/storage/database.svelte.ts": [
+          "risubardWikiPending",
+          "updateBase?:string",
+          "mobileMessageActionsInline"
+        ],
+        "src/ts/process/index.svelte.ts": [
+          "selectAnalysisLoreReference",
+          "enqueueNarrativeConfirmation"
+        ],
+        "server/node/risubard-memory-runtime.cjs": [
+          "setWikiDocumentGrade"
+        ],
+        "src/App.svelte": [
+          "CharacterUpdateDialog"
+        ],
+        "server/node/risubard-markdown-wiki.ts": [
+          "setDocumentGrade",
+          "workspace.snapshotsDirectory"
         ]
       }
     }

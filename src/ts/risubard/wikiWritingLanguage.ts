@@ -119,6 +119,13 @@ export function isStoryArcTitle(value: unknown): boolean {
     return storyArcTitles.some((title) => normalizedHeading(title) === normalized)
 }
 
+/** A closed chapter of the story arc plot, titled like "Story Arc Plot (2)". */
+export function isStoryArcChapterTitle(value: unknown): boolean {
+    if (typeof value !== 'string') return false
+    const match = /^(.*) \((\d+)\)$/u.exec(value.trim())
+    return match !== null && isStoryArcTitle(match[1])
+}
+
 export function detectWikiWritingLanguage(content: string): WikiWritingLanguage | undefined {
     const headings = content.split('\n').map((line) =>
         /^#{2,3}\s+(.+?)\s*$/.exec(line)?.[1].toLocaleLowerCase()

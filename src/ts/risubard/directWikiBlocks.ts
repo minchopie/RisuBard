@@ -1,4 +1,5 @@
 import { get_encoding, type Tiktoken } from '@dqbd/tiktoken'
+import { sha256Digest } from '../secureCrypto'
 
 let tokenizer: Tiktoken | undefined
 export function directWikiTokens(value: string): number {
@@ -16,7 +17,7 @@ export interface DirectWikiBlock {
 }
 
 async function hash(value: string): Promise<string> {
-    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+    const bytes = await sha256Digest(new TextEncoder().encode(value))
     return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 

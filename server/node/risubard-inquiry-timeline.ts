@@ -30,6 +30,8 @@ export function createInquiryTimeline(input?: InquiryTimelineInput) {
         return position === undefined ? undefined : Math.max(1, assistantFrom[position])
     }
     return {
+        /** Assistant turns between the document's source and the recent transcript; undefined outside the timeline. */
+        turnsBefore,
         sourceLabel(document: Pick<TimedDocument, 'sourceMessageIds'>): string | undefined {
             const turns = turnsBefore(document)
             return turns === undefined ? undefined : `[${turnsLabel(turns)} the recent transcript]`

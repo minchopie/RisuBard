@@ -8,7 +8,7 @@ import { createGenerationSaveTracker } from './storage/generationSaveTracking';
 import streamSaver from 'streamsaver';
 import { setDatabase, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadChatBindings, syncActiveBotPresetFromMirror, syncActiveThemePresetFromMirror } from "./storage/database.svelte";
 import { checkRisuUpdate } from "./update";
-import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, loadingOverlayStore, chatDeselected } from "./stores.svelte";
+import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, loadingOverlayStore, chatDeselected, alertStore } from "./stores.svelte";
 import { loadPlugins } from "./plugins/plugins.svelte";
 import { alertConfirm, alertConfirmMulti, alertError, alertMd, alertSelect, alertTOS, waitAlert, notifySuccess, notifyError, notifyInfo } from "./alert";
 import { hasher } from "./parser/parser.svelte";
@@ -49,13 +49,17 @@ let refreshLiveFilesImpl: (() => Promise<void>) | null = null
 export async function refreshLiveFiles() {
     await refreshLiveFilesImpl?.()
 }
+// Merges a server metadata snapshot into the open tab; set while the save runtime runs.
+let applyLiveSnapshotImpl: ((snapshot: LiveFileSnapshot, etag: string | null | undefined) => Promise<void>) | null = null
 
 // Keep recovery available even when browser storage is full or unavailable.
 export const liveFileConflictRecovery: { time: string, conflicts: LiveFileConflict[] }[] = []
 
 export async function downloadFile(name: string, dat: Uint8Array | ArrayBuffer | string) {
     if (typeof (dat) === 'string') {
-        dat = Buffer.from(dat, 'utf-8')
+        // The browser Buffer polyfill collects UTF-8 bytes in a JS array, which
+        // throws "Invalid array length" past ~100 MB (large chat exports on phones).
+        dat = new TextEncoder().encode(dat)
     }
     const data = new Uint8Array(dat)
     if ((globalThis as any).RisuPlay) {
@@ -277,6 +281,7 @@ export let requiresFullEncoderReload = $state({
 
 let requestImmediateSaveImpl: ((options?: {
     chats?: [string, string][]
+    characters?: string[]
     forceFullWrite?: boolean
     flushServer?: boolean | 'canonical' | 'canonical-background'
     // Waits for the flush without the write timeout; abort to stop waiting.
@@ -284,6 +289,8 @@ let requestImmediateSaveImpl: ((options?: {
     rejectOnFailure?: boolean
     syncOwned?: boolean
 }) => Promise<void> | void) = () => {}
+let trackChatForSaveImpl: (chaId: string, chatId: string) => void = () => {}
+let trackCharacterForSaveImpl: (chaId: string) => void = () => {}
 let patchSyncBaseline: Database | null = null
 
 // Surfaces server-side persist failures (Stage 1 visibility — see issues.md).
@@ -390,6 +397,7 @@ export function previewPersistFailureToast() {
 import { syncSaveHold, canonicalSaveSettled } from './transferState'
 export function requestImmediateSave(options?: {
     chats?: [string, string][]
+    characters?: string[]
     forceFullWrite?: boolean
     /** The NAS sync apply's own save: allowed while syncSaveHold blocks every other save. */
     syncOwned?: boolean
@@ -401,14 +409,58 @@ export function requestImmediateSave(options?: {
     return requestImmediateSaveImpl(options)
 }
 
+/**
+ * Include this chat's body in the next save. Only the chat on screen (and
+ * chats being generated into) are tracked automatically, so a write to any
+ * other chat needs this; a failed save keeps it queued like any other change.
+ */
+export function trackChatForSave(chaId: string, chatId: string) {
+    trackChatForSaveImpl(chaId, chatId)
+}
+
 let trackedChangesImpl: (() => toSaveType | null) = () => null
 /** Read-only copy of the changes the save runtime has tracked but not yet persisted (null before the runtime starts). */
 export function pendingTrackedChanges(): toSaveType | null {
     return trackedChangesImpl()
 }
 
+/** Saves a bot changed while it is not the selected one (only that bot is watched for edits). */
+export function trackCharacterForSave(chaId: string) {
+    trackCharacterForSaveImpl(chaId)
+}
+
 export function setPatchSyncBaseline(data: Database | null) {
     patchSyncBaseline = data ? safeStructuredClone(data) as Database : null
+}
+
+// Reads the character's assets folder once (the server no longer watches it):
+// files added or replaced there become its assets, merged into the open tab.
+export const assetFolderScan = $state({ busy: false })
+export async function scanCharacterAssetFolder(characterId: string) {
+    if (assetFolderScan.busy) return
+    assetFolderScan.busy = true
+    try {
+        await requestImmediateSave({ flushServer: true, rejectOnFailure: true })
+        const result = await forageStorage.scanCharacterAssets(characterId)
+        if (!result.changed) {
+            notifyInfo(language.assetFolderScanNone)
+            return
+        }
+        if (result.snapshot && applyLiveSnapshotImpl) {
+            await applyLiveSnapshotImpl(result.snapshot, result.etag)
+            notifyInfo(language.assetFolderScanDone)
+            return
+        }
+        try { sessionStorage.setItem('risu-asset-folder-reload', '1') } catch {}
+        location.reload()
+    } catch (error) {
+        notifyError(language.assetFolderScanFailed, {
+            description: error instanceof Error ? error.message : String(error),
+            source: 'asset-folder-scan',
+        })
+    } finally {
+        assetFolderScan.busy = false
+    }
 }
 
 export async function toggleExternalEditMode() {
@@ -470,14 +522,20 @@ export async function saveDb() {
         channel = new BroadcastChannel('risu-db')
         saveRuntime.addCleanup(() => channel?.close())
     }
+    // Set when the server refused a write because a RisuAI account import
+    // started (on any device); the pause then says so instead of naming
+    // another tab.
+    let pausedForAccountImport = false
+    const pausedTitle = () => pausedForAccountImport ? language.risuAccountImportActiveTitle : language.sessionSavePausedTitle
+    const pausedDetail = () => pausedForAccountImport ? language.risuAccountImportActive : language.sessionSavePausedDetail
     const sessionHandoff = createSessionHandoff({
         isActive: () => saveRuntime.isActive(),
         isVisible: () => document.visibilityState === 'visible',
         choose: async () => {
-            const choice = await alertConfirmMulti(language.sessionSavePausedTitle, [
+            const choice = await alertConfirmMulti(pausedTitle(), [
                 language.canonicalSaveConflictDownload,
                 { label: language.sessionReloadLatest, variant: 'destructive' },
-            ], language.sessionSavePausedDetail)
+            ], pausedDetail())
             return choice === 0 ? 'download' : choice === 1 ? 'reload' : 'cancel'
         },
         download: async () => {
@@ -495,14 +553,17 @@ export async function saveDb() {
             try { sessionStorage.setItem('risu-session-handoff-reload', '1') } catch {}
             location.reload()
         },
-        notifyPaused: () => notifyError(language.sessionSavePausedTitle, {
-            description: language.sessionSavePausedDetail, source: 'session-handoff',
+        notifyPaused: () => notifyError(pausedTitle(), {
+            description: pausedDetail(), source: 'session-handoff',
         }),
         notifyBusy: () => notifyError(language.sessionReloadBusy),
         onError: error => notifyError(error),
     })
-    const handleSessionDeactivated = () => {
+    const handleSessionDeactivated = (event?: Event) => {
         if (!saveRuntime.isActive()) return
+        if ((event as CustomEvent<{ code?: string | null }> | undefined)?.detail?.code === 'ACCOUNT_IMPORT_ACTIVE') {
+            pausedForAccountImport = true
+        }
         gotChannel = true
         closeLiveEvents?.()
         void sessionHandoff.deactivate()
@@ -562,9 +623,15 @@ export async function saveDb() {
             sessionStorage.removeItem('risu-canonical-files-reload')
             setTimeout(() => notifyInfo(language.canonicalFilesChangedReload), 1500)
         }
+        const recoveryPath = forageStorage.takeLiveFilesRecoveryPath()
+        if (recoveryPath) setTimeout(() => notifyInfo(language.externalChangePendingRecovered(recoveryPath)), 1500)
         if (sessionStorage.getItem('risu-external-edit-reload')) {
             sessionStorage.removeItem('risu-external-edit-reload')
             setTimeout(() => notifyInfo(language.externalEditModeReloaded), 1500)
+        }
+        if (sessionStorage.getItem('risu-asset-folder-reload')) {
+            sessionStorage.removeItem('risu-asset-folder-reload')
+            setTimeout(() => notifyInfo(language.assetFolderScanDone), 1500)
         }
     } catch { /* storage unavailable — skip the notice */ }
 
@@ -588,6 +655,7 @@ export async function saveDb() {
     // After an unsuccessful attempt, rebuild a full snapshot instead of
     // treating an empty retry diff as proof that the server has the changes.
     let forceFullWriteOnRetry = false
+    let saveFailureNotified = false
     // Immediate saves diff only tracked characters; the next background save
     // runs the full untracked-character sweep so missed edits still persist.
     let untrackedSweepPending = false
@@ -730,6 +798,14 @@ export async function saveDb() {
         if (gotChannel) throw new Error(language.sessionSavePausedTitle)
     }
     refreshLiveFilesImpl = refreshWithSessionCheck
+    const applySnapshotInPlace = (snapshot: LiveFileSnapshot, etag: string | null | undefined) => createLiveFileRefresh({
+        isActive: () => saveRuntime.isActive() && !gotChannel,
+        getInFlight: () => saveInFlight,
+        setInFlight: operation => { saveInFlight = operation },
+        sync: () => applyRemoteSnapshot(snapshot, etag),
+    })()
+    // The in-place merge needs the patch-sync baseline; without it the scan reloads the page.
+    if (supportsPatchSync) applyLiveSnapshotImpl = applySnapshotInPlace
     // With the review option on, look for external edits every few seconds while visible.
     const externalReviewTimer = setInterval(() => {
         if (getDatabase()?.externalChangeReview !== true || document.hidden || saveInFlight || gotChannel) return
@@ -772,6 +848,7 @@ export async function saveDb() {
         liveSignals.close()
         document.removeEventListener('visibilitychange', catchUpLiveFiles)
         if (refreshLiveFilesImpl === refreshWithSessionCheck) refreshLiveFilesImpl = null
+        if (applyLiveSnapshotImpl === applySnapshotInPlace) applyLiveSnapshotImpl = null
     })
 
     function hasTrackedChanges(toSave: toSaveType) {
@@ -1586,6 +1663,7 @@ export async function saveDb() {
                     if (supportsPatchSync && navigator.userAgent.includes('RisuBardAndroid/')) await flushServerDbNow(false, true)
                     forceFullWriteOnRetry = false
                     savetrys = 0
+                    saveFailureNotified = false
                     // A user save settled: the NAS sync coordinator (if enabled) snapshots after its debounce. The sync apply's own
                     // save is not a trigger, so a received apply never echoes into a snapshot cycle.
                     if (!options?.syncOwned) canonicalSaveSettled.set(Date.now())
@@ -1624,19 +1702,18 @@ export async function saveDb() {
                 forceFullWriteOnRetry ||= supportsPatchSync
                 if (toSave) requeueTrackedChanges(toSave)
                 savetrys += 1
-                if (options?.rejectOnFailure) {
-                    changed = true
-                    throw error
-                }
-                if (savetrys > 4) {
-                    alertError(error)
-                    savetrys = 0
-                }
-                else {
+                changed = true
+                if (options?.rejectOnFailure) throw error
+                if (savetrys > 4 && !saveFailureNotified && !['wait', 'wait2', 'progress'].includes(get(alertStore).type)) {
+                    saveFailureNotified = true
+                    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : null
+                    if (cause) console.error(error, cause)
+                    else console.error(error)
+                    notifyError('아직 저장하지 못했습니다. 편집 내용은 앱에 남아 있으며 자동으로 재시도합니다.', { source: 'save-retry' })
+                } else if (savetrys <= 4) {
                     console.error(error)
-                    await sleep(Math.min(500 * savetrys, 3000))
-                    changed = true
                 }
+                await sleep(Math.min(500 * savetrys, 3000))
             } finally {
                 saving.state = false
                 saveInFlight = null
@@ -1646,12 +1723,29 @@ export async function saveDb() {
         return saveInFlight
     }
 
+    trackChatForSaveImpl = (chaId, chatId) => {
+        if (!chaId || !chatId) return
+        if (!changeTracker.chat.some(([owner, id]) => owner === chaId && id === chatId)) {
+            changeTracker.chat.push([chaId, chatId])
+        }
+        changed = true
+    }
+
+    trackCharacterForSaveImpl = (chaId) => {
+        if (!chaId) return
+        if (!changeTracker.character.includes(chaId)) changeTracker.character.push(chaId)
+        changed = true
+    }
+
     requestImmediateSaveImpl = async (options) => {
         if (gotChannel) {
             void sessionHandoff.show()
             throw new Error(language.sessionSavePausedTitle)
         }
         if (get(syncSaveHold) && !options?.syncOwned) throw new Error('NAS 동기화 적용이 끝날 때까지 저장이 잠겨 있어요.')
+        for (const id of options?.characters ?? []) {
+            if (!changeTracker.character.includes(id)) changeTracker.character.push(id)
+        }
         // Imports can append chats without selecting their character in the UI.
         for (const [id, chatId] of options?.chats ?? []) {
             if (!changeTracker.character.includes(id)) changeTracker.character.push(id)
@@ -2059,11 +2153,6 @@ export function checkCharOrder() {
     checkCharacterOrder(getDatabase())
 }
 
-/**
- * Retrieves the most recent request logs. Kept for the plugin API (v3
- * getFetchLogs), which has always been Promise-returning, so moving the
- * storage server-side is invisible to plugins.
- */
 export async function getFetchLogs(limit = 20) {
     return await fetchRequestLogs({ limit, bodies: true })
 }

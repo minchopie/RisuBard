@@ -13,12 +13,13 @@ import {
     assembleChatContentPages,
     getRemainingChatContentPageOffsets,
     type ChatContentPageEnvelope,
+    type ChatPreviewPayload,
 } from './chatContentPage'
 import { isCanonicalFilesChangedResponse, isExternalChangesPendingResponse } from './canonicalConflict'
 import { uploadChatContent } from './chatContentUpload'
 import { subscribeLiveFileEvents } from './liveFileEvents'
 
-const CHAT_CONTENT_TRANSFER_PAGE_SIZE = 200
+const CHAT_CONTENT_TRANSFER_PAGE_SIZE = 500
 const CHAT_CONTENT_TRANSFER_CONCURRENCY = 4
 
 // ── User intent for the write lock ─────────────────────────────────────────
@@ -161,6 +162,62 @@ export interface SettingsBackupEstimate {
 
 export type BackupImportPhase = 'processing' | 'validating' | 'publishing' | 'finalizing'
 
+/** Server-side RisuAI account import (server/node/risu-account-import.cjs). */
+export type RisuAccountImportState =
+    'idle' | 'preparing' | 'ready' | 'downloading' | 'paused' | 'needs-login' | 'downloaded' | 'applying'
+
+export interface RisuAccountImportSummary {
+    accountId: string
+    characters: number
+    chats: number
+    assets: number
+    assetsStaged: number
+    cold: number
+    coldStaged: number
+    skipped: number
+    unresolvedRemotes: number
+    /** Blocks of the account database that could not be read (left out). */
+    damaged: number
+    damagedNames: string[]
+    estimatedSeconds: number
+}
+
+export interface RisuAccountImportStep {
+    done: number
+    total: number
+    bytes?: number
+}
+
+export interface RisuAccountImportStatus {
+    state: RisuAccountImportState
+    /** Set from the user's confirmation until the import is applied or cancelled; the app shows only the import screen. */
+    blocking: boolean
+    error: { message: string, code: string | null } | null
+    accountId: string | null
+    summary: RisuAccountImportSummary | null
+    /** The account check (database, remote characters). */
+    progress: { phase: 'database' | 'remotes', done: number, total: number | null, bytes: number } | null
+    phase: 'cold' | 'assets' | 'apply' | null
+    /** apply counts bytes. */
+    steps: { cold: RisuAccountImportStep, assets: RisuAccountImportStep, apply: RisuAccountImportStep | null } | null
+    remainingSeconds: number | null
+    missingCount: number
+    missing: { kind: 'asset' | 'cold', key: string, status: number, reason: 'not-found' | 'unreadable' }[]
+    result: { missing: number, assetsRestored?: number, coldStorageFailed?: number, pluginStorageColdFailed?: number } | null
+    /** Files already downloaded by a started import the server lost its plan for (after a restart). */
+    staged: { files: number, total: number | null } | null
+}
+
+export class RisuAccountImportError extends Error {
+    code: string | null
+    status: number
+    constructor(message: string, code: string | null, status: number) {
+        super(message)
+        this.code = code
+        this.status = status
+    }
+}
+
 export class NodeStorage{
     importProgressId?: string
 
@@ -217,6 +274,8 @@ export class NodeStorage{
     })()
 
     _lastDbEtag: string | null = null
+    // Set when the server kept unsaved app state in a recovery file on load.
+    liveFilesRecoveryPath: string | null = null
     authChecked = false
     private cachedJwt: { token: string; expiresAt: number } | null = null
     private static sessionInitialized = false
@@ -442,16 +501,26 @@ export class NodeStorage{
         if (this.importProgressId) headers.set('x-import-id', this.importProgressId)
         if (isUserActive()) headers.set('x-user-active', '1')
 
-        const response = await fetch(input, {
-            ...init,
-            headers
-        })
+        let response: Response
+        try {
+            response = await fetch(input, {
+                ...init,
+                headers
+            })
+        } catch (error) {
+            if (!init.signal?.aborted && error instanceof TypeError && [
+                'Failed to fetch', 'NetworkError when attempting to fetch resource.', 'Load failed',
+            ].includes(error.message)) {
+                throw Object.assign(new TypeError('앱 서버에 연결하지 못했습니다', { cause: error }), { code: 'APP_SERVER_FETCH' })
+            }
+            throw error
+        }
         init.signal?.throwIfAborted()
 
         if (response.status === 423) {
             const failure = await response.clone().json().catch(() => ({}))
-            // Local transfer/sync write gates answer 423 too; only a real session takeover deactivates this tab.
-            if (!['TRANSFER_BUSY', 'NAS_SYNC_BUSY'].includes(failure.code)) window.dispatchEvent(new CustomEvent('risu-session-deactivated'))
+            // Account import preserves its reason; transfer/sync gates do not deactivate this tab.
+            if (!['TRANSFER_BUSY', 'NAS_SYNC_BUSY'].includes(failure.code)) window.dispatchEvent(new CustomEvent('risu-session-deactivated', { detail: { code: failure.code ?? null } }))
         }
 
         if(retry && await this.shouldRetryAuth(response)){
@@ -538,6 +607,8 @@ export class NodeStorage{
         if (dbEtag) {
             this._lastDbEtag = dbEtag
         }
+        const recoveryPath = da.headers.get('x-live-files-recovery')
+        if (recoveryPath) this.liveFilesRecoveryPath = recoveryPath
 
         const data = Buffer.from(await da.arrayBuffer())
         if (data.length === 0){
@@ -706,6 +777,10 @@ export class NodeStorage{
             const res = await this.authFetch('/api/session/lock-status')
             if (!res.ok) return 'unknown'
             const data = await res.json()
+            // A started RisuAI account import makes every page stale; say why.
+            if (data?.code === 'ACCOUNT_IMPORT_ACTIVE') {
+                window.dispatchEvent(new CustomEvent('risu-session-deactivated', { detail: { code: data.code } }))
+            }
             return data?.state ?? 'unknown'
         } catch {
             return 'unknown'
@@ -781,6 +856,18 @@ export class NodeStorage{
         this.liveMonitoringGeneration++
         this.liveMonitoringPending = null
         return this.cacheLiveFileMonitoring(data)
+    }
+
+    // One read of a character's assets folder: files added or replaced there become its assets.
+    async scanCharacterAssets(characterId: string): Promise<{ changed: boolean, etag?: string | null, snapshot?: import('./liveFileSync').LiveFileSnapshot }> {
+        const response = await this.authFetch('/api/live-files/scan-assets', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ characterId }),
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data?.error || `Asset folder scan failed (${response.status})`)
+        return { changed: data?.changed === true, etag: data?.etag ?? null, snapshot: data?.snapshot }
     }
 
     async getExternalChanges(): Promise<ExternalChangesPending | null> {
@@ -1024,7 +1111,7 @@ export class NodeStorage{
     async importBackup(
         file: Blob,
         onProgress?: (loaded: number, total: number, phase?: BackupImportPhase) => void
-    ): Promise<{ok: boolean, assetsRestored: number, coldStorageFailed?: number}> {
+    ): Promise<{ok: boolean, assetsRestored: number, coldStorageFailed?: number, pluginStorageColdFailed?: number}> {
         await this.prepareImport(file.size)
         const authHeader = await this.createAuth()
 
@@ -1049,7 +1136,7 @@ export class NodeStorage{
 
             let parsedIndex = 0
             let leftover = ''
-            let result: {ok: boolean, assetsRestored: number, coldStorageFailed?: number} | null = null
+            let result: {ok: boolean, assetsRestored: number, coldStorageFailed?: number, pluginStorageColdFailed?: number} | null = null
             let serverErrorMsg: string | null = null
 
             const drainNdjson = () => {
@@ -1124,6 +1211,18 @@ export class NodeStorage{
         return response.json()
     }
 
+    async assetStoreTransition(action: 'status' | 'convert' | 'revert', options: { limit?: number, verify?: boolean } = {}) {
+        const response = action === 'status'
+            ? await this.authFetch('/api/asset-store/status')
+            : await this.authFetch(`/api/asset-store/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(options),
+            })
+        if (!response.ok) throw new Error(`Asset store ${action} failed: ${response.status}`)
+        return response.json()
+    }
+
     async storagePackageOverview() {
         const response = await this.authFetch('/api/storage-packages/overview')
         if (!response.ok) throw new Error(`Storage package overview failed: ${response.status}`)
@@ -1195,7 +1294,7 @@ export class NodeStorage{
     async restoreServerBackup(
         filename: string,
         onProgress?: (bytes: number, totalBytes: number, phase?: BackupImportPhase) => void
-    ): Promise<{ok: boolean, assetsRestored: number, coldStorageFailed?: number}> {
+    ): Promise<{ok: boolean, assetsRestored: number, coldStorageFailed?: number, pluginStorageColdFailed?: number}> {
         const da = await this.authFetch('/api/backup/server/restore', {
             method: 'POST',
             headers: {
@@ -1214,7 +1313,7 @@ export class NodeStorage{
         const reader = da.body!.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
-        let result: {ok: boolean, assetsRestored: number, coldStorageFailed?: number} | null = null
+        let result: {ok: boolean, assetsRestored: number, coldStorageFailed?: number, pluginStorageColdFailed?: number} | null = null
 
         while (true) {
             const { done, value } = await reader.read()
@@ -1252,16 +1351,82 @@ export class NodeStorage{
         await this.startBrowserDownload(`/api/backup/server/download/${encodeURIComponent(filename)}`)
     }
 
+    // ── RisuAI account import ───────────────────────────────────────────────
+    // These calls answer at once (the work runs on the server in the
+    // background) and, like every RisuBard server wait, have no time limit.
+
+    private async risuAccountRequest<T>(urlPath: string, init: RequestInit = {}): Promise<T> {
+        const da = await this.authFetch(urlPath, init)
+        const ok = da.status >= 200 && da.status < 300
+        // A success body that is cut off must fail, not read as an empty
+        // answer; only an error answer may lack a JSON body.
+        const body = ok ? await da.json() : await da.json().catch(() => ({}))
+        if (!ok) {
+            throw new RisuAccountImportError(body?.error || `RisuAI account import error: ${da.status}`, body?.code ?? null, da.status)
+        }
+        return body as T
+    }
+
+    private postRisuAccount<T>(action: string, body: unknown = {}): Promise<T> {
+        return this.risuAccountRequest<T>(`/api/risu-account/${action}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+        })
+    }
+
+    getRisuAccountImportConfig(): Promise<{ loginUrl: string, loginOrigin: string }> {
+        return this.risuAccountRequest('/api/risu-account/config')
+    }
+
+    getRisuAccountImportStatus(): Promise<RisuAccountImportStatus> {
+        return this.risuAccountRequest('/api/risu-account/status')
+    }
+
+    /** Starts reading the account database; poll the status for the summary. */
+    async prepareRisuAccountImport(token: string, id: string): Promise<void> {
+        await this.postRisuAccount('prepare', { token, id })
+    }
+
+    async startRisuAccountDownload(): Promise<void> {
+        await this.postRisuAccount('download')
+    }
+
+    async cancelRisuAccountImport(): Promise<void> {
+        await this.postRisuAccount('cancel')
+    }
+
+    /** Applies a download that has missing items; poll the status for the outcome. */
+    async applyRisuAccountImport(): Promise<void> {
+        await this.postRisuAccount('apply')
+    }
+
     // ── Chat content (runtime lazy load) ────────────────────────────────────
 
-    private async fetchFullChatContent(chaId: string, chatIndex: number, chatId: string): Promise<any | null> {
+    async fetchRawChatContent(chaId: string, chatIndex: number, chatId: string): Promise<any | null> {
         const da = await this.authFetch(`/api/chat-content/${encodeURIComponent(chaId)}/${chatIndex}`, {
             headers: { 'x-chat-id': chatId },
         })
         if (da.status === 404) return null
         if (da.status < 200 || da.status >= 300) throw new Error(`fetchChatContent error: ${da.status}`)
         const buffer = new Uint8Array(await da.arrayBuffer())
-        return normalizeChat(await decodeRisuSave(buffer))
+        return await decodeRisuSave(buffer)
+    }
+
+    private async fetchFullChatContent(chaId: string, chatIndex: number, chatId: string): Promise<any | null> {
+        const chat = await this.fetchRawChatContent(chaId, chatIndex, chatId)
+        return chat === null ? null : normalizeChat(chat)
+    }
+
+    /** Persona binding and last message only, for the chat list hover card. */
+    async fetchChatPreview(chaId: string, chatIndex: number, chatId: string): Promise<ChatPreviewPayload | null> {
+        const da = await this.authFetch(`/api/chat-preview/${encodeURIComponent(chaId)}/${chatIndex}`, {
+            headers: { 'x-chat-id': chatId },
+        })
+        // 409: the chat moved since this index was read; the caller asks again later.
+        if (da.status === 404 || da.status === 409) return null
+        if (da.status < 200 || da.status >= 300) throw new Error(`fetchChatPreview error: ${da.status}`)
+        return await da.json() as ChatPreviewPayload
     }
 
     async fetchChatContent(chaId: string, chatIndex: number, chatId: string): Promise<any | null> {

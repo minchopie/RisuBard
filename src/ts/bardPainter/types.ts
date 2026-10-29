@@ -32,6 +32,48 @@ export interface PainterSubject {
     outfitEdited?: boolean
     /** Legacy single-field prompt; migrated into the structured fields when a chat opens. */
     prompt?: string
+    /** Planner-reported sex; the plan renderer derives count tags such as 1girl from it. */
+    sex?: PainterSex
+    /** The user edited the rendered pose or state text; plan rendering keeps it. */
+    poseEdited?: boolean
+    stateEdited?: boolean
+    /** NovelAI character position from the plan; coordinates are sent only when every block has one. */
+    center?: { x: number; y: number }
+    /** Transient link to its plan entry between parsing and rendering; never saved. */
+    planKey?: string
+}
+
+export type PainterSex = 'female' | 'male' | 'other' | 'unknown'
+
+/** Modifier option IDs per catalog group and normalized free tags per free-tag group. */
+export interface PainterPlanSelection {
+    modifiers: Record<string, string[]>
+    freeTags: Record<string, string[]>
+}
+
+export interface PainterPlanSubject extends PainterPlanSelection {
+    stateIds: string[]
+    notes: { placement: string; action: string }
+    /** Planner quote showing presence at the selected moment; checked against the sent text. */
+    evidence?: string
+}
+
+/** Endpoints are draft subject IDs; an ID missing from the draft is the hidden first-person viewer. */
+export interface PainterPlanInteraction {
+    source: string
+    target: string
+    acts: string[]
+    description: string
+    sourceAction: string
+    targetAction: string
+}
+
+/** Scene plan version 3 selections, kept with the draft so revisions edit choices instead of text. */
+export interface PainterPlan {
+    version: 3
+    scene: PainterPlanSelection & { notes: string }
+    subjects: Record<string, PainterPlanSubject>
+    interactions: PainterPlanInteraction[]
 }
 
 export interface PainterFragment {
@@ -49,6 +91,10 @@ export interface PainterDraft {
     size?: string
     /** User-owned copies; never populated from model output. */
     fragments?: PainterFragment[]
+    /** Selections the scene text was rendered from; absent for version 2 and older drafts. */
+    plan?: PainterPlan
+    /** The user edited the rendered scene text; plan rendering keeps it. */
+    sceneEdited?: boolean
 }
 
 export interface PainterStyle {
@@ -118,6 +164,8 @@ export interface PainterSettings {
     width: number
     height: number
     seed: number | null
+    /** 'plan' sends the planner's character positions as NovelAI coordinates; 'novelai' leaves placement to NovelAI. Missing means 'plan'. */
+    positionMode?: 'plan' | 'novelai'
     instruction: string
     /** Scene-local camera selection; missing legacy values use third-person. */
     perspective?: 'first-person' | 'third-person'
@@ -140,14 +188,14 @@ export interface PainterIdentity {
 }
 
 /** Reusable generation options; scene-specific instructions and references stay in the chat. */
-export type PainterGenerationSettings = Pick<PainterSettings, 'model' | 'modelSlot' | 'sizeMode' | 'width' | 'height' | 'seed'> & {
+export type PainterGenerationSettings = Pick<PainterSettings, 'model' | 'modelSlot' | 'sizeMode' | 'width' | 'height' | 'seed' | 'positionMode'> & {
     context: Omit<PainterContext, 'wikiIds' | 'referenceId' | 'referenceAssetId'>
 }
 
 export function painterGenerationSettings(settings: PainterSettings): PainterGenerationSettings {
     const { model, modelSlot, width, height, seed } = settings
     const { before, after, surrounding, systemPrompt, characterDescription, persona, characterLorebook, moduleLorebook } = settings.context
-    return { model, modelSlot, sizeMode: painterSizeMode(settings), width, height, seed,
+    return { model, modelSlot, sizeMode: painterSizeMode(settings), width, height, seed, positionMode: settings.positionMode ?? 'plan',
         context: { before, after, surrounding, systemPrompt, characterDescription, persona, characterLorebook, moduleLorebook } }
 }
 
@@ -181,6 +229,8 @@ export interface PainterChatData {
     imagePreset?: { promptPresetId: string; name: string; values: Record<string, string> }
     /** Missing on legacy chats: preserve their existing local generation options. */
     settingsScope?: 'global' | 'chat'
+    /** The user picked this chat's style; otherwise a bot lorebook default style applies. */
+    styleChosen?: boolean
     anchor?: PainterAnchor
     draft?: PainterDraft
     outfits: PainterOutfit[]
@@ -213,7 +263,7 @@ export function createPainterSettings(): PainterSettings {
         styleId: 'default', model: 'nai-diffusion-5-full', modelSlot: 'model', sizeMode: 'ai',
         width: 832, height: 1216, seed: null, instruction: '', perspective: 'third-person',
         context: {
-            before: 2, after: 0, surrounding: false, systemPrompt: false,
+            before: 2, after: 0, surrounding: true, systemPrompt: false,
             characterDescription: true, persona: false, characterLorebook: false,
             moduleLorebook: false, wikiIds: [], referenceId: '',
         },

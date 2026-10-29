@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, stat } from 'node:fs/
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { threadId as mainThreadId } from 'node:worker_threads'
 import { fixtureDav } from './nas-sync-dav-fixture'
 import { resolveMemoryWorkspace } from './risubard-memory-workspace'
 import { createMemorySaveSlot, memorySaveWorkspaceId } from './risubard-memory-save'
@@ -56,7 +57,10 @@ const echoOf = (plan: any, db: any) => ({ transaction: plan.transaction, chats: 
     modules: plan.modules, plugins: plan.plugins, pluginEnabled: plan.pluginEnabled })
 
 async function device(t: any, dav: ReturnType<typeof fixtureDav>, name: string, database: any, master = MASTER, extra: any = {}) {
-    const root = await mkdtemp(join(tmpdir(), `bard-sync-svc-${name}-`)); t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const base = await mkdtemp(join(tmpdir(), `bard-sync-svc-${name}-`)); t.onTestFinished(() => rm(base, { recursive: true, force: true }))
+    // longRoot: a fixture root past the Windows 260-character limit (see the long-path test); the service never sees the option.
+    const { longRoot, ...options } = extra; let root = base
+    if (longRoot) { while (root.length < 280) root = join(root, 'segment-0123456789abcdef'); await mkdir(root, { recursive: true }) }
     const dataRoot = join(root, 'data'); await mkdir(dataRoot)
     const repository = createUserDataRepository({ dataRoot }); repository.importLegacyDatabase(database, { mode: 'sync' })
     const memory = createRuntimeMemoryService(dataRoot), storage = createFileKv({ dataRoot })
@@ -66,7 +70,7 @@ async function device(t: any, dav: ReturnType<typeof fixtureDav>, name: string, 
         readInlay: async (id: string) => inlays.get(id) ?? null,
         installInlay: async (entry: any, staging: string) => { if (inlays.has(entry.id)) throw Object.assign(new Error('EEXIST inlay'), { code: 'EEXIST' }); inlays.set(entry.id, { metadata: entry.metadata, data: await readFile(join(staging, entry.file)) }); if (entry.ownership) storage.kvSet('inlay_meta/' + entry.id, Buffer.from(JSON.stringify(entry.ownership))) },
         inlayMeta: async (id: string) => { const raw = storage.kvGet('inlay_meta/' + id); return raw ? JSON.parse(Buffer.from(raw).toString('utf8')) : null },
-        removeInlay: async (id: string) => { inlays.delete(id); storage.kvDel('inlay_meta/' + id) }, hooks, ...extra })
+        removeInlay: async (id: string) => { inlays.delete(id); storage.kvDel('inlay_meta/' + id) }, hooks, ...options })
     const service = make()
     const save = (db: any) => repository.importLegacyDatabase(db, { mode: 'sync' })
     return { root, dataRoot, repository, memory, storage, inlays, service, make, save, db: () => repository.exportLegacyDatabase() }
@@ -76,6 +80,38 @@ const baseDb = (extra: any = {}) => ({ language: 'ko', botPresets: [{ id: 'p1', 
     openAIKey: S('openai'), forceReplaceUrl: 'https://proxy.example/v1', proxyKey: S('proxy'), aiModel: 'gpt', textAreaSize: 11, account: { token: S('account'), id: 'me', data: {} },
     characters: [{ chaId: 'card', type: 'character', name: '표본', image: 'assets/icon.png', chatPage: 0, oaiTTSConfig: { apiKey: S('tts'), baseURL: 'https://tts.example' },
         chats: [{ id: 'chat', name: '현재', note: '', localLore: [], scriptstate: { day: 7 }, message: [{ role: 'char', data: '본문 {{inlay::draw1}}', promptInfo: { promptText: 'private request' } }] }] }], ...extra })
+
+test('snapshot retries join the running capture across HTTP and direct callers, then allow a fresh capture', async t => {
+    let release!: () => void, reads = 0
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const db = { characters: [], personas: [], modules: [], plugins: [], botPresets: [] }
+    const d = await device(t, fixtureDav(), 'snapshot-retry', db, MASTER, { readDatabase: async () => { reads++; await gate; return db } })
+    d.service.enable({ workspaceId: 'ws-fixture' })
+    const routes = new Map<string, any>()
+    const app = { get: (path: string, handler: any) => routes.set(path, handler), post: (path: string, handler: any) => routes.set(path, handler) }
+    d.service.registerRoutes(app, { auth: async () => true, activeSession: () => true })
+    let httpResult: any
+    const first = d.service.snapshot()
+    const retry = routes.get('/api/nas-sync/snapshot')({}, { json: (value: any) => { httpResult = value } })
+    release()
+    const [result] = await Promise.all([first, retry])
+    expect(httpResult).toEqual(result)
+    expect(reads).toBe(1)
+    await d.service.snapshot()
+    expect(reads).toBe(2)
+})
+
+test('a failed shared snapshot does not poison the retry', async t => {
+    let reads = 0
+    const db = { characters: [], personas: [], modules: [], plugins: [], botPresets: [] }
+    const d = await device(t, fixtureDav(), 'snapshot-failure', db, MASTER, { readDatabase: async () => { if (++reads === 1) throw new Error('capture failed'); return db } })
+    d.service.enable({ workspaceId: 'ws-fixture' })
+    const attempts = await Promise.allSettled([d.service.snapshot(), d.service.snapshot()])
+    expect(attempts.map(result => result.status)).toEqual(['rejected', 'rejected'])
+    expect(reads).toBe(1)
+    await expect(d.service.snapshot()).resolves.toHaveProperty('committed')
+    expect(reads).toBe(2)
+})
 
 async function seedTablet(t: any, dav: ReturnType<typeof fixtureDav>) {
     const tablet = await device(t, dav, 'tablet', baseDb())
@@ -192,6 +228,12 @@ test('real snapshot → publish → pull → plan → canonical save → arm →
     const db = phone.db()
     await phone.service.arm(plan.transaction, echoOf(plan, applyPlanToDb(structuredClone(db), plan)))
     expect(() => phone.service.assertWrite({ path: '/api/db/flush', headers: {} })).toThrow(expect.objectContaining({ code: 'NAS_SYNC_BUSY', transaction: plan.transaction })) // armed: carries the transaction
+    for (const kind of ['nas', 'github']) for (const op of ['config', 'list', 'upload', 'download']) {
+        expect(() => phone.service.assertWrite({ path: `/api/play-transfer/remote/${kind}/${op}`, headers: {} })).not.toThrow()
+    }
+    for (const path of ['/api/play-transfer/export', '/api/play-transfer/incoming/prepare', '/api/play-transfer/incoming/arm', '/api/play-transfer/incoming/finish', '/api/play-transfer/remote/github/legacy-upload', '/api/play-transfer/remote/nas/configure']) {
+        expect(() => phone.service.assertWrite({ path, headers: {} })).toThrow(expect.objectContaining({ code: 'NAS_SYNC_BUSY' }))
+    }
     expect(() => phone.service.assertWrite({ path: '/api/db/flush', headers: { 'x-nas-sync-id': plan.transaction } })).not.toThrow()
     phone.save(applyPlanToDb(db, plan))
     const finished = await phone.service.finish(plan.transaction, true)
@@ -828,7 +870,7 @@ test('live .78 root cause: a joining device whose prompt-presets stayed vault-pe
     // Tablet pulls: the root is a conflict, not a linear update; its presets stay and the conflict is reported for resolution.
     await tablet.service.pull(); const plan = await tablet.service.plan()
     expect(plan.settings?.botPresets).toBeUndefined(); expect(tablet.db().botPresets.map((p: any) => p.id)).toEqual(['p1']) // the plan is empty or carries no preset change
-    const conflict = tablet.service.conflicts().find((c: any) => c.root === presetsRoot); expect(conflict?.state).toBe('diverged'); expect(conflict.variants).toHaveLength(2)
+    const conflict = (await tablet.service.conflicts()).find((c: any) => c.root === presetsRoot); expect(conflict?.state).toBe('diverged'); expect(conflict.variants).toHaveLength(2)
     const heads = tablet.service.store().graph.classify(presetsRoot).heads; expect(heads).toHaveLength(2); expect(heads).toEqual(expect.arrayContaining([tabletHead, mine.id]))
     // restore-revision on the diverged root: duplicated heads are not "every head" (exact set); a device whose key cannot open the sealed
     // values is refused before anything is queued; with the exact set the tablet's revision becomes the resolution of both heads.
@@ -944,7 +986,7 @@ test('legacy userNote revisions are acknowledged without overwriting the selecte
     const peer = await device(t, dav, 'note-peer', { characters: [], personas: [], userNote: '' }); peer.service.enable({ workspaceId: 'note-legacy' });
     await d.service.publish(); await peer.service.pull(); await settle(peer);
     expect(peer.db().userNote).toBe(''); expect(peer.service.pendingRoots().roots).toEqual([]);
-    expect(d.service.conflicts().some((c: any) => c.id === 'userNote')).toBe(false);
+    expect((await d.service.conflicts()).some((c: any) => c.id === 'userNote')).toBe(false);
     await expect(peer.service.restoreRevision({ root: 'settings\ngroup\nuserNote', confirmed: true })).rejects.toThrow(/persona note/);
     expect(d.service.store().graph.get(legacy.id)).toBeTruthy();
 })
@@ -960,7 +1002,7 @@ test('receipt-only message differences are state conflicts, not new conversation
         await d.service.snapshot(); await d.service.publish()
     }
     await left.service.pull(); await right.service.pull()
-    const conflict = left.service.conflicts().find((c: any) => c.type === 'chat')
+    const conflict = (await left.service.conflicts()).find((c: any) => c.type === 'chat')
     expect(conflict.sameMessages).toBe(true); expect(conflict.differs).toContain('state'); expect(conflict.differs).not.toContain('messages')
     expect(conflict.state).not.toBe('branches-preserved')
     const plan = await right.service.plan()
@@ -971,7 +1013,7 @@ test('receipt-only message differences are state conflicts, not new conversation
     }
     const edited = right.db(); edited.characters[0].chats[0].message[0].data += ' 실제 본문 변경'; right.save(edited)
     await right.service.snapshot(); await right.service.publish(); await left.service.pull()
-    expect(left.service.conflicts().find((c: any) => c.type === 'chat')).toMatchObject({ sameMessages: false, differs: expect.arrayContaining(['messages']) })
+    expect((await left.service.conflicts()).find((c: any) => c.type === 'chat')).toMatchObject({ sameMessages: false, differs: expect.arrayContaining(['messages']) })
 })
 
 test('same messages with two Wiki revisions do not create duplicate chats, expose no message content, and show Wiki counts after receipt', async t => {
@@ -983,7 +1025,7 @@ test('same messages with two Wiki revisions do not create duplicate chats, expos
         await d.service.snapshot(); await d.service.publish();
     }
     await left.service.pull(); await right.service.pull();
-    const conflict = left.service.conflicts().find((c: any) => c.type === 'chat');
+    const conflict = (await left.service.conflicts()).find((c: any) => c.type === 'chat');
     expect(conflict.sameMessages).toBe(true); expect(conflict.differs).toContain('wiki'); expect(conflict.title).toContain('표본');
     expect(conflict.variants.every((v: any) => !('content' in v))).toBe(true);
     const overview = await right.service.overview(); expect(overview.peerApplied).toBe('unconfirmed'); expect(overview.chats[0].wikiFiles).toBeGreaterThan(0);
@@ -992,7 +1034,7 @@ test('same messages with two Wiki revisions do not create duplicate chats, expos
     const newcomer = await device(t, dav, 'wiki-newcomer', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] });
     newcomer.service.enable({ workspaceId: 'ws-fixture' }); await newcomer.service.pull();
     const held = await settle(newcomer); expect(held.pending.some((p: any) => p.reason === 'same-messages')).toBe(true);
-    const choice = newcomer.service.conflicts().find((c: any) => c.type === 'chat');
+    const choice = (await newcomer.service.conflicts()).find((c: any) => c.type === 'chat');
     expect(choice.title).toContain('표본'); expect(choice.sameMessages).toBe(true);
     await newcomer.service.resolveConflict({ root: choice.root, keep: choice.variants[0].heads[0] }); await settle(newcomer);
     expect(newcomer.db().characters[0].chats).toHaveLength(1);
@@ -1086,6 +1128,127 @@ test('card-only updates preserve published chat membership, history and Wiki ins
     expect(Object.keys(graph.get(heads[0]).dependencies).some(k => k.startsWith('bard:'))).toBe(true)
 })
 
+test('upstream .84 automatic trash backup (trashTime copy with a fresh id-less empty chat, later an id, later no chats) is never published as an ordinary card and never blocks the snapshot; the in-place update of the original card still publishes', async t => {
+    const dav = fixtureDav(), state: any = baseDb()
+    // readDatabase hands the service exactly what the app holds, so a chat that has no id yet (upstream backupOf before any save) reaches it as-is.
+    const sender = await device(t, dav, 'trash-backup-sender', structuredClone(state), MASTER, { readDatabase: async () => structuredClone(state) })
+    sender.storage.kvSet('assets/icon.png', Buffer.from('icon-bytes'))
+    sender.inlays.set('draw1', { metadata: { type: 'image', ext: 'png', name: '그림' }, data: Buffer.from('inlay-draw1-bytes') })
+    sender.storage.kvSet('inlay_meta/draw1', Buffer.from(JSON.stringify({ createdAt: 100, updatedAt: 200, charId: 'card', chatId: 'chat' })))
+    await sender.memory.saveMarkdownWikiTurn({ characterId: 'card', chatId: 'chat', sourceMessageIds: ['m1'], markdown: '## 사건\n\n위키' })
+    sender.service.enable({ workspaceId: 'trash-backup-ws' })
+    expect((await sender.service.snapshot()).committed).toMatchObject({ sequence: 1 }); expect((await sender.service.publish()).failed).toEqual([])
+    const receiver = await device(t, dav, 'trash-backup-receiver', EMPTY_DB()); receiver.service.enable({ workspaceId: 'trash-backup-ws' }); await applyAll(receiver)
+    expect(receiver.db().characters.map((c: any) => c.chaId)).toEqual(['card'])
+    const graph = sender.service.store().graph, ck = 'library\ncharacter\ncard', chk = 'play\nchat\nchat'
+    const chatHeads = graph.classify(chk).heads, chatDeps = Object.keys(graph.get(chatHeads[0]).dependencies)
+    expect(chatDeps.some(k => k.startsWith('inlay:'))).toBe(true); expect(chatDeps.some(k => k.startsWith('bard:'))).toBe(true)
+    // Exactly upstream backupOf's shape: the card without chats/chatFolders, a new id, the suffixed name, ONE empty chat that has no id yet, trashTime.
+    const { chats: _chats, chatFolders: _folders, ...card } = state.characters[0]
+    const backup: any = { ...structuredClone(card), chaId: 'backup-copy', name: `${card.name} (백업)`, chats: [{ message: [], note: '', name: 'Chat 1', localLore: [] }], chatFolders: [], chatPage: 0, trashTime: now() }
+    state.characters.push(backup)
+    state.characters[0].description = 'updated card prompt' // tryUpdateExistingCharacter replaces the original in place: an ordinary edit
+    const rootsBefore = graph.rootKeys(), cardHeads = graph.classify(ck).heads
+    const snap = await sender.service.snapshot()
+    expect(snap.committed).toMatchObject({ tombstones: 0 }) // the card edit (and the chat's pin on its owner card) continue linearly; nothing else
+    expect(graph.rootKeys()).toEqual(rootsBefore); expect(graph.rootKeys().filter(k => k.includes('backup-copy'))).toEqual([])
+    expect(graph.get(graph.classify(ck).heads[0]).parents).toEqual(cardHeads)
+    expect(graph.classify(chk).heads).toHaveLength(1); expect(graph.get(graph.classify(chk).heads[0]).parents).toEqual(chatHeads)
+    expect(graph.classify(ck).tombstoneHeads).toEqual([]); expect(graph.classify(chk).tombstoneHeads).toEqual([])
+    expect((await sender.service.publish()).failed).toEqual([]); await applyAll(receiver)
+    expect(receiver.db().characters.map((c: any) => c.chaId)).toEqual(['card'])
+    expect(receiver.db().characters[0].description).toBe('updated card prompt')
+    // After an ordinary save the backup's chat carries an id; a card-only backup has no chats at all. Neither becomes a revision.
+    backup.chats[0].id = 'backup-chat'
+    expect((await sender.service.snapshot()).committed).toBeNull()
+    backup.chats = []
+    expect((await sender.service.snapshot()).committed).toBeNull()
+    expect(graph.rootKeys().filter(k => k.includes('backup'))).toEqual([])
+    expect(Object.keys(sender.service.state().lineage).filter(k => k.includes('backup'))).toEqual([])
+    expect(sender.service.store().trash()).toEqual([])
+    expect(receiver.db().characters.map((c: any) => c.chaId)).toEqual(['card'])
+    // The REAL card-only upload setting on the trashed backup (the setting checks the card exists in the database) changes nothing:
+    // a trashed card is excluded before the card-only rule, so neither its id-less chat, nor an id, nor an empty list makes a revision.
+    const settled = { roots: graph.rootKeys(), lineage: structuredClone(sender.service.state().lineage), card: graph.classify(ck).heads, chat: graph.classify(chk).heads }
+    backup.chats = [{ message: [], note: '', name: 'Chat 1', localLore: [] }]
+    await sender.service.setCardOnlyUpload({ characterId: 'backup-copy', enabled: true })
+    expect(sender.service.status().cardOnlyUploads).toEqual(['backup-copy']); expect(sender.make().status().cardOnlyUploads).toEqual(['backup-copy'])
+    expect((await sender.service.snapshot()).committed).toBeNull()
+    backup.chats[0].id = 'backup-chat'
+    expect((await sender.service.snapshot()).committed).toBeNull()
+    backup.chats = []
+    expect((await sender.service.snapshot()).committed).toBeNull()
+    expect(graph.rootKeys()).toEqual(settled.roots); expect(sender.service.state().lineage).toEqual(settled.lineage)
+    expect(graph.classify(ck).heads).toEqual(settled.card); expect(graph.classify(chk).heads).toEqual(settled.chat); expect(sender.service.store().trash()).toEqual([])
+    expect((await sender.service.publish()).failed).toEqual([]); expect(await applyAll(receiver)).toMatchObject({ empty: true })
+    expect(receiver.db().characters.map((c: any) => c.chaId)).toEqual(['card']); expect(receiver.db().characters[0].description).toBe('updated card prompt')
+    await assertNoSentinel(sender.dataRoot)
+})
+
+test('a previously published card trashed locally: no tombstone, lineage/heads/media kept; a peer edit waits as local-edit, untrash resumes the same ancestry, explicit deletion is still a deletion', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await device(t, dav, 'trash-phone', EMPTY_DB()); phone.service.enable({ workspaceId: 'ws-fixture' }); await applyAll(phone)
+    const graph = tablet.service.store().graph, ck = 'library\ncharacter\ncard', chk = 'play\nchat\nchat'
+    const before = { card: graph.classify(ck).heads, chat: graph.classify(chk).heads, lineage: structuredClone(tablet.service.state().lineage), commits: tablet.service.store().state().commits.length }
+    const chatDeps = Object.keys(graph.get(before.chat[0]).dependencies)
+    expect(chatDeps.some(k => k.startsWith('inlay:'))).toBe(true); expect(chatDeps.some(k => k.startsWith('bard:'))).toBe(true); expect(chatDeps.some(k => k.startsWith('slot:'))).toBe(true)
+    // The tablet user trashes the card (upstream sets trashTime; the chats stay inside the card).
+    const trashedDb = tablet.db(); trashedDb.characters[0].trashTime = now(); tablet.save(trashedDb)
+    expect((await tablet.service.snapshot()).committed).toBeNull()
+    expect(graph.classify(ck).heads).toEqual(before.card); expect(graph.classify(chk).heads).toEqual(before.chat)
+    expect(graph.classify(ck).state).toBe('live'); expect(graph.classify(chk).state).toBe('live')
+    expect(tablet.service.state().lineage).toEqual(before.lineage); expect(tablet.service.store().trash()).toEqual([]); expect(tablet.service.store().state().commits).toHaveLength(before.commits)
+    expect(Object.keys(graph.get(graph.classify(chk).heads[0]).dependencies)).toEqual(chatDeps)
+    expect((await tablet.service.publish()).failed).toEqual([]); expect(await applyAll(phone)).toMatchObject({ empty: true })
+    expect(phone.db().characters[0]).toMatchObject({ chaId: 'card', name: '표본' }); expect(phone.db().characters[0].trashTime).toBeUndefined()
+    // The phone edits the card while it is trashed on the tablet: the uncompared local card is not overwritten; the root waits, unacknowledged.
+    const edited = phone.db(); edited.characters[0].description = 'phone edit'; phone.save(edited)
+    await phone.service.snapshot(); await phone.service.publish()
+    await tablet.service.pull(); const waiting = await tablet.service.plan()
+    expect(waiting.empty).toBe(true); expect(waiting.pending).toEqual(expect.arrayContaining([expect.objectContaining({ root: ck, reason: 'local-edit' })]))
+    expect(tablet.db().characters[0].trashTime).toBe(now()); expect(tablet.db().characters[0].description).toBeUndefined(); expect(tablet.service.store().pendingApply()).toHaveLength(1)
+    // Untrash: equal to the recorded base, so nothing new is published; the waiting peer edit now applies linearly.
+    const restored = tablet.db(); delete restored.characters[0].trashTime; tablet.save(restored)
+    expect((await tablet.service.snapshot()).committed).toBeNull()
+    expect((await applyAll(tablet)).empty).not.toBe(true)
+    expect(tablet.db().characters[0].description).toBe('phone edit'); expect(tablet.db().characters[0].trashTime).toBeUndefined(); expect(tablet.service.store().pendingApply()).toHaveLength(0)
+    expect(graph.classify(ck).state).toBe('live'); expect(graph.get(graph.classify(ck).heads[0]).parents).toEqual(before.card)
+    // The phone's card edit re-pinned the chat (a linear child of the old chat head); the tablet applied it, so its chat lineage sits there now.
+    const appliedChat = graph.classify(chk).heads; expect(appliedChat).toHaveLength(1); expect(graph.get(appliedChat[0]).parents).toEqual(before.chat)
+    // A local edit after untrash continues that same ancestry (no genesis root, no sibling) and reaches the phone.
+    const again = tablet.db(); again.characters[0].chats[0].message.push({ role: 'user', data: '복구 후 이어 쓴 대화' }); tablet.save(again)
+    expect((await tablet.service.snapshot()).committed).toMatchObject({ tombstones: 0 })
+    const chatHeads = graph.classify(chk).heads; expect(chatHeads).toHaveLength(1); expect(graph.get(chatHeads[0]).parents).toEqual(appliedChat); expect(graph.isAncestor(before.chat[0], chatHeads[0])).toBe(true)
+    expect((await tablet.service.publish()).failed).toEqual([]); await applyAll(phone)
+    expect(phone.db().characters[0].chats[0].message).toHaveLength(2)
+    // Removing the card from the database is still an explicit deletion with its cohort.
+    const deleted = tablet.db(); deleted.characters = []; tablet.save(deleted)
+    expect((await tablet.service.snapshot()).committed).toMatchObject({ tombstones: 2 }); expect(tablet.service.store().trash()).toHaveLength(2)
+    expect(graph.classify(ck).state).toBe('deleted'); expect(graph.classify(chk).state).toBe('deleted')
+    expect((await tablet.service.publish()).failed).toEqual([]); await phone.service.pull(); const removal = await phone.service.plan()
+    expect(removal.deletions).toEqual(expect.arrayContaining([{ kind: 'character', id: 'card' }, { kind: 'chat', characterId: 'card', id: 'chat' }])); expect(removal.pending).toEqual([])
+    await assertNoSentinel(tablet.dataRoot); await assertNoSentinel(phone.dataRoot)
+})
+
+test('a trashed backup never blocks the snapshot, but an active card with an unresolved stub still fails closed, leaving the input and lineage untouched', async t => {
+    const dav = fixtureDav()
+    const input: any = { characters: [
+        { chaId: 'active', name: 'Active', type: 'character', chats: [{ id: 'started', name: 'Chat', message: [{ role: 'user', data: 'hi' }] }] },
+        { chaId: 'backup', name: 'Active (백업)', type: 'character', trashTime: 5, chats: [{ message: [], note: '', name: 'Chat 1', localLore: [] }] },
+    ] }
+    const sender = await device(t, dav, 'trash-strict', { characters: [] }, MASTER, { readDatabase: async () => structuredClone(input) })
+    sender.service.enable({ workspaceId: 'trash-strict-ws' })
+    expect((await sender.service.snapshot()).committed).toMatchObject({ sequence: 1, tombstones: 0 })
+    const lineage = structuredClone(sender.service.state().lineage), roots = sender.service.store().graph.rootKeys()
+    expect(Object.keys(lineage)).toEqual(expect.arrayContaining(['library\ncharacter\nactive#active', 'play\nchat\nstarted#started']))
+    expect(Object.keys(lineage).some(k => k.includes('backup'))).toBe(false); expect(roots.some(k => k.includes('backup'))).toBe(false)
+    input.characters[0].chats.push({ id: 'not-started', name: 'Chat 2', _stub: true })
+    const before = structuredClone(input)
+    await expect(sender.service.snapshot()).rejects.toMatchObject({ code: 'CHAT_NOT_HYDRATED' })
+    expect(input).toEqual(before)
+    expect(sender.service.state().lineage).toEqual(lineage); expect(sender.service.store().graph.rootKeys()).toEqual(roots); expect(sender.service.state().pendingLineage).toBeNull()
+})
+
 
 for (const corrupted of [false, true]) test(`character order normalization ${corrupted ? 'rejects a different reorder' : 'finishes a saved legacy-client plan after restart'}`, async t => {
     const dav = fixtureDav(), sender = await seedTablet(t, dav)
@@ -1121,4 +1284,377 @@ test('shared character order keeps folder metadata and array identity while remo
     expect(db.characterOrder).toBe(order)
     expect(db.characterOrder).toEqual([{ name: 'Folder', color: 'blue', data: ['first'] }, 'local'])
     expect(db.characterOrder[0]).toBe(folder)
+})
+
+for (const recovery of [
+    { name: 'untouched baseline rolls back without ACK', card: { chaId: 'synthetic-card', name: 'local-before' }, confirmed: false, outcome: 'rolled-back' },
+    { name: 'missing field plus partial edit retains the gate', card: { chaId: 'synthetic-card', name: 'edited-after-arm' }, confirmed: false, outcome: 'partial' },
+    { name: 'confirmed save with a missing field retains the gate', card: { chaId: 'synthetic-card', name: 'local-before' }, confirmed: true, outcome: 'mismatch' },
+    { name: 'complete expected fields finish normally', card: { chaId: 'synthetic-card', name: 'local-before', desc: 'remote-expected' }, confirmed: false, outcome: 'applied' },
+    { name: 'present wrong field retains the gate', card: { chaId: 'synthetic-card', name: 'local-before', desc: 'wrong-value' }, confirmed: false, outcome: 'partial' },
+    { name: 'missing whole character retains the gate', card: null, confirmed: false, outcome: 'partial' },
+]) test(`finish recovery with missing expected character fields: ${recovery.name}`, async t => {
+    const { card, confirmed, outcome } = recovery
+    const { atomicWriteJson } = require('./file-store.cjs')
+    const { createManifest } = require('./transfer-sync/nas-sync-manifest.cjs')
+    const { canonical } = require('../../shared/play-set/protocol.ts')
+    const hash = (value: any) => sha(canonical(value, true))
+    const dataRoot = await mkdtemp(join(tmpdir(), 'bard-finish-field-'))
+    t.onTestFinished(() => rm(dataRoot, { recursive: true, force: true }))
+    const db = { characters: card ? [{ ...card, chats: [] }] : [], modules: [], plugins: [] }, beforeDb = structuredClone(db)
+    const fetch = () => { throw new Error('No network permitted') }
+    const make = () => createNasSyncService({ dataRoot, readDatabase: async () => db, memory: {}, storage: {}, secrets: {}, protect: async (v: any) => v, fetch })
+    make()
+    const transaction = randomUUID(), root = join(dataRoot, 'nas-sync')
+    const baseline = { chaId: 'synthetic-card', name: 'local-before' }, expected = { ...baseline, desc: 'remote-expected' }
+    const journal = { transaction, workspaceId: 'synthetic-only', phase: 'saving', chats: [], settings: {}, characters: [{ chaId: baseline.chaId, fields: expected }], newCharacters: [], modules: [], plugins: [], deletions: [], pluginEnabled: null,
+        baseline: { chats: [], settings: {}, characters: [hash(baseline)], modules: [], plugins: [], deletions: [] },
+        expected: { chats: [], settings: {}, characters: [{ chaId: baseline.chaId, fields: Object.keys(expected), hash: hash(expected) }], modules: [], plugins: [], pluginEnabled: null, deletions: [], keptDeletions: [] },
+        media: [], workspaces: [], progress: { workspaces: {}, acked: [] }, lineage: {}, branches: {}, appliedRoots: [], commits: [], pending: [] }
+    atomicWriteJson(root, `apply/${transaction}.json`, journal)
+    createManifest({ root, name: 'service.json' }).transact((s: any) => { s.plan = { transaction, phase: 'saving', workspaceId: 'synthetic-only' } })
+    const service = make(), manifestFile = join(root, 'service.json'), beforeManifest = await readFile(manifestFile)
+    if (outcome === 'partial') await expect(service.finish(transaction, confirmed)).rejects.toMatchObject({ code: 'NAS_SYNC_PARTIAL' })
+    else if (outcome === 'mismatch') await expect(service.finish(transaction, confirmed)).rejects.toThrow('Saved state does not match')
+    else expect((await service.finish(transaction, confirmed)).state).toBe(outcome)
+    const state = JSON.parse(await readFile(manifestFile, 'utf8'))
+    expect(db).toEqual(beforeDb)
+    expect(state.retained).toEqual([])
+    expect(state.applied).toHaveLength(outcome === 'applied' ? 1 : 0)
+    if (outcome === 'partial' || outcome === 'mismatch') {
+        expect(await readFile(manifestFile)).toEqual(beforeManifest)
+        expect(state.plan.transaction).toBe(transaction)
+        expect(JSON.parse(await readFile(join(root, `apply/${transaction}.json`), 'utf8'))).toEqual(journal)
+        expect(() => service.assertWrite({ path: '/api/write', headers: {} })).toThrow(expect.objectContaining({ code: 'NAS_SYNC_BUSY' }))
+    } else {
+        expect(state.plan).toBeNull()
+        expect(state.rolledBack ?? []).toHaveLength(outcome === 'rolled-back' ? 1 : 0)
+        expect(existsSync(join(root, `apply/${transaction}.json`))).toBe(false)
+        expect(() => service.assertWrite({ path: '/api/write', headers: {} })).not.toThrow()
+    }
+})
+
+/** A durable synthetic saving journal: classification must not rewrite the journal or acknowledge anything. */
+async function partialDetailFixture(t: any, options: { other?: string; order?: 'valid' | 'corrupt'; deletion?: boolean; confirmed?: boolean; both?: boolean; newCharacter?: boolean } = {}) {
+    const { atomicWriteJson } = require('./file-store.cjs')
+    const { createManifest } = require('./transfer-sync/nas-sync-manifest.cjs')
+    const { canonical } = require('../../shared/play-set/protocol.ts')
+    const hash = (value: any) => sha(canonical(value, true))
+    const dataRoot = await mkdtemp(join(tmpdir(), 'bard-partial-detail-'))
+    t.onTestFinished(() => rm(dataRoot, { recursive: true, force: true }))
+    const oldChat = { id: 'chat', name: 'Before chat', message: [] }, newChat = { ...oldChat, note: 'EXPECTED-CHAT-NOT-IN-DETAIL' }
+    const oldCard = { chaId: 'card', name: 'Before card' }, newCard = { ...oldCard, desc: 'EXPECTED-CARD-NOT-IN-DETAIL' }
+    const oldModule = { id: 'module', name: 'Before module' }, newModule = { ...oldModule, name: 'EXPECTED-MODULE-NOT-IN-DETAIL' }
+    const oldPlugin = { name: 'plugin', script: 'before', enabled: true }, newPlugin = { ...oldPlugin, script: 'EXPECTED-PLUGIN-NOT-IN-DETAIL' }
+    const db: any = { maxContext: 2, characters: [{ ...oldCard, chats: [oldChat] }], modules: [oldModule], plugins: [oldPlugin] }
+    if (options.other === 'character') db.characters[0].name = 'LOCAL-EDIT-NOT-IN-DETAIL'
+    if (options.other === 'missing-character') db.characters = []
+    if (options.other === 'pluginEnabled') db.plugins[0].enabled = false
+    const transaction = randomUUID(), root = join(dataRoot, 'nas-sync')
+    const settings: any = { maxContext: 2 }, baselineSettings: any = { maxContext: hash(options.both ? 2 : 1) }, expectedSettings: any = { maxContext: hash(2) }
+    if (options.both) { Object.assign(newModule, oldModule); settings.temperature = 2; baselineSettings.temperature = hash(1); expectedSettings.temperature = hash(2); db.temperature = 2 }
+    if (options.order) {
+        settings.characterOrder = ['card']; baselineSettings.characterOrder = hash(['local']); expectedSettings.characterOrder = hash(['card'])
+        db.characters.push({ chaId: 'local', name: 'Retained local', chats: [] })
+        db.characterOrder = options.order === 'valid' ? ['card', 'local'] : ['local', 'card']
+    }
+    const deletions = options.deletion ? [{ kind: 'module', id: 'obsolete' }] : []
+    if (options.deletion) db.modules.push({ id: 'obsolete', name: 'Must not delete after unknown edits' })
+    const journal: any = { transaction, workspaceId: 'synthetic-only', phase: 'saving', chats: [{ characterId: 'card', chat: newChat }], settings,
+        characters: [{ chaId: 'card', fields: newCard, chatIds: ['chat'] }], newCharacters: [], modules: [newModule], plugins: [newPlugin], deletions, pluginEnabled: { plugin: true },
+        baseline: { chats: [hash(oldChat)], settings: baselineSettings, characters: [hash(oldCard)], modules: [hash(oldModule)], plugins: [hash(oldPlugin)], deletions: deletions.map(() => true) },
+        expected: { chats: [{ characterId: 'card', chatId: 'chat', fields: Object.keys(newChat), hash: hash(newChat) }], settings: expectedSettings,
+            characters: [{ chaId: 'card', fields: Object.keys(newCard), hash: hash(newCard) }], modules: [{ id: 'module', hash: hash(newModule) }], plugins: [{ name: 'plugin', hash: hash(newPlugin) }], pluginEnabled: hash({ plugin: true }), deletions, keptDeletions: [] },
+        media: [], workspaces: [], progress: { workspaces: {}, acked: [] }, lineage: {}, branches: {}, appliedRoots: [], commits: [], pending: [] }
+    if (options.newCharacter) { db.characters = []; journal.characters = []; journal.newCharacters = [{ ...newCard, chats: [] }]; journal.baseline.characters = [null]; journal.chats = []; journal.expected.chats = []; journal.baseline.chats = [] }
+    const make = () => createNasSyncService({ dataRoot, readDatabase: async () => db, memory: {}, storage: {}, secrets: {}, protect: async (v: any) => v, fetch: () => { throw new Error('No network permitted') } })
+    make(); atomicWriteJson(root, `apply/${transaction}.json`, journal)
+    createManifest({ root, name: 'service.json' }).transact((s: any) => { s.plan = { transaction, phase: 'saving', workspaceId: 'synthetic-only' } })
+    const service = make(), manifestFile = join(root, 'service.json'), planFile = join(root, `apply/${transaction}.json`)
+    const before = { manifest: await readFile(manifestFile), plan: await readFile(planFile), db: structuredClone(db) }
+    const failure = () => service.finish(transaction, options.confirmed === true).then(() => { throw new Error('Expected retained partial') }, (error: any) => error)
+    const preserved = async () => { expect(await readFile(manifestFile)).toEqual(before.manifest); expect(await readFile(planFile)).toEqual(before.plan); expect(db).toEqual(before.db); expect(service.state().applied).toEqual([]); expect(service.state().retained).toEqual([]); expect(() => service.assertWrite({ path: '/api/write', headers: {} })).toThrow(expect.objectContaining({ code: 'NAS_SYNC_BUSY' })) }
+    return { service, transaction, failure, preserved, hash, journal, db }
+}
+
+test('partial classification returns exact expected/before units with hashes, missing-field guards, and no journal or ACK changes', async t => {
+    const f = await partialDetailFixture(t), error = await f.failure()
+    expect(error.code).toBe('NAS_SYNC_PARTIAL')
+    expect(error.detail).toMatchObject({ resumable: true })
+    const unit = (kind: string) => error.detail.units.find((u: any) => u.kind === kind)
+    expect(unit('setting')).toMatchObject({ id: 'maxContext', key: 'maxContext', state: 'expected', expectedHash: f.hash(2), beforeHash: f.hash(1) })
+    expect(unit('character')).toMatchObject({ id: 'card', state: 'before', expectedHash: f.journal.expected.characters[0].hash, beforeHash: f.journal.baseline.characters[0], fields: ['chaId', 'name', 'desc'] })
+    expect(unit('chat')).toMatchObject({ id: 'chat', characterId: 'card', state: 'before', expectedHash: f.journal.expected.chats[0].hash, beforeHash: f.journal.baseline.chats[0], fields: ['id', 'name', 'message', 'note'] })
+    expect(unit('module')).toMatchObject({ id: 'module', state: 'before' })
+    expect(unit('plugin')).toMatchObject({ id: 'plugin', state: 'before' })
+    expect(unit('pluginEnabled')).toMatchObject({ state: 'expected', expectedHash: f.hash({ plugin: true }), beforeHash: null })
+    expect(JSON.stringify(error.detail)).not.toContain('NOT-IN-DETAIL')
+    await f.preserved()
+})
+
+for (const other of ['character', 'missing-character', 'pluginEnabled']) test(`partial classification blocks other state: ${other}`, async t => {
+    const f = await partialDetailFixture(t, { other }), error = await f.failure()
+    expect(error.detail.resumable).toBe(false)
+    expect(error.detail.units.some((u: any) => u.state === 'other')).toBe(true)
+    if (other === 'pluginEnabled') expect(error.detail.units.find((u: any) => u.kind === 'pluginEnabled')).toMatchObject({ state: 'other', beforeHash: null })
+    await f.preserved()
+})
+
+for (const order of ['valid', 'corrupt'] as const) test(`partial classification preserves existing characterOrder normalization: ${order}`, async t => {
+    const f = await partialDetailFixture(t, { order }), error = await f.failure()
+    expect(error.detail.units.find((u: any) => u.kind === 'setting' && u.key === 'characterOrder')).toMatchObject({ state: order === 'valid' ? 'expected' : 'other' })
+    expect(error.detail.resumable).toBe(order === 'valid')
+    await f.preserved()
+})
+
+test('before deletion is classified but cannot automatically resume because existence baseline cannot prove its content is untouched', async t => {
+    const f = await partialDetailFixture(t, { deletion: true }), error = await f.failure()
+    expect(error.detail.units.find((u: any) => u.kind === 'deletion')).toMatchObject({ id: 'obsolete', key: 'module', state: 'before', expectedHash: f.hash(false), beforeHash: f.hash(true) })
+    expect(error.detail.resumable).toBe(false)
+    await f.preserved()
+})
+
+test('confirmed mismatch keeps its existing error and read-only detail; HTTP finish forwards the same detail', async t => {
+    const f = await partialDetailFixture(t, { confirmed: true }), error = await f.failure()
+    expect(error.message).toBe('Saved state does not match the prepared sync apply; recovery retained')
+    expect(error.code).toBeUndefined()
+    expect(error.detail.resumable).toBe(true)
+    const routes = new Map<string, any>(), app = { get: (p: string, h: any) => routes.set(p, h), post: (p: string, h: any) => routes.set(p, h) }
+    f.service.registerRoutes(app, { auth: async () => true, activeSession: () => true })
+    let status = 0, body: any
+    const response = { headersSent: false, status: (n: number) => { status = n; return response }, json: (v: any) => { body = v } }
+    await routes.get('/api/nas-sync/finish')({ body: { transaction: f.transaction } }, response)
+    expect(status).toBe(400); expect(body.code).toBe('NAS_SYNC_PARTIAL'); expect(body.detail).toEqual(error.detail)
+    await f.preserved()
+})
+
+
+test('classification calls an unchanged both-before-and-expected unit expected, never before', async t => {
+    const f = await partialDetailFixture(t, { both: true }), error = await f.failure()
+    for (const kind of ['setting', 'module']) {
+        const unit = error.detail.units.find((u: any) => u.kind === kind)
+        expect(unit.state).toBe('expected'); expect(unit.beforeHash).toBe(unit.expectedHash)
+    }
+    expect(error.detail.resumable).toBe(true)
+    await f.preserved()
+})
+
+test('classification recognizes a new character that is still absent as before while preserving the missing entity', async t => {
+    const f = await partialDetailFixture(t, { newCharacter: true }), error = await f.failure()
+    expect(error.detail.units.find((u: any) => u.kind === 'character')).toMatchObject({ id: 'card', state: 'before', beforeHash: null, expectedHash: f.journal.expected.characters[0].hash })
+    expect(error.detail.resumable).toBe(true)
+    await f.preserved()
+})
+
+
+test('partial classification exposes the current whole-entity fingerprint for expected, before and third-party values', async t => {
+    const f = await partialDetailFixture(t, { other: 'character' }), error = await f.failure()
+    const unit = (kind: string) => error.detail.units.find((u: any) => u.kind === kind)
+    expect(unit('setting')).toMatchObject({ state: 'expected', currentHash: f.hash(f.db.maxContext) })
+    const { chats: _chats, ...characterMetadata } = f.db.characters[0]
+    expect(unit('character')).toMatchObject({ state: 'other', currentHash: f.hash(characterMetadata) })
+    expect(unit('chat')).toMatchObject({ state: 'before', currentHash: f.hash(f.db.characters[0].chats[0]) })
+    expect(unit('module')).toMatchObject({ state: 'before', currentHash: f.hash(f.db.modules[0]) })
+    expect(unit('plugin')).toMatchObject({ state: 'before', currentHash: f.hash(f.db.plugins[0]) })
+    expect(unit('pluginEnabled')).toMatchObject({ state: 'expected', currentHash: f.hash({ plugin: true }) })
+    expect(error.detail.resumable).toBe(false)
+    await f.preserved()
+})
+
+// Windows limits ordinary paths to 260 characters. Node's fs handles longer ones, but fs.mkdtemp and fs.openAsBlob do not
+// (output/risubard-weekly-20261028/openblob-path-probe-result.json, claude-longpath-report.md). A data root that long must
+// still snapshot (snapshot- work dir, Wiki/slot/inlay/asset staging) and plan (plan-check- work dir), and no namespaced
+// path may be persisted anywhere.
+test('NAS snapshot and plan-check under a data root longer than 260 characters carry Wiki, slot, inlay and asset bytes and persist no namespaced path', async t => {
+    const dav = fixtureDav()
+    const tablet = await device(t, dav, 'long-tablet', baseDb(), MASTER, { longRoot: true })
+    expect(tablet.dataRoot.length).toBeGreaterThan(260)
+    const iconBytes = Buffer.from('icon-bytes-long'), inlayBytes = Buffer.from('inlay-draw1-bytes-long')
+    tablet.storage.kvSet('assets/icon.png', iconBytes)
+    tablet.inlays.set('draw1', { metadata: { type: 'image', ext: 'png', name: '그림' }, data: inlayBytes })
+    tablet.storage.kvSet('inlay_meta/draw1', Buffer.from(JSON.stringify({ createdAt: 100, updatedAt: 200, charId: 'card', chatId: 'chat' })))
+    await tablet.memory.saveMarkdownWikiTurn({ characterId: 'card', chatId: 'chat', sourceMessageIds: ['m1'], markdown: '## 사건\n\n장경로 위키' })
+    const slotChat = { id: 'chat', name: '슬롯', note: '', localLore: [], scriptstate: { day: 3 }, message: [{ role: 'char', data: '슬롯 전용 {{inlay::slot-only}}' }] }
+    tablet.inlays.set('slot-only', { metadata: { type: 'image', ext: 'png' }, data: Buffer.from('slot-only-bytes') })
+    await createMemorySaveSlot({ userDataDirectory: tablet.dataRoot, characterId: 'card', sourceChatId: 'chat', saveId: 'slot', sourceChatName: '슬롯', turnCount: 1, chatBytes: encodeMemorySaveChat(slotChat as any) })
+    tablet.service.enable({ workspaceId: 'ws-long' })
+    expect((await tablet.service.snapshot()).committed).toMatchObject({ sequence: 1, tombstones: 0 })
+    const s = tablet.service.store(), graph = s.graph, chk = 'play\nchat\nchat'
+    const headDeps = (key: string) => graph.get(graph.classify(key).heads[0]).dependencies, chatDeps = headDeps(chk)
+    const assetOwner = graph.rootKeys().find((key: string) => 'asset:assets/icon.png' in headDeps(key)) // the card (or persona) root that pins the icon
+    expect(assetOwner, 'asset:assets/icon.png root').toBeTruthy()
+    const deps = { ...headDeps(assetOwner), ...chatDeps }
+    for (const prefix of ['inlay:', 'bard:', 'slot:']) expect(Object.keys(chatDeps).some(k => k.startsWith(prefix)), prefix).toBe(true)
+    // Material dependencies are content-addressed blobs; `pin:`/`envelope:` dependencies name revisions and secret identities instead.
+    for (const [k, h] of Object.entries(deps)) if (/^(?:asset|inlay|inlay-metadata|bard|slot):/.test(k)) { expect(s.hasBlob(h), k).toBe(true); expect(sha(await readFile(s.blobFile(h)))).toBe(h) }
+    expect(await readFile(s.blobFile(deps['asset:assets/icon.png']))).toEqual(iconBytes)
+    expect(await readFile(s.blobFile(deps['inlay:draw1']))).toEqual(inlayBytes)
+    const leftovers = async () => (await readdir(join(tablet.dataRoot, 'nas-sync'))).filter(n => n.startsWith('snapshot-') || n.startsWith('plan-check-'))
+    const namespaced = async () => { const hits: string[] = []; for (const f of await walk(join(tablet.dataRoot, 'nas-sync'))) if ((await readFile(f)).toString('latin1').includes('\\\\?\\')) hits.push(f); return hits }
+    expect(await leftovers()).toEqual([]); expect(await namespaced()).toEqual([])
+    expect((await tablet.service.publish()).failed).toEqual([])
+    const phone = await device(t, dav, 'long-phone', EMPTY_DB()); phone.service.enable({ workspaceId: 'ws-long' })
+    expect((await applyAll(phone)).empty).not.toBe(true)
+    expect(phone.db().characters.map((c: any) => c.chaId)).toEqual(['card'])
+    expect(phone.inlays.get('draw1')?.data).toEqual(inlayBytes)
+    expect(Buffer.from(phone.storage.kvGet('assets/icon.png'))).toEqual(iconBytes)
+    // Plan-check at the long root: the phone publishes a chat edit; the tablet edits the same chat without snapshotting, so plan() must
+    // compare the local chat (plan-check- work dir, Wiki material) and keep it as an unacknowledged local edit.
+    const edited = phone.db(); edited.characters[0].chats[0].message.push({ role: 'user', data: '폰에서 이어 쓴 대화' }); phone.save(edited)
+    expect((await phone.service.snapshot()).committed).toMatchObject({ tombstones: 0 }); expect((await phone.service.publish()).failed).toEqual([])
+    const local = tablet.db(); local.characters[0].chats[0].message.push({ role: 'user', data: '태블릿에서 이어 쓴 대화' }); tablet.save(local)
+    await tablet.service.pull(); const plan = await tablet.service.plan()
+    expect(plan.empty).toBe(true); expect(plan.pending).toEqual(expect.arrayContaining([expect.objectContaining({ root: chk, reason: 'local-edit' })]))
+    expect(tablet.db().characters[0].chats[0].message.at(-1).data).toBe('태블릿에서 이어 쓴 대화')
+    expect(await leftovers()).toEqual([]); expect(await namespaced()).toEqual([])
+    await assertNoSentinel(tablet.dataRoot); await assertNoSentinel(phone.dataRoot)
+})
+
+test('the trash lists the newest three deletions by name and refuses to restore an older one, even after a newer one was restored', async t => {
+    const card = (n: number) => ({ chaId: `card${n}`, type: 'character', name: `캐릭터${n}`, chatPage: 0, chats: [{ id: `chat${n}`, name: `대화${n}`, note: '', localLore: [], scriptstate: {}, message: [{ role: 'char', data: `본문${n}` }] }] })
+    const d = await device(t, fixtureDav(), 'trash-cap', baseDb({ characters: [1, 2, 3, 4].map(card) }))
+    d.service.enable({ workspaceId: 'ws-trash' }); await d.service.snapshot()
+    // The character renamed before its deletion is listed under its last name.
+    clock += 1000; const renamed = d.db(); renamed.characters[3].name = '새이름4'; d.save(renamed); await d.service.snapshot()
+    for (const n of [1, 2, 3, 4]) { clock += 1000; const db = d.db(); db.characters = db.characters.filter((c: any) => c.chaId !== `card${n}`); d.save(db); await d.service.snapshot() }
+    const store = d.service.store(), all = Object.keys(store.state().trash)
+    const listed = store.trash().map((x: any) => x.root).sort()
+    expect(listed).toEqual(['card2', 'card3', 'card4', 'chat2', 'chat3', 'chat4'])
+    // Titles come from the last live state; a chat shows its character's current name, not an older one.
+    expect((await d.service.trashList()).map((x: any) => x.title)).toEqual(expect.arrayContaining(['새이름4', '새이름4 · 대화4', '캐릭터2 · 대화2', '캐릭터3']))
+    const oldest = all.find(id => store.graph.get(id).root === 'card1')!
+    await expect(d.service.restoreTrash({ id: oldest })).rejects.toThrow(/no longer in the trash/)
+    const newest = store.trash().find((x: any) => x.root === 'card4')!
+    await d.service.restoreTrash({ id: newest.id })
+    expect(d.service.store().trash().map((x: any) => x.root)).not.toContain('card1')
+    await expect(d.service.restoreTrash({ id: oldest })).rejects.toThrow(/no longer in the trash/)
+})
+
+test('a chat deleted in the same snapshot as its character rename is listed under the new character name', async t => {
+    const card = { chaId: 'card5', type: 'character', name: '옛이름', chatPage: 0, chats: [{ id: 'chat5', name: '대화5', note: '', localLore: [], scriptstate: {}, message: [{ role: 'char', data: '본문' }] }, { id: 'chat6', name: '대화6', note: '', localLore: [], scriptstate: {}, message: [{ role: 'char', data: '본문6' }] }] }
+    const d = await device(t, fixtureDav(), 'trash-rename', baseDb({ characters: [card] }))
+    d.service.enable({ workspaceId: 'ws-trash-rename' }); await d.service.snapshot()
+    clock += 1000; const db = d.db(); db.characters[0].name = '새이름'; db.characters[0].chats = db.characters[0].chats.filter((c: any) => c.id !== 'chat5'); d.save(db); await d.service.snapshot()
+    expect((await d.service.trashList()).map((x: any) => x.title)).toEqual(['새이름 · 대화5'])
+})
+
+// Revision metadata (name/chatIds) behind trash, conflict and overview titles is read on the shared reader thread, verified, cached by id.
+const readerCard = (chaId: string, name: string, chats: string[]) => ({ chaId, type: 'character', name, chatPage: 0, chats: chats.map(id => ({ id, name: `대화-${id}`, note: '', localLore: [], scriptstate: {}, message: [{ role: 'char', data: `본문-${id}` }] })) })
+const dropChat = async (d: any, id: string) => { clock += 1000; const db = d.db(); db.characters[0].chats = db.characters[0].chats.filter((c: any) => c.id !== id); d.save(db); await d.service.snapshot() }
+const renameCard = async (d: any, name: string) => { clock += 1000; const db = d.db(); db.characters[0].name = name; d.save(db); await d.service.snapshot() }
+const titles = async (d: any) => (await d.service.trashList()).map((x: any) => x.title).sort()
+
+test('trash titles are read once on the shared reader thread: concurrent cold calls share one read, a repeat reads nothing, a new revision reads only itself', async t => {
+    const reads: { ids: string[]; thread: number }[] = []
+    const d = await device(t, fixtureDav(), 'trash-reader', baseDb({ characters: [readerCard('card7', '이름0', ['r1', 'r2', 'r3'])] }), MASTER, { hooks: { beforeMetaRead: ({ ids, worker }: any) => { reads.push({ ids, thread: worker.threadId }) } } })
+    d.service.enable({ workspaceId: 'ws-trash-reader' }); await d.service.snapshot()
+    for (let n = 1; n <= 5; n++) await renameCard(d, `이름${n}`)
+    for (const id of ['r1', 'r2', 'r3']) await dropChat(d, id)
+    const expected = ['이름5 · 대화-r1', '이름5 · 대화-r2', '이름5 · 대화-r3']
+    const [a, b, c] = await Promise.all([d.service.trashList(), d.service.trashList(), d.service.conflicts()])
+    expect(a.map((x: any) => x.title).sort()).toEqual(expected); expect(b).toEqual(a); expect(c).toEqual([])
+    const read = reads.flatMap(r => r.ids)
+    expect(new Set(read).size).toBe(read.length) // concurrent cold callers never read the same revision twice
+    expect(reads.length).toBeGreaterThan(0); expect(reads.every(r => r.thread > 0 && r.thread !== mainThreadId)).toBe(true)
+    const characters = d.service.store().graph.revisions().filter((r: any) => r.type === 'character').map((r: any) => r.id)
+    expect(characters.every((id: string) => read.includes(id))).toBe(true)
+    reads.length = 0
+    expect(await d.service.trashList()).toEqual(a); expect(reads).toEqual([]) // a repeat reads nothing
+    await renameCard(d, '새이름')
+    expect(await titles(d)).toEqual(expected.map(x => x.replace('이름5', '새이름')))
+    expect(reads.flatMap(r => r.ids)).toEqual(d.service.store().graph.classify('library\ncharacter\ncard7').liveHeads) // only the new revision
+})
+
+test('a damaged or substituted stored revision fails the listing on the reader thread, is never cached, and lists again once restored', async t => {
+    const d = await device(t, fixtureDav(), 'trash-damage', baseDb({ characters: [readerCard('card8', 'Alpha', ['d1'])] }))
+    d.service.enable({ workspaceId: 'ws-trash-damage' }); await d.service.snapshot()
+    await renameCard(d, 'Beta'); await dropChat(d, 'd1')
+    const [first, second] = d.service.store().graph.revisions().filter((r: any) => r.type === 'character').map((r: any) => r.id)
+    const root = join(d.dataRoot, 'nas-sync'), headerFile = (id: string) => join(root, 'revisions', `${id}.json`)
+    const hash = JSON.parse(await readFile(headerFile(first), 'utf8')).contentHash, blob = join(root, 'blobs', hash.slice(0, 2), hash), original = await readFile(blob)
+    await writeFile(blob, original.toString('utf8').replace('Alpha', 'Alphb'))
+    await expect(d.service.trashList()).rejects.toThrow(/Revision hash mismatch/)
+    await expect(d.service.trashList()).rejects.toThrow(/Revision hash mismatch/) // the failure was not cached as a value
+    await writeFile(blob, original)
+    expect(await titles(d)).toEqual(['Beta · 대화-d1'])
+    // Another valid revision placed at a requested path decodes cleanly but is not the requested id (fresh service: cold cache; its store
+    // is opened first because opening checks every header path).
+    const fresh = d.make(); fresh.store()
+    const saved = await readFile(headerFile(first))
+    await writeFile(headerFile(first), await readFile(headerFile(second)))
+    await expect(fresh.trashList()).rejects.toThrow(/Revision hash mismatch/)
+    await writeFile(headerFile(first), saved)
+    expect(await titles({ service: fresh })).toEqual(['Beta · 대화-d1'])
+})
+
+test('a reader thread that stops mid-read fails only that read and the next call starts a new one; a rename landing during a read is listed by its new name', async t => {
+    const threads: number[] = []
+    let stop = false, gate: Promise<void> | null = null, parked: (() => void) | null = null
+    const hooks = { beforeMetaRead: async ({ worker }: any) => { threads.push(worker.threadId); if (stop) { stop = false; await worker.terminate() } if (gate) { parked?.(); await gate } } }
+    const d = await device(t, fixtureDav(), 'trash-thread', baseDb({ characters: [readerCard('card9', 'Gamma', ['g1'])] }), MASTER, { hooks })
+    d.service.enable({ workspaceId: 'ws-trash-thread' }); await d.service.snapshot(); await dropChat(d, 'g1')
+    stop = true
+    await expect(d.service.trashList()).rejects.toThrow(/reader thread stopped/)
+    expect(await titles(d)).toEqual(['Gamma · 대화-g1'])
+    expect(threads.at(-1)).not.toBe(threads[0]) // a new thread, no main-thread fallback
+    // Race: the read of the first rename is parked; a second rename commits meanwhile; the listing reads that head too and shows it.
+    await renameCard(d, 'Delta1')
+    let release!: () => void; gate = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { parked = resolve })
+    const listing = titles(d); await entered
+    await renameCard(d, 'Delta2')
+    gate = null; release()
+    expect(await listing).toEqual(['Delta2 · 대화-g1'])
+    expect(await d.service.trashList()).toHaveLength(1)
+})
+
+// Records whether the service left a reader thread referenced (Node's ref/unref is a flag); the own-property overrides on the shared
+// thread are removed when the test ends.
+const watchRef = (t: any, worker: any, refd: Map<any, boolean>) => {
+    if (refd.has(worker)) return
+    refd.set(worker, false) // the service unrefs a thread when it is created and after every settled read
+    for (const [name, on] of [['ref', true], ['unref', false]] as const) { const call = worker[name].bind(worker); worker[name] = () => { refd.set(worker, on); call() } }
+    t.onTestFinished(() => { delete worker.ref; delete worker.unref; delete worker.postMessage })
+}
+
+test('a request the reader thread cannot be sent rejects only that read and leaves the thread unreferenced; the next request reads on it', async t => {
+    const workers: any[] = [], refd = new Map<any, boolean>()
+    let fail = false
+    const hooks = { beforeMetaRead: ({ worker }: any) => {
+        workers.push(worker); watchRef(t, worker, refd)
+        if (fail) { fail = false; worker.postMessage = () => { delete worker.postMessage; throw new Error('post failed') } }
+    } }
+    const d = await device(t, fixtureDav(), 'trash-post', baseDb({ characters: [readerCard('card10', 'Eta', ['p1'])] }), MASTER, { hooks })
+    d.service.enable({ workspaceId: 'ws-trash-post' }); await d.service.snapshot(); await dropChat(d, 'p1')
+    for (let n = 0; n < 5; n++) {
+        fail = true
+        await expect(d.service.trashList()).rejects.toThrow(/post failed/)
+        expect(refd.get(workers.at(-1))).toBe(false)
+    }
+    expect(await titles(d)).toEqual(['Eta · 대화-p1'])
+    expect(new Set(workers).size).toBe(1); expect(refd.get(workers[0])).toBe(false)
+})
+
+test('a reader thread stopped right after a read was sent rejects that read and its concurrent waiter without a second batch, five times; then a new thread reads', async t => {
+    const workers: any[] = [], cuts: any[] = [], refd = new Map<any, boolean>()
+    let cut = false
+    const hooks = { beforeMetaRead: ({ worker }: any) => {
+        workers.push(worker); watchRef(t, worker, refd)
+        if (cut) { cuts.push(worker); const post = worker.postMessage.bind(worker); worker.postMessage = (m: any) => { delete worker.postMessage; post(m); void worker.terminate() } }
+    } }
+    const d = await device(t, fixtureDav(), 'trash-cut', baseDb({ characters: [readerCard('card11', 'Theta', ['c1'])] }), MASTER, { hooks })
+    d.service.enable({ workspaceId: 'ws-trash-cut' }); await d.service.snapshot(); await dropChat(d, 'c1')
+    cut = true
+    for (let n = 0; n < 5; n++) {
+        const batches = workers.length
+        const results = await Promise.allSettled([d.service.trashList(), d.service.trashList()])
+        expect(results.map(r => r.status)).toEqual(['rejected', 'rejected'])
+        for (const r of results) expect(String((r as PromiseRejectedResult).reason)).toMatch(/reader thread stopped/)
+        expect(workers.length - batches).toBe(1) // the waiter shared the failed batch instead of running its own
+    }
+    cut = false
+    expect(await titles(d)).toEqual(['Theta · 대화-c1'])
+    const last = workers.at(-1)
+    expect(new Set([...cuts, last]).size).toBe(6) // every stopped thread was replaced, no main-thread fallback
+    expect(refd.get(last)).toBe(false)
 })

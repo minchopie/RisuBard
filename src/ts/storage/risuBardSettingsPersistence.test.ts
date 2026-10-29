@@ -39,7 +39,7 @@ describe('RisuBard settings persistence', () => {
                 chaId: 'pinned-bot', name: 'Pinned bot', chats: [],
                 risuBardPinnedSettings: {
                     risuBardResponseMessageCount: 7,
-                    risuBardBardChanEnabled: false,
+                    risuBardModelMode: 'model',
                     risuBardWikiWritingLanguage: 'ja',
                 },
             }],
@@ -49,7 +49,7 @@ describe('RisuBard settings persistence', () => {
         setDatabase(JSON.parse(JSON.stringify(getDatabase())))
         expect(getDatabase().characters[0].risuBardPinnedSettings).toEqual({
             risuBardResponseMessageCount: 7,
-            risuBardBardChanEnabled: false,
+            risuBardModelMode: 'model',
             risuBardWikiWritingLanguage: 'ja',
         })
     })

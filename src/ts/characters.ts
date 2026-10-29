@@ -212,13 +212,14 @@ export async function exportChat(page:number){
             if(chat.folderId) {
                 folders = db.characters[selectedID].chatFolders?.filter(f => f.id === chat.folderId)
             }
-             const stringl = Buffer.from(JSON.stringify({
+             // TextEncoder, not the Buffer polyfill: it fails on very large chats.
+             const stringl = new TextEncoder().encode(JSON.stringify({
                  type: 'risuChat',
                  ver: 2,
                  sourceCharacterId: char.chaId,
                  data: chat,
                  folders: folders
-            }), 'utf-8')
+            }))
     
             await downloadFile(`${char.name}_${date}_chat`.replace(/[<>:"/\\|?*\.\,]/g, "") + '.json', stringl)
     
@@ -616,13 +617,14 @@ export async function exportAllChats() {
 
         const allChats = char.chats
         const allFolders = char.chatFolders
-         const stringl = Buffer.from(JSON.stringify({
+         // TextEncoder, not the Buffer polyfill: it fails on very large chats.
+         const stringl = new TextEncoder().encode(JSON.stringify({
              type: 'risuAllChats',
              ver: 2,
              sourceCharacterId: char.chaId,
              data: allChats,
              folders: allFolders
-        }), 'utf-8')
+        }))
         await downloadFile(`${char.name}_all_chats_${date}`.replace(/[<>:"/\\|?*.,]/g, "") + '.json', stringl)
         notifySuccess(language.successExport)
     } catch (error) {

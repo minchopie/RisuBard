@@ -171,6 +171,13 @@ export const searchManifestEntries: ManualSearchEntry[] = [
         keywords: ['grimoire', 'metadata prompt', '그리모어 프롬프트', '메타데이터 분석 지시문'],
         route: SettingsRoute.RisuBardGrimoirePrompt,
     },
+    {
+        id: 'manual.page.risuBardInputAssistant',
+        label: () => language.risuBardInputAssistant.title,
+        help: () => language.risuBardInputAssistant.description,
+        keywords: ['input assistant', 'input helper', 'wand', '인풋 도우미', '입력 도우미', '요술봉'],
+        route: SettingsRoute.RisuBardInputAssistant,
+    },
     // ── Standalone hardcoded pages
     {
         id: 'manual.page.plugin',

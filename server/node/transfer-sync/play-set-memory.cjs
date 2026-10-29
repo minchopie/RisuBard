@@ -4,7 +4,9 @@ require('sucrase/register/ts');
 const fs = require('node:fs/promises');
 const { createReadStream, openAsBlob } = require('node:fs');
 const { createHash } = require('node:crypto');
-const { dirname, join, relative, resolve, isAbsolute, sep } = require('node:path');
+const { dirname, basename, join, relative, resolve, isAbsolute, sep, toNamespacedPath } = require('node:path');
+// fs.mkdtemp lacks Node's Windows long-path handling (>260 chars): create through the namespaced prefix, return the plain path.
+const mkdtempLong = async prefix => join(dirname(prefix), basename(await fs.mkdtemp(toNamespacedPath(prefix))));
 const { resolveMemoryWorkspace } = require('../risubard-memory-workspace.ts');
 const { resolveLegacySourceSnapshotWorkspace } = require('../risubard-source-workspace.ts');
 const { memorySaveWorkspaceId, parseMemorySaveManifest } = require('../risubard-memory-save.ts');
@@ -43,7 +45,7 @@ const stamp = status => `${status.size}:${status.mtimeMs}:${status.ctimeMs}:${st
 async function capturePlaySetMemory({ userDataDirectory, characterId, chatIds, temporaryDirectory }) {
     const root = await fs.realpath(resolve(userDataDirectory));
     if (!Array.isArray(chatIds) || !chatIds.length || new Set(chatIds).size !== chatIds.length) throw new Error('Select unique chats');
-    const directory = await fs.mkdtemp(join(temporaryDirectory, 'play-memory-'));
+    const directory = await mkdtempLong(join(temporaryDirectory, 'play-memory-'));
     const blocks = new Map(), workspaces = [], excluded = [];
     const cleanup = () => fs.rm(directory, { recursive: true, force: true });
     const capture = async (path, relativePath, expected) => {
@@ -170,7 +172,8 @@ async function attachPlaySetMemory(snapshot, capture) {
         character: itemId('character', workspace.sourceCharacterId), chat: itemId('chat', workspace.sourceChatId) }));
     const manifest = { ...snapshot.manifest, items: snapshot.manifest.items.map(item => ({ ...item })), version: 2, bard };
     const blobLoaders = new Map(snapshot.blobLoaders);
-    for (const [entry, path] of capture.blocks) blobLoaders.set(entry, () => openAsBlob(path));
+    // fs.openAsBlob lacks Node's Windows long-path handling (>260 chars): pass the namespaced form; no-op elsewhere.
+    for (const [entry, path] of capture.blocks) blobLoaders.set(entry, () => openAsBlob(toNamespacedPath(path)));
     const result = { ...snapshot, manifest, blobLoaders, excluded: [...snapshot.excluded, ...capture.excluded] };
     await finalizeSnapshotLineage(result);
     validateRecords(manifest, snapshot.records);

@@ -313,6 +313,7 @@ export const displayOtherChatItems: SettingItem[] = [
     { id: 'display.useAdditionalAssetsPreview', type: 'check', labelKey: 'useAdditionalAssetsPreview', helpKey: 'useAdditionalAssetsPreview', bindKey: 'useAdditionalAssetsPreview', keywords: ['additional', 'assets', 'preview'] },
     { id: 'display.showMemoryLimit', type: 'check', labelKey: 'showMemoryLimit', helpKey: 'showMemoryLimit', bindKey: 'showMemoryLimit', keywords: ['memory', 'limit'] },
     { id: 'display.showSavingIcon', type: 'check', labelKey: 'showSavingIcon', helpKey: 'showSavingIcon', bindKey: 'showSavingIcon', keywords: ['saving', 'icon'] },
+    { id: 'display.mobileMessageActionsInline', type: 'check', labelKey: 'mobileMessageActionsInline', helpKey: 'mobileMessageActionsInline', bindKey: 'mobileMessageActionsInline', keywords: ['mobile', 'message', 'toolbar', 'actions', 'inline'] },
 ];
 
 export const displayOtherBubbleItems: SettingItem[] = [

@@ -18,6 +18,8 @@ export interface PainterInsertionRequest {
     messageId?: string
     preferredOffset?: number
     insert: (anchor: PainterAnchor) => Promise<boolean>
+    /** Swap an image already in the message for this result; `occurrence` counts that id's tokens in the source. */
+    replace?: (target: { messageId: string; inlayId: string; occurrence: number }) => Promise<boolean>
     error?: () => string
 }
 export const painterInsertionRequest = writable<PainterInsertionRequest | null>(null)

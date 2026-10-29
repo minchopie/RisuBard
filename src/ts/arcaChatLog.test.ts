@@ -143,6 +143,8 @@ describe('Arca chat log clipboard composition', () => {
         expect(html).toContain('<p>First <strong>reply</strong></p>')
         expect(html.match(/From RisuBard/g)).toHaveLength(1)
         expect(html.match(/data:image\/png;base64,/g)).toHaveLength(2)
+        expect(html.startsWith('<p><br></p>\n<div')).toBe(true)
+        expect(html.endsWith('<p><br></p>')).toBe(true)
     })
 
     test('omits profile images when the shared setting is disabled', () => {

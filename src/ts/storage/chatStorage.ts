@@ -1,6 +1,7 @@
 import { forageStorage } from "../globalApi.svelte"
 import { type Chat, type ChatStub, type ChatOrStub, isChatStub } from "./database.svelte"
 import { tick } from "svelte"
+import type { ChatPreviewPayload } from "./chatContentPage"
 
 // ── Stub ↔ Placeholder conversion ───────────────────────────────────────────
 
@@ -125,6 +126,13 @@ function waitForHydrationPaint(): Promise<void> {
 export async function fetchChatFromServer(chaId: string, chatIndex: number, chatId: string): Promise<Chat | null> {
     const storage = forageStorage.realStorage
     return storage.fetchChatContent(chaId, chatIndex, chatId)
+}
+
+/** Null when this storage cannot serve previews or the chat moved. */
+export async function fetchChatPreviewFromServer(chaId: string, chatIndex: number, chatId: string): Promise<ChatPreviewPayload | null> {
+    const storage = forageStorage.realStorage
+    if (typeof storage?.fetchChatPreview !== 'function') return null
+    return storage.fetchChatPreview(chaId, chatIndex, chatId)
 }
 
 export async function saveChatToServer(chaId: string, chatIndex: number, chatId: string, chat: Chat): Promise<void> {

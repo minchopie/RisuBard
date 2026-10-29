@@ -47,6 +47,26 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 beforeEach(() => { vi.useFakeTimers(); canonicalSaveSettled.set(0); transferBusy.set(false); syncSaveHold.set(false); f.unavailable.mockReturnValue(false); f.activity.mockReturnValue(false); f.alert.type = 'none'; f.chat = 'card/chat'; f.selected.set(0) })
 afterEach(() => { vi.useRealTimers() })
 
+test.each(['retryNow', 'uploadNow', 'downloadNow'] as const)('%s retries a failed startup probe before deciding sync is idle', async action => {
+    const h = harness(); h.io.status.mockRejectedValueOnce(new Error('sync network deadline'))
+    await h.c.start(); h.setPending(1)
+    expect(h.c.state).toMatchObject({ enabled: false, probed: false, lastError: 'sync network deadline' })
+    expect(await h.c[action]()).toBe(action === 'uploadNow' ? 'uploaded' : 'applied')
+    expect(h.c.state).toMatchObject({ enabled: true, probed: true, lastError: '' })
+    expect(h.io.snapshot).toHaveBeenCalledTimes(1)
+    h.c.stop()
+})
+
+test('interaction during a manual recovery probe still voids the captured safe window', async () => {
+    const h = harness(); h.io.status.mockRejectedValueOnce(new Error('sync network deadline'))
+    await h.c.start(); h.setPending(1)
+    h.io.status.mockImplementationOnce(async () => { h.interact(); return STATUS() })
+    expect(await h.c.downloadNow()).toBe('pulled')
+    expect(h.io.apply).not.toHaveBeenCalled()
+    expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+    h.c.stop()
+})
+
 test('manual upload only snapshots and publishes; manual download protects local edits but never publishes', async () => {
     const h = harness(); await h.c.start(); h.calls.length = 0; h.setPending(1)
     expect(await h.c.uploadNow()).toBe('uploaded')

@@ -318,6 +318,46 @@ describe('RisuBardMemoryWiki', () => {
         expect(mocks.saveManualWikiDocument).not.toHaveBeenCalled()
     })
 
+    test('stays editable after saving a page whose refreshed catalog entry has no body', async () => {
+        const entry = {
+            id: 'kayo', title: '카요', type: 'character' as const, status: 'active' as const,
+            contextMode: 'auto' as const, contentHash: 'hash-1', relativePath: 'characters/kayo.md',
+            aliases: [], sourceMessageIds: [], updated: 'now', links: [],
+        }
+        const savedEntry = { ...entry, contentHash: 'hash-2' }
+        const savedBody = { ...savedEntry, content: '## 카요\n\n고친 내용' }
+        const view = (item: typeof entry) => ({
+            mode: 'markdown' as const, wikiPath: 'C:\\wiki', documents: [item],
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
+        })
+        lastView.bodies = [{ ...entry, content: '## 카요\n\n처음 내용' }]
+        lastView.bodyRequests = []
+        mocks.loadNarrativeMemoryWiki.mockResolvedValueOnce(view(entry)).mockResolvedValue(view(savedEntry))
+        mocks.saveManualWikiDocument.mockImplementation(async () => {
+            lastView.bodies = [savedBody]
+            return savedBody
+        })
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: { open: true, characterId: 'character', chatId: 'save-body-chat' },
+        })
+        const editor = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Markdown"]')
+        await vi.waitFor(() => expect(editor()?.value).toContain('처음 내용'))
+        editor()!.value = '## 카요\n\n고친 내용'
+        editor()!.dispatchEvent(new Event('input', { bubbles: true }))
+        await tick()
+        document.querySelector<HTMLButtonElement>('[aria-label="저장"]')!.click()
+        await vi.waitFor(() => expect(mocks.saveManualWikiDocument).toHaveBeenCalled())
+        await vi.waitFor(() => {
+            expect(lastView.bodyRequests.at(-1)).toEqual(['kayo'])
+            const always = document.querySelector<HTMLButtonElement>('[data-wiki-context-segment="always"]')
+            expect(always?.disabled).toBe(false)
+        })
+        expect(editor()?.value).toContain('고친 내용')
+        lastView.bodies = null
+        mocks.saveManualWikiDocument.mockReset()
+    })
+
     test('docks outside a constrained theme and cleans up when the chat unmounts', async () => {
         const workspace = document.createElement('div')
         workspace.dataset.chatDockWorkspace = ''
@@ -551,7 +591,8 @@ describe('RisuBardMemoryWiki', () => {
             expect(help?.textContent).toContain('위키 관리자 명령')
             expect(help?.textContent).toContain('컨텍스트 정책')
         })
-        expect(document.querySelector('[role="dialog"]')?.textContent)
+        // The hidden settings popover is also a dialog, so look up the one holding the guide.
+        expect(document.querySelector('[data-memory-help-content]')?.closest('[role="dialog"]')?.textContent)
             .toContain('BardWiki 사용 가이드')
         document.querySelector<HTMLButtonElement>('[aria-label="사용 가이드 닫기"]')!.click()
         await vi.waitFor(() => {
@@ -569,8 +610,9 @@ describe('RisuBardMemoryWiki', () => {
             expect([...help!.querySelectorAll('h2')].slice(0, 3)
                 .map((heading) => heading.textContent))
                 .toEqual(['빠른 시작', 'BardWiki의 컨셉', '먼저 확인할 핵심 설정'])
-            expect(help?.textContent).toContain('현재 챗 설정')
+            expect(help?.textContent).toContain('바꾼 값이 어디에 저장되는지')
             expect(help?.textContent).toContain('전역값 사용')
+            expect(help?.textContent).toContain('고정 풀고 전역값 따르기')
         })
     })
 
@@ -583,15 +625,16 @@ describe('RisuBardMemoryWiki', () => {
             const help = document.querySelector('[data-memory-help-content]')
             const text = help?.textContent ?? ''
             for (const setting of [
-                'LLM에 전달할 최근 채팅 내역', '응답 최근 메시지',
-                '위키 분석 최근 원문', '분석 최근 메시지',
+                'LLM에 전달할 최근 채팅 내역', '답변에 그대로 넣을 최근 응답 수',
+                '위키 분석 최근 원문', '위키 분석이 읽을 최근 응답 수',
                 '과거 사용자 메시지 제외', '위키 작성 언어',
                 '위키 조회 토큰 목표', '위키 조회 토큰 절대 상한',
-                'AI 분석 토큰 상한', '정본 대상 한도', '정본 집필 문체',
+                'AI 분석 토큰 상한', '한 번에 고칠 위키 문서 수', '정본 집필 문체',
             ]) expect(text).toContain(setting)
-            expect(text).toContain('왕복 턴 수가 아니라 메시지 수')
-            expect(text).toContain('현재 사용자 요청도 이 개수에 포함')
-            expect(text).toContain('기본값은 각각 12개')
+            // The window counts AI responses; the current request rides along outside the count.
+            expect(text).toContain('메시지 수가 아니라 AI 응답 수')
+            expect(text).toContain('현재 사용자 요청은 이 수와 별도로 항상 들어갑니다')
+            expect(text).toContain('기본값은 각각 12')
             expect(text).toContain('UI·대화 언어와 독립적')
             expect(text).toContain('기존 문서는 자동 번역되지 않습니다')
             expect(text).toContain('리부트는 시작할 때 선택한 언어를 유지')
@@ -991,8 +1034,8 @@ describe('RisuBardMemoryWiki', () => {
             expect(document.body.querySelector('[data-memory-settings]')).not.toBeNull()
         })
         expect(document.body.querySelector('[data-chat-risubard-settings]')).not.toBeNull()
-        expect(document.body.textContent).toContain('분석할 턴 수')
-        expect(document.body.textContent).toContain('응답용 턴 수')
+        expect(document.body.textContent).toContain('위키 분석이 읽을 최근 응답 수')
+        expect(document.body.textContent).toContain('답변에 그대로 넣을 최근 응답 수')
         expect(document.body.textContent).toContain('정본 문체')
         const settingsSource = readFileSync(resolve(
             process.cwd(), 'src/lib/Others/RisuBardCurrentChatSettings.svelte'
@@ -1229,170 +1272,31 @@ describe('RisuBardMemoryWiki', () => {
         expect(progress.classList.contains('running')).toBe(true)
     })
 
-    test('shows the current v2 graph instead of the v1 ledger', async () => {
-        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
-            mode: 'v2',
-            baseline: null,
-            graph: {
-                schemaVersion: 2,
-                storyId: 'character',
-                branchId: 'chat',
-                revision: 1,
-                nodes: [{
-                    id: 'entity:lina',
-                    kind: 'entity',
-                    subtype: 'character',
-                    title: 'Lina',
-                    summary: 'Lina summary',
-                    storyId: 'character',
-                    branchId: 'chat',
-                    status: 'active',
-                    authority: 'draft',
-                    salience: 5,
-                    perspective: { kind: 'omniscient' },
-                    epistemic: 'fact',
-                    evidence: [{
-                        chatId: 'chat',
-                        messageId: 'message-1',
-                    }],
-                    revision: 1,
-                }],
-                edges: [],
-            },
+    test('reloads an open view when its background analysis completes', async () => {
+        const view = (documents: Array<Record<string, unknown>>) => ({
+            mode: 'markdown' as const, wikiPath: 'C:\\wiki', documents,
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
         })
-        const target = document.createElement('div')
-        document.body.appendChild(target)
-        mounted = mount(RisuBardMemoryWiki, {
-            target,
-            props: {
-                open: true,
-                characterId: 'character',
-                chatId: 'chat',
-            },
-        })
-
-        await vi.waitFor(() => {
-            expect(mocks.loadNarrativeMemoryWiki).toHaveBeenCalledOnce()
-            expect(document.body.querySelector(
-                '[data-memory-node-id="entity:lina"]'
-            )).not.toBeNull()
-            expect(document.body.querySelector(
-                '[data-writer-workbench]'
-            )).not.toBeNull()
-            expect(document.body.querySelector(
-                '[data-memory-v2-scroll]'
-            )).not.toBeNull()
-            expect(document.body.querySelector('[data-memory-wiki-dock]'))
-                .not.toBeNull()
-            expect(document.body.querySelector('[role="dialog"]')).toBeNull()
-            const ledger = document.body.querySelector<HTMLElement>(
-                '.memory-ledger'
-            )
-            expect(ledger?.classList.contains('min-h-0')).toBe(true)
-        })
-        await tick()
-    })
-
-    test('announces the safe v1 compatibility view when graph cache is unavailable', async () => {
-        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
-            mode: 'v1',
-            reason: 'missing-or-stale-v2-index',
-            baseline: null,
-            state: {
-                facts: [],
-                events: [],
-            },
-        })
-        const target = document.createElement('div')
-        document.body.appendChild(target)
-        mounted = mount(RisuBardMemoryWiki, {
-            target,
-            props: {
-                open: true,
-                characterId: 'character',
-                chatId: 'chat',
-            },
-        })
-
-        await vi.waitFor(() => {
-            const fallback = document.body.querySelector(
-                '[data-memory-view-mode="v1"]'
-            )
-            expect(fallback).not.toBeNull()
-            expect(fallback?.textContent).toContain('Compatibility view')
-            expect(document.body.querySelector(
-                '[data-writer-workbench]'
-            )).toBeNull()
-        })
-    })
-
-    test('reloads an open empty view when its background analysis completes', async () => {
         mocks.loadNarrativeMemoryWiki
-            .mockResolvedValueOnce({
-                mode: 'v1',
-                reason: 'missing-or-stale-v2-index',
-                baseline: null,
-                state: { facts: [], events: [] },
-            })
-            .mockResolvedValueOnce({
-                mode: 'v2',
-                baseline: null,
-                graph: {
-                    schemaVersion: 2,
-                    storyId: 'character',
-                    branchId: 'chat',
-                    revision: 1,
-                    nodes: [{
-                        id: 'entity:first-turn',
-                        kind: 'entity',
-                        subtype: 'character',
-                        title: 'First turn',
-                        summary: 'The first turn.',
-                        storyId: 'character',
-                        branchId: 'chat',
-                        status: 'active',
-                        authority: 'draft',
-                        salience: 3,
-                        perspective: { kind: 'omniscient' },
-                        epistemic: 'fact',
-                        evidence: [{
-                            chatId: 'chat',
-                            messageId: 'message-1',
-                        }],
-                        revision: 1,
-                    }],
-                    edges: [],
-                },
-            })
-        const target = document.createElement('div')
-        document.body.appendChild(target)
+            .mockResolvedValueOnce(view([]))
+            .mockResolvedValueOnce(view([{
+                id: 'first-turn', title: 'First turn', type: 'character', status: 'active',
+                contextMode: 'auto', contentHash: 'hash-first', relativePath: 'characters/first-turn.md',
+                aliases: [], sourceMessageIds: [], updated: 'now', links: [], content: '## First turn',
+            }]))
         mounted = mount(RisuBardMemoryWiki, {
-            target,
-            props: {
-                open: true,
-                characterId: 'character',
-                chatId: 'chat',
-            },
+            target: document.body,
+            props: { open: true, characterId: 'character', chatId: 'chat' },
         })
-        await vi.waitFor(() => {
-            expect(mocks.loadNarrativeMemoryWiki).toHaveBeenCalledOnce()
-            expect(document.body.querySelector(
-                '[data-memory-view-mode="v1"]'
-            )).not.toBeNull()
-        })
+        await vi.waitFor(() => expect(mocks.loadNarrativeMemoryWiki).toHaveBeenCalledOnce())
 
         window.dispatchEvent(new CustomEvent('risubard-memory-updated', {
-            detail: {
-                characterId: 'character',
-                chatId: 'chat',
-            },
+            detail: { characterId: 'character', chatId: 'chat' },
         }))
 
         await vi.waitFor(() => {
             expect(mocks.loadNarrativeMemoryWiki).toHaveBeenCalledTimes(2)
-            expect(document.body.querySelector(
-                '[data-memory-node-id="entity:first-turn"]'
-            )).not.toBeNull()
+            expect(document.body.textContent).toContain('First turn')
         })
     })
 
@@ -1747,5 +1651,119 @@ describe('RisuBardMemoryWiki', () => {
         expect(document.querySelector<HTMLTextAreaElement>(
             '[aria-label="Markdown"]'
         )?.value).toContain('폐쇄된 역에 도착했다.')
+    })
+
+    describe('dock shell behaviour', () => {
+        const page = (id: string, title: string, type = 'character') => ({
+            id, title, type, status: 'active' as const, contextMode: 'auto' as const,
+            contentHash: `hash-${id}`, relativePath: `${type}s/${id}.md`, aliases: [],
+            sourceMessageIds: [], updated: 'now', links: [], content: `## ${title}\n\n### 이야기 요약\n\n- ${title}.`,
+        })
+        const markdownView = () => ({
+            mode: 'markdown' as const, wikiPath: 'C:\\wiki',
+            documents: [page('alpha', 'Alpha'), page('event-1', '첫 사건', 'event')],
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
+        })
+        const view = (name: string) => document.querySelector<HTMLButtonElement>(`[data-memory-view="${name}"]`)!
+
+        test('switching between wiki views does not reload the catalog', async () => {
+            mocks.loadNarrativeMemoryWiki.mockResolvedValue(markdownView())
+            mounted = mount(RisuBardMemoryWiki, { target: document.body, props: { open: true, characterId: 'c', chatId: 'views-chat' } })
+            await vi.waitFor(() => expect(view('story')).not.toBeNull())
+            const calls = mocks.loadNarrativeMemoryWiki.mock.calls.length
+            for (const name of ['story', 'log', 'workspace', 'arc-plot', 'workspace']) {
+                view(name).click()
+                await tick()
+            }
+            expect(mocks.loadNarrativeMemoryWiki.mock.calls.length).toBe(calls)
+        })
+
+        test('every view button reports its pressed state and views sit apart from actions', async () => {
+            mocks.loadNarrativeMemoryWiki.mockResolvedValue(markdownView())
+            mounted = mount(RisuBardMemoryWiki, { target: document.body, props: { open: true, characterId: 'c', chatId: 'pressed-chat' } })
+            await vi.waitFor(() => expect(view('story')).not.toBeNull())
+            const views = [...document.querySelectorAll<HTMLButtonElement>('[data-memory-view]')]
+            expect(views.every((button) => button.hasAttribute('aria-pressed'))).toBe(true)
+            expect(view('workspace').getAttribute('aria-pressed')).toBe('true')
+            const group = document.querySelector('[data-memory-view-group]')
+            expect(group?.getAttribute('role')).toBe('group')
+            expect(group?.contains(document.querySelector('[data-risubard-force-wiki-update]'))).toBe(false)
+            expect(view('log').textContent).toContain('요청 기록')
+        })
+
+        test('a failed catalog load offers a retry that reloads', async () => {
+            mocks.loadNarrativeMemoryWiki.mockRejectedValueOnce(new Error('boom'))
+            mocks.loadNarrativeMemoryWiki.mockResolvedValue(markdownView())
+            mounted = mount(RisuBardMemoryWiki, { target: document.body, props: { open: true, characterId: 'c', chatId: 'retry-chat' } })
+            const retry = () => document.querySelector<HTMLButtonElement>('[data-memory-retry]')
+            await vi.waitFor(() => expect(retry()).not.toBeNull())
+            retry()!.click()
+            await vi.waitFor(() => expect(view('story')).not.toBeNull())
+            expect(retry()).toBeNull()
+        })
+
+        test('a failed story summary load stays inline and keeps the toolbar', async () => {
+            mocks.loadNarrativeMemoryWiki.mockResolvedValue(markdownView())
+            const memoryWiki = await import('src/ts/risubard/memoryWiki')
+            const original = memoryWiki.loadWikiStorySummaries
+            ;(memoryWiki as { loadWikiStorySummaries: unknown }).loadWikiStorySummaries = vi.fn(async () => { throw new Error('story down') })
+            try {
+                mounted = mount(RisuBardMemoryWiki, { target: document.body, props: { open: true, characterId: 'c', chatId: 'inline-chat' } })
+                await vi.waitFor(() => expect(view('story')).not.toBeNull())
+                view('story').click()
+                await vi.waitFor(() => expect(document.querySelector('[data-memory-inline-error]')?.textContent).toContain('story down'))
+                expect(document.querySelector('.ledger-error')).toBeNull()
+                expect(view('workspace')).not.toBeNull()
+                document.querySelector<HTMLButtonElement>('[data-memory-inline-error] [data-dismiss]')!.click()
+                await tick()
+                expect(document.querySelector('[data-memory-inline-error]')).toBeNull()
+            } finally {
+                ;(memoryWiki as { loadWikiStorySummaries: unknown }).loadWikiStorySummaries = original
+            }
+        })
+
+        test('the settings popover is a dialog that closes on Escape', async () => {
+            mocks.loadNarrativeMemoryWiki.mockResolvedValue(markdownView())
+            mounted = mount(RisuBardMemoryWiki, { target: document.body, props: { open: true, characterId: 'c', chatId: 'settings-chat' } })
+            const settings = () => document.querySelector<HTMLButtonElement>('[data-memory-settings]')!
+            await vi.waitFor(() => expect(settings()).not.toBeNull())
+            expect(settings().getAttribute('aria-haspopup')).toBe('dialog')
+            settings().click()
+            await tick()
+            const popover = document.querySelector<HTMLElement>('[data-memory-settings-popover]')!
+            expect(popover.hidden).toBe(false)
+            popover.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+            await tick()
+            expect(popover.hidden).toBe(true)
+        })
+
+        test('leaving the workspace with an unsaved edit asks first', async () => {
+            const { alertConfirm } = await import('src/ts/alert')
+            mocks.loadNarrativeMemoryWiki.mockResolvedValue(markdownView())
+            mounted = mount(RisuBardMemoryWiki, { target: document.body, props: { open: true, characterId: 'c', chatId: 'dirty-chat' } })
+            const editor = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Markdown"]')
+            await vi.waitFor(() => expect(editor()?.value).toContain('Alpha'))
+            editor()!.value = '## Alpha\n\n고친 내용'
+            editor()!.dispatchEvent(new Event('input', { bubbles: true }))
+            await tick()
+            vi.mocked(alertConfirm).mockResolvedValueOnce(false)
+            view('story').click()
+            await vi.waitFor(() => expect(alertConfirm).toHaveBeenCalled())
+            await tick()
+            expect(view('workspace').getAttribute('aria-pressed')).toBe('true')
+            expect(editor()?.value).toContain('고친 내용')
+            vi.mocked(alertConfirm).mockResolvedValueOnce(true)
+            view('story').click()
+            await vi.waitFor(() => expect(view('story').getAttribute('aria-pressed')).toBe('true'))
+        })
+
+        test('status banners can be dismissed and are cleared on chat switch', () => {
+            const source = readFileSync(resolve(process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'), 'utf8')
+            expect(source).toContain('data-dismiss-force-update')
+            expect(source).toContain('data-dismiss-transfer')
+            const load = source.slice(source.indexOf('async function loadWiki()'), source.indexOf('function wikiScope()'))
+            expect(load).toContain("forceUpdateStatus = ''")
+            expect(load).toContain('settingsOpen = false')
+        })
     })
 })

@@ -1,4 +1,4 @@
-import { isStoryArcTitle } from './wikiWritingLanguage'
+import { isStoryArcChapterTitle, isStoryArcTitle } from './wikiWritingLanguage'
 import { normalizeMemoryRetrievalMetadata, type MemoryRetrievalMetadata } from '../../../server/node/risubard-memory-metadata'
 
 export const WIKI_PACKAGE_MAX_BYTES = 16 * 1024 * 1024
@@ -32,6 +32,7 @@ export function isPortableWikiDocument(document: Pick<DocumentInput, 'type' | 't
     return types.some(type => type === document.type)
         && (document.status === undefined || document.status === 'active')
         && !isStoryArcTitle(document.title)
+        && !isStoryArcChapterTitle(document.title)
         && !(document.aliases ?? []).some(isStoryArcTitle)
         && !/<!--\s*risubard-story-arc-checkpoint:/u.test(document.content ?? '')
 }

@@ -83,14 +83,16 @@ describe('RisuBard mode settings', () => {
         const korean = readFileSync(
             resolve(process.cwd(), 'src/lang/ko.ts'), 'utf8',
         )
-        expect(korean).toContain('risuBardRecentMessages: "분석할 턴 수"')
-        expect(korean).toContain('risuBardResponseRecentMessages: "응답용 턴 수"')
-        expect(korean).toContain('risuBardResponseExcludeUsers: "응답 사용자 메시지"')
-        expect(korean).toContain('risuBardAnalysisExcludeUsers: "분석 사용자 메시지"')
-        expect(currentChatSettings).toContain("'분석할 턴 수'")
-        expect(currentChatSettings).toContain("'응답용 턴 수'")
-        expect(currentChatSettings).toContain("'응답 사용자 메시지'")
-        expect(currentChatSettings).toContain("'분석 사용자 메시지'")
+        // Global checkboxes store the exclusion directly, so their labels say "빼기";
+        // the chat panel inverts the same keys and labels them "넣기".
+        expect(korean).toContain('risuBardRecentMessages: "위키 분석이 읽을 최근 응답 수"')
+        expect(korean).toContain('risuBardResponseRecentMessages: "답변에 그대로 넣을 최근 응답 수"')
+        expect(korean).toContain('risuBardResponseExcludeUsers: "답변에서 사용자 메시지 빼기"')
+        expect(korean).toContain('risuBardAnalysisExcludeUsers: "위키 분석에서 사용자 메시지 빼기"')
+        expect(currentChatSettings).toContain("'위키 분석이 읽을 최근 응답 수'")
+        expect(currentChatSettings).toContain("'답변에 그대로 넣을 최근 응답 수'")
+        expect(currentChatSettings).toContain("'답변에 사용자 메시지 넣기'")
+        expect(currentChatSettings).toContain("'분석에 사용자 메시지 넣기'")
     })
 
     test('exposes bounded automatic canon analysis controls without review mode', () => {

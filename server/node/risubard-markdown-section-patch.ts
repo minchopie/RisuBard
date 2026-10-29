@@ -185,6 +185,35 @@ export function hasCanonicalSection(
         expected.has(normalizeCanonicalSectionHeading(section.text)))
 }
 
+/** Direct sections of a canonical document with their bodies, in document order. */
+export function listCanonicalSections(markdown: string): Array<{ heading: string; body: string }> {
+    const prepared = prepareCanonicalMarkdown(markdown)
+    return parseCanonicalMarkdown(prepared).sections.map((section) => ({
+        heading: section.text,
+        body: prepared.slice(section.line.end, section.end).trim(),
+    }))
+}
+
+/** Rewrites each direct section body in place, keeping headings and the text between them. */
+export function mapCanonicalSectionBodies(
+    markdown: string,
+    transform: (heading: string, body: string) => string,
+): string {
+    const parsed = parseCanonicalMarkdown(prepareCanonicalMarkdown(markdown))
+    let result = ''
+    let cursor = 0
+    for (const section of parsed.sections) {
+        const raw = parsed.markdown.slice(section.line.end, section.end)
+        const lead = /^\s*/u.exec(raw)![0]
+        const trail = /\s*$/u.exec(raw.slice(lead.length))![0]
+        const body = raw.slice(lead.length, raw.length - trail.length)
+        result += parsed.markdown.slice(cursor, section.line.end) + lead
+            + (body ? transform(section.text, body) : body) + trail
+        cursor = section.end
+    }
+    return result + parsed.markdown.slice(cursor)
+}
+
 export function readCanonicalSection(
     markdown: string,
     headings: readonly string[],

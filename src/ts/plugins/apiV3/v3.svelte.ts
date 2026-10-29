@@ -21,6 +21,7 @@ import { getLLMCache, searchLLMCache } from "src/ts/translator/translator";
 import { hasher, risuChatParser, type CbsConditions } from "src/ts/parser/parser.svelte";
 import { LLMFlags, LLMFormat, LLMProvider, LLMTokenizer, type LLMModel } from "src/ts/model/types";
 import { readPersistentJson, removePersistentKey, writePersistentJson } from "src/ts/storage/persistentKv";
+import { createPluginPermissionGate, createPluginScriptHashGetter, type PluginPermission, type PluginPermissionState } from "./pluginPermissionCache";
 import { endAllGenerations } from "src/ts/process/generationState";
 import { sendChat as processSendChat, doingChat } from "src/ts/process/index.svelte";
 import { getModelInfo } from "src/ts/model/modellist";
@@ -36,6 +37,7 @@ import {
     getBardWikiPluginDocuments,
     saveBardWikiPluginDocument,
     setBardWikiPluginDocumentContextMode,
+    setBardWikiPluginDocumentGrade,
     stripBardWikiVirtualMemory,
     stripBardWikiVirtualMemoryFromCharacter,
     stripBardWikiVirtualMemoryFromDatabase,
@@ -73,17 +75,20 @@ import {
 */
 
 const pluginChannel = new Map<string, Function>();
-const documentEventListeners: Array<{target: HTMLElement, type: string, listener: EventListenerOrEventListenerObject, options: any}> = [];
+type TrackedEventListener = {target: EventTarget, type: string, listener: EventListenerOrEventListenerObject, options: AddEventListenerOptions};
+const documentEventListeners: TrackedEventListener[] = [];
 
 class SafeElement {
     #element: HTMLElement;
+    #eventTarget: EventTarget;  // Differs from #element for SafeDocument
     __classType = 'REMOTE_REQUIRED' as const;
 
-    constructor(element: HTMLElement) {
+    constructor(element: HTMLElement, eventTarget?: EventTarget) {
         if(element.getAttribute('freezed')){
             throw new Error("This element cannot be accessed by SafeELement")
         }
         this.#element = element;
+        this.#eventTarget = eventTarget ?? element;
     }
 
     public appendChild(child: SafeElement) {
@@ -257,7 +262,7 @@ class SafeElement {
     public scrollIntoView(options?: boolean | ScrollIntoViewOptions) {
         this.#element.scrollIntoView(options);
     }
-    #eventIdMap = new Map<string, Function>()
+    #eventIdMap = new Map<string, TrackedEventListener>()
 
     public async addEventListener(type:string, listener: (event: any) => void, options?: boolean | AddEventListenerOptions):Promise<string> {
         const realOptions = typeof options === 'boolean' ? { capture: options } : options || {};
@@ -332,10 +337,11 @@ class SafeElement {
             const modifiedListener = (event: any) => {
                 listener(trimEvent(event))
             }
-            this.#eventIdMap.set(id, modifiedListener)
-            documentEventListeners.push({target: this.#element, type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
+            const tracked: TrackedEventListener = {target: this.#eventTarget, type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions}
+            this.#eventIdMap.set(id, tracked)
+            documentEventListeners.push(tracked)
             // Element listeners must not receive input meant for an overlying dialog.
-            this.#element.addEventListener(type, modifiedListener, realOptions)
+            tracked.target.addEventListener(tracked.type, tracked.listener, tracked.options)
             return id;
         }
         else if(allowedDelayedEventListeners.includes(type)){
@@ -348,9 +354,10 @@ class SafeElement {
                     listener(trimEvent(event));
                 }, delay);
             }
-            this.#eventIdMap.set(id, modifiedListener)
-            documentEventListeners.push({target: this.#element, type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
-            this.#element.addEventListener(type, modifiedListener, realOptions);
+            const tracked: TrackedEventListener = {target: this.#eventTarget, type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions}
+            this.#eventIdMap.set(id, tracked)
+            documentEventListeners.push(tracked)
+            tracked.target.addEventListener(tracked.type, tracked.listener, tracked.options);
             return id;
         }
         else{
@@ -359,11 +366,12 @@ class SafeElement {
     }
 
     public removeEventListener(type:string, id:string, options?: boolean | EventListenerOptions) {
-        const listener = this.#eventIdMap.get(id);
-        if(listener){
-            const realOptions = typeof options === 'boolean' ? { capture: options } : options || {};
-            this.#element.removeEventListener(type, listener as EventListenerOrEventListenerObject, realOptions);
-            const idx = documentEventListeners.findIndex(e => e.listener === listener);
+        // type/options are kept for API compatibility. DOM removal silently
+        // no-ops if they don't match the registration, so the stored one is replayed.
+        const tracked = this.#eventIdMap.get(id);
+        if(tracked){
+            tracked.target.removeEventListener(tracked.type, tracked.listener, tracked.options);
+            const idx = documentEventListeners.indexOf(tracked);
             if(idx !== -1) documentEventListeners.splice(idx, 1);
             this.#eventIdMap.delete(id);
         }
@@ -377,7 +385,8 @@ class SafeElement {
 class SafeDocument extends SafeElement {
     __classType = 'REMOTE_REQUIRED' as const;
     constructor(document: Document) {
-        super(document.documentElement);
+        // document-level events (including viewport scroll) are bound to the Document
+        super(document.documentElement, document);
     }
     createElement(tagName: string): SafeElement {
         if(!tagWhitelist.includes(tagName.toLowerCase())) {
@@ -576,90 +585,40 @@ const unloadV3Plugin = async (pluginName: string) => {
     }
 }
 
-type PluginPermissionDesc = 'fetchLogs'|'db'|'mainDom'|'replacer'|'provider'|'sendChat'|'inlay'|'bardWikiWrite';
-const pluginPermissionDescs: PluginPermissionDesc[] = ['fetchLogs', 'db', 'mainDom', 'replacer', 'provider', 'sendChat', 'inlay', 'bardWikiWrite'];
-
-// Plugin names are free text (the //@name directive), so `${name}_${desc}` keys
-// can collide — both across permissions and with a legacy name-only entry that
-// happens to read like "name_desc". JSON-encoding the pair makes every key
-// unambiguous: ["foo","db"] can never equal a plain "foo_db" or ["foo_db","x"].
-const permissionKeyOf = (pluginName: string, permissionDesc: string) =>
-    JSON.stringify([pluginName, permissionDesc])
-
-const permissionGivenPlugins: Set<string> = new Set();
-const permissionDeniedPlugins: Set<string> = new Set();
-const permissionCache = new Map<string, boolean | number>();
 const pluginPermissionStateKey = 'cache/plugin-permissions/state.json';
-let pluginPermissionLoadPromise: Promise<void> | null = null;
 
-async function ensurePluginPermissionStateLoaded() {
-    if (!pluginPermissionLoadPromise) {
-        pluginPermissionLoadPromise = (async () => {
-            const payload = await readPersistentJson<{
-                given: string[]
-                denied: string[]
-                cache: [string, boolean | number][]
-            }>(pluginPermissionStateKey)
-            if (!payload) {
-                return
-            }
-            permissionGivenPlugins.clear()
-            permissionDeniedPlugins.clear()
-            permissionCache.clear()
-            for (const pluginName of payload.given ?? []) {
-                permissionGivenPlugins.add(pluginName)
-            }
-            for (const pluginName of payload.denied ?? []) {
-                permissionDeniedPlugins.add(pluginName)
-            }
-            for (const [key, value] of payload.cache ?? []) {
-                permissionCache.set(key, value)
-            }
-        })()
+const pluginPermissionConsent = (permission: PluginPermission): string => {
+    const consent: Record<PluginPermission, string> = {
+        fetchLogs: language.fetchLogConsent,
+        db: language.getFullDatabaseConsent,
+        mainDom: language.mainDomAccessConsent,
+        replacer: language.replacerPermissionConsent,
+        provider: language.providerPermissionConsent,
+        sendChat: language.sendChatConsent,
+        inlay: language.inlayPermissionConsent,
+        bardWikiWrite: language.bardWikiWriteConsent,
     }
-    await pluginPermissionLoadPromise
+    return consent[permission]
 }
 
+const pluginPermissionGate = createPluginPermissionGate({
+    read: () => readPersistentJson<PluginPermissionState>(pluginPermissionStateKey),
+    write: (state) => writePersistentJson(pluginPermissionStateKey, state),
+    remove: () => removePersistentKey(pluginPermissionStateKey),
+    confirm: (pluginName, permission) =>
+        withPluginFramesBehindDialog(() => alertConfirm(pluginPermissionConsent(permission).replace("{}", pluginName))),
+});
+
 export async function resetAllPluginPermissions() {
-    permissionGivenPlugins.clear()
-    permissionDeniedPlugins.clear()
-    permissionCache.clear()
-    pluginPermissionLoadPromise = Promise.resolve()
-    await removePersistentKey(pluginPermissionStateKey)
+    await pluginPermissionGate.resetAll()
 }
 
 export async function resetPluginPermission(pluginName: string) {
-    await ensurePluginPermissionStateLoaded()
-    // Permission descs are a fixed enum, so we delete the exact key for each
-    // one rather than prefix-matching (which would also wipe another plugin's
-    // keys). `pluginName` alone covers legacy name-only entries from older
-    // versions, which JSON keys never collide with but reset should still clear.
-    const exactKeys = pluginPermissionDescs.map(desc => permissionKeyOf(pluginName, desc))
-    for (const key of [pluginName, ...exactKeys]) {
-        permissionGivenPlugins.delete(key)
-        permissionDeniedPlugins.delete(key)
-    }
-    for (const desc of pluginPermissionDescs) {
-        permissionCache.delete(permissionKeyOf(pluginName, desc) + '_lastGrantTime')
-    }
+    // Decisions are keyed by code: this clears those of the installed script.
     const plugin = DBState.db.plugins?.find(p => p.name === pluginName)
     if (plugin?.script) {
-        const scriptHashBase = await hasher(new TextEncoder().encode(plugin.script))
-        for (const key of [...permissionCache.keys()]) {
-            if (key.startsWith(scriptHashBase + '_')) {
-                permissionCache.delete(key)
-            }
-        }
+        await pluginPermissionGate.resetScript(await hasher(new TextEncoder().encode(plugin.script)))
     }
-    await persistPluginPermissionState()
-}
-
-async function persistPluginPermissionState() {
-    await writePersistentJson(pluginPermissionStateKey, {
-        given: [...permissionGivenPlugins],
-        denied: [...permissionDeniedPlugins],
-        cache: [...permissionCache.entries()]
-    })
 }
 
 type PluginV3ProviderOptions = PluginV2ProviderOptions & {
@@ -667,112 +626,6 @@ type PluginV3ProviderOptions = PluginV2ProviderOptions & {
 }
 
 export const customV3ProviderMetaStore:LLMModel[] = []
-
-// Serializes permission dialogs. Every plugin shares the single global
-// alertStore, so when several plugins request permission at boot they would
-// otherwise overwrite each other's dialog — only the last one stays clickable
-// and a single click resolves all of them. The chain makes each dialog wait
-// for the previous one to finish, showing them one at a time.
-let pluginPermissionDialogChain: Promise<unknown> = Promise.resolve()
-
-const isPermissionResolved = async (
-    pluginName: string,
-    permissionDesc: PluginPermissionDesc,
-    requiresReconfirm: boolean,
-): Promise<{ resolved: boolean; value: boolean; pluginHash: string }> => {
-    const permissionKey = permissionKeyOf(pluginName, permissionDesc);
-    if (!requiresReconfirm && permissionGivenPlugins.has(permissionKey)) {
-        return { resolved: true, value: true, pluginHash: '' }
-    }
-    if (!requiresReconfirm && permissionDeniedPlugins.has(permissionKey)) {
-        return { resolved: true, value: false, pluginHash: '' }
-    }
-
-    const pluginHash = await hasher(
-        new TextEncoder().encode(
-            DBState.db.plugins.find(p => p.name === pluginName)?.script
-        )
-    ) + `_${permissionDesc}`;
-
-    if (!requiresReconfirm && permissionCache.get(pluginHash)) {
-        permissionGivenPlugins.add(permissionKey);
-        return { resolved: true, value: true, pluginHash }
-    }
-
-    return { resolved: false, value: false, pluginHash }
-}
-
-const getPluginPermission = async (pluginName: string, permissionDesc: PluginPermissionDesc, reconfirm: boolean|'periodically' = false) => {
-    await ensurePluginPermissionStateLoaded()
-
-    // Recomputed (not captured) so a periodic reconfirm reflects the latest
-    // lastGrantTime: when several identical requests queue together, an earlier
-    // one may refresh it, making the reconfirm no longer due for the rest.
-    const computeRequiresReconfirm = () => {
-        if(reconfirm === 'periodically'){
-            const lastGrantTime = permissionCache.get(permissionKeyOf(pluginName, permissionDesc) + '_lastGrantTime') as number | undefined;
-            return !lastGrantTime || Date.now() - lastGrantTime > 3 * 24 * 60 * 60 * 1000; //3 days
-        }
-        return reconfirm === true;
-    }
-
-    // Fast path: if the answer is already known, skip the serialization queue
-    // entirely so cached/granted permissions never block on a pending dialog.
-    const early = await isPermissionResolved(pluginName, permissionDesc, computeRequiresReconfirm())
-    if (early.resolved) {
-        return early.value
-    }
-
-    const showDialog = async (): Promise<boolean> => {
-        // Re-check under the lock: an earlier queued dialog for the same plugin
-        // may have already granted/denied (or refreshed a periodic grant) while
-        // we were waiting our turn — recompute reconfirm so we don't re-prompt.
-        const requiresReconfirm = computeRequiresReconfirm()
-        const recheck = await isPermissionResolved(pluginName, permissionDesc, requiresReconfirm)
-        if (recheck.resolved) {
-            return recheck.value
-        }
-        const pluginHash = recheck.pluginHash
-
-        let alertTitle =
-            permissionDesc === 'fetchLogs' ? language.fetchLogConsent.replace("{}", pluginName)
-            : permissionDesc === 'db' ? language.getFullDatabaseConsent.replace("{}", pluginName)
-            : permissionDesc === 'mainDom' ? language.mainDomAccessConsent.replace("{}", pluginName)
-            : permissionDesc === 'replacer' ? language.replacerPermissionConsent.replace("{}", pluginName)
-            : permissionDesc === 'provider' ? language.providerPermissionConsent.replace("{}", pluginName)
-            : permissionDesc === 'sendChat' ? language.sendChatConsent.replace("{}", pluginName)
-            : permissionDesc === 'inlay' ? language.inlayPermissionConsent.replace("{}", pluginName)
-            : permissionDesc === 'bardWikiWrite' ? language.bardWikiWriteConsent.replace("{}", pluginName)
-            : `Error`
-        if(alertTitle === 'Error'){
-            return false;
-        }
-        const permissionKey = permissionKeyOf(pluginName, permissionDesc);
-        const conf = await withPluginFramesBehindDialog(() => alertConfirm(alertTitle))
-        if(conf && pluginHash){
-            permissionGivenPlugins.add(permissionKey);
-            permissionDeniedPlugins.delete(permissionKey);
-            permissionCache.set(pluginHash, true);
-            if(reconfirm === 'periodically'){
-                permissionCache.set(permissionKeyOf(pluginName, permissionDesc) + '_lastGrantTime', Date.now());
-            }
-            await persistPluginPermissionState()
-            return true;
-        }
-        permissionDeniedPlugins.add(permissionKey);
-        await persistPluginPermissionState()
-        return false;
-    }
-
-    // Append to the dialog chain so only one permission dialog is shown at a
-    // time. finally restores the chain even if showDialog throws, so a single
-    // failure never deadlocks every later permission request.
-    const run = pluginPermissionDialogChain
-        .catch(() => {})
-        .then(() => showDialog())
-    pluginPermissionDialogChain = run.catch(() => {})
-    return run
-}
 
 const urlBlacklist = [
     'risuai.xyz',
@@ -789,6 +642,10 @@ const authorizationHeaders = [
 const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
 
     const oldApis = getV2PluginAPIs(plugin.name);
+    const getPluginScriptHash = createPluginScriptHashGetter(plugin.script, hasher)
+    const getPermission = async (permissionDesc: PluginPermission, reconfirm: boolean|'periodically' = false) => {
+        return pluginPermissionGate.request(plugin.name, await getPluginScriptHash(), permissionDesc, reconfirm)
+    }
     const createBardWikiAuth = () => forageStorage.createAuth()
     const warnBardWikiCompatibilityFailure = (error: unknown) => {
         console.warn('[RisuBard] BardWiki plugin compatibility unavailable:', error)
@@ -880,7 +737,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             let provs = get(customProviderStore)
             provs.push(name)
             pluginV2.providers.set(name, async (arg, abortSignal) => {
-               await getPluginPermission(plugin.name, 'provider', 'periodically');
+               await getPermission('provider', 'periodically');
                //mode is overridden to v3, due to vulnerabilities using mode.
                //Alternative to mode will be added in future
                arg.mode = 'v3'
@@ -924,7 +781,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
         removeRisuScriptHandler: oldApis.removeRisuScriptHandler,
         addRisuReplacer: async (name:string,func:Function) => {
             //permission check for replacer
-            const conf = await getPluginPermission(plugin.name, 'replacer', 'periodically');
+            const conf = await getPermission('replacer', 'periodically');
             if(!conf){
                 return;
             }
@@ -932,7 +789,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
         },
         removeRisuReplacer: oldApis.removeRisuReplacer,
         addRisuChatListener: async (mode: 'output', func: Function) => {
-            const conf = await getPluginPermission(plugin.name, 'replacer', 'periodically');
+            const conf = await getPermission('replacer', 'periodically');
             if(!conf){
                 return;
             }
@@ -945,22 +802,30 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
         removeRisuChatListener: (mode: 'output', func: Function) => {
             removeOwnedChatOutputListener(pluginV2.chatOutput, `v3:${plugin.name}`, mode, func as any);
         },
-        setDatabaseLite: (database: any) =>
-            oldApis.setDatabaseLite(stripBardWikiVirtualMemoryFromDatabase(database)),
+        setDatabaseLite: (database: any) => {
+            // The plugin list is changed only through setDatabase(), which asks
+            // before installing; a plugins array here is dropped.
+            if(database && Object.hasOwn(database, 'plugins')){
+                console.warn(`Plugin "${plugin.name}" attempted to modify the plugin list using setDatabaseLite. The change was ignored.`);
+                database = {...database};
+                delete database.plugins;
+            }
+            return oldApis.setDatabaseLite(stripBardWikiVirtualMemoryFromDatabase(database));
+        },
         setDatabase: (database: any) =>
             oldApis.setDatabase(stripBardWikiVirtualMemoryFromDatabase(database)),
         loadPlugins: oldApis.loadPlugins,
         readImage: oldApis.readImage,
         readInlay: async (id: string) => {
             return await readInlayWithPermission(
-                () => getPluginPermission(plugin.name, 'inlay', 'periodically'),
+                () => getPermission('inlay', 'periodically'),
                 () => getInlayAsset(id),
             );
         },
         saveAsset: oldApis.saveAsset,
         //Same functionality, but new implementation
         getDatabase: async (includeOnly:string[]|'all' = 'all') => {
-            const conf = await getPluginPermission(plugin.name, 'db', 'periodically');
+            const conf = await getPermission('db', 'periodically');
             if(!conf){
                 return null;
             }
@@ -1202,7 +1067,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             })
         },
         _saveBardWikiDocument: async (document: any) => {
-            const conf = await getPluginPermission(plugin.name, 'bardWikiWrite')
+            const conf = await getPermission('bardWikiWrite')
             if (!conf) return null
             return saveBardWikiPluginDocument({
                 ...getCurrentBardWikiScope(),
@@ -1214,15 +1079,28 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             contextMode: any
             expectedContentHash: string
         }) => {
-            const conf = await getPluginPermission(plugin.name, 'bardWikiWrite')
+            const conf = await getPermission('bardWikiWrite')
             if (!conf) return null
             return setBardWikiPluginDocumentContextMode({
                 ...getCurrentBardWikiScope(),
                 ...input,
             })
         },
+        _setBardWikiGrade: async (input: {
+            documentId: string
+            grade: number | null
+            gradeBy?: 'user' | 'ai'
+            expectedContentHash: string
+        }) => {
+            const conf = await getPermission('bardWikiWrite')
+            if (!conf) return null
+            return setBardWikiPluginDocumentGrade({
+                ...getCurrentBardWikiScope(),
+                ...input,
+            })
+        },
         _trashBardWikiDocument: async (documentId: string) => {
-            const conf = await getPluginPermission(plugin.name, 'bardWikiWrite')
+            const conf = await getPermission('bardWikiWrite')
             if (!conf) return null
             return trashBardWikiPluginDocument({
                 ...getCurrentBardWikiScope(),
@@ -1263,7 +1141,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             unregisterFullscreenPluginFrame(iframe);
         },
         getRootDocument: async () => {
-            const conf = await getPluginPermission(plugin.name, 'mainDom');
+            const conf = await getPermission('mainDom');
             if(!conf){
                 return null;
             }
@@ -1313,7 +1191,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
         },
         registerBodyIntercepter: async (callback: (body: any, type: string) => any) => {
 
-            if(await getPluginPermission(plugin.name, 'replacer') === false){
+            if(await getPermission('replacer') === false){
                 return null;
             }
             
@@ -1483,7 +1361,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             addPluginUnloadCallback(plugin.name, callback);
         },
         getFetchLogs: async () => {
-            const conf = await getPluginPermission(plugin.name, 'fetchLogs');
+            const conf = await getPermission('fetchLogs');
             if(!conf){
                 return null;
             }
@@ -1528,7 +1406,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
         },
         checkCharOrder: checkCharOrder,
         requestPluginPermission: (permission:string) => {
-            return getPluginPermission(plugin.name, permission as any);
+            return getPermission(permission as any);
         },
         //Internal use APIs
         _getOldKeys: () => {
@@ -1575,8 +1453,10 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             oldApis.safeLocalStorage.clear()
             clearOwners('local')
         },
-        _keySafeLocalStorage: oldApis.safeLocalStorage.key,
-        _keysSafeLocalStorage: oldApis.safeLocalStorage.keys,
+        //bound call: SafeLocalStorage.key uses `this`
+        _keySafeLocalStorage: (index: number) => oldApis.safeLocalStorage.key(index),
+        _keysSafeLocalStorage: () => oldApis.safeLocalStorage.keys(),
+        _lengthSafeLocalStorage: () => oldApis.safeLocalStorage.length,
         searchTranslationCache: async (partialKey: string) => {
             return searchLLMCache(partialKey)
         },
@@ -1601,12 +1481,14 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                     'clear': '_clearSafeLocalStorage',
                     'key': '_keySafeLocalStorage',
                     'keys': '_keysSafeLocalStorage',
+                    'length': '_lengthSafeLocalStorage',
                 },
                 'bardWiki':{
                     'getContext': '_getBardWikiContext',
                     'getDocuments': '_getBardWikiDocuments',
                     'saveDocument': '_saveBardWikiDocument',
                     'setContextMode': '_setBardWikiContextMode',
+                    'setGrade': '_setBardWikiGrade',
                     'trashDocument': '_trashBardWikiDocument',
                 }
             }
@@ -1633,7 +1515,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             }, options.mode)
         },
         sendChat: async (message: string) => {
-            const conf = await getPluginPermission(plugin.name, 'sendChat');
+            const conf = await getPermission('sendChat');
             if(!conf){
                 return false;
             }

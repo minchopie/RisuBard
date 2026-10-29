@@ -1,5 +1,5 @@
 import { asBuffer } from 'src/ts/util';
-import { getChatVar, getGlobalChatVar, setChatVar } from "../parser/chatVar.svelte";
+import { getChatVar, getGlobalChatVar, setChatVar, setScriptGlobalChatVar } from "../parser/chatVar.svelte";
 import { hasher, type simpleCharacterArgument, risuChatParser } from "../parser/parser.svelte";
 import { LuaEngine, LuaFactory } from "wasmoon";
 import { getCurrentCharacter, getCurrentChat, getDatabase, setDatabase, type Chat, type character, type triggerscript } from "../storage/database.svelte";
@@ -7,7 +7,7 @@ import { get } from "svelte/store";
 import { ReloadChatPointer, ReloadGUIPointer, selectedCharID } from "../stores.svelte";
 import { alertSelect, alertError, alertInput, alertNormal, alertConfirm } from "../alert";
 import { HypaProcesser } from "./memory/hypamemory";
-import { generateAIImage } from "./stableDiff";
+import { generateAIImage, type ImageGenerationOptions } from "./stableDiff";
 import { writeInlayImage, getInlayAsset } from "./files/inlays";
 import type { OpenAIChat, MultiModal } from "./index.svelte";
 import { requestChatData, type StreamResponseChunk } from "./request/request";
@@ -19,6 +19,8 @@ import { fetchNative, readImage } from "../globalApi.svelte";
 import { loadLoreBookV3Prompt } from './lorebook.svelte';
 import { getPersonaPrompt, getUserName, getUserIcon } from '../util';
 import { resolveGenerationTarget, type GenerationTarget } from './generationTarget';
+import { mergeLuaFullChat } from './luaFullChat';
+import { debugTiming } from '../debugTiming';
 let luaFactory:LuaFactory
 let ScriptingSafeIds = new Set<string>()
 let ScriptingEditDisplayIds = new Set<string>()
@@ -94,6 +96,7 @@ export async function runScripted(code:string, arg:{
     
     try {
         return await ScriptingEngineState.mutex.runExclusive(async () => {
+        const timingRunStart = performance.now()
         ScriptingEngineState.moduleId = arg.moduleId
         ScriptingEngineState.chat = chat
         ScriptingEngineState.char = char
@@ -107,6 +110,7 @@ export async function runScripted(code:string, arg:{
             // Invalidate the cached identity before rebuilding. If engine creation or
             // script initialization fails, the next run must retry instead of using
             // a closed or partially initialized runtime under the previous identity.
+            const timingEngineStart = performance.now()
             ScriptingEngineState.code = undefined
             ScriptingEngineState.permissionFingerprint = undefined
             let declareAPI:(name: string, func:Function) => void
@@ -116,7 +120,7 @@ export async function runScripted(code:string, arg:{
                 const previousEngine = ScriptingEngineState.engine
                 ScriptingEngineState.engine = undefined
                 previousEngine?.global.close()
-                ScriptingEngineState.engine = await luaFactory.createEngine({injectObjects: true})
+                ScriptingEngineState.engine = await luaFactory.createEngine({injectObjects: true, enableProxy: false})
                 const luaEngine = ScriptingEngineState.engine
                 declareAPI = (name:string, func:Function) => {
                     luaEngine.global.set(name, func)
@@ -149,6 +153,16 @@ export async function runScripted(code:string, arg:{
             })
             declareAPI('getGlobalVar', (id:string, key:string) => {
                 return getGlobalChatVar(key, ScriptingEngineState.chat)
+            })
+            declareAPI('setGlobalVar', (id:string, key:string, value:string) => {
+                if(!ScriptingSafeIds.has(id) && !ScriptingEditDisplayIds.has(id)){
+                    return
+                }
+                // toggle_ keys belong to preset and module toggles; scripts must not flip them.
+                if(typeof key !== 'string' || key === '' || key.startsWith('toggle_')){
+                    return
+                }
+                setScriptGlobalChatVar(key, String(value ?? ''), ScriptingEngineState.chat)
             })
             declareAPI('stopChat', (id:string) => {
                 if(!ScriptingSafeIds.has(id)){
@@ -309,12 +323,10 @@ export async function runScripted(code:string, arg:{
                 }
                 const realValue = JSON.parse(value)
 
-                ScriptingEngineState.chat.message = realValue.map((v) => {
-                    return {
-                        role: v.role,
-                        data: v.data
-                    }
-                })
+                ScriptingEngineState.chat.message = mergeLuaFullChat(
+                    ScriptingEngineState.chat.message ?? [],
+                    Array.isArray(realValue) ? realValue : []
+                )
             })
 
             declareAPI('logMain', (value:string) => {
@@ -417,15 +429,19 @@ export async function runScripted(code:string, arg:{
                 }
             })
 
-            declareAPI('generateImage', async (id:string, value:string, negValue:string = '') => {
+            declareAPI('generateImage', async (id:string, value:string, negValue:string = '', options?:ImageGenerationOptions) => {
                 if(!ScriptingLowLevelIds.has(id)){
                     return
+                }
+                const orientation = options?.orientation
+                if(orientation !== undefined && orientation !== 'landscape' && orientation !== 'portrait'){
+                    return 'Error: Image orientation must be landscape or portrait, received ' + orientation
                 }
                 const currentChar = ScriptingEngineState.char
                 if(!currentChar || currentChar.type !== 'character'){
                     return 'Error: Character context is unavailable'
                 }
-                const gen = await generateAIImage(value, currentChar, negValue, 'inlay')
+                const gen = await generateAIImage(value, currentChar, negValue, 'inlay', options)
                 if(!gen){
                     return 'Error: Image generation failed'
                 }
@@ -961,7 +977,15 @@ export async function runScripted(code:string, arg:{
                     }
                 }
 
-                const options = parseLuaOptions(optionsStr) as { streaming?: boolean }
+                const options = parseLuaOptions(optionsStr) as { mode?: string, streaming?: boolean }
+                const modes = new Set(['emotion', 'memory', 'otherAx', 'submodel', 'translate'])
+                const mode = options.mode ?? 'otherAx'
+                if (!modes.has(mode)) {
+                    return JSON.stringify({
+                        result: 'Error: Invalid axLLM mode: ' + mode,
+                        success: false
+                    })
+                }
                 const result = await requestChatData({
                     formated: promptbody,
                     bias: {},
@@ -969,7 +993,7 @@ export async function runScripted(code:string, arg:{
                     forceStreaming: options.streaming === true,
                     noMultiGen: true,
                     moduleId: ScriptingEngineState.moduleId,
-                }, 'otherAx')
+                }, mode as 'emotion' | 'memory' | 'otherAx' | 'submodel' | 'translate')
 
                 if(result.type === 'fail'){
                     return JSON.stringify({
@@ -1091,6 +1115,7 @@ export async function runScripted(code:string, arg:{
             }
             ScriptingEngineState.code = code
             ScriptingEngineState.permissionFingerprint = permissionFingerprint
+            debugTiming.engine(mode, performance.now() - timingEngineStart)
         }
         let accessKey = v4()
         if(mode === 'editDisplay'){
@@ -1132,6 +1157,13 @@ export async function runScripted(code:string, arg:{
                         const func = luaEngine.global.get('onButtonClick')
                         if(func){
                             res = await func(accessKey, data)
+                        }
+                        break
+                    }
+                    case 'onFormSubmit':{
+                        const func = luaEngine.global.get('onFormSubmit')
+                        if(func){
+                            res = await func(accessKey, data, JSON.stringify(meta))
                         }
                         break
                     }
@@ -1196,6 +1228,7 @@ export async function runScripted(code:string, arg:{
         ScriptingSafeIds.delete(accessKey)
         ScriptingEditDisplayIds.delete(accessKey)
         ScriptingLowLevelIds.delete(accessKey)
+        debugTiming.lua(mode, performance.now() - timingRunStart)
         chat = ScriptingEngineState.chat
 
         return {
@@ -1570,7 +1603,12 @@ export async function runLuaEditTrigger<T extends string|OpenAIChat[]>(char:char
     }
 }
 
-export async function runLuaButtonTrigger(char:character|simpleCharacterArgument, data:string):Promise<any>{
+export async function runLuaButtonTrigger(char:character|simpleCharacterArgument, data:string, chat?:Chat):Promise<any>{
+    return runLuaInteractionTrigger('button', char, data, chat)
+}
+
+export async function runLuaInteractionTrigger(type: 'button'|'form', char:character|simpleCharacterArgument, data:string, chat?:Chat, meta?:object):Promise<any>{
+    const mode = type === 'button' ? 'onButtonClick' : 'onFormSubmit'
     let runResult
     try {
         const triggers = char.triggerscript.map<triggerscript>((v) => ({
@@ -1582,8 +1620,10 @@ export async function runLuaButtonTrigger(char:character|simpleCharacterArgument
             if(trigger?.effect?.[0]?.type === 'triggerlua'){
                 runResult = await runScripted(trigger.effect[0].code, {
                     char: char,
+                    chat,
                     lowLevelAccess: trigger.lowLevelAccess,
-                    mode: 'onButtonClick',
+                    meta,
+                    mode,
                     data: data,
                     moduleId: trigger.moduleId,
                 })

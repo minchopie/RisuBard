@@ -4,6 +4,7 @@ import { getDatabase } from "./storage/database.svelte"
 import { selectedCharID } from "./stores.svelte"
 import { createBlankChar, getCharImage } from "./characters"
 import { isIOS } from "src/ts/platform"
+import { aesGcmWithZeroIv, sha256Digest } from "./secureCrypto"
 import PopupList from "src/lib/UI/PopupList.svelte"
 import { normalizeSelectedPersonaIndex, resolvePersonaById } from "./personaScopes"
 
@@ -314,52 +315,14 @@ export function getAuthorNoteDefaultText(){
 
 export async function encryptBuffer(data:Uint8Array, keys:string){
     // hash the key to get a fixed length key value
-    const keyArray = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(keys))
-
-    const key = await window.crypto.subtle.importKey(
-        "raw",
-        keyArray,
-        "AES-GCM",
-        false,
-        ["encrypt", "decrypt"]
-    )
-
-    // use web crypto api to encrypt the data
-    const result = await window.crypto.subtle.encrypt(
-        {
-            name: "AES-GCM",
-            iv: new Uint8Array(12),
-        },
-        key,
-        asBuffer(data)
-    )
-
-    return result
+    const keyArray = await sha256Digest(new TextEncoder().encode(keys))
+    return aesGcmWithZeroIv('encrypt', asBuffer(data), keyArray)
 }
 
 export async function decryptBuffer(data:Uint8Array, keys:string){
     // hash the key to get a fixed length key value
-    const keyArray = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(keys))
-
-    const key = await window.crypto.subtle.importKey(
-        "raw",
-        keyArray,
-        "AES-GCM",
-        false,
-        ["encrypt", "decrypt"]
-    )
-
-    // use web crypto api to encrypt the data
-    const result = await window.crypto.subtle.decrypt(
-        {
-            name: "AES-GCM",
-            iv: new Uint8Array(12),
-        },
-        key,
-        asBuffer(data)
-    )
-
-    return result
+    const keyArray = await sha256Digest(new TextEncoder().encode(keys))
+    return aesGcmWithZeroIv('decrypt', asBuffer(data), keyArray)
 }
 
 export function toState<T>(t:T):Writable<T>{

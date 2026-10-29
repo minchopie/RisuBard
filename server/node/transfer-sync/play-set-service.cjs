@@ -2,7 +2,9 @@
 require('sucrase/register/ts');
 const fs = require('node:fs/promises');
 const { createReadStream, createWriteStream, openAsBlob, existsSync, readdirSync, readFileSync } = require('node:fs');
-const { join, dirname, relative, isAbsolute, sep } = require('node:path');
+const { join, dirname, basename, relative, isAbsolute, sep, toNamespacedPath } = require('node:path');
+// fs.mkdtemp lacks Node's Windows long-path handling (>260 chars): create through the namespaced prefix, return the plain path.
+const mkdtempLong = async prefix => join(dirname(prefix), basename(await fs.mkdtemp(toNamespacedPath(prefix))));
 const { randomUUID, createHash } = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
 const { Transform } = require('node:stream');
@@ -69,11 +71,11 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         return result.sort((a, b) => b.createdAt - a.createdAt);
     }
     const publicState = record => ({ id: record.id, direction: record.direction, state: record.state, createdAt: record.createdAt,
-        name: record.name, bytes: record.bytes, sha256: record.sha256, error: record.error, trusted: !!record.trusted, nativeId: record.nativeId, progress: record.progress, ...(record.kind ? { kind: record.kind } : {}) });
-    async function ingest(source, { name = '대화 자료.risuplay', trusted = false, nativeId } = {}) {
+        name: record.name, bytes: record.bytes, sha256: record.sha256, error: record.error, trusted: !!record.trusted, applyRequested: record.applyRequested, nativeId: record.nativeId, progress: record.progress, ...(record.kind ? { kind: record.kind } : {}) });
+    async function ingest(source, { name = '대화 자료.risuplay', trusted = false, applyRequested, nativeId } = {}) {
         const key = randomUUID(), dir = directory(key);
         await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-        const record = { id: key, direction: 'receive', state: 'receiving', createdAt: Date.now(), name: String(name).slice(0, 200), trusted, ...(nativeId ? { nativeId } : {}) };
+        const record = { id: key, direction: 'receive', state: 'receiving', createdAt: Date.now(), name: String(name).slice(0, 200), trusted, ...(typeof applyRequested === 'boolean' ? { applyRequested } : {}), ...(nativeId ? { nativeId } : {}) };
         write(record);
         let bytes = 0, checked = 0;
         const digest = createHash('sha256');
@@ -105,13 +107,14 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         if (character.chats.some(c => selection.chatIds.includes(c.id) && (c.isStreaming || c.risuBardWikiReboot))) throw new Error('Wait for generation and Wiki work to finish');
         const selectedHash = hash(canonical(character, true));
         await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-        const work = await fs.mkdtemp(join(dir, 'export-work-'));
+        const work = await mkdtempLong(join(dir, 'export-work-'));
         let capture, recorded = false;
         try {
             capture = await memory.capturePlaySetMemory({ characterId: character.chaId, chatIds: selection.chatIds, temporaryDirectory: work });
             const binary = async key => {
                 const path = join(work, randomUUID());
-                return await storage.kvExportFile(key, path) ? openAsBlob(path) : null;
+                // fs.openAsBlob lacks Node's Windows long-path handling (>260 chars): pass the namespaced form; no-op elsewhere.
+                return await storage.kvExportFile(key, path) ? openAsBlob(toNamespacedPath(path)) : null;
             };
             const originFile = join(root, 'origin.json');
             let origin;
@@ -318,6 +321,12 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         for (const file of ['incoming.risuplay', 'incoming.part', 'export.risuplay']) await fs.rm(join(directory(key), file), { force: true });
         return publicState(record);
     }
+    async function requestApply(key, requested) {
+        const record = await read(key);
+        if (typeof requested !== 'boolean' || record.direction !== 'receive' || record.plan || !['waiting', 'failed'].includes(record.state)) throw new Error('Cannot change an active or completed import');
+        record.applyRequested = requested; write(record);
+        return publicState(record);
+    }
     async function holdRecovery(key) {
         const record = await read(key);
         if (!record.plan) throw new Error('No pending import recovery');
@@ -402,9 +411,10 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/:id/finish', async (req, res) => res.json(await exclusive(() => finish(req.params.id, req.body.confirmed === true))));
         route('post', '/:id/hold-recovery', async (req, res) => { if (req.body.confirmed !== true) throw new Error('Recovery exit requires confirmation'); res.json(await exclusive(() => holdRecovery(req.params.id))); });
         route('post', '/:id/cancel', async (req, res) => res.json(await exclusive(() => cancel(req.params.id))));
+        route('post', '/:id/apply-request', async (req, res) => res.json(await exclusive(() => requestApply(req.params.id, req.body.requested))));
     }
     return { assertWrite, list, ingest, exportSet, inspect, prepare: (...args) => exclusive(() => prepare(...args)), arm: (...args) => exclusive(() => arm(...args)),
-        finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes };
+        finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), requestApply: (...args) => exclusive(() => requestApply(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes };
 }
 async function safeParents(root, path) {
     const rel = relative(root, path);

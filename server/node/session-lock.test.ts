@@ -5,6 +5,8 @@ const { createSessionLock } = pkg as {
     createSessionLock: (opts?: { now?: () => number }) => {
         register: (id: string) => void
         checkWrite: (id: string, userActive?: boolean) => { ok: boolean, tookOver?: boolean, passive?: boolean }
+        peek: (id: string) => string
+        revokeAll: () => void
         activeId: () => string | null
     }
 }
@@ -147,5 +149,22 @@ describe('session-lock', () => {
         expect(lock.peek('pc')).toBe('stale')
         expect(lock.activeId()).toBe('phone')
         expect(lock.peek('')).toBe('active')            // sessionless clients never reload
+    })
+
+    // After an account import replaced all data, no page loaded before it
+    // may write its old copy back, the lock holder included.
+    it('revokeAll makes every earlier page stale and lets a new page take over', () => {
+        const { lock } = makeLock()
+        lock.register('pc')
+        lock.register('phone')
+        expect(lock.checkWrite('pc').ok).toBe(true)
+        lock.revokeAll()
+        expect(lock.peek('pc')).toBe('stale')
+        expect(lock.checkWrite('pc', true).ok).toBe(false)
+        expect(lock.checkWrite('phone', true).ok).toBe(false)
+        lock.register('pc-reloaded')
+        expect(lock.checkWrite('pc-reloaded')).toEqual({ ok: true, passive: true })
+        expect(lock.checkWrite('pc-reloaded', true)).toEqual({ ok: true, tookOver: true })
+        expect(lock.activeId()).toBe('pc-reloaded')
     })
 })

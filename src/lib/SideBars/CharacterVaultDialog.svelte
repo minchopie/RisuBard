@@ -26,6 +26,7 @@
         createCharacterVaultFolder,
         createCharacterVaultClones,
         applyCharacterVaultClones,
+        buildCharacterVaultSections,
         deleteCharacterVaultFolder,
         getCharacterVaultQuickAccess,
         moveCharactersToVaultFolder,
@@ -67,7 +68,8 @@
     let selectedIds = $state<string[]>([])
     let moveTarget = $state('__unfiled__')
     let folderSort = $state<'manual' | 'name' | 'count'>('manual')
-    let characterSort = $state<CharacterVaultSortKey>('name')
+    // 'order' follows the sidebar; in the full vault it groups cards by folder.
+    let characterSort = $state<CharacterVaultSortKey | 'order'>('name')
     let characterSortDirection = $state<CharacterVaultSortDirection>('asc')
     let coverCharacterId = $state('')
     let notice = $state('')
@@ -113,7 +115,9 @@
         ))
     })
 
-    let visibleCharacters = $derived.by(() => {
+    const folderColorNames = ['red', 'yellow', 'green', 'blue', 'indigo', 'purple', 'pink', 'default']
+
+    let scopedCharacters = $derived.by(() => {
         revision
         const normalizedQuery = query.trim().toLocaleLowerCase()
         const unfiled = new Set(DBState.db.characterOrder.filter(
@@ -133,10 +137,28 @@
                 return !normalizedQuery
                     || character.name.toLocaleLowerCase().includes(normalizedQuery)
             })
+        return items
+    })
+
+    let orderSections = $derived.by(() => {
+        if (characterSort !== 'order') return null
+        return buildCharacterVaultSections(
+            DBState.db.characterOrder,
+            scopedCharacters.map((item) => ({ ...item, chaId: item.character.chaId })),
+            activeScope === 'all' && !query.trim()
+        )
+    })
+
+    // Folder groups only make sense across the whole vault; a single scope stays flat.
+    let groupedSections = $derived(activeScope === 'all' ? orderSections : null)
+
+    let visibleCharacters = $derived.by(() => {
+        if (orderSections) return orderSections.flatMap((section) => section.items)
+        const items = scopedCharacters
         const itemsById = new Map(items.map((item) => [item.character.chaId, item]))
         return sortCharacterVaultCharacters(
             items.map((item) => item.character),
-            characterSort,
+            characterSort as CharacterVaultSortKey,
             characterSortDirection
         ).map((character) => itemsById.get(character.chaId)!)
     })
@@ -608,14 +630,16 @@
                         aria-label="캐릭터 정렬 기준"
                         value={characterSort}
                         onchange={(event) => characterSort =
-                            (event.currentTarget as HTMLSelectElement).value as CharacterVaultSortKey}
+                            (event.currentTarget as HTMLSelectElement).value as CharacterVaultSortKey | 'order'}
                     >
                         <option value="name">이름</option>
                         <option value="lastInteraction">마지막 사용</option>
                         <option value="creationDate">생성/임포트</option>
+                        <option value="order">사이드바 순서</option>
                     </select>
                     <button
                         type="button"
+                        disabled={characterSort === 'order'}
                         aria-label={`정렬 방향: ${characterSortDirection === 'asc' ? '오름차' : '내림차'}`}
                         onclick={() => characterSortDirection = characterSortDirection === 'asc'
                             ? 'desc'
@@ -645,7 +669,7 @@
                     <label>
                         <span>강조색</span>
                         <div class="color-line">
-                            {#each ['red','yellow','green','blue','indigo','purple','pink','default'] as color}
+                            {#each folderColorNames as color}
                                 <button
                                     type="button"
                                     class="color-chip color-{color}"
@@ -683,86 +707,146 @@
                 </section>
             {/if}
 
-            <div class="character-grid" aria-label="캐릭터 목록">
-                {#each visibleCharacters as item (item.character.chaId)}
-                    <div
-                        class="character-card"
-                        role="checkbox"
-                        tabindex="0"
-                        aria-checked={selectedIds.includes(item.character.chaId)}
-                        class:selected={selectedIds.includes(item.character.chaId)}
-                        class:dragging={draggedCharacterId === item.character.chaId}
-                        draggable="true"
-                        aria-label={`${item.character.name} 캐릭터 카드 · 폴더로 드래그하여 이동`}
-                        onclick={(event) => selectCard(event, item.character.chaId)}
-                        onkeydown={(event) => {
-                            if (event.target !== event.currentTarget
-                                || (event.key !== 'Enter' && event.key !== ' ')) return
-                            event.preventDefault()
-                            toggleSelected(item.character.chaId)
-                        }}
-                        ondragstart={(event) => startCharacterDrag(
-                            event,
+            {#snippet characterCard(item: (typeof visibleCharacters)[number])}
+                <div
+                    class="character-card"
+                    role="checkbox"
+                    tabindex="0"
+                    aria-checked={selectedIds.includes(item.character.chaId)}
+                    class:selected={selectedIds.includes(item.character.chaId)}
+                    class:dragging={draggedCharacterId === item.character.chaId}
+                    draggable="true"
+                    aria-label={`${item.character.name} 캐릭터 카드 · 폴더로 드래그하여 이동`}
+                    onclick={(event) => selectCard(event, item.character.chaId)}
+                    onkeydown={(event) => {
+                        if (event.target !== event.currentTarget
+                            || (event.key !== 'Enter' && event.key !== ' ')) return
+                        event.preventDefault()
+                        toggleSelected(item.character.chaId)
+                    }}
+                    ondragstart={(event) => startCharacterDrag(
+                        event,
+                        item.character.chaId,
+                        item.character.name
+                    )}
+                    ondragend={endCharacterDrag}
+                >
+                    <div class="portrait">
+                        {#await characterImage(
                             item.character.chaId,
-                            item.character.name
+                            item.character.image ?? ''
                         )}
-                        ondragend={endCharacterDrag}
-                    >
-                        <div class="portrait">
-                            {#await characterImage(
-                                item.character.chaId,
-                                item.character.image ?? ''
+                            <UserRoundIcon size={24} />
+                        {:then image}
+                            {#if image}<img src={image} alt="" />
+                            {:else}<UserRoundIcon size={24} />{/if}
+                        {/await}
+                        {#if characterPackageLabel(item.character.chaId)}
+                            <span class="package-badge" title={`저장 구조: ${characterPackageLabel(item.character.chaId)}`}>{characterPackageLabel(item.character.chaId)}</span>
+                        {/if}
+                        <button
+                            type="button"
+                            class="select-character"
+                            aria-label={`${item.character.name} 선택`}
+                            aria-pressed={selectedIds.includes(item.character.chaId)}
+                            onclick={() => toggleSelected(item.character.chaId)}
+                        >
+                            {#if selectedIds.includes(item.character.chaId)}<CheckIcon size={14} />{/if}
+                        </button>
+                        <button
+                            type="button"
+                            class="pin-character"
+                            class:pinned={quickKeys.has(`character:${item.character.chaId}`)}
+                            aria-label={`${item.character.name} 퀵 인벤토리 전환`}
+                            aria-pressed={quickKeys.has(`character:${item.character.chaId}`)}
+                            onclick={() => toggleQuick(
+                                { kind: 'character', id: item.character.chaId },
+                                item.character.name
                             )}
-                                <UserRoundIcon size={24} />
-                            {:then image}
-                                {#if image}<img src={image} alt="" />
-                                {:else}<UserRoundIcon size={24} />{/if}
-                            {/await}
-                            {#if characterPackageLabel(item.character.chaId)}
-                                <span class="package-badge" title={`저장 구조: ${characterPackageLabel(item.character.chaId)}`}>{characterPackageLabel(item.character.chaId)}</span>
-                            {/if}
-                            <button
-                                type="button"
-                                class="select-character"
-                                aria-label={`${item.character.name} 선택`}
-                                aria-pressed={selectedIds.includes(item.character.chaId)}
-                                onclick={() => toggleSelected(item.character.chaId)}
+                        ><PinIcon size={13} /></button>
+                        <button
+                            type="button"
+                            class="open-character"
+                            aria-label={`${item.character.name} 열기`}
+                            onclick={() => openCharacter(item.index)}
+                        ><SolarBoldIcon name="play-circle" size={16} /></button>
+                        <button
+                            type="button"
+                            class="rename-character"
+                            aria-label={`${item.character.name} 이름 변경`}
+                            onclick={() => void renameCharacter(item.character.chaId)}
+                        ><PencilIcon size={13} /></button>
+                    </div>
+                    <div class="character-caption">
+                        <strong>{item.character.name}</strong>
+                    </div>
+                </div>
+            {/snippet}
+
+            {#snippet emptyVault()}
+                <div class="empty-vault">
+                    <SearchIcon size={22} /> 조건에 맞는 캐릭터가 없습니다.
+                </div>
+            {/snippet}
+
+            <div class="character-grid" class:grouped={!!groupedSections} aria-label="캐릭터 목록">
+                {#if groupedSections}
+                    {#each groupedSections as section (section.key)}
+                        {@const folderEntry = section.folder}
+                        {#if folderEntry}
+                            <section
+                                class="vault-section"
+                                class:drop-target={dragOverFolderId === folderEntry.id}
+                                aria-label={`${folderEntry.name} 폴더`}
+                                ondragover={(event) => dragCharacterOverLocation(event, folderEntry)}
+                                ondragleave={(event) => leaveCharacterLocation(event, folderEntry.id)}
+                                ondrop={(event) => dropCharacterInLocation(event, folderEntry)}
                             >
-                                {#if selectedIds.includes(item.character.chaId)}<CheckIcon size={14} />{/if}
-                            </button>
-                            <button
-                                type="button"
-                                class="pin-character"
-                                class:pinned={quickKeys.has(`character:${item.character.chaId}`)}
-                                aria-label={`${item.character.name} 퀵 인벤토리 전환`}
-                                aria-pressed={quickKeys.has(`character:${item.character.chaId}`)}
-                                onclick={() => toggleQuick(
-                                    { kind: 'character', id: item.character.chaId },
-                                    item.character.name
-                                )}
-                            ><PinIcon size={13} /></button>
-                            <button
-                                type="button"
-                                class="open-character"
-                                aria-label={`${item.character.name} 열기`}
-                                onclick={() => openCharacter(item.index)}
-                            ><SolarBoldIcon name="play-circle" size={16} /></button>
-                            <button
-                                type="button"
-                                class="rename-character"
-                                aria-label={`${item.character.name} 이름 변경`}
-                                onclick={() => void renameCharacter(item.character.chaId)}
-                            ><PencilIcon size={13} /></button>
-                        </div>
-                        <div class="character-caption">
-                            <strong>{item.character.name}</strong>
-                        </div>
-                    </div>
+                                <header class="vault-section-head">
+                                    <span
+                                        class="color-chip color-{folderColorNames.includes(folderEntry.color) ? folderEntry.color : 'default'}"
+                                        style={folderEntry.color?.startsWith('#') ? `background:${folderEntry.color}` : undefined}
+                                    ></span>
+                                    <FolderIcon size={15} />
+                                    <h3 title={folderEntry.name}>{folderEntry.name}</h3>
+                                    <small>{query.trim() && section.items.length !== folderEntry.data.length
+                                        ? `${section.items.length} / ${folderEntry.data.length}명`
+                                        : `${section.items.length}명`}</small>
+                                </header>
+                                {#if section.items.length > 0}
+                                    <div class="vault-section-grid">
+                                        {#each section.items as item (item.character.chaId)}
+                                            {@render characterCard(item)}
+                                        {/each}
+                                    </div>
+                                {:else}
+                                    <p class="vault-section-empty">비어 있는 폴더입니다. 캐릭터 카드를 여기로 끌어 놓으면 이 폴더로 옮겨집니다.</p>
+                                {/if}
+                            </section>
+                        {:else}
+                            <section class="vault-section" aria-label="미분류 캐릭터">
+                                <header class="vault-section-head">
+                                    <UserRoundIcon size={15} />
+                                    <h3>미분류</h3>
+                                    <small>{section.items.length}명</small>
+                                </header>
+                                <div class="vault-section-grid">
+                                    {#each section.items as item (item.character.chaId)}
+                                        {@render characterCard(item)}
+                                    {/each}
+                                </div>
+                            </section>
+                        {/if}
+                    {:else}
+                        {@render emptyVault()}
+                    {/each}
                 {:else}
-                    <div class="empty-vault">
-                        <SearchIcon size={22} /> 조건에 맞는 캐릭터가 없습니다.
-                    </div>
-                {/each}
+                    {#each visibleCharacters as item (item.character.chaId)}
+                        {@render characterCard(item)}
+                    {:else}
+                        {@render emptyVault()}
+                    {/each}
+                {/if}
             </div>
 
             {#if selectedIds.length > 0}
@@ -859,7 +943,8 @@
     .character-sort select, .character-sort button { border: 0; background: transparent; color: var(--color-textcolor2); font-size: .7rem; }
     .character-sort select { padding: 0 .4rem; }
     .character-sort button { min-width: 3.5rem; padding: 0 .45rem; border-left: 1px solid var(--color-darkborderc); }
-    .character-sort button:hover { color: var(--color-textcolor); background: color-mix(in srgb, var(--color-selected) 45%, transparent); }
+    .character-sort button:hover:not(:disabled) { color: var(--color-textcolor); background: color-mix(in srgb, var(--color-selected) 45%, transparent); }
+    .character-sort button:disabled { cursor: not-allowed; opacity: .4; }
     .folder-editor { display: grid; grid-template-columns: minmax(8rem, 1fr) auto minmax(15rem, 1.3fr); align-items: end; gap: .55rem; padding: .55rem .7rem; border-bottom: 1px solid var(--color-darkborderc); background: color-mix(in srgb, var(--color-selected) 35%, transparent); }
     .folder-editor label { display: grid; gap: .25rem; color: var(--color-textcolor2); font-size: .64rem; }
     .folder-editor input:not([type=color]), .folder-editor select, .bulk-dock select { min-width: 0; height: 2rem; padding: 0 .45rem; border: 1px solid var(--color-darkborderc); border-radius: .35rem; background: var(--color-darkbg); color: var(--color-textcolor); font-size: .72rem; }
@@ -871,6 +956,17 @@
     .cover-control { grid-template-columns: minmax(6rem, 1fr) auto auto; }
     .cover-control > span { grid-column: 1 / -1; }
     .character-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); grid-auto-rows: max-content; align-content: start; gap: .65rem; overflow-y: auto; padding: .75rem; }
+    .character-grid.grouped { display: flex; flex-direction: column; gap: 1.25rem; padding-top: 0; }
+    .vault-section { border-radius: .55rem; transition: box-shadow 120ms ease; }
+    .vault-section.drop-target { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 55%, transparent); }
+    .vault-section-head { position: sticky; z-index: 3; top: 0; display: flex; min-width: 0; align-items: center; gap: .45rem; margin-bottom: .55rem; padding: .7rem .1rem .45rem; border-bottom: 1px solid var(--color-darkborderc); background: color-mix(in srgb, var(--color-darkbg) 97%, var(--color-bgcolor)); color: var(--color-textcolor2); }
+    .vault-section.drop-target .vault-section-head { color: var(--color-textcolor); background: color-mix(in srgb, var(--color-warning) 14%, var(--color-darkbg)); }
+    .vault-section-head .color-chip { flex: none; width: .7rem; height: .7rem; }
+    .vault-section-head :global(svg) { flex: none; }
+    .vault-section-head h3 { min-width: 0; flex: 1 1 auto; margin: 0; overflow: hidden; color: var(--color-textcolor); font-size: .8rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .vault-section-head small { flex: none; font: 600 .66rem ui-monospace, monospace; opacity: .75; }
+    .vault-section-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); grid-auto-rows: max-content; gap: .65rem; }
+    .vault-section-empty { margin: 0; padding: .9rem .75rem; border: 1px dashed var(--color-darkborderc); border-radius: .55rem; color: var(--color-textcolor2); font-size: .74rem; line-height: 1.5; }
     .character-card { position: relative; width: 100%; min-width: 0; aspect-ratio: 1; align-self: start; isolation: isolate; overflow: hidden; cursor: grab; border: 1px solid var(--color-darkborderc); border-radius: .55rem; background: color-mix(in srgb, var(--color-darkbg) 88%, var(--color-selected) 12%); transition: border-color 120ms ease, opacity 120ms ease, transform 120ms ease; }
     .character-card:hover { transform: translateY(-1px); border-color: var(--color-borderc); }
     .character-card:focus-visible { outline: 2px solid var(--color-warning); outline-offset: 2px; }
@@ -918,6 +1014,8 @@
         .bulk-actions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .bulk-actions :global(button) { width: 100%; min-height: 2.75rem; white-space: normal; }
         .character-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 8.5rem), 1fr)); gap: .5rem; padding: .6rem; }
+        .character-grid.grouped { gap: 1rem; padding-top: 0; }
+        .vault-section-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 8.5rem), 1fr)); gap: .5rem; }
         .select-character, .pin-character, .open-character, .rename-character { width: 2.25rem; height: 2.25rem; }
     }
     @media (max-width: 720px) {

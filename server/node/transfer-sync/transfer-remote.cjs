@@ -184,7 +184,7 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
             if (!/^[\x20-\x7e]+$/.test(input.etag)) throw new Error('Invalid ETag');
             headers['If-Match'] = input.etag;
         }
-        return transfers.ingest(checked(await nasRequest(c, 'GET', filename, headers)), { name: filename });
+        return transfers.ingest(checked(await nasRequest(c, 'GET', filename, headers)), { name: filename, applyRequested: input.applyRequested === true });
     }
     const api = (c, path, options = {}) => fetch(`https://api.github.com/repos/${c.repository}/${path}`, { ...options, headers: {
         Authorization: `Bearer ${c.token}`, 'User-Agent': 'RisuBard', Accept: 'application/vnd.github.object+json', 'X-GitHub-Api-Version': '2026-03-10', ...options.headers,
@@ -240,7 +240,7 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
             done(bytes > info.size ? new Error('GitHub download exceeds declared size') : null, chunk);
         }, flush(done) { done(bytes !== info.size || hash.digest('hex') !== input.sha ? new Error('GitHub download hash mismatch') : null); } });
         stream.on('error', error => verify.destroy(error)); verify.on('close', () => stream.destroy()); stream.pipe(verify);
-        return transfers.ingest(verify, { name: input.name });
+        return transfers.ingest(verify, { name: input.name, applyRequested: input.applyRequested === true });
     }
     async function legacyList() {
         const c = await secrets.get('github'); await repoInfo(c);

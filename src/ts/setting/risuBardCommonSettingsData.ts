@@ -132,33 +132,11 @@ export const risuBardCommonSettingsItems: SettingItem[] = [
         keywords: ['analysis', 'analysis user messages', '분석 사용자 메시지'],
     },
     {
-        id: 'risubard.chat.bardChan',
-        type: 'check',
-        labelKey: 'risuBardBardChanEnabled',
-        helpKey: 'risuBardBardChanEnabled',
-        bindKey: 'risuBardBardChanEnabled',
-        keywords: ['Bard-chan', 'reranker', 'auxiliary model', '바드쨩', '재순위', '보조 모델'],
-    },
-    {
         id: 'risubard.common.embedding',
         type: 'custom',
         componentId: 'WikiEmbeddingSettings',
         fallbackLabel: 'Semantic search embedding',
         keywords: ['embedding', 'semantic search', 'Hypa', 'memory', '임베딩', '의미 검색', '하이파', '기억'],
-    },
-    {
-        id: 'risubard.chat.bardChanModel',
-        type: 'select',
-        labelKey: 'risuBardBardChanModelMode',
-        helpKey: 'risuBardBardChanModelMode',
-        bindKey: 'risuBardBardChanModelMode',
-        options: {
-            selectOptions: [
-                { value: 'memory', labelKey: 'risuBardBardChanModelAuxiliary' },
-                { value: 'model', labelKey: 'risuBardBardChanModelMain' },
-            ],
-        },
-        keywords: ['Bard-chan', 'reranker', 'main model', 'auxiliary model', '바드쨩', '메인 모델', '보조 모델'],
     },
     {
         id: 'risubard.chat.memoryBudgetPreset',
@@ -167,7 +145,7 @@ export const risuBardCommonSettingsItems: SettingItem[] = [
         labelKey: 'risuBardMemoryBudgetPreset',
         helpKey: 'risuBardMemoryBudgetPreset',
         fallbackLabel: '기억 예산',
-        keywords: ['memory budget', 'preset', 'economy', 'standard', 'generous', 'custom', '기억 예산', '프리셋', '절약', '보통', '넉넉', '커스텀', '검색 목표', '사건 검색', '자료별 검색', '검색 최대', '동적 한도'],
+        keywords: ['memory budget', 'preset', 'economy', 'standard', 'generous', 'custom', '기억 예산', '프리셋', '절약', '보통', '넉넉', '커스텀', '사용자 지정', '검색 목표', '사건 검색', '자료별 검색', '검색 최대', '동적 한도'],
     },
     {
         id: 'risubard.chat.dynamicMemory',

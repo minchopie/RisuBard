@@ -1,7 +1,7 @@
 <script lang="ts">
     import { Buffer } from 'buffer'
     import { untrack } from 'svelte'
-    import { Check, ChevronLeft, ChevronRight, Copy, Images, LoaderCircle, RefreshCw, Trash2 } from '@lucide/svelte'
+    import { Archive, Check, ChevronLeft, ChevronRight, Copy, Images, LoaderCircle, RefreshCw, Trash2, X } from '@lucide/svelte'
     import ShButton from '../UI/GUI/ShButton.svelte'
     import ShDialog from '../UI/GUI/ShDialog.svelte'
     import { alertConfirm, notifyError, notifySuccess } from 'src/ts/alert'
@@ -9,10 +9,26 @@
     import type { character } from 'src/ts/storage/database.svelte'
     import { filterPainterGallery, loadPainterGalleryRecord, novelAiGalleryInfo, painterGalleryInfo, preservePainterChatsGallery, PAINTER_GALLERY_DELETED_CHAT, PAINTER_GALLERY_UNASSIGNED, type GalleryGenerationInfo } from 'src/ts/bardPainter/gallery'
     import { readPainterImageMetadata } from 'src/ts/bardPainter/metadata'
-    import { requestImmediateSave } from 'src/ts/globalApi.svelte'
+    import { downloadFile, requestImmediateSave } from 'src/ts/globalApi.svelte'
+    import { readArchiveFiles, usedInlayIds, writeArchiveFolder, zipArchiveFiles } from 'src/ts/bardPainter/galleryArchive'
 
     let { bot, disabled = false }: { bot: character; disabled?: boolean } = $props()
-    const pageSize = 24
+    type ThumbSize = 'small' | 'medium' | 'large'
+    const sizeKey = 'risubard.painterGallery.thumbSize'
+    function storedSize(): ThumbSize {
+        try { const value = localStorage.getItem(sizeKey); return value === 'small' || value === 'large' ? value : 'medium' } catch { return 'medium' }
+    }
+    let thumbSize = $state<ThumbSize>(storedSize())
+    function chooseSize(value: ThumbSize) { thumbSize = value; try { localStorage.setItem(sizeKey, value) } catch { /* Size is a per-browser convenience. */ } }
+    const pageSize = $derived(thumbSize === 'small' ? 36 : thumbSize === 'large' ? 12 : 24)
+    // Which images the bot's chats still show; read once per filter request, refreshed with the list.
+    let usage = $state<'all' | 'used' | 'unused'>('all')
+    let usedIds = $state<Set<string> | null>(null), usageLoading = $state(false), usageError = $state('')
+    let usageVersion = 0
+    let selected = $state<string[]>([])
+    let rangeStart = ''
+    let archiveOpen = $state(false), archiveMode = $state<'zip' | 'folder'>('zip'), archiveRemove = $state(true), archiving = $state(false)
+    const folderSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
     let items = $state<InlayExplorerItem[]>([])
     let loading = $state(false), deleting = $state(false), loadError = $state('')
     let deletingImageId = $state('')
@@ -41,7 +57,10 @@
         return ''
     })
     const all = $derived(filterPainterGallery(items, bot.chaId, bot.chats))
-    const filtered = $derived(filterPainterGallery(items, bot.chaId, bot.chats, chatFilter, oldestFirst))
+    const byChat = $derived(filterPainterGallery(items, bot.chaId, bot.chats, chatFilter, oldestFirst))
+    const filtered = $derived(usage === 'all' ? byChat : usedIds ? byChat.filter(item => usedIds!.has(item.id) === (usage === 'used')) : [])
+    const selectedSet = $derived(new Set(selected))
+    const selectedItems = $derived(filtered.filter(item => selectedSet.has(item.id)))
     const pageCount = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)))
     const viewerIndex = $derived(filtered.findIndex(item => item.id === viewer?.id))
     const shown = $derived(filtered.slice(page * pageSize, (page + 1) * pageSize))
@@ -63,7 +82,7 @@
             // Old painter records migrate only for chats already loaded in memory.
             await preservePainterChatsGallery(target.chats.filter(chat => !chat._placeholder))
             const next = await listInlayExplorerItems(true)
-            if (version === loadVersion) items = next
+            if (version === loadVersion) { items = next; usedIds = null; if (usage !== 'all') void loadUsage() }
         } catch (error) { if (version === loadVersion) loadError = String(error) }
         finally { if (version === loadVersion) loading = false }
     }
@@ -73,7 +92,72 @@
         untrack(() => { items = []; chatFilter = ''; page = 0; viewerOpen = false; viewer = null; void refresh() })
         return () => { loadVersion++; viewerVersion++ }
     })
-    $effect(() => { chatFilter; oldestFirst; page = 0 })
+    $effect(() => { chatFilter; oldestFirst; usage; thumbSize; page = 0 })
+    $effect(() => { chatFilter; usage; bot.chaId; untrack(() => { selected = []; rangeStart = ''; archiveOpen = false }) })
+
+    async function loadUsage() {
+        const version = ++usageVersion, target = bot
+        usageLoading = true; usageError = ''
+        try { const ids = await usedInlayIds(target); if (version === usageVersion) usedIds = ids }
+        catch (error) { if (version === usageVersion) usageError = error instanceof Error ? error.message : String(error) }
+        finally { if (version === usageVersion) usageLoading = false }
+    }
+    function chooseUsage(value: 'all' | 'used' | 'unused') {
+        usage = value
+        if (value !== 'all' && !usedIds && !usageLoading) void loadUsage()
+    }
+    function toggle(id: string) { selected = selectedSet.has(id) ? selected.filter(value => value !== id) : [...selected, id]; rangeStart = id }
+    function tileClick(event: MouseEvent, item: InlayExplorerItem) {
+        if (event.shiftKey && rangeStart) {
+            const from = filtered.findIndex(entry => entry.id === rangeStart), to = filtered.findIndex(entry => entry.id === item.id)
+            if (from >= 0 && to >= 0) {
+                const range = filtered.slice(Math.min(from, to), Math.max(from, to) + 1).map(entry => entry.id)
+                selected = [...new Set([...selected, ...range])]
+                return
+            }
+        }
+        // Once anything is selected, a plain click keeps selecting instead of opening the viewer.
+        if (event.ctrlKey || event.metaKey || event.shiftKey || selected.length) { toggle(item.id); return }
+        void openImage(item)
+    }
+    async function deleteSelected() {
+        const targets = selectedItems
+        if (!targets.length || disabled || deleting || loading || referenceBusy) return
+        if (!await alertConfirm(`선택한 그림 ${targets.length}장을 삭제할까요? 이미지 파일과 생성 기록을 삭제합니다. 본문에 삽입한 그림도 더 이상 표시되지 않으며 되돌릴 수 없습니다.`)) return
+        await deleteImages(targets, bot)
+    }
+    type ArchiveFolder = Parameters<typeof writeArchiveFolder>[0]
+    async function archiveSelected() {
+        const targets = selectedItems, targetBot = bot
+        if (!targets.length || archiving || deleting || disabled) return
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')
+        archiving = true
+        try {
+            // Ask for the folder first: the browser allows the picker only right after the click.
+            const directory = archiveMode === 'folder' ? await (window as unknown as { showDirectoryPicker(options: { mode: 'readwrite' }): Promise<ArchiveFolder> }).showDirectoryPicker({ mode: 'readwrite' }) : undefined
+            const { files, ids, failed } = await readArchiveFiles(targets.map(item => ({ id: item.id, label: `${chatName(item.meta?.chatId)}_${item.meta?.createdAt ? new Date(item.meta.createdAt).toISOString().slice(0, 10) : 'image'}` })))
+            if (!files.length) { notifyError('보관할 그림 파일을 읽지 못했습니다.'); return }
+            let saved: Set<string>
+            if (directory) saved = await writeArchiveFolder(directory, files)
+            else {
+                await downloadFile(`바드페인터-보관-${targetBot.name || 'bot'}-${stamp}.zip`, zipArchiveFiles(files))
+                saved = new Set(ids)
+            }
+            const kept = targets.filter(item => saved.has(item.id))
+            const missing = targets.length - kept.length
+            if (archiveRemove && kept.length) {
+                const used = usedIds ? kept.filter(item => usedIds!.has(item.id)).length : 0
+                const question = `${directory ? '폴더에 저장한' : '내려받은 zip에 담은'} 그림 ${kept.length}장을 앱에서 지울까요?${directory ? '' : ' zip 파일이 저장됐는지 먼저 확인해 주세요.'}${used ? ` 이 중 ${used}장은 본문에 들어가 있어 본문에서도 사라집니다.` : ''}`
+                if (await alertConfirm(question)) await deleteImages(kept, targetBot)
+                else notifySuccess(`${kept.length}장을 보관했습니다. 앱의 그림은 그대로 둡니다.`)
+            } else notifySuccess(`${kept.length}장을 보관했습니다.`)
+            if (missing || failed.length) notifyError(`${missing}장은 보관하지 못해 앱에 그대로 둡니다.`)
+            archiveOpen = false
+        } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') return
+            notifyError(`보관하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`)
+        } finally { archiving = false }
+    }
     $effect(() => { if (page >= pageCount) page = pageCount - 1 })
     $effect(() => { if (!referenceAssigned) referenceNotice = '' })
     $effect(() => {
@@ -159,6 +243,7 @@
             }
             if (bot.chaId === targetBot.chaId) {
                 items = items.filter(item => !removed.has(item.id))
+                selected = selected.filter(id => !removed.has(id))
                 if (viewer && removed.has(viewer.id)) { viewerOpen = false; viewer = null; viewerVersion++ }
             }
             if (removed.size) await requestImmediateSave({ flushServer: true, rejectOnFailure: true })
@@ -189,17 +274,62 @@
         </select>
         {#if chatFilter}<ShButton variant="ghost" size="sm" className="text-draculared" disabled={disabled || deleting || loading || referenceBusy || !filtered.length} onclick={() => void deleteChatImages()}><Trash2 size={14}/>{deleting ? '삭제 중...' : '이 분류 모두 삭제'}</ShButton>{/if}
     </div>
+    <div class="grid grid-cols-2 gap-2">
+        <label class="text-xs text-textcolor2">본문 사용
+            <select aria-label="본문 사용 여부" value={usage} onchange={(event) => chooseUsage(event.currentTarget.value as 'all' | 'used' | 'unused')} disabled={deleting} class="mt-1 min-h-9 w-full rounded-md border border-darkborderc bg-darkbg px-2 text-sm text-textcolor">
+                <option value="all">모두</option><option value="used">챗에 들어간 그림</option><option value="unused">챗에 없는 그림</option>
+            </select>
+        </label>
+        <label class="text-xs text-textcolor2">썸네일 크기
+            <select aria-label="썸네일 크기" value={thumbSize} onchange={(event) => chooseSize(event.currentTarget.value as ThumbSize)} class="mt-1 min-h-9 w-full rounded-md border border-darkborderc bg-darkbg px-2 text-sm text-textcolor">
+                <option value="small">작게</option><option value="medium">보통</option><option value="large">크게</option>
+            </select>
+        </label>
+    </div>
+    {#if usage !== 'all'}
+        {#if usageLoading}<p role="status" class="flex items-center gap-2 text-xs text-textcolor2"><LoaderCircle size={14} class="animate-spin"/>모든 챗의 본문에서 그림 사용 여부를 확인하는 중...</p>
+        {:else if usageError}<p role="alert" class="text-xs text-draculared">{usageError} <button type="button" class="underline" onclick={() => void loadUsage()}>다시 확인</button></p>
+        {:else}<p class="text-xs leading-relaxed text-textcolor2">이 봇의 모든 챗 본문과 스와이프, 인사말, 로어북을 확인한 결과입니다.</p>{/if}
+    {/if}
+    <div data-gallery-selection class="flex flex-wrap items-center gap-2 rounded-md border border-darkborderc px-2 py-1.5">
+        {#if selected.length}
+            <span class="text-sm text-textcolor">{selectedItems.length}장 선택</span>
+            <ShButton variant="ghost" size="sm" aria-label="선택 해제" onclick={() => { selected = []; archiveOpen = false }}><X size={14}/>해제</ShButton>
+            <span class="flex-1"></span>
+            <ShButton variant="outline" size="sm" aria-expanded={archiveOpen} disabled={disabled || deleting || archiving || !selectedItems.length} onclick={() => archiveOpen = !archiveOpen}><Archive size={14}/>보관하기</ShButton>
+            <ShButton variant="ghost" size="sm" className="text-draculared" disabled={disabled || deleting || loading || referenceBusy || !selectedItems.length} onclick={() => void deleteSelected()}><Trash2 size={14}/>삭제</ShButton>
+        {:else}
+            <span class="text-xs text-textcolor2">Ctrl이나 Shift를 누른 채 클릭하거나 체크박스로 여럿 고릅니다.</span>
+            <span class="flex-1"></span>
+            <ShButton variant="ghost" size="sm" disabled={!filtered.length || loading} onclick={() => selected = filtered.map(item => item.id)}><Check size={14}/>모두 선택</ShButton>
+        {/if}
+    </div>
+    {#if archiveOpen && selected.length}
+        <div data-gallery-archive class="space-y-2 rounded-md border border-darkborderc bg-darkbg p-3 text-sm text-textcolor">
+            <p class="text-xs leading-relaxed text-textcolor2">선택한 그림을 앱 밖으로 옮깁니다. 생성 기록이 있으면 같은 이름의 JSON 파일도 함께 저장합니다.</p>
+            <label class="flex items-center gap-2"><input type="radio" name="gallery-archive-mode" value="zip" checked={archiveMode === 'zip'} onchange={() => archiveMode = 'zip'} class="accent-primary"/>zip 파일로 내려받기</label>
+            <label class="flex items-center gap-2" class:opacity-50={!folderSupported}><input type="radio" name="gallery-archive-mode" value="folder" disabled={!folderSupported} checked={archiveMode === 'folder'} onchange={() => archiveMode = 'folder'} class="accent-primary"/>고른 폴더에 파일 그대로 저장</label>
+            {#if !folderSupported}<p class="text-xs text-textcolor2">이 브라우저는 폴더 저장을 지원하지 않습니다. Chrome이나 Edge에서 사용할 수 있습니다.</p>{/if}
+            <label class="flex items-center gap-2"><input type="checkbox" bind:checked={archiveRemove} class="accent-primary"/>보관한 뒤 앱에서 지우기 (지우기 전에 한 번 더 묻습니다)</label>
+            <div class="flex justify-end gap-2">
+                <ShButton variant="ghost" size="sm" onclick={() => archiveOpen = false}>취소</ShButton>
+                <ShButton variant="primary" size="sm" disabled={archiving || deleting || !selectedItems.length} onclick={() => void archiveSelected()}>{#if archiving}<LoaderCircle size={14} class="animate-spin"/>보관 중...{:else}<Archive size={14}/>{selectedItems.length}장 보관{/if}</ShButton>
+            </div>
+        </div>
+    {/if}
     {#if loadError}<p role="alert" class="text-sm text-draculared">그림 목록을 불러오지 못했습니다. 새로고침으로 다시 시도해 주세요.</p>{/if}
     {#if loading && !items.length}<p role="status" class="py-8 text-center text-sm text-textcolor2">그림 목록을 불러오는 중...</p>
+    {:else if usage !== 'all' && !usedIds}<p role="status" class="py-8 text-center text-sm text-textcolor2">{usageError ? '사용 여부를 확인하지 못했습니다.' : '확인하는 중...'}</p>
     {:else if !filtered.length}<div class="rounded-md border border-dashed border-darkborderc p-6 text-center text-textcolor2"><Images size={28} class="mx-auto mb-2"/><p class="text-sm">이 분류에는 그림이 없습니다.</p></div>
     {:else}
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid gap-2" class:grid-cols-3={thumbSize === 'small'} class:grid-cols-2={thumbSize === 'medium'} class:grid-cols-1={thumbSize === 'large'}>
             {#each shown as item (item.id)}
                 <div class="relative min-w-0">
-                    <button data-gallery-image={item.id} class="w-full overflow-hidden rounded-md border border-darkborderc bg-darkbg text-left text-textcolor focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50" disabled={disabled} onclick={() => void openImage(item)} aria-label={`${chatName(item.meta?.chatId)}, ${date(item.meta?.createdAt)} 그림 확대`}>
-                        <img src={url(item.id, true)} alt="" loading="lazy" class="aspect-square w-full object-cover"/>
-                        <span class="block truncate px-2 pt-1 text-xs">{chatName(item.meta?.chatId)}</span><span class="block truncate px-2 pb-2 text-[10px] text-textcolor2">{date(item.meta?.createdAt)}</span>
+                    <button data-gallery-image={item.id} aria-pressed={selectedSet.has(item.id)} class="w-full overflow-hidden rounded-md border bg-darkbg text-left text-textcolor focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50 {selectedSet.has(item.id) ? 'border-primary ring-2 ring-primary' : 'border-darkborderc'}" disabled={disabled} onclick={(event) => tileClick(event, item)} aria-label={`${chatName(item.meta?.chatId)}, ${date(item.meta?.createdAt)} 그림 ${selected.length ? '선택' : '확대'}`}>
+                        <img src={url(item.id, true)} alt="" loading="lazy" class="w-full object-cover" class:aspect-square={thumbSize !== 'large'}/>
+                        {#if thumbSize !== 'small'}<span class="block truncate px-2 pt-1 text-xs">{chatName(item.meta?.chatId)}</span><span class="block truncate px-2 pb-2 text-[10px] text-textcolor2">{date(item.meta?.createdAt)}</span>{/if}
                     </button>
+                    <input type="checkbox" data-gallery-check={item.id} aria-label={`${chatName(item.meta?.chatId)}, ${date(item.meta?.createdAt)} 그림 선택`} checked={selectedSet.has(item.id)} onclick={(event) => { if (event.shiftKey && rangeStart) { event.preventDefault(); tileClick(event, item) } }} onchange={() => toggle(item.id)} class="absolute left-1.5 top-1.5 h-4 w-4 cursor-pointer accent-primary"/>
                     <ShButton data-gallery-delete={item.id} variant="secondary" size="icon-sm" className="absolute right-1.5 top-1.5 text-danger shadow-sm" aria-label={`${chatName(item.meta?.chatId)}, ${date(item.meta?.createdAt)} 그림 삭제`} title="그림 즉시 삭제. 본문에 삽입한 그림도 사라집니다." aria-busy={deletingImageId === item.id} disabled={disabled || deleting || loading || referenceBusy} onclick={() => void deleteImages([item], bot)}>
                         {#if deletingImageId === item.id}<LoaderCircle size={16} class="animate-spin motion-reduce:animate-none"/>{:else}<Trash2 size={16}/>{/if}
                     </ShButton>

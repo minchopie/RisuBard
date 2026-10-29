@@ -29,7 +29,8 @@ const log = m => console.error('[transfer-sync] ' + m);
 /** Parse `git diff` output into files → hunks (header + lines), keeping text verbatim. */
 export function parseDiff(text) {
     const files = []; let file = null, hunk = null;
-    for (const line of text.split('\n')) {
+    const lines = text.split('\n'); if (lines.at(-1) === '') lines.pop(); // the trailing newline is not a (context) line of the last hunk
+    for (const line of lines) {
         if (line.startsWith('diff --git ')) { file = { header: [line], hunks: [] }; files.push(file); hunk = null; continue; }
         if (!file) continue;
         if (line.startsWith('@@')) { const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(line); hunk = { oldStart: +m[1], oldCount: m[2] === undefined ? 1 : +m[2], newStart: +m[3], newCount: m[4] === undefined ? 1 : +m[4], tail: m[5], lines: [] }; file.hunks.push(hunk); continue; }

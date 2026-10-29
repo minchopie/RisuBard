@@ -3,7 +3,7 @@ import { mkdtemp, rm, cp, writeFile, readFile, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-const { createSyncStore, commitIdOf, RETRY_SECONDS, PHYSICAL_PURGE, TRASH_DAYS } = require('./nas-sync-store.cjs')
+const { createSyncStore, commitIdOf, RETRY_SECONDS, PHYSICAL_PURGE, TRASH_DAYS, TRASH_KEEP, deviceProfile } = require('./nas-sync-store.cjs')
 const { makeRevision, hashJson } = require('./nas-sync-core.cjs')
 const { atomicWriteJson } = require('./file-store.cjs')
 const { canonical } = require('../../shared/play-set/protocol.ts')
@@ -362,4 +362,47 @@ test('interrupted resolution resumes from its durable intent; held variants fetc
     expect(() => d.resolveAmbiguity(A.deviceId, A.incarnationId, { acceptHeld: true })).toThrow(/crash/)
     expect(d.resolveAmbiguity(A.deviceId, A.incarnationId, { acceptHeld: false })).toEqual([]) // decision already recorded as accept; nothing left to process
     expect(d.status().incoming[`${A.deviceId}/${A.incarnationId}`]).toMatchObject({ ambiguous: null, resolution: null, waiting: 1, admitted: 3 })
+})
+
+test('the trash offers only the newest TRASH_KEEP deletion operations; older ones stay as tombstones and history but are no longer listed', async t => {
+    const a = open(await temp(t)); a.setWorkspace('ws')
+    expect(TRASH_KEEP).toBe(3)
+    const live = ['t1', 't2', 't3', 't4', 't5'].map(root => chat(root, { root })); a.commit(live)
+    const tombs: any[] = []
+    for (const [i, rev] of live.entries()) {
+        clock += 1000
+        // t4 and t5 are deleted together (one operation): they stay one restorable unit.
+        const operation = i >= 3 ? 'op-last' : `op-${i}`
+        const tomb = makeRevision({ domain: 'play', type: 'chat', root: rev.root, parents: [rev.id], tombstone: { operation, base: rev.id } })
+        tombs.push(tomb); a.commit([tomb])
+    }
+    const listed = a.trash().map((x: any) => x.root).sort()
+    expect(listed).toEqual(['t2', 't3', 't4', 't5']) // op-1, op-2 and op-last; the oldest operation (t1) left the list
+    expect(a.status().trash).toBe(4)
+    expect(a.graph.heads(key('t1'))).toEqual([tombs[0].id]) // its tombstone (the deletion) is untouched
+    expect(existsSync(a.blobFile(live[0].contentHash))).toBe(true) // nothing physically removed
+    // Restoring the newest deletion does not bring the oldest one back: the kept operations come from the whole deletion history.
+    clock += 1000; a.commit(a.graph.restore(tombs[4].id))
+    expect(a.trash().map((x: any) => x.root).sort()).toEqual(['t2', 't3'])
+    clock += 1000; const t6 = chat('t6', { root: 't6' }); a.commit([t6]); clock += 1000
+    a.commit([makeRevision({ domain: 'play', type: 'chat', root: 't6', parents: [t6.id], tombstone: { operation: 'op-new', base: t6.id } })])
+    expect(a.trash().map((x: any) => x.root).sort()).toEqual(['t3', 't6']) // op-1 is pushed out by the new deletion
+})
+
+test('commits drafted after a device profile is set carry it; peers record it on admission; malformed profiles are refused', async t => {
+    const a = open(await temp(t)), b = open(await temp(t, 'bard-sync-b-')); a.setWorkspace('ws'); b.setWorkspace('ws')
+    const before = a.commit([chat('p0', { n: 0 })]), bytesBefore = canonical(a.commitObject(before))
+    expect(a.commitObject(before).device).toBeUndefined() // drafted before the profile: re-uploads byte-identically
+    expect(() => a.setProfile({ kind: 'laptop' })).toThrow(/Invalid device profile/)
+    expect(a.setProfile({ kind: 'pc', name: '  거실\u0007 PC  ' })).toEqual({ kind: 'pc', name: '거실 PC' })
+    const after = a.commit([chat('p1', { n: 1 })])
+    expect(a.commitObject(after).device).toEqual({ kind: 'pc', name: '거실 PC' })
+    expect(canonical(a.commitObject(before))).toBe(bytesBefore)
+    const A = a.identity()
+    expect(b.admitRemote(deliver(a, b, before), { device: A.deviceId, incarnation: A.incarnationId, sequence: before.sequence, commitId: before.commitId }).state).toBe('admitted')
+    expect(b.status().incoming[`${A.deviceId}/${A.incarnationId}`].profile).toBeNull()
+    expect(b.admitRemote(deliver(a, b, after), { device: A.deviceId, incarnation: A.incarnationId, sequence: after.sequence, commitId: after.commitId }).state).toBe('admitted')
+    expect(b.status().incoming[`${A.deviceId}/${A.incarnationId}`].profile).toEqual({ kind: 'pc', name: '거실 PC' })
+    expect(a.status().profile).toEqual({ kind: 'pc', name: '거실 PC' })
+    expect(deviceProfile({ kind: 'tablet', name: 5 })).toEqual({ kind: 'tablet' }); expect(deviceProfile(null)).toBeNull()
 })

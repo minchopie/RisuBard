@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 // copies pages written since the previous one.
 
 export const SAVE_FILES = 'risubard-save-files.json'
-const EXCLUDED_NAMES = new Set(['.risubard-snapshots', '.risubard-recovery'])
+const EXCLUDED_NAMES = new Set(['.risubard-snapshots', '.risubard-history', '.risubard-recovery'])
 const HASH_PATTERN = /^[0-9a-f]{64}$/
 
 export interface SavedFileEntry {

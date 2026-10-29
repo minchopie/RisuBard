@@ -27,7 +27,6 @@
 
 <section class="story-ledger" data-story-so-far aria-label="지금까지의 이야기">
     <header>
-        <span>STORY SO FAR</span>
         <h2>지금까지의 이야기</h2>
         <p>확정된 사건을 원본 대화 순서로 읽습니다. 원본을 찾을 수 없는 사건은 뒤에 표시됩니다.</p>
     </header>
@@ -38,7 +37,7 @@
         </div>
     {:else if entries.length === 0}
         <div class="story-empty" data-story-empty>
-            아직 기록된 사건이 없습니다.
+            아직 기록된 사건이 없습니다. AI 응답이 위키 분석을 거치면 사건이 여기에 쌓입니다.
         </div>
     {:else}
         <ol>
@@ -47,22 +46,25 @@
                 <li data-story-entry={entry.id}>
                     <span class="chapter-mark">{String(index + 1).padStart(2, '0')}</span>
                     <article class="story-card">
-                        <button
-                            type="button"
-                            class="entry-edit"
-                            data-story-edit
-                            onclick={() => onEdit?.(entry.id)}
-                            aria-label={`“${entry.title}” 편집`}
-                            title="편집기에서 열기"
-                        >
-                            <span class="entry-heading">
-                                <strong>{entry.title}</strong>
-                                <PencilIcon size={15} />
-                            </span>
+                        <div class="entry-body">
+                            <div class="entry-heading">
+                                <strong id={`story-title-${index}`}>{entry.title}</strong>
+                                <button
+                                    type="button"
+                                    class="entry-edit"
+                                    data-story-edit
+                                    onclick={() => onEdit?.(entry.id)}
+                                    aria-label="이 사건 편집"
+                                    aria-describedby={`story-title-${index}`}
+                                    title="이 사건 편집"
+                                >
+                                    <PencilIcon size={15} />
+                                </button>
+                            </div>
                             {#each entry.summary as item}
-                                <span class="story-line">{item}</span>
+                                <p class="story-line">{item}</p>
                             {/each}
-                        </button>
+                        </div>
                         <button
                             type="button"
                             class="source-button"
@@ -98,25 +100,26 @@
             color-mix(in srgb, var(--risu-theme-bgcolor) 82%, var(--risu-theme-darkbg));
     }
     header { max-width: 46rem; margin: 0 auto 1.8rem; padding-left: 2.6rem; }
-    header > span { color: var(--risu-theme-primary); font: 700 .68rem/1.2 ui-monospace, monospace; letter-spacing: .19em; }
     h2 { margin: .35rem 0 .3rem; font-family: Georgia, 'Noto Serif KR', serif; font-size: clamp(1.55rem, 3vw, 2.2rem); font-weight: 600; letter-spacing: -.035em; }
     header p { margin: 0; color: var(--risu-theme-textcolor2); font-size: .84rem; }
     ol { max-width: 46rem; margin: 0 auto; padding: 0; list-style: none; }
     li { position: relative; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: .6rem; padding-bottom: 1rem; }
-    .chapter-mark { padding-top: .9rem; color: color-mix(in srgb, var(--risu-theme-primary) 75%, var(--risu-theme-textcolor)); font: 700 .67rem/1 ui-monospace, monospace; letter-spacing: .08em; }
+    .chapter-mark { padding-top: .9rem; color: color-mix(in srgb, var(--risu-theme-primary) 75%, var(--risu-theme-textcolor)); font: 700 .75rem/1 ui-monospace, monospace; letter-spacing: .08em; }
     .story-card { overflow: hidden; border: 1px solid color-mix(in srgb, var(--risu-theme-borderc) 24%, transparent); border-radius: .28rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 80%, transparent); box-shadow: 0 .25rem 1.2rem color-mix(in srgb, var(--color-shadow) 8%, transparent); transition: border-color .16s ease, transform .16s ease, background .16s ease; }
-    .story-card:hover, .story-card:focus-within { border-color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 7%, var(--risu-theme-darkbg)); transform: translateX(.2rem); }
+    .story-card:focus-within { border-color: var(--risu-theme-primary); }
     button { color: var(--risu-theme-textcolor); cursor: pointer; }
     button:focus-visible { outline: 2px solid var(--risu-theme-primary); outline-offset: -2px; }
-    .entry-edit { width: 100%; padding: .85rem 1rem 1rem; border: 0; background: transparent; text-align: left; }
-    .source-button { display: flex; align-items: center; justify-content: flex-end; gap: .35rem; width: 100%; padding: .45rem 1rem; border: 0; border-top: 1px solid color-mix(in srgb, var(--risu-theme-borderc) 18%, transparent); color: var(--risu-theme-textcolor2); background: color-mix(in srgb, var(--risu-theme-darkbg) 45%, transparent); font-size: .72rem; }
+    .entry-body { padding: .85rem 1rem 1rem; }
+    .entry-edit { display: grid; flex: 0 0 auto; width: 2rem; height: 2rem; place-items: center; padding: 0; border: 1px solid transparent; border-radius: .3rem; color: var(--risu-theme-textcolor2); background: transparent; }
+    .entry-edit:hover { border-color: var(--risu-theme-primary); color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); }
+    .source-button { display: flex; align-items: center; justify-content: flex-end; gap: .35rem; width: 100%; padding: .45rem 1rem; border: 0; border-top: 1px solid color-mix(in srgb, var(--risu-theme-borderc) 18%, transparent); color: var(--risu-theme-textcolor2); background: color-mix(in srgb, var(--risu-theme-darkbg) 45%, transparent); font-size: .75rem; }
     .source-button:hover { color: var(--risu-theme-primary); }
     .entry-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .45rem; color: var(--risu-theme-textcolor2); }
     .entry-heading strong { color: var(--risu-theme-textcolor); font-family: Georgia, 'Noto Serif KR', serif; font-size: .95rem; }
-    .story-line { display: block; font-family: Georgia, 'Noto Serif KR', serif; font-size: .9rem; line-height: 1.72; }
+    .story-line { display: block; margin: 0; font-family: Georgia, 'Noto Serif KR', serif; font-size: .9rem; line-height: 1.72; }
     .story-line + .story-line { margin-top: .3rem; }
     .story-more { display: flex; align-items: baseline; justify-content: center; gap: .5rem; width: 100%; max-width: 43.4rem; margin: 1rem auto 2rem; padding: .7rem 1rem; border: 1px dashed var(--story-rule); border-radius: .4rem; color: var(--risu-theme-textcolor); background: transparent; font-size: .8rem; font-weight: 700; cursor: pointer; }
-    .story-more span { color: var(--risu-theme-textcolor2); font-size: .72rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .story-more span { color: var(--risu-theme-textcolor2); font-size: .75rem; font-weight: 500; font-variant-numeric: tabular-nums; }
     .story-more:hover { background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); }
     .story-more:focus-visible { outline: 2px solid color-mix(in srgb, var(--risu-theme-primary) 70%, transparent); outline-offset: 2px; }
     .story-empty { max-width: 43.4rem; margin: 2rem auto; padding: 2rem; border: 1px dashed var(--story-rule); color: var(--risu-theme-textcolor2); text-align: center; }

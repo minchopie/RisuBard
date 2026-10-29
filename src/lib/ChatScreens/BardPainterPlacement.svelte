@@ -9,6 +9,8 @@
 
     let { characterId, chatId }: { characterId: string; chatId: string } = $props()
     let marker = $state<PainterParagraphStop | undefined>()
+    /** An image in the message under the pointer; clicking it swaps it for the new illustration. */
+    let swap = $state<{ top: number; left: number; width: number; height: number } | undefined>()
     let saving = $state(false), error = $state('')
     function portal(node: HTMLElement) {
         document.body.appendChild(node)
@@ -69,9 +71,42 @@
                 if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
             }
             const rootOf = (event: Event) => event.target instanceof Element ? event.target.closest<HTMLElement>('[data-painter-message]') : null
+            const imageOf = (event: Event) => {
+                if (!request.replace || !(event.target instanceof Element) || event.target.closest('button')) return null
+                return event.target.closest('.inlay-image-control')?.querySelector<HTMLImageElement>('img[data-inlay-image-id]')
+                    ?? event.target.closest<HTMLImageElement>('img[data-inlay-image-id]')
+            }
+            const replaceImage = async (root: HTMLElement, image: HTMLImageElement) => {
+                if (saving || disposed || !request.replace) return
+                const { chat } = current()
+                const message = chat?.message?.[Number(root.dataset.painterMessage)]
+                const id = image.dataset.inlayImageId!, occurrence = Number(image.dataset.inlayOccurrence)
+                // Display scripts can hide or repeat images; replace only when the rendered images match the source.
+                const sourceCount = [...(message?.data ?? '').matchAll(/{{(?:inlay|inlayed|inlayeddata)::(.+?)}}/g)].filter(match => match[1] === id).length
+                const rendered = [...root.querySelectorAll<HTMLElement>('img[data-inlay-image-id]')].filter(element => element.dataset.inlayImageId === id)
+                if (!message?.chatId || !Number.isInteger(occurrence) || sourceCount !== rendered.length) {
+                    error = '이 그림의 원문 위치를 확인하지 못했습니다. 다른 그림을 고르거나 문단 사이에 삽입해 주세요.'
+                    return
+                }
+                saving = true; error = ''
+                try {
+                    const success = await request.replace({ messageId: message.chatId, inlayId: id, occurrence })
+                    if (disposed) return
+                    if (success) cancel()
+                    else error = request.error?.() || '그림을 바꾸지 못했습니다.'
+                } catch (cause) { if (!disposed) error = cause instanceof Error ? cause.message : String(cause) }
+                finally { if (!disposed) saving = false }
+            }
             const move = (event: PointerEvent) => {
                 if (saving) return
                 const root = rootOf(event)
+                const image = root ? imageOf(event) : null
+                if (image) {
+                    const box = image.getBoundingClientRect()
+                    swap = { top: box.top, left: box.left, width: box.width, height: box.height }
+                    marker = undefined; candidate = undefined; return
+                }
+                swap = undefined
                 if (!root) { marker = undefined; candidate = undefined; return }
                 candidate = position(root, event.clientY)
                 marker = candidate?.stop.offset != null ? candidate.stop : undefined
@@ -105,6 +140,8 @@
                 event.preventDefault(); event.stopImmediatePropagation()
                 const started = press; press = undefined
                 if (event.detail === 0 || started?.root !== root || Math.hypot(started.x - event.clientX, started.y - event.clientY) > 8) return
+                const image = imageOf(event)
+                if (image) { void replaceImage(root, image); return }
                 const point = position(root, event.clientY, true)
                 if (point) { candidate = point; marker = point.stop.offset !== null ? point.stop : undefined; void insert(point) }
                 else error = '메시지를 표시한 뒤 다시 위치를 선택해 주세요.'
@@ -125,6 +162,7 @@
             }
             const invalidate = () => {
                 cache = new WeakMap()
+                swap = undefined
                 const previous = candidate
                 candidate = undefined; marker = undefined
                 // scrollIntoView, image loads and dock resizing change client geometry,
@@ -152,17 +190,24 @@
                 if (disposed) return
                 const { chat } = current()
                 const roots = [...document.querySelectorAll<HTMLElement>('[data-painter-message]')]
-                focused = roots.find(root => chat?.message?.[Number(root.dataset.painterMessage)]?.chatId === request.messageId) ?? roots.at(-1)
+                const target = roots.find(root => chat?.message?.[Number(root.dataset.painterMessage)]?.chatId === request.messageId)
+                // Start where the reader is looking; jumping to the scene's message loses their place.
+                const middle = window.innerHeight / 2
+                const onScreen = (root: HTMLElement) => { const box = root.getBoundingClientRect(); return box.bottom > 0 && box.top < window.innerHeight }
+                const distance = (root: HTMLElement) => { const box = root.getBoundingClientRect(); return box.top > middle ? box.top - middle : box.bottom < middle ? middle - box.bottom : 0 }
+                const visible = roots.filter(onScreen).sort((a, b) => distance(a) - distance(b))
+                focused = target && visible.includes(target) ? target : visible[0] ?? target ?? roots.at(-1)
                 if (!focused) { error = '삽입할 메시지가 보이도록 본문을 열어 주세요.'; return }
                 originalTabIndex = focused.getAttribute('tabindex')
                 focused.setAttribute('tabindex', '-1')
                 focused.focus({ preventScroll: true })
-                focused.scrollIntoView?.({ block: 'nearest' })
-                candidate = position(focused)
-                marker = candidate?.stop
+                if (!visible.length) focused.scrollIntoView?.({ block: 'nearest' })
+                candidate = focused === target ? position(focused) : undefined
+                if (!candidate || candidate.stop.top < 0 || candidate.stop.top > window.innerHeight) candidate = position(focused, middle) ?? candidate
+                marker = candidate?.stop.offset != null ? candidate.stop : undefined
             })
             return () => {
-                disposed = true; marker = undefined
+                disposed = true; marker = undefined; swap = undefined
                 document.body.classList.remove('painter-placing')
                 if (focused) { if (originalTabIndex === null) focused.removeAttribute('tabindex'); else focused.setAttribute('tabindex', originalTabIndex) }
                 document.removeEventListener('pointermove', move)
@@ -181,9 +226,10 @@
 
 {#if $painterInsertionRequest?.characterId === characterId && $painterInsertionRequest?.chatId === chatId}
     <div class="placement-notice" role="status" data-painter-placement use:portal>
-        <div><strong>{saving ? '선택한 위치에 삽입하고 저장하는 중입니다.' : '본문에서 삽화를 넣을 위치를 클릭하세요.'}</strong><small>{saving ? '저장이 끝나면 본문에 반영됩니다.' : '파란 선의 위치에 왼클릭으로 삽입 / Esc 또는 우클릭으로 취소'}</small>{#if error}<p role="alert">{error}</p>{/if}</div>
+        <div><strong>{saving ? '선택한 위치에 삽입하고 저장하는 중입니다.' : '본문에서 삽화를 넣을 위치를 클릭하세요.'}</strong><small>{saving ? '저장이 끝나면 본문에 반영됩니다.' : $painterInsertionRequest?.replace ? '파란 선 위치에 클릭하면 삽입, 본문의 그림을 클릭하면 그 그림을 교체 / Esc 또는 우클릭으로 취소' : '파란 선의 위치에 왼클릭으로 삽입 / Esc 또는 우클릭으로 취소'}</small>{#if error}<p role="alert">{error}</p>{/if}</div>
         <button type="button" disabled={saving} onclick={() => painterInsertionRequest.set(null)}>취소</button>
     </div>
+    {#if swap}<div class="placement-swap" style:top="{swap.top}px" style:left="{swap.left}px" style:width="{swap.width}px" style:height="{swap.height}px" aria-hidden="true" use:portal><span>이 그림 교체</span></div>{/if}
     {#if marker}<div class="placement-marker" style:top="{marker.top}px" style:left="{marker.left}px" style:width="{marker.width}px" aria-hidden="true" use:portal><span>삽입 위치</span></div>{/if}
 {/if}
 
@@ -195,5 +241,7 @@
     button { flex: none; padding: .45rem .7rem; border: 1px solid var(--color-darkborderc); border-radius: .4rem; background: var(--color-darkbutton); }
     p { color: var(--color-draculared); margin-top: .4rem; }
     .placement-marker { position: fixed; z-index: 44; height: 3px; background: var(--color-primary); pointer-events: none; }
+    .placement-swap { position: fixed; z-index: 44; border: 3px solid var(--color-primary); border-radius: 4px; background: color-mix(in srgb, var(--color-primary) 18%, transparent); pointer-events: none; }
+    .placement-swap span { position: absolute; top: 6px; right: 6px; padding: 2px 8px; background: var(--color-primary); color: var(--color-accenttext); border-radius: 3px; font-size: 12px; font-weight: 600; }
     .placement-marker span { position: absolute; right: 0; bottom: 3px; padding: 2px 6px; background: var(--color-primary); color: var(--color-accenttext); border-radius: 3px; font-size: 11px; }
 </style>

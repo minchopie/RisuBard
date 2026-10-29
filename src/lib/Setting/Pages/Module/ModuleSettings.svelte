@@ -3,7 +3,8 @@
     import { language } from "src/lang";
     import SettingPage from "src/lib/UI/GUI/SettingPage.svelte";
     
-    import { DBState } from 'src/ts/stores.svelte';
+    import { DBState, openModuleEditId } from 'src/ts/stores.svelte';
+    import { removeModules } from "src/ts/process/moduleRemoval";
     import ModuleMenu from "src/lib/Setting/Pages/Module/ModuleMenu.svelte";
     import { exportModule, importModule, refreshModules, type RisuModule } from "src/ts/process/modules";
     import { SquarePen, TrashIcon, Globe, PlusIcon, HardDriveUpload, Waypoints, UsersRoundIcon, ArrowLeftIcon } from "@lucide/svelte";
@@ -32,6 +33,17 @@
     onMount(() => registerSettingsBack(returnToModules))
 
     let mode = $state(0)
+    // Opened from the chat sidebar module list: jump straight to that module's editor.
+    $effect(() => {
+        const moduleId = $openModuleEditId
+        if (!moduleId) return
+        openModuleEditId.set(null)
+        const target = DBState.db.modules.find((module) => module.id === moduleId)
+        if (target && !target.mcp) {
+            tempModule = target
+            mode = 2
+        }
+    })
     let selectedModuleFolder = $state<string | null | undefined>(undefined)
     let personaAssignmentOpen = $state(false)
     let personaAssignmentModuleId = $state('')
@@ -124,23 +136,6 @@
         for(const module of DBState.db.modules){
             if(!previousIds.has(module.id)) assignModuleToFolder(module.id, selectedModuleFolder)
         }
-    }
-
-    function removeModules(moduleIds:readonly string[]){
-        const moduleIdsToDelete = new Set(moduleIds)
-        DBState.db.enabledModules = DBState.db.enabledModules.filter((moduleId) => !moduleIdsToDelete.has(moduleId))
-        DBState.db.modules = DBState.db.modules.filter((module) => !moduleIdsToDelete.has(module.id))
-        if(DBState.db.collectionOrganizers){
-            DBState.db.collectionOrganizers = {
-                ...DBState.db.collectionOrganizers,
-                modules: normalizeCollectionOrganizerState(
-                    DBState.db.collectionOrganizers.modules,
-                    DBState.db.modules.map((module) => module.id),
-                ),
-            }
-        }
-        normalizeAssignments()
-        void requestImmediateSave()
     }
 
     async function deleteModules(moduleIds:string[]){

@@ -116,7 +116,42 @@ export function shouldIncludeArcaSnapshotNode(
 ): boolean {
     if (excludedElements.includes(node as HTMLElement)) return false;
     return !(node instanceof Element
-        && node.matches('button, input, textarea, select, [role="button"]'));
+        && node.matches(CONTROL_SELECTOR));
+}
+
+const CONTROL_SELECTOR = 'button, input, textarea, select, [role="button"]';
+
+// Floating buttons stay on screen while the chat scrolls, so they are app chrome, not
+// message content. Bots also build them from labels or divs: any small fixed element
+// counts, while a large one is a panel that is rendered on its own.
+function isFloatingControl(
+    element: Element,
+    readStyle: (element: Element) => CSSStyleDeclaration,
+    readRect: (element: Element) => DOMRect,
+): boolean {
+    const position = getStyleValue(readStyle(element), 'position');
+    if (position !== 'fixed' && position !== 'sticky') return false;
+    if (element.matches(CONTROL_SELECTOR)) return true;
+    if (position !== 'fixed') return false;
+    // A zero-size fixed wrapper can still hold a panel, which must not go with it.
+    const isLarge = (target: Element) => {
+        const rect = readRect(target);
+        return rect.width >= 220 && rect.height >= 120;
+    };
+    return !isLarge(element) && !Array.from(element.querySelectorAll('*')).some(isLarge);
+}
+
+// Inside a rasterized block, controls are part of what the reader sees: a bot's room
+// grid of buttons, or a folded sprite that is itself a role="button" toggle. Only
+// floating controls such as FAB buttons stay out of the picture.
+export function shouldIncludeArcaRasterNode(
+    node: Node,
+    excludedElements: readonly HTMLElement[],
+    readStyle: (element: Element) => CSSStyleDeclaration = element => getComputedStyle(element),
+    readRect: (element: Element) => DOMRect = element => element.getBoundingClientRect(),
+): boolean {
+    if (excludedElements.includes(node as HTMLElement)) return false;
+    return !(node instanceof Element && isFloatingControl(node, readStyle, readRect));
 }
 
 export function findDetachedArcaPanels(
@@ -168,10 +203,14 @@ export function findDetachedArcaPanels(
     }
 
     const absoluteLayers = elements.filter((element) => {
+        // A positioned picture (a sprite over a background, or a framed and tilted cut-in
+        // such as a bot's weather inset) is part of its scene, never a panel.
+        if (element instanceof HTMLImageElement || getSingleImageChild(element) !== null) return false;
         if (positionOf(element) !== 'absolute' || !isLargeLayer(element)) return false;
         if (selected.some(layer => layer === element || layer.contains(element) || element.contains(layer))) return false;
         const style = readStyle(element);
-        return hasDetachedPanelSurface(style) && hasDetachedLayerState(style);
+        const parentStyle = element.parentElement ? readStyle(element.parentElement) : null;
+        return hasDetachedPanelSurface(style) && hasDetachedLayerState(style, parentStyle);
     });
     selected.push(...absoluteLayers);
     return selected.filter((candidate, index) =>
@@ -193,13 +232,11 @@ function rectArea(rect: DOMRect): number {
 }
 
 function hasDetachedPanelSurface(style: CSSStyleDeclaration): boolean {
-    const background = [
-        getStyleValue(style, 'background'),
-        getStyleValue(style, 'background-color'),
-        getStyleValue(style, 'background-image'),
-    ].join(' ');
-    const hasBackground = Boolean(background.trim())
-        && !/^(?:\s*|none|transparent|rgba\(0,\s*0,\s*0,\s*0\))+$/i.test(background.trim());
+    // The computed `background` shorthand always lists default layers such as
+    // `none repeat scroll 0% 0%`, so only its color and images count as a surface.
+    const backgroundColor = getStyleValue(style, 'background-color');
+    const hasBackground = (backgroundColor !== '' && !/^(?:transparent|rgba\([^)]*,\s*0\))$/i.test(backgroundColor))
+        || /(?:url|gradient)\s*\(/i.test(`${getStyleValue(style, 'background-image')} ${getStyleValue(style, 'background')}`);
     const boxShadow = getStyleValue(style, 'box-shadow');
     const overflow = [
         getStyleValue(style, 'overflow'),
@@ -211,13 +248,17 @@ function hasDetachedPanelSurface(style: CSSStyleDeclaration): boolean {
         || overflow.some(value => value === 'auto' || value === 'scroll' || value === 'hidden');
 }
 
-function hasDetachedLayerState(style: CSSStyleDeclaration): boolean {
+function hasDetachedLayerState(style: CSSStyleDeclaration, parentStyle: CSSStyleDeclaration | null): boolean {
     const zIndex = Number.parseInt(getStyleValue(style, 'z-index'), 10);
     const opacity = Number.parseFloat(getStyleValue(style, 'opacity'));
     const transform = getStyleValue(style, 'transform');
+    // pointer-events is inherited: a background layer inside a non-interactive picture
+    // is not a hidden panel unless it disables pointer events on its own.
+    const ownPointerEventsNone = getStyleValue(style, 'pointer-events') === 'none'
+        && (!parentStyle || getStyleValue(parentStyle, 'pointer-events') !== 'none');
     return (Number.isFinite(zIndex) && zIndex >= 10)
         || (Number.isFinite(opacity) && opacity < 1)
-        || getStyleValue(style, 'pointer-events') === 'none'
+        || ownPointerEventsNone
         || (transform !== '' && transform !== 'none');
 }
 
@@ -407,7 +448,24 @@ function createPseudoElementClone(
     return clone;
 }
 
-function getSingleImageChild(element: HTMLElement): HTMLElement | null {
+// Image plugins such as Asset Maid wrap a picture with hidden history images and
+// controls that only appear on hover; none of them is part of what the reader sees.
+function isHiddenOrControl(
+    element: HTMLElement,
+    readStyle?: (element: Element, pseudoElement?: string | null) => CSSStyleDeclaration,
+): boolean {
+    if (!readStyle) return false;
+    if (shouldDropElement(element) || !shouldIncludeArcaSnapshotNode(element, [])) return true;
+    const style = readStyle(element);
+    return getStyleValue(style, 'display') === 'none'
+        || getStyleValue(style, 'visibility') === 'hidden'
+        || getStyleValue(style, 'opacity') === '0';
+}
+
+function getSingleImageChild(
+    element: HTMLElement,
+    readStyle?: (element: Element, pseudoElement?: string | null) => CSSStyleDeclaration,
+): HTMLElement | null {
     if (!['DIV', 'FIGURE', 'P', 'SPAN', 'TABLE', 'TBODY', 'TR', 'TD'].includes(element.tagName)) {
         return null;
     }
@@ -415,13 +473,23 @@ function getSingleImageChild(element: HTMLElement): HTMLElement | null {
         if (node.nodeType === Node.TEXT_NODE) {
             return Boolean(node.textContent?.trim());
         }
-        return node.nodeType !== Node.COMMENT_NODE && !(node instanceof HTMLBRElement);
+        return node.nodeType !== Node.COMMENT_NODE
+            && !(node instanceof HTMLBRElement)
+            && !(node instanceof HTMLElement && isHiddenOrControl(node, readStyle));
     });
     return meaningfulChildren.length === 1
         && meaningfulChildren[0] instanceof HTMLElement
-        && (meaningfulChildren[0].tagName === 'IMG' || getSingleImageChild(meaningfulChildren[0]) !== null)
+        && (meaningfulChildren[0].tagName === 'IMG' || getSingleImageChild(meaningfulChildren[0], readStyle) !== null)
         ? meaningfulChildren[0]
         : null;
+}
+
+// A lone picture keeps its original file. Rasterizing it would only re-encode the
+// image and risk dropping it, as happened to Asset Maid illustrations.
+function isStandalonePicture(element: HTMLElement, options: ResolvedArcaExportOptions): boolean {
+    if (extractBackgroundUrl(readBackgroundImage(element, options))) return false;
+    const single = getSingleImageChild(element, options.readStyle);
+    return single !== null && (single.tagName === 'IMG' || isStandalonePicture(single, options));
 }
 
 async function createImageClone(
@@ -501,6 +569,7 @@ function isComplexVisualBlock(
 
     const nodes = [element, ...Array.from(element.querySelectorAll<HTMLElement>('*'))];
     let hasStructuredLayout = false;
+    let hasMultiColumnLayout = false;
     let hasVisualBackground = false;
 
     for (const node of nodes) {
@@ -513,22 +582,71 @@ function isComplexVisualBlock(
         if (display === 'grid' || display === 'inline-grid' || display === 'flex' || display === 'inline-flex') {
             hasStructuredLayout = true;
         }
+        if (isMultiColumnLayout(node, style, readStyle)) {
+            hasMultiColumnLayout = true;
+        }
         const backgroundImage = getStyleValue(style, 'background-image');
         if (backgroundImage && backgroundImage !== 'none') {
             hasVisualBackground = true;
         }
     }
 
+    // A closed <details> cannot be rasterized with its hidden body, so it stays as HTML.
+    const closedDetails = 'details:not([open])';
+    if (hasMultiColumnLayout && !element.matches(closedDetails) && !element.querySelector(closedDetails)) {
+        return true;
+    }
     return hasVisualBackground && (hasStructuredLayout || nodes.length >= 4);
 }
 
-function createComplexSnapshotFrame(dataUrl: string, outputDocument: Document): HTMLParagraphElement {
+// Block-level flex rows and grids collapse into misaligned tables after Arca strips
+// their layout, so status boards built on them are snapshotted even without a background image.
+function isMultiColumnLayout(
+    element: HTMLElement,
+    style: CSSStyleDeclaration,
+    readStyle: (element: Element, pseudoElement?: string | null) => CSSStyleDeclaration,
+): boolean {
+    const display = getStyleValue(style, 'display');
+    if (display === 'flex') {
+        const direction = getStyleValue(style, 'flex-direction');
+        if (direction === 'column' || direction === 'column-reverse') return false;
+    }
+    else if (display !== 'grid') {
+        return false;
+    }
+    const visibleChildren = Array.from(element.children)
+        .filter(child => getStyleValue(readStyle(child), 'display') !== 'none');
+    return visibleChildren.length >= 2;
+}
+
+const PROSE_CHILD_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'UL', 'OL']);
+
+// A plain block that wraps the message prose is exported as HTML and searched
+// for complex blocks inside it, so one layout widget does not turn the whole body into an image.
+function isProseWrapper(
+    element: HTMLElement,
+    readStyle: (element: Element, pseudoElement?: string | null) => CSSStyleDeclaration,
+): boolean {
+    const style = readStyle(element);
+    const display = getStyleValue(style, 'display');
+    if (display === 'flex' || display === 'grid' || display === 'inline-flex' || display === 'inline-grid') return false;
+    if (isOutOfFlowPosition(getStyleValue(style, 'position'))) return false;
+    if (extractBackgroundUrl(getStyleValue(style, 'background-image'))) return false;
+    return Array.from(element.children).some(child => PROSE_CHILD_TAGS.has(child.tagName)
+        || (child instanceof HTMLElement && child.tagName === 'DIV' && isProseWrapper(child, readStyle)));
+}
+
+function createComplexSnapshotFrame(
+    dataUrl: string,
+    outputDocument: Document,
+    widthPercent = 100,
+): HTMLParagraphElement {
     const image = outputDocument.createElement('img');
     image.src = dataUrl;
     image.alt = '';
     image.setAttribute('data-arca-complex-snapshot', '');
     appendRawStyle(image, 'display', 'block');
-    appendRawStyle(image, 'width', '100%');
+    appendRawStyle(image, 'width', `${widthPercent}%`);
     appendRawStyle(image, 'max-width', '100%');
     appendRawStyle(image, 'height', 'auto');
     appendRawStyle(image, 'margin-left', 'auto');
@@ -615,7 +733,9 @@ ${badgeHtml}
 </div>`;
     }
 
-    return `<div style="margin: 1rem 0; color: ${colors.text}; background-color: ${colors.background}; border: 1px solid ${colors.border}; border-radius: 12px; font-family: 'Segoe UI', Roboto, Arial, sans-serif; font-size: ${fontSizePx}px; line-height: 1.6;">
+    // Empty paragraphs on both sides leave a typing line above and below the pasted card in the editor.
+    return `<p><br></p>
+<div style="margin: 1rem 0; color: ${colors.text}; background-color: ${colors.background}; border: 1px solid ${colors.border}; border-radius: 12px; font-family: 'Segoe UI', Roboto, Arial, sans-serif; font-size: ${fontSizePx}px; line-height: 1.6;">
 <div style="padding: 20px;">
 ${titleBlock}
 <div style="padding-top: 1rem; border-top: 1px solid ${colors.border};">${options.bodyHtml}</div>
@@ -627,11 +747,24 @@ ${titleBlock}
 <p><br></p>`;
 }
 
+type ResolvedArcaExportOptions = Required<Pick<ArcaExportOptions, 'baseUrl' | 'loadImage' | 'readStyle'>>
+    & ArcaExportOptions
+    & { sourceBaseFontSize: string; exportRoot: HTMLElement };
+
+// Keeps a narrow block at its share of the message width instead of stretching it to full width.
+function snapshotWidthPercent(element: HTMLElement, root: HTMLElement): number {
+    const width = element.getBoundingClientRect().width;
+    const rootWidth = root.getBoundingClientRect().width;
+    if (!width || !rootWidth) return 100;
+    return Math.min(100, Math.round(width / rootWidth * 1000) / 10);
+}
+
 async function cloneNodeForArca(
     source: Node,
     outputDocument: Document,
-    options: Required<Pick<ArcaExportOptions, 'baseUrl' | 'loadImage'>> & ArcaExportOptions & { sourceBaseFontSize: string },
+    options: ResolvedArcaExportOptions,
     forcedDisplay?: 'table-cell',
+    appendChildren?: (clone: HTMLElement) => Promise<void>,
 ): Promise<Node | null> {
     if (source.nodeType === Node.TEXT_NODE) {
         return outputDocument.createTextNode(source.textContent ?? '');
@@ -647,8 +780,11 @@ async function cloneNodeForArca(
     if (getStyleValue(computedStyle, 'display') === 'none') {
         return null;
     }
+    if (options.readStyle && isFloatingControl(source, options.readStyle, element => element.getBoundingClientRect())) {
+        return null;
+    }
 
-    const singleImage = getSingleImageChild(source);
+    const singleImage = getSingleImageChild(source, options.readStyle);
     if (singleImage) {
         const frame = await cloneNodeForArca(singleImage, outputDocument, options);
         const image = frame instanceof HTMLElement ? frame.querySelector('img') : null;
@@ -692,7 +828,10 @@ async function cloneNodeForArca(
     if (before) {
         clone.appendChild(before);
     }
-    for (const child of Array.from(source.childNodes)) {
+    if (appendChildren) {
+        await appendChildren(clone);
+    }
+    else for (const child of Array.from(source.childNodes)) {
         const childDisplay = tableRow && child.nodeType === Node.ELEMENT_NODE ? 'table-cell' : undefined;
         const clonedChild = await cloneNodeForArca(child, outputDocument, options, childDisplay);
         if (clonedChild) {
@@ -716,6 +855,46 @@ async function cloneNodeForArca(
     return clone;
 }
 
+async function exportChildNodes(
+    parent: HTMLElement,
+    target: HTMLElement,
+    options: ResolvedArcaExportOptions,
+): Promise<void> {
+    const outputDocument = target.ownerDocument;
+    for (const child of Array.from(parent.childNodes)) {
+        // Controls such as a bot's fixed FAB buttons are dropped, not snapshotted: rendered on
+        // their own they leave transparent images that Arca shows as blank space.
+        if (child instanceof HTMLElement
+            && options.renderComplexBlock
+            && shouldIncludeArcaSnapshotNode(child, [])
+            && !shouldDropElement(child)
+            && !isStandalonePicture(child, options)
+            && isComplexVisualBlock(child, options.readStyle)) {
+            if (isProseWrapper(child, options.readStyle)) {
+                const wrapper = await cloneNodeForArca(child, outputDocument, options, undefined,
+                    clone => exportChildNodes(child, clone, options));
+                if (wrapper) {
+                    target.appendChild(wrapper);
+                }
+                continue;
+            }
+            const rendered = await options.renderComplexBlock(child);
+            const dataUrls = typeof rendered === 'string' ? [rendered] : rendered;
+            if (dataUrls?.length) {
+                dataUrls.forEach((dataUrl, index) => {
+                    const widthPercent = index === 0 ? snapshotWidthPercent(child, options.exportRoot) : 100;
+                    target.appendChild(createComplexSnapshotFrame(dataUrl, outputDocument, widthPercent));
+                });
+                continue;
+            }
+        }
+        const clonedChild = await cloneNodeForArca(child, outputDocument, options);
+        if (clonedChild) {
+            target.appendChild(clonedChild);
+        }
+    }
+}
+
 export async function exportArcaHtml(root: HTMLElement, options: ArcaExportOptions = {}): Promise<string> {
     const outputDocument = root.ownerDocument;
     const container = outputDocument.createElement('div');
@@ -726,31 +905,10 @@ export async function exportArcaHtml(root: HTMLElement, options: ArcaExportOptio
         loadImage: options.loadImage ?? loadImageAsDataUrl,
         readStyle,
         sourceBaseFontSize: getStyleValue(readStyle(root), 'font-size'),
+        exportRoot: root,
     };
 
-    for (const child of Array.from(root.childNodes)) {
-        if (child instanceof HTMLElement
-            && resolvedOptions.renderComplexBlock
-            && isComplexVisualBlock(child, readStyle)) {
-            try {
-                const rendered = await resolvedOptions.renderComplexBlock(child);
-                const dataUrls = typeof rendered === 'string' ? [rendered] : rendered;
-                if (dataUrls?.length) {
-                    for (const dataUrl of dataUrls) {
-                        container.appendChild(createComplexSnapshotFrame(dataUrl, outputDocument));
-                    }
-                    continue;
-                }
-            }
-            catch (cause) {
-                throw cause;
-            }
-        }
-        const clonedChild = await cloneNodeForArca(child, outputDocument, resolvedOptions);
-        if (clonedChild) {
-            container.appendChild(clonedChild);
-        }
-    }
+    await exportChildNodes(root, container, resolvedOptions);
     applyTopLevelSpacing(container, options.paragraphSpacingPercent);
     return container.innerHTML.trim();
 }

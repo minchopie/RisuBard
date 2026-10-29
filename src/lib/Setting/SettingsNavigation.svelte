@@ -20,6 +20,7 @@
         TruckIcon,
         UserRoundIcon,
         Volume2Icon,
+        WandSparklesIcon,
     } from '@lucide/svelte'
     import { language } from 'src/lang'
     import PluginDefinedIcon from '../Others/PluginDefinedIcon.svelte'
@@ -60,6 +61,7 @@
         'risubard-common': SettingsIcon,
         'risubard-wiki-prompt': ScrollTextIcon,
         'risubard-grimoire-prompt': ScrollTextIcon,
+        'risubard-input-assistant': WandSparklesIcon,
         prompt: SparklesIcon,
         'global-lorebook': ScrollTextIcon,
         'global-regex': BracesIcon,
@@ -88,6 +90,7 @@
             'risubard-common': language.risuBardSettings.common.title,
             'risubard-wiki-prompt': language.risuBardWikiPrompt.title,
             'risubard-grimoire-prompt': language.risuBardGrimoirePrompt.title,
+            'risubard-input-assistant': language.risuBardInputAssistant.title,
             prompt: language.promptTemplate,
             'global-lorebook': language.loreBook,
             'global-regex': language.regexScript,

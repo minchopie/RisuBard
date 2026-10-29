@@ -68,7 +68,7 @@ When the build finishes, you'll see:
 
 ```
 Build OK. Start the server with:
-  node server/node/server.cjs
+  node --max-old-space-size=2048 server/node/server.cjs
 
 Then open this address in the phone's own browser:
   http://localhost:7777
@@ -82,8 +82,10 @@ Then open this address in the phone's own browser:
 From the same directory, start the server:
 
 ```bash
-node server/node/server.cjs
+node --max-old-space-size=2048 server/node/server.cjs
 ```
+
+`--max-old-space-size=2048` raises Node's memory limit from the default of about 1 GB to 2 GB. Without it, large saves can stop the server with a `JavaScript heap out of memory` error. Phones with 8 GB of RAM or more can use up to `4096`, but a value above the phone's real RAM makes Android kill Termux instead.
 
 Once the server boot log appears, open the phone's browser (Chrome, Firefox, etc.) and navigate to:
 

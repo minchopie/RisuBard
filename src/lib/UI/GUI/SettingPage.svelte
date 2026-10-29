@@ -13,6 +13,7 @@
         resizeStorageKey,
         children,
         leading,
+        titleSuffix,
         headerActions,
     }: {
         title: string;
@@ -25,6 +26,7 @@
         resizeStorageKey?: string;
         children?: Snippet;
         leading?: Snippet;
+        titleSuffix?: Snippet;
         headerActions?: Snippet;
     } = $props();
     let pageElement: HTMLElement | null = $state(null);
@@ -42,7 +44,7 @@
     {#if showTitle}
         <header data-settings-page-header class="settings-standard-page__header">
             <div class="settings-standard-page__title-row">
-                <div class="settings-standard-page__title">{@render leading?.()}<h1>{title}</h1></div>
+                <div class="settings-standard-page__title">{@render leading?.()}<h1>{title}</h1>{@render titleSuffix?.()}</div>
                 {@render headerActions?.()}
             </div>
             {#if description}

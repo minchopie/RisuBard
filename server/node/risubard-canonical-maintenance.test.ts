@@ -364,6 +364,49 @@ describe('canonical maintenance', () => {
         expect(supported.restored).toBe(0)
         expect(supported.markdown).not.toContain('마을 규칙 11을')
     })
+
+    test('sends a section over the part size in parts and saves them back together', () => {
+        const units = Array.from({ length: 130 }, (_, index) => `규칙 ${index + 1}을 들었다.`)
+        const long = ['## 미오', '', '### 현재 상태', '', '- 대합실.', '', '### 지식과 비밀', '', ...units.map((unit) => `- ${unit}`)].join('\n')
+        const request = buildMaintenanceRequest({ markdown: long, title: '미오', roles: ['knowledge'], coverDocuments: [], policy: '' })
+        expect([...request.sections.keys()]).toEqual(['knowledge:1', 'knowledge:2'])
+        expect(request.system).toContain('numbered parts')
+        expect(JSON.parse(request.schema).properties.sections.items.properties.role.enum).toEqual(['knowledge:1', 'knowledge:2'])
+
+        const result = applyMaintenanceResponse({
+            markdown: long, title: '미오', sections: request.sections, coverContents: new Map(),
+            text: JSON.stringify({
+                sections: [{ role: 'knowledge:1', units: ['규칙 1~128을 들었다.'] }],
+                dispositions: units.slice(0, 128).map((_, old) => disposition('knowledge:1', old, 'merged', { newIndex: 0 })),
+            }),
+        })
+        expect(result.markdown).toContain('### 지식과 비밀\n\n- 규칙 1~128을 들었다.\n- 규칙 129을 들었다.\n- 규칙 130을 들었다.')
+        expect(result.counts).toEqual([{ role: 'knowledge', heading: '지식과 비밀', before: 130, after: 3 }])
+    })
+
+    test('maintains every section but the current-state snapshot of other documents', async () => {
+        const place = ['## 북문', '', '### 현재 상태', '', '- 닫혀 있다.', '', '### 구조', '',
+            '- 북문은 두 겹의 철문이다.', '- 북문 바깥 문은 철로 되어 있다.', '- 북문 안쪽 문도 철로 되어 있다.', '',
+            '### 규칙', '', '- 새벽에 열린다.'].join('\n')
+        const prompts: Array<{ system: string; input: string; schema: string }> = []
+        const result = await maintainCharacterCanon({
+            markdown: place, title: '북문', documentType: 'location', coverDocuments: [], policy: '',
+            countTokens: chars, perSourceTokens: 50,
+            request: async (prompt) => {
+                prompts.push(prompt)
+                return JSON.stringify({
+                    sections: [{ role: 's1', units: ['북문은 두 겹의 철문이다.'] }],
+                    dispositions: [0, 1, 2].map((old) => disposition('s1', old, 'merged', { newIndex: 0 })),
+                })
+            },
+        })
+        expect(JSON.parse(prompts[0].input).sections.map((section: { role: string; heading: string }) => [section.role, section.heading]))
+            .toEqual([['s1', '구조'], ['s2', '규칙']])
+        expect(prompts[0].system).toContain('place, group, creature, item, concept or open thread')
+        expect(result).toMatchObject({ attempted: true, outcome: 'applied' })
+        expect(result.markdown).toContain('### 구조\n\n- 북문은 두 겹의 철문이다.\n\n### 규칙')
+        expect(result.markdown).toContain('### 현재 상태\n\n- 닫혀 있다.')
+    })
 })
 
 describe('cover support', () => {

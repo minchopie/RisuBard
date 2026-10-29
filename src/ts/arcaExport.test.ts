@@ -6,6 +6,7 @@ import {
     exportArcaHtml,
     findDetachedArcaPanels,
     planArcaComplexSnapshots,
+    shouldIncludeArcaRasterNode,
     shouldIncludeArcaSnapshotNode,
 } from './arcaExport';
 
@@ -20,6 +21,36 @@ describe('shouldIncludeArcaSnapshotNode', () => {
         expect(shouldIncludeArcaSnapshotNode(proseText, [panel])).toBe(true);
         expect(shouldIncludeArcaSnapshotNode(button, [panel])).toBe(false);
         expect(shouldIncludeArcaSnapshotNode(panel, [panel])).toBe(false);
+    });
+});
+
+describe('shouldIncludeArcaRasterNode', () => {
+    it('keeps in-flow buttons and folded sprites in a rasterized block but drops floating controls', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<button class="chip">501</button><div class="sprite" role="button"><img src="a.png"></div><button class="fab">menu</button><aside>panel</aside>';
+        const [chip, sprite, fab, panel] = Array.from(root.children) as HTMLElement[];
+        const readStyle = (element: Element) => ({
+            getPropertyValue: (property: string) => property === 'position' && element === fab ? 'fixed' : '',
+        }) as unknown as CSSStyleDeclaration;
+
+        expect(shouldIncludeArcaRasterNode(chip, [panel], readStyle)).toBe(true);
+        expect(shouldIncludeArcaRasterNode(sprite, [panel], readStyle)).toBe(true);
+        expect(shouldIncludeArcaRasterNode(fab, [panel], readStyle)).toBe(false);
+        expect(shouldIncludeArcaRasterNode(panel, [panel], readStyle)).toBe(false);
+    });
+
+    it('drops small fixed labels but keeps a fixed wrapper that holds a panel', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<label class="fab">지도</label><div class="wrap"><section class="tablet"></section></div>';
+        const [fab, wrap] = Array.from(root.children) as HTMLElement[];
+        const tablet = wrap.firstElementChild as HTMLElement;
+        const readStyle = (element: Element) => ({
+            getPropertyValue: (property: string) => property === 'position' && element !== tablet ? 'fixed' : '',
+        }) as unknown as CSSStyleDeclaration;
+        const readRect = (element: Element) => (element === tablet ? domRect(360, 640) : domRect(element === fab ? 56 : 0, element === fab ? 56 : 0));
+
+        expect(shouldIncludeArcaRasterNode(fab, [], readStyle, readRect)).toBe(false);
+        expect(shouldIncludeArcaRasterNode(wrap, [], readStyle, readRect)).toBe(true);
     });
 });
 
@@ -83,6 +114,57 @@ describe('findDetachedArcaPanels', () => {
         expect(plan[0].element).toBe(panel);
     });
 
+    it('keeps an image background layer that only inherits pointer-events none', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<div class="pic"><span class="stage"><span class="bg"></span><img class="sprite"></span></div>';
+        const stage = root.querySelector('.stage') as HTMLElement;
+        const background = root.querySelector('.bg') as HTMLElement;
+        const sprite = root.querySelector('.sprite') as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [stage, cssStyle('position: relative; pointer-events: none;')],
+            [background, cssStyle('position: absolute; z-index: 0; pointer-events: none; background-image: linear-gradient(#123, #456); box-shadow: 4px 4px 0 #111;')],
+            // Chrome reports overflow on <img>; the loaded sprite must still not become a panel.
+            [sprite, cssStyle('position: absolute; z-index: 1; pointer-events: none; overflow: hidden; transform: translateX(-50%);')],
+        ]);
+        const rects = new Map<Element, DOMRect>([
+            [root, domRect(760, 600)],
+            [stage, domRect(600, 340)],
+            [background, domRect(600, 340)],
+            [sprite, domRect(230, 340)],
+        ]);
+
+        expect(findDetachedArcaPanels(
+            root,
+            element => styles.get(element) ?? cssStyle(''),
+            element => rects.get(element) ?? domRect(0, 0),
+        )).toEqual([]);
+    });
+
+    it('keeps a framed and tilted picture cut-in as part of its scene', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<span class="bg"><span class="cuts"><span class="cut"><img src="rain.webp"></span></span></span>';
+        const background = root.querySelector('.bg') as HTMLElement;
+        const cuts = root.querySelector('.cuts') as HTMLElement;
+        const cut = root.querySelector('.cut') as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [background, cssStyle('position: absolute; background-image: url(room.webp);')],
+            [cuts, cssStyle('position: absolute; pointer-events: none; z-index: 1;')],
+            [cut, cssStyle('position: absolute; overflow: hidden; box-shadow: 4px 4px 0 #111; background-color: rgb(28, 35, 48); transform: rotate(1.5deg); pointer-events: none;')],
+        ]);
+        const rects = new Map<Element, DOMRect>([
+            [root, domRect(760, 400)],
+            [background, domRect(600, 340)],
+            [cuts, domRect(600, 340)],
+            [cut, domRect(240, 180)],
+        ]);
+
+        expect(findDetachedArcaPanels(
+            root,
+            element => styles.get(element) ?? cssStyle(''),
+            element => rects.get(element) ?? domRect(0, 0),
+        )).toEqual([]);
+    });
+
     it('detects an unnamed absolute off-canvas layer from geometry and computed state', () => {
         const root = document.createElement('div');
         root.innerHTML = '<section class="ordinary"><i></i></section><aside class="unknown-layer">Details</aside>';
@@ -106,9 +188,57 @@ describe('findDetachedArcaPanels', () => {
             element => rects.get(element) ?? domRect(0, 0),
         )).toEqual([layer]);
     });
+
+    it('does not treat a transparent control overlay as a panel because of the computed background shorthand', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<div class="frame"><img class="art"><span class="controls"><span class="count">2/3</span></span></div>';
+        const controls = root.querySelector('.controls') as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            // Chrome always reports the shorthand with its default layers.
+            [controls, computedStyle({
+                position: 'absolute',
+                'z-index': '16',
+                opacity: '0',
+                'pointer-events': 'none',
+                background: 'rgba(0, 0, 0, 0) none repeat scroll 0% 0% / auto padding-box border-box',
+                'background-color': 'rgba(0, 0, 0, 0)',
+                'background-image': 'none',
+                'box-shadow': 'none',
+                overflow: 'visible',
+            })],
+        ]);
+        const rects = new Map<Element, DOMRect>([
+            [root, domRect(760, 600)],
+            [controls, domRect(560, 608)],
+        ]);
+
+        expect(findDetachedArcaPanels(
+            root,
+            element => styles.get(element) ?? cssStyle(''),
+            element => rects.get(element) ?? domRect(0, 0),
+        )).toEqual([]);
+    });
 });
 
 describe('exportArcaHtml', () => {
+    it('drops floating label FABs instead of copying them as text', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<p>prose</p><div class="fabs"><label class="fab" for="tab-map">지도</label><label class="fab" for="tab-set">설정</label></div>';
+        const labels = Array.from(root.querySelectorAll('label'));
+        const styles = new Map<Element, CSSStyleDeclaration>(
+            labels.map(label => [label, cssStyle('position: fixed; display: flex; width: 56px; height: 56px;')]),
+        );
+
+        const html = await exportArcaHtml(root, {
+            readStyle: element => styles.get(element) ?? cssStyle(''),
+            loadImage: async url => url,
+        });
+
+        expect(html).toContain('prose');
+        expect(html).not.toContain('지도');
+        expect(html).not.toContain('설정');
+    });
+
     it('surfaces complex snapshot failures instead of silently flattening hidden panels', async () => {
         const root = document.createElement('div');
         root.innerHTML = '<div class="unknown-wrapper"><div class="unknown-panel">Hidden panel</div></div>';
@@ -163,6 +293,157 @@ describe('exportArcaHtml', () => {
         expect(renderComplexBlock).toHaveBeenCalledOnce();
         expect(renderComplexBlock).toHaveBeenCalledWith(status);
         expect(html).not.toContain('class="status"');
+    });
+
+    it('snapshots a flex-row status board even without a background image', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<p>prose</p><div class="board"><div class="floor"><b>5F</b><b>A-501</b></div></div>';
+        const board = root.children[1] as HTMLElement;
+        const floor = board.firstElementChild as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [board, cssStyle('display: block; background-color: rgb(16, 18, 24);')],
+            [floor, cssStyle('display: flex;')],
+        ]);
+        const renderComplexBlock = vi.fn(async () => 'data:image/png;base64,board');
+
+        const html = await exportArcaHtml(root, {
+            readStyle: element => styles.get(element) ?? cssStyle(''),
+            renderComplexBlock,
+        });
+
+        expect(renderComplexBlock).toHaveBeenCalledWith(board);
+        expect(html).toContain('data:image/png;base64,board');
+        expect(html).toContain('<p');
+        expect(html).not.toContain('5F');
+    });
+
+    it('drops fixed FAB buttons instead of snapshotting them into blank images', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<p>prose</p><div class="mha-clear"></div><button class="fab">지도</button><button class="fab">설정</button>';
+        const [, , map, settings] = Array.from(root.children) as HTMLElement[];
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [map, cssStyle('position: fixed; right: 18px; bottom: 220px; width: 56px; height: 56px;')],
+            [settings, cssStyle('position: fixed; right: 18px; bottom: 288px; width: 56px; height: 56px;')],
+        ]);
+        const renderComplexBlock = vi.fn(async () => 'data:image/png;base64,blank');
+
+        const html = await exportArcaHtml(root, {
+            readStyle: element => styles.get(element) ?? cssStyle(''),
+            renderComplexBlock,
+        });
+
+        expect(renderComplexBlock).not.toHaveBeenCalled();
+        expect(html).not.toContain('<img');
+        expect(html).not.toContain('지도');
+    });
+
+    it('keeps column flex layouts and closed details as HTML', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<div class="stack"><b>one</b><b>two</b></div>'
+            + '<details><summary>open</summary><div class="row"><b>a</b><b>b</b></div></details>';
+        const stack = root.children[0] as HTMLElement;
+        const row = root.querySelector('.row') as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [stack, cssStyle('display: flex; flex-direction: column;')],
+            [row, cssStyle('display: flex;')],
+        ]);
+        const renderComplexBlock = vi.fn(async () => 'data:image/png;base64,unused');
+
+        const html = await exportArcaHtml(root, {
+            readStyle: element => styles.get(element) ?? cssStyle(''),
+            renderComplexBlock,
+        });
+
+        expect(renderComplexBlock).not.toHaveBeenCalled();
+        expect(html).toContain('one');
+        expect(html).toContain('<details');
+    });
+
+    it('descends into a prose wrapper and snapshots only the layout block inside it', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<div class="message"><p>first line</p><div class="overlay"><img src="/bg.png"><img src="/sprite.png"></div><p>last line</p></div>';
+        const wrapper = root.firstElementChild as HTMLElement;
+        const overlay = wrapper.querySelector('.overlay') as HTMLElement;
+        const sprite = overlay.lastElementChild as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [wrapper, cssStyle('display: block; border: 1px solid rgb(255, 0, 0);')],
+            [overlay, cssStyle('position: relative;')],
+            [sprite, cssStyle('position: absolute;')],
+        ]);
+        const renderComplexBlock = vi.fn(async () => 'data:image/png;base64,overlay');
+        root.getBoundingClientRect = () => domRect(750, 400);
+        overlay.getBoundingClientRect = () => domRect(300, 160);
+
+        const html = await exportArcaHtml(root, {
+            readStyle: element => styles.get(element) ?? cssStyle(''),
+            renderComplexBlock,
+        });
+        const output = document.createElement('div');
+        output.innerHTML = html;
+        const exportedWrapper = output.firstElementChild as HTMLElement;
+
+        expect(renderComplexBlock).toHaveBeenCalledOnce();
+        expect(renderComplexBlock).toHaveBeenCalledWith(overlay);
+        expect(exportedWrapper.tagName).toBe('DIV');
+        expect(exportedWrapper.style.border).toContain('1px solid');
+        expect(Array.from(exportedWrapper.children).map(child => child.textContent)).toEqual(['first line', '', 'last line']);
+        const snapshot = exportedWrapper.querySelector('img[data-arca-complex-snapshot]') as HTMLImageElement;
+        expect(snapshot.getAttribute('src')).toBe('data:image/png;base64,overlay');
+        expect(snapshot.style.width).toBe('40%');
+    });
+
+    it('exports an image plugin picture with hidden overlays as the original image instead of a snapshot', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = `
+            <p>before</p>
+            <div class="am-generated-image"><span class="am-generated-image-frame"><img class="am-generated-image__img" src="/api/asset/module-art" loading="lazy"><span class="history"><img src="/api/asset/old-art"></span><span class="edge-controls"><button>prev</button><span class="count">2/3</span></span><span class="regen-ui"><span class="spinner"></span></span></span></div>
+            <p>after</p>
+        `;
+        const picture = root.querySelector('.am-generated-image') as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [picture, cssStyle('display: flex; justify-content: center;')],
+            [root.querySelector('.am-generated-image-frame') as HTMLElement, cssStyle('display: grid; position: relative;')],
+            [root.querySelector('.history') as HTMLElement, cssStyle('display: none;')],
+            [root.querySelector('.edge-controls') as HTMLElement, cssStyle('position: absolute; inset: 0 -72px; z-index: 16; opacity: 0;')],
+            [root.querySelector('.regen-ui') as HTMLElement, cssStyle('position: absolute; display: none;')],
+        ]);
+        const renderComplexBlock = vi.fn(async () => 'data:image/webp;base64,snapshot');
+        const loadImage = vi.fn(async (url: string) => `data:image/png;base64,${url.split('/').pop()}`);
+
+        const html = await exportArcaHtml(root, {
+            baseUrl: 'https://risu.example/chat',
+            readStyle: element => styles.get(element) ?? cssStyle(''),
+            loadImage,
+            renderComplexBlock,
+        });
+        const output = document.createElement('div');
+        output.innerHTML = html;
+
+        expect(renderComplexBlock).not.toHaveBeenCalled();
+        expect(Array.from(output.children).map(element => element.tagName)).toEqual(['P', 'P', 'P']);
+        expect(Array.from(output.querySelectorAll('img')).map(image => image.getAttribute('src')))
+            .toEqual(['data:image/png;base64,module-art']);
+        expect(loadImage).toHaveBeenCalledWith('https://risu.example/api/asset/module-art');
+        expect(output.textContent).not.toContain('2/3');
+    });
+
+    it('still snapshots a sprite over a background picture', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<div class="scene"><img class="sprite" src="/sprite.png"></div>';
+        const scene = root.firstElementChild as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [scene, cssStyle('position: relative; background-image: url("/room.png");')],
+            [scene.firstElementChild as HTMLElement, cssStyle('position: absolute; left: 10px;')],
+        ]);
+        const renderComplexBlock = vi.fn(async () => 'data:image/webp;base64,scene');
+
+        await exportArcaHtml(root, {
+            readStyle: element => styles.get(element) ?? cssStyle(''),
+            loadImage: async url => url,
+            renderComplexBlock,
+        });
+
+        expect(renderComplexBlock).toHaveBeenCalledWith(scene);
     });
 
     it('replaces a CSS background asset with a real image without changing message order', async () => {
@@ -575,7 +856,7 @@ describe('buildArcaClipboardHtml', () => {
         expect(html).not.toMatch(/class=|<style|display:\s*(?:flex|grid)|position:|overflow:|opacity:|url\(/i);
     });
 
-    it('adds an empty paragraph after the chat frame for pasting the next turn', () => {
+    it('adds an empty paragraph before and after the chat frame for typing around it', () => {
         const html = buildArcaClipboardHtml({
             bodyHtml: '<p>본문</p>',
             displayName: 'Test',
@@ -583,7 +864,10 @@ describe('buildArcaClipboardHtml', () => {
         const output = document.createElement('div');
         output.innerHTML = html;
 
-        expect(output.children).toHaveLength(2);
+        expect(output.children).toHaveLength(3);
+        expect(output.firstElementChild?.tagName).toBe('P');
+        expect(output.firstElementChild?.innerHTML).toBe('<br>');
+        expect(output.children[1].tagName).toBe('DIV');
         expect(output.lastElementChild?.tagName).toBe('P');
         expect(output.lastElementChild?.innerHTML).toBe('<br>');
     });
@@ -667,6 +951,10 @@ function cssStyle(cssText: string): CSSStyleDeclaration {
     const element = document.createElement('div');
     element.style.cssText = cssText;
     return element.style;
+}
+
+function computedStyle(values: Record<string, string>): CSSStyleDeclaration {
+    return { getPropertyValue: (property: string) => values[property] ?? '' } as CSSStyleDeclaration;
 }
 
 function domRect(width: number, height: number): DOMRect {

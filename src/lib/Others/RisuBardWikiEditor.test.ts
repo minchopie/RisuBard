@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     createAuth: vi.fn(async () => 'token'),
     requestImmediateSave: vi.fn(async () => undefined),
     alertConfirmMulti: vi.fn(async () => 0),
+    alertConfirm: vi.fn(async () => true),
     db: {
         characters: [] as Array<Record<string, any>>,
         risuBardWikiMarkdownPreview: undefined as boolean | undefined,
@@ -36,6 +37,7 @@ vi.mock('src/ts/stores.svelte', () => ({
 }))
 vi.mock('src/ts/alert', () => ({
     alertConfirmMulti: mocks.alertConfirmMulti,
+    alertConfirm: mocks.alertConfirm,
 }))
 
 const documents = [{
@@ -276,7 +278,7 @@ describe('RisuBardWikiEditor', () => {
         const badges = [...document.querySelectorAll('[data-wiki-recent-update]')]
         expect(badges.map((badge) => badge.parentElement?.getAttribute('aria-label')))
             .toEqual(['현재 장면', '새 인물, 관련 있을 때 포함', '전투'])
-        expect(badges.every((badge) => badge.textContent === 'New'
+        expect(badges.every((badge) => badge.textContent === '새 문서'
             && badge === badge.parentElement?.lastElementChild)).toBe(true)
         badges[0].parentElement!.click()
         await tick()
@@ -297,13 +299,14 @@ describe('RisuBardWikiEditor', () => {
         expect(titleRow?.querySelector('[aria-label="항목 유형"]')).not.toBeNull()
         expect(titleRow?.querySelector('[aria-label="항목 이름"]')).not.toBeNull()
         expect(toolbar).not.toBeNull()
-        expect([...toolbar!.querySelectorAll('button')].map((button) =>
+        const actions = [...toolbar!.querySelectorAll('button:not([data-wiki-context-segment])')]
+        expect(actions.map((button) =>
             button.textContent?.trim()
         )).toEqual(['', '', '로어북에 복사', ''])
         expect(toolbar!.querySelectorAll('[data-wiki-action-label]')).toHaveLength(1)
-        expect([...toolbar!.querySelectorAll('button')].map((button) =>
+        expect(actions.map((button) =>
             button.getAttribute('aria-label')
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '휴지통으로 이동'])
 
         const source = readFileSync(
             'src/lib/Others/RisuBardWikiEditor.svelte',
@@ -326,7 +329,7 @@ describe('RisuBardWikiEditor', () => {
         const option = document.querySelector<HTMLOptionElement>(
             '[aria-label="항목 유형"] option[value="creature"]'
         )
-        expect(option?.textContent).toBe('종족·생물')
+        expect(option?.textContent).toBe('종족과 생물')
     })
 
     it('keeps a visible vertical scrollbar in the Markdown editor', () => {
@@ -656,8 +659,8 @@ describe('RisuBardWikiEditor', () => {
         })
         await tick()
 
-        expect(document.body.textContent).toContain('characters')
-        expect(document.body.textContent).toContain('events')
+        expect(document.body.textContent).toContain('인물')
+        expect(document.body.textContent).toContain('사건')
         const eventButton = [...document.querySelectorAll('button')]
             .find((button) => button.textContent?.includes('전투'))!
         eventButton.click()
@@ -771,8 +774,6 @@ describe('RisuBardWikiEditor', () => {
         mocks.retractWikiEvent.mockResolvedValue({
             ...documents[1], status: 'retracted', contentHash: 'hash-retracted',
         })
-        const confirm = vi.fn(() => true)
-        vi.stubGlobal('confirm', confirm)
         const onChanged = vi.fn()
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {
@@ -792,7 +793,7 @@ describe('RisuBardWikiEditor', () => {
             button.textContent?.trim()
         )).toEqual(['', '', '로어북에 복사', ''])
         const deleteButton = toolbar.querySelector<HTMLButtonElement>(
-            '[aria-label="삭제"]'
+            '[aria-label="영구 삭제"]'
         )!
         deleteButton.click()
 
@@ -807,7 +808,7 @@ describe('RisuBardWikiEditor', () => {
             )
             expect(onChanged).toHaveBeenCalled()
         })
-        expect(confirm).toHaveBeenCalledWith(expect.stringContaining(
+        expect(mocks.alertConfirm).toHaveBeenCalledWith(expect.stringContaining(
             '복구할 수 없습니다'
         ))
     })
@@ -818,7 +819,6 @@ describe('RisuBardWikiEditor', () => {
             id: 'character.lavian',
             trashed: true,
         })
-        vi.stubGlobal('confirm', vi.fn(() => true))
         const onChanged = vi.fn()
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {
@@ -862,9 +862,9 @@ describe('RisuBardWikiEditor', () => {
         characterButton.click()
         await tick()
         await vi.waitFor(() => expect(
-            (button('삭제') as HTMLButtonElement).disabled
+            (button('휴지통으로 이동') as HTMLButtonElement).disabled
         ).toBe(false))
-        button('삭제').click()
+        button('휴지통으로 이동').click()
         await vi.waitFor(() => expect(mocks.trashWikiDocument).toHaveBeenCalled())
         expect(mocks.trashWikiDocument).toHaveBeenCalledWith(
             expect.objectContaining({ documentId: 'character.lavian' })
@@ -884,7 +884,7 @@ describe('RisuBardWikiEditor', () => {
         })
         await tick()
         const badges = [...document.querySelectorAll('[data-wiki-context-mode]')]
-        expect(badges.map((badge) => badge.textContent?.trim()).sort()).toEqual(['자동', '제외', '항상'])
+        expect(badges.map((badge) => badge.textContent?.trim()).sort()).toEqual(['제외', '항상'])
         expect(document.querySelector('[data-wiki-context-mode="always"] svg')).not.toBeNull()
         expect(document.querySelector('[data-wiki-context-mode="never"]')?.closest('.file-select')
             ?.querySelector('.document-title.context-excluded')).not.toBeNull()
@@ -944,7 +944,7 @@ describe('RisuBardWikiEditor', () => {
         expect(mocks.setWikiDocumentContextMode).toHaveBeenCalledTimes(1)
         rejectSave(new Error('설정 저장 실패'))
         await vi.waitFor(() => expect(document.body.textContent).toContain('설정 저장 실패'))
-        expect(row.querySelector('[data-wiki-context-mode="auto"]')).not.toBeNull()
+        expect(row.querySelector('[data-wiki-context-mode]')).toBeNull()
         expect(document.querySelector('[data-wiki-context-auto]')?.getAttribute('aria-checked')).toBe('true')
     })
 

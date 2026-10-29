@@ -35,6 +35,7 @@ vi.mock('src/lang', async () => ({
         },
     },
 }))
+vi.mock('../characterUpdateFlow.svelte', () => ({ tryUpdateExistingModule: vi.fn(async () => null) }))
 vi.mock('../alert', () => ({
     alertClear: vi.fn(),
     alertConfirm: vi.fn(),

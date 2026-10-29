@@ -10,7 +10,8 @@ vi.mock('./importSession', () => ({ importSession: writable({ phase: 'idle' }) }
 vi.mock('./stores.svelte', () => ({ loadedStore: writable(true), alertStore: writable({ type: 'none' }) }))
 vi.mock('./alert', () => ({ alertSelect: (...args: any[]) => f.select(...args), alertConfirm: (...args: any[]) => f.select(...args) }))
 vi.mock('./risubard/memorySaveSlots', () => ({ applyMemorySavePromptSettings: (chat: any, current: any) => { chat.modelBinding = current.modelBinding; delete chat.bindedPersona } }))
-import { receiveTransfer, recoverTransfers, exportTransfer, uploadLegacyChat, transferBusy } from './playTransfer'
+import { receiveTransfer, recoverTransfers, exportTransfer, uploadLegacyChat, transferBusy, requestRemoteTransfer } from './playTransfer'
+import { forageStorage } from './globalApi.svelte'
 import { isAnyGenerating } from './process/generationState'
 import { importSession } from './importSession'
 const reply = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
@@ -19,6 +20,42 @@ beforeEach(() => {
     transferBusy.set(false); (isAnyGenerating as any).set(false); importSession.set({ phase: 'idle' } as any)
     f.save.mockReset(); f.save.mockResolvedValue(undefined); f.request.mockReset(); f.normalized.mockReset(); f.defaults.mockReset(); f.defaults.mockReturnValue({ modelBinding: { main: 'receiver-model' } })
     f.select.mockReset()
+    forageStorage.realStorage.syncTransaction = undefined; forageStorage.realStorage.transferTransaction = undefined
+})
+
+test('automatic direct receive with ambiguous targets defers durably without a selection popup or save', async () => {
+    f.request.mockImplementation(async (path: string) => reply(path.endsWith('/inspect') ? { characters: [{ id: 'card', name: 'Keep', candidates: [{ id: 'a' }, { id: 'b' }] }] } : []))
+    await receiveTransfer('in', true)
+    expect(f.request).toHaveBeenCalledWith('/in/apply-request', expect.objectContaining({ body: JSON.stringify({ requested: false }) }))
+    expect(f.select).not.toHaveBeenCalled(); expect(f.save).not.toHaveBeenCalled()
+})
+
+test('remote requests wait only for transient pre-handler NAS gates, stop at the deadline and keep durable transaction errors', async () => {
+    vi.useFakeTimers()
+    const gate = (transaction?: string) => new Response(JSON.stringify({ error: 'busy', code: 'NAS_SYNC_BUSY', ...(transaction ? { transaction } : {}) }), { status: 423 })
+    try {
+        f.request.mockResolvedValueOnce(gate()).mockResolvedValueOnce(reply({ state: 'waiting', applyRequested: true }))
+        const success = requestRemoteTransfer('nas', 'download', { name: 'fixture.risuplay', applyRequested: true })
+        await vi.advanceTimersByTimeAsync(500)
+        expect(await success).toMatchObject({ applyRequested: true })
+        expect(f.request.mock.calls[0]).toEqual(f.request.mock.calls[1])
+        f.request.mockReset(); f.request.mockResolvedValue(gate('durable-transaction'))
+        await expect(requestRemoteTransfer('nas', 'upload', { id: 'out' })).rejects.toMatchObject({ transaction: 'durable-transaction', status: 423 })
+        expect(f.request).toHaveBeenCalledTimes(1)
+        f.request.mockReset(); f.request.mockImplementation(async () => gate())
+        const bounded = expect(requestRemoteTransfer('nas', 'download')).rejects.toMatchObject({ code: 'NAS_SYNC_BUSY' })
+        await vi.advanceTimersByTimeAsync(30_000); await bounded
+        expect(f.request).toHaveBeenCalledTimes(61)
+        f.request.mockReset(); f.request.mockRejectedValue(new Error('network failed'))
+        await expect(requestRemoteTransfer('nas', 'upload')).rejects.toThrow('network failed')
+        expect(f.request).toHaveBeenCalledTimes(1)
+        f.request.mockReset(); f.request.mockImplementation(async () => gate())
+        const changed = expect(requestRemoteTransfer('nas', 'upload')).rejects.toMatchObject({ status: 423 })
+        await vi.advanceTimersByTimeAsync(100)
+        forageStorage.realStorage.syncTransaction = 'new-apply'
+        await vi.advanceTimersByTimeAsync(400); await changed
+        expect(f.request).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers(); forageStorage.realStorage.syncTransaction = undefined }
 })
 
 test('legacy backup asks before replacing a diverged revision and carries the confirmed hash', async () => {
@@ -70,6 +107,17 @@ test('background generation and an existing import defer reception without touch
     await expect(exportTransfer(['old'])).rejects.toThrow('진행 중')
     ;(isAnyGenerating as any).set(false); importSession.set({ phase: 'applying' } as any)
     await receiveTransfer('in'); expect(f.request).not.toHaveBeenCalled()
+})
+
+test('a manual click racing the background receiver prepares and appends only once', async () => {
+    f.request.mockImplementation(async (path: string) => {
+        if (path.endsWith('/inspect')) return reply({ characters: [] })
+        if (path.endsWith('/prepare')) return reply({ transaction: 'tx', newCharacters: [], added: [{ characterId: 'existing', chat: { id: 'incoming', message: [] } }], registry: {} })
+        return reply([])
+    })
+    await Promise.all([receiveTransfer('in'), receiveTransfer('in', true)])
+    expect(f.request.mock.calls.filter(c => c[0] === '/in/prepare')).toHaveLength(1)
+    expect(f.db.characters[0].chats.map((chat: any) => chat.id)).toEqual(['old', 'incoming'])
 })
 test('startup recovery independently verifies committed client chat before server publication', async () => {
     f.db.risuPlaySets = { transactions: { tx: 'instance' } }

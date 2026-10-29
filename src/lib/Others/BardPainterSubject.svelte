@@ -22,7 +22,7 @@
     let confirmRemove = $state(false)
     let outfitName = $state('')
     let character = $derived(subject.kind === 'character')
-    let linked = $derived(session.bot.identities.find(item => item.id === subject.id))
+    let linked = $derived(session.identities.find(item => item.id === subject.id))
     let globalMatch = $derived(session.globalMatchFor(subject))
     let globalChoices = $derived(session.unreflectedGlobalIdentities)
     let outfits = $derived(session.outfitChoices(subject.id))
@@ -92,7 +92,7 @@
                     {#if character}
                         <select class="picker" aria-label={`대상 ${index + 1} 캐릭터 불러오기`} value={linked ? `bot:${linked.id}` : ''} {disabled} onchange={event => { const value = event.currentTarget.value; event.currentTarget.value = linked ? `bot:${linked.id}` : ''; chooseCharacter(value) }}>
                             <option value="">캐릭터 불러오기</option>
-                            {#each session.bot.identities as identity (identity.id)}<option value={`bot:${identity.id}`}>{identity.name}{identity.appearance.trim() ? '' : ' (외형 없음)'}</option>{/each}
+                            {#each session.identities as identity (identity.id)}<option value={`bot:${identity.id}`}>{identity.name}{identity.appearance.trim() ? '' : ' (외형 없음)'}</option>{/each}
                             {#if globalChoices.length}<optgroup label="글로벌 (고르면 이 봇에 반영)">{#each globalChoices as identity (identity.id)}<option value={`global:${identity.id}`}>{identity.name}</option>{/each}</optgroup>{/if}
                         </select>
                     {/if}

@@ -18,8 +18,8 @@ function fixture(dirty = true) {
     const sync = vi.fn(async () => {})
     const save = vi.fn(async (_changes: any) => 'saved')
     const flush = vi.fn(async () => {})
-    const create = new Function('syncLiveFilesNow', 'persistTrackedChanges', 'flushServerDbNow', 'initialDirty', 'get', 'syncSaveHold', 'canonicalSaveSettled', `
-        let saveInFlight = null, requestImmediateSaveImpl, savetrys = 0, changed = false, forceFullWriteOnRetry = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
+    const create = new Function('syncLiveFilesNow', 'persistTrackedChanges', 'flushServerDbNow', 'initialDirty', 'get', 'syncSaveHold', 'canonicalSaveSettled', 'alertStore', `
+        let saveInFlight = null, requestImmediateSaveImpl, savetrys = 0, changed = false, forceFullWriteOnRetry = false, saveFailureNotified = false, gotChannel = false, untrackedSweepPending = false, lastImmediateSaveAt = 0;
         const supportsPatchSync = true, saving = {}, lastLiveError = '';
         const saveRuntime = { isActive: () => true }, language = { sessionSavePausedTitle: 'paused' };
         const changeTracker = { root: initialDirty, character: [], chat: [], botPreset: false, modules: false, plugins: false, pluginCustomStorage: false };
@@ -31,7 +31,7 @@ function fixture(dirty = true) {
         ${controller}
         return { request: requestImmediateSaveImpl, changeTracker };
     `)
-    return { sync, save, flush, ...create(sync, save, flush, dirty, get, writable(false), writable(0)) }
+    return { sync, save, flush, ...create(sync, save, flush, dirty, get, writable(false), writable(0), writable({ type: 'none' })) }
 }
 
 test('a preset-only save does not retransmit the chat or character already saved', async () => {
@@ -141,4 +141,14 @@ test('page hide flushes already uploaded data immediately and Android flushes on
         finish(); await pending; await Promise.resolve()
         expect(flush).toHaveBeenCalledTimes(android ? 2 : 1)
     }
+})
+
+
+test('a card-only sync explicitly tracks off-screen and new characters without fake chats', async () => {
+    const f = fixture(false)
+    await f.request({ characters: ['off-screen', 'new-card', 'off-screen'], chats: [], flushServer: 'canonical', rejectOnFailure: true, syncOwned: true })
+    expect(f.save).toHaveBeenCalledOnce()
+    expect(f.save.mock.calls[0][0].character).toEqual(['off-screen', 'new-card'])
+    expect(f.save.mock.calls[0][0].chat).toEqual([])
+    expect((f.save.mock.calls[0] as any[])[1]).toMatchObject({ trackedCharactersOnly: true })
 })

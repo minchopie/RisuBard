@@ -11,10 +11,16 @@
     let parts = $derived(tokenizePromptEmphasis(value).map(part => ({ ...part, ...emphasisAppearance(part.weight) })))
     let tagSettings = $derived(normalizeTagAutocompleteSettings(DBState.db.tagAutocomplete))
     let viewport = $state({ left: 1, top: 1, width: 0, height: 0, x: 0, y: 0 })
+    let metrics = $state('')
 
     function syncViewport() {
-        if (input) viewport = { left: input.clientLeft, top: input.clientTop,
+        if (!input) return
+        viewport = { left: input.clientLeft, top: input.clientTop,
             width: input.clientWidth, height: input.clientHeight, x: input.scrollLeft, y: input.scrollTop }
+        // Callers restyle the textarea (a larger font in subject blocks), so the highlight copies its text metrics.
+        const style = getComputedStyle(input)
+        metrics = ['font', 'line-height', 'letter-spacing', 'word-spacing', 'padding']
+            .map(name => `${name}: ${style.getPropertyValue(name)}`).join('; ')
     }
     $effect(() => {
         if (!input) return
@@ -34,7 +40,7 @@
     <div class="mirror" data-prompt-mirror aria-hidden="true"
         style:left={`${viewport.left}px`} style:top={`${viewport.top}px`}
         style:width={`${viewport.width}px`} style:height={`${viewport.height}px`}>
-        <div class="content" class:nowrap={attributes.wrap === 'off'} data-prompt-content
+        <div class="content" class:nowrap={attributes.wrap === 'off'} data-prompt-content style={metrics}
             style:transform={`translate(${-viewport.x}px, ${-viewport.y}px)`}>{#each parts as part}<span data-weight={part.weight} data-tone={part.tone} style:background-color={part.tone === 'neutral' ? 'transparent' : `color-mix(in srgb, var(--color-prompt-${part.tone}) ${part.opacity * 100}%, transparent)`}>{part.text}</span>{/each}{'\u200b'}</div>
     </div>
     <textarea {...attributes} bind:this={input} {value} oninput={edit} use:tagAutocomplete={tagSettings}

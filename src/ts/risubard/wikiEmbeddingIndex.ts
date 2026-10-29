@@ -214,25 +214,3 @@ export class WikiEmbeddingIndex {
     }
 }
 
-export function mergeWikiSemanticMatches(
-    semantic: readonly WikiSemanticMatch[], ranked: readonly WikiSemanticMatch[],
-): WikiSemanticMatch[] {
-    if (ranked.length === 0) return [...semantic].sort((a, b) => b.score - a.score).slice(0, 32)
-    const matches = new Map<string, WikiSemanticMatch>()
-    for (const match of semantic) if (!matches.has(match.documentId)) matches.set(match.documentId, match)
-    const ordered = new Map<string, WikiSemanticMatch>()
-    for (const match of [...ranked].sort((a, b) => b.score - a.score)) {
-        const previous = matches.get(match.documentId)
-        if (!ordered.has(match.documentId)) ordered.set(match.documentId, { ...match, ...previous })
-    }
-    for (const match of [...matches.values()].sort((a, b) => b.score - a.score)) {
-        if (!ordered.has(match.documentId)) ordered.set(match.documentId, match)
-    }
-    const result = [...ordered.values()].slice(0, 32)
-    for (const match of semantic) {
-        if (result.length >= 32) break
-        if (!result.some(item => item.documentId === match.documentId && item.start === match.start && item.end === match.end)) result.push(match)
-    }
-    // Encode one ordering, never compare cosine values to reranker rank fractions.
-    return result.map((match, index) => ({ ...match, score: (result.length - index) / result.length }))
-}

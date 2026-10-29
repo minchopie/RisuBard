@@ -237,3 +237,24 @@ describe('RisuBard analysis settings', () => {
         })
     })
 })
+
+describe('number setting bounds', () => {
+    test('exposes the resolve bounds and normalizes typed values with them', async () => {
+        const { risuBardNumberSettingBounds, normalizeRisuBardNumberSetting } = await import('./risuBardSettings')
+        expect(risuBardNumberSettingBounds('risuBardInquiryTimeoutMs')).toEqual({ min: 1, max: 10_000 })
+        expect(risuBardNumberSettingBounds('risuBardHistoricalSourceMatchLimit')).toEqual({ min: 0, max: 32 })
+        expect(risuBardNumberSettingBounds('risuBardAnalysisTokenLimit').min).toBe(3_072)
+        expect(risuBardNumberSettingBounds('risuBardResponseMessageCount').min).toBe(1)
+        expect(risuBardNumberSettingBounds('risuBardInquiryTargetTokenBudget', 5_000)).toEqual({ min: 256, max: 5_000 })
+        expect(normalizeRisuBardNumberSetting('risuBardInquiryTimeoutMs', 99_999, 5)).toBe(10_000)
+        expect(normalizeRisuBardNumberSetting('risuBardRecentMessageCount', 0, 5)).toBe(1)
+        expect(normalizeRisuBardNumberSetting('risuBardRecentMessageCount', Number.NaN, 5)).toBe(5)
+        expect(normalizeRisuBardNumberSetting('risuBardInquiryEventTokenBudget', 9_000, 5, 7_500)).toBe(7_500)
+        for (const key of ['risuBardInquiryTimeoutMs', 'risuBardHistoricalSourceMatchLimit', 'risuBardAnalysisTokenLimit', 'risuBardAdditionalSearchLimit', 'risuBardCanonicalTargetLimit', 'risuBardDynamicMemoryMaximumTokens'] as const) {
+            const { min, max } = risuBardNumberSettingBounds(key)
+            const resolved = (value: number) => resolveRisuBardChatSettings({ [key]: value })[key]
+            expect(resolved(min - 1), key).toBe(min)
+            if (max < Number.MAX_SAFE_INTEGER) expect(resolved(max + 1), key).toBe(max)
+        }
+    })
+})

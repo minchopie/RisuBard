@@ -86,6 +86,17 @@ describe('historical source recall', () => {
         expect(matches).toEqual([])
     })
 
+    test('still returns an event source hidden behind an all-before boundary', () => {
+        const messages = [
+            { role: 'char', data: '플러피풋의 사과 에일', chatId: 'hidden' },
+            { role: 'user', data: '기억을 여기서 초기화한다.', chatId: 'boundary', disabled: 'allBefore' as const },
+            { role: 'char', data: '새로운 여정이 시작됐다.', chatId: 'after' },
+            { role: 'user', data: '그 에일 기억나?', chatId: 'current' },
+        ]
+        expect(resolveHistoricalSourceMatchesById({ messageIds: ['hidden'], messages, excludeRecentMessages: 1 })
+            .map((match) => match.messageId)).toEqual(['hidden'])
+    })
+
     test('uses the configured maximum candidate count, including zero', () => {
         const messages = [
             ...Array.from({ length: 10 }, (_, index) => ({

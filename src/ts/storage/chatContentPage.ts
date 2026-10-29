@@ -9,6 +9,19 @@ export type ChatContentPageEnvelope<
     total: number
 }
 
+/** Response of GET /api/chat-preview: what the chat list hover card shows. */
+export type ChatPreviewPayload = {
+    id: string | null
+    bindedPersona: string
+    lastMessage: {
+        role: 'user' | 'char'
+        data: string
+        saying?: string
+        name?: string
+        time?: number
+    } | null
+}
+
 function requireNonNegativeInteger(value: unknown, name: string): number {
     if (!Number.isSafeInteger(value) || (value as number) < 0) {
         throw new Error(`Chat content page has invalid ${name}`)

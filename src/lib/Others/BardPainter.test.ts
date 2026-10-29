@@ -45,7 +45,7 @@ beforeEach(() => {
     const data = createPainterChatData()
     const style = result().style
     runtime.current = painterTestState({
-        data, get settings() { return this.data.settings }, chat: { isStreaming: false }, bot: { identities: [] as any[], outfits: [] }, style, styles: [style],
+        data, get settings() { return this.data.settings }, chat: { isStreaming: false }, bot: { identities: [] as any[], outfits: [] }, get identities() { return this.bot.identities }, refreshLorePresets: vi.fn(async () => {}), style, styles: [style],
         get botCatalog() { return this.bot }, unreflectedGlobalIdentities: [] as any[], generationSettingsPinned: false, hasGenerationOverrides: false,
         promptPreset: { id: 'current' }, imagePreset: undefined,
         imagePresets: [{ index: 0, preset: { name: 'Image', values: { toggle_detail: '0' } } }], applyImagePreset: vi.fn().mockResolvedValue(true),
@@ -58,9 +58,12 @@ beforeEach(() => {
 afterEach(() => { component?.$destroy(); component = undefined; document.body.replaceChildren() })
 
 describe('BardPainter workspace', () => {
-    test('uses icon tools with accessible names and cleans up blank presets once on open', async () => {
+    test('shows the preset frame as labeled tiles and cleans up blank presets once on open', async () => {
         mount(); await tick()
-        expect([...document.querySelectorAll('nav[aria-label="바드페인터 도구"] button')].map(el => el.getAttribute('aria-label'))).toEqual(['화풍 프리셋', '캐릭터 프리셋', '생성 설정', '작업 리셋'])
+        expect([...document.querySelectorAll('nav[aria-label="바드페인터 도구"] button')].map(el => el.getAttribute('aria-label'))).toEqual(['화풍 프리셋', '캐릭터 프리셋', '생성 설정'])
+        expect(document.querySelector('nav[aria-label="바드페인터 도구"]')?.textContent).toContain('잉크')
+        expect(button('작업 리셋').textContent?.trim()).toBe('초기화')
+        expect(button('캐릭터 분석기').textContent?.trim()).toBe('캐릭터 분석')
         expect(runtime.current.autoPruneBlankIdentities).toHaveBeenCalledOnce()
         expect(document.querySelector('[aria-label="이전 메시지 수"]')).toBeNull()
     })
@@ -169,16 +172,19 @@ describe('BardPainter workspace', () => {
         runtime.current.chat.isStreaming = true; await tick()
         expect(choose.disabled).toBe(true)
     })
-    test('asks before replacing a planned scene', async () => {
+    test('replaces a planned scene at once and edits the fixed scene as plain text', async () => {
         runtime.current.data.anchor = { ...anchor }; runtime.current.data.draft = draft()
+        painterSelection.set({ characterId: 'bot', chatId: 'chat', anchor: { ...anchor } })
         mount(); await tick()
+        const editor = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="장면 글"]')!
+        expect(editor.value).toBe(anchor.text)
+        editor.value = '고친 장면'; editor.dispatchEvent(new Event('input', { bubbles: true })); await tick()
+        expect(runtime.current.data.anchor.text).toBe('고친 장면')
+        // Editing the text is not a new selection.
+        expect(button('본문에서 새로 선택한 부분으로 장면 바꾸기').disabled).toBe(true)
         const next = { ...anchor, start: 20, end: 28, text: '새 장면' }
         painterSelection.set({ characterId: 'bot', chatId: 'chat', anchor: next }); await tick()
-        expect(document.querySelector('[aria-label="그릴 장면"] blockquote')?.textContent).toBe(anchor.text)
         button('본문에서 새로 선택한 부분으로 장면 바꾸기').click(); await tick()
-        expect(runtime.current.changeScene).not.toHaveBeenCalled()
-        expect(document.body.textContent).toContain('직접 추가했거나 잠근 인물 블록은 남깁니다')
-        button('장면 바꾸기').click(); await tick()
         expect(runtime.current.changeScene).toHaveBeenCalledWith(next)
     })
     test('confirms workspace reset and clears the selection on success', async () => {
@@ -187,7 +193,7 @@ describe('BardPainter workspace', () => {
         current.resetWorkspace.mockImplementation(async () => { current.data.anchor = undefined; current.data.draft = undefined; current.data.results = []; return true })
         mount(); await tick()
         const range = document.createRange()
-        range.selectNodeContents(document.querySelector('blockquote')!)
+        range.selectNodeContents(document.querySelector('[aria-label="그릴 장면"] h3')!)
         window.getSelection()!.addRange(range)
         button('작업 리셋').click(); await tick()
         expect(document.body.textContent).toContain('갤러리 이미지')
@@ -274,7 +280,7 @@ describe('BardPainter workspace', () => {
         mount()
         const destination = { ...anchor, messageId: 'elsewhere', start: 0, end: 20, text: '다른 삽입 위치', insertionUnavailable: true }
         painterSelection.set({ characterId: 'bot', chatId: 'chat', anchor: destination }); await tick()
-        expect(document.querySelector('[aria-label="그릴 장면"]')?.textContent).toContain(anchor.text)
+        expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="장면 글"]')?.value).toBe(anchor.text)
         button('원문 아래에 삽입').click()
         expect(runtime.current.insert).toHaveBeenCalledWith('result', 'after', destination)
     })

@@ -130,7 +130,7 @@ index 3ef5c95..5f51b76 100644
          const root = tempRoot()
          const statePath = join(root, 'logs', 'state.json')
 diff --git a/server/node/request-logs.test.ts b/server/node/request-logs.test.ts
-index 5b0b3a2..c4d6022 100644
+index 5b0b3a2..b970224 100644
 --- a/server/node/request-logs.test.ts
 +++ b/server/node/request-logs.test.ts
 @@ -78,6 +78,18 @@ describe('truncation', () => {
@@ -152,11 +152,214 @@ index 5b0b3a2..c4d6022 100644
      it('writes a request row and a matching usage row', () => {
          expect(logs.addRequestLogBatch([entry()])).toBe(1)
  
+@@ -558,8 +570,20 @@ describe('routes', () => {
+         return false
+     }
+ 
++    // fetch rejects some OS-assigned ports client-side ("bad port") before any request is sent; node:http has no such list,
++    // so the fixture tests HTTP status/body rather than browser port policy (same pattern as play-transfer-http.test.ts).
++    const httpFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array } = {}) => new Promise<Response>((resolve, reject) => {
++        const req = http.request(url, { method: init.method, headers: init.headers }, response => {
++            const chunks: Buffer[] = []
++            response.on('data', chunk => chunks.push(chunk))
++            response.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode })))
++            response.on('error', reject)
++        })
++        req.on('error', reject); req.end(init.body)
++    })
++
+     function get(path: string) {
+-        return fetch(`${base}${path}`, { headers: { 'risu-auth': AUTH_TOKEN } })
++        return httpFetch(`${base}${path}`, { headers: { 'risu-auth': AUTH_TOKEN } })
+     }
+ 
+     beforeEach(async () => {
+@@ -582,7 +606,7 @@ describe('routes', () => {
+     })
+ 
+     async function post(body: unknown) {
+-        return fetch(`${base}/api/request-logs`, {
++        return httpFetch(`${base}/api/request-logs`, {
+             method: 'POST',
+             headers: { 'content-type': 'application/json', 'risu-auth': AUTH_TOKEN },
+             body: JSON.stringify(body),
+@@ -590,7 +614,7 @@ describe('routes', () => {
+     }
+ 
+     it('rejects unauthenticated reads', async () => {
+-        const res = await fetch(`${base}/api/request-logs`)
++        const res = await httpFetch(`${base}/api/request-logs`)
+         expect(res.status).toBe(400)
+     })
+ 
+@@ -673,11 +697,11 @@ describe('routes', () => {
+ 
+     it('clears logs but keeps usage unless asked', async () => {
+         await post(entry())
+-        await fetch(`${base}/api/request-logs`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
++        await httpFetch(`${base}/api/request-logs`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
+         expect((await (await get('/api/request-logs')).json()).total).toBe(0)
+         expect((await (await get('/api/request-logs/usage')).json()).total.requests).toBe(1)
+ 
+-        await fetch(`${base}/api/request-logs?usage=1`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
++        await httpFetch(`${base}/api/request-logs?usage=1`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
+         expect((await (await get('/api/request-logs/usage')).json()).total.requests).toBe(0)
+     })
+ })
+diff --git a/src/lang/help.en.ts b/src/lang/help.en.ts
+index 9372b6d..3f389a2 100644
+--- a/src/lang/help.en.ts
++++ b/src/lang/help.en.ts
+@@ -491,7 +491,7 @@ export const helpEn = {
+         risuBardResponseExcludeUsers:
+             "Exclude earlier user messages from response context. The current user request is always retained.",
+         risuBardHideOocTurns: "Hide OOC replies and their user inputs from the main chat list. Off by default. Read the live transcript in BardWiki's OOC notepad. Applies to all chats without changing saved messages, AI context or wiki analysis settings.",
+-        risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. The current narrative baseline stays in the description position. Turn it off to restore the previous order.",
++        risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. Keeps the original character description and active lorebook text without also inserting their summarized narrative baseline. Turn it off to restore the previous order.",
+         risuBardAnalysisExcludeUsers:
+             "Exclude user messages from the confirmed turn and recent raw context used for BardWiki analysis, leaving assistant responses only.",
+         customBackground: "A custom image used as the chat background.",
+diff --git a/src/lang/help.ko.ts b/src/lang/help.ko.ts
+index 8056b71..652b1c4 100644
+--- a/src/lang/help.ko.ts
++++ b/src/lang/help.ko.ts
+@@ -295,7 +295,7 @@ export const helpKo = {
+         "risuBardArcPlotterMaxCharacters": "예약 플롯 Markdown 전체의 글자 수 상한입니다. 높일수록 더 많은 줄기를 보존하지만 정본 writer 입력과 이후 검색 후보가 커질 수 있습니다.",
+         "risuBardResponseExcludeUsers": "켜면 과거 사용자 메시지를 답변 생성용 최근 원문에서 제외합니다. 현재 사용자 요청은 항상 포함합니다.",
+         risuBardHideOocTurns: "기본 꺼짐. OOC 응답과 대응 사용자 입력을 본문 챗 목록에서 숨깁니다. 바드위키의 OOC 메모장에서 원본과 연결된 내용을 볼 수 있습니다. 모든 챗에 적용하며 원본 기록, AI 대화 컨텍스트와 위키 분석 설정은 바꾸지 않습니다.",
+-        risuBardCacheFriendlyContext: "기본 꺼짐. 켜면 매 턴 바뀌는 바드위키 기억(항상 포함 문서 포함)을 프롬프트 맨 위와 캐릭터 설명 자리에서 빼고, 최신 사용자 메시지 바로 앞에 넣습니다. 프리셋, 캐릭터 설명, 로어북과 지난 대화가 턴마다 똑같이 유지되어 프롬프트 캐시가 더 오래 적중합니다. 현재 서사 기준선은 기존처럼 캐릭터 설명 자리에 둡니다. 끄면 이전 배치로 돌아갑니다.",
++        risuBardCacheFriendlyContext: "기본 꺼짐. 켜면 매 턴 바뀌는 바드위키 기억(항상 포함 문서 포함)을 프롬프트 맨 위와 캐릭터 설명 자리에서 빼고, 최신 사용자 메시지 바로 앞에 넣습니다. 프리셋, 캐릭터 설명, 로어북과 지난 대화가 턴마다 똑같이 유지되어 프롬프트 캐시가 더 오래 적중합니다. 캐릭터 설명과 활성 로어북 원문을 유지하고, 이를 요약한 서사 기준선은 중복 삽입하지 않습니다. 끄면 이전 배치로 돌아갑니다.",
+         "risuBardAnalysisExcludeUsers": "켜면 사용자 메시지를 BardWiki 갱신 분석의 확정 턴과 최근 원문에서 제외하고 AI 응답만 분석합니다.",
+         "customBackground": "채팅 배경에 사용할 커스텀 이미지입니다.",
+         "playMessageOnTranslateEnd": "번역이 끝났을 때 별도 알림음을 재생합니다. 자동 번역이 켜진 상태에서 본문이 다 번역되었는지 소리로 알 수 있습니다.",
 diff --git a/src/ts/preset/adapter/openaiCompatible.test.ts b/src/ts/preset/adapter/openaiCompatible.test.ts
-index 94a1cc2..f2e0aba 100644
+index 94a1cc2..bad5676 100644
 --- a/src/ts/preset/adapter/openaiCompatible.test.ts
 +++ b/src/ts/preset/adapter/openaiCompatible.test.ts
-@@ -511,6 +511,13 @@ describe('sendChatRequest (non-stream)', () => {
+@@ -1,4 +1,5 @@
+ import { describe, expect, test } from 'vitest'
++import { readFileSync } from 'node:fs'
+ import { loadBundledRegistry } from '../registry/loader'
+ import { resolveSnapshot } from '../registry/snapshot'
+ import type { ModelPreset, ResolvedModelProfileSnapshot } from '../types'
+@@ -112,6 +113,116 @@ function captureFetch(response: Response | (() => Response)): {
+     return { fetchImpl, calls }
+ }
+ 
++describe('OpenRouter main-chat session metadata', () => {
++    const makeRouterPreset = (overrides: Partial<ModelPreset> = {}) => makePreset({
++        profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url: 'https://openrouter.ai/api/v1/chat/completions' } }),
++        ...overrides,
++    })
++
++    test('adds only session metadata to non-streaming, streaming and preview requests', async () => {
++        const preset = makeRouterPreset({ customBody: { provider: { only: ['google-ai-studio/flex'] } } })
++        const original = structuredClone(preset)
++        const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
++        const options = { messages: userMessages, sessionId: 'chat-1', fetchImpl }
++        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
++        const preview = await previewChatRequest(preset, options, { apiKey: 'sk' })
++        expect(calls).toHaveLength(0)
++        expect(preview.body).toEqual({ ...before.body, session_id: 'chat-1' })
++        await sendChatRequest(preset, options, { apiKey: 'sk' })
++        expect(calls[0].body).toEqual(preview.body)
++
++        const streaming = captureFetch(sseResponse(['data: [DONE]\n\n']))
++        for await (const _ of streamChatRequest(preset, { ...options, fetchImpl: streaming.fetchImpl }, { apiKey: 'sk' })) { /* drain */ }
++        expect(streaming.calls[0].body).toEqual({ ...preview.body, stream: true })
++        expect(preset).toEqual(original)
++    })
++
++    test.each(['https://demo.test/v1/chat/completions', 'https://openrouter.ai.demo.test/api/v1/chat/completions', '/api/local/chat/completions'])(
++        'leaves non-OpenRouter endpoint %s unchanged', async (url) => {
++            const preset = makePreset({ profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url } }) })
++            const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
++            const after = await previewChatRequest(preset, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
++            expect(after).toEqual(before)
++        },
++    )
++
++    test.each([
++        { customBody: { session_id: 'user-session' } },
++        { customBody: { session_id: null } },
++        { customBody: { prompt_cache_key: 'user-cache-key' } },
++        { customHeaders: { 'X-SESSION-ID': 'user-header' } },
++        { additionalParamsText: 'header::X-Session-Id=user-header' },
++        { additionalParamsText: 'session_id=user-session' },
++    ])('preserves explicitly configured routing metadata %j', async (overrides) => {
++        const preset = makeRouterPreset(overrides)
++        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
++        const after = await previewChatRequest(preset, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
++        expect(after).toEqual(before)
++    })
++
++    test.each([undefined, '', 'x'.repeat(257)])('does not send an absent or invalid-length session key %j', async (sessionId) => {
++        const preset = makeRouterPreset()
++        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
++        const after = await previewChatRequest(preset, { messages: userMessages, sessionId }, { apiKey: 'sk' })
++        expect(after).toEqual(before)
++    })
++
++    test('works without URL.canParse on older browsers and preserves relative endpoints', async () => {
++        const original = Object.getOwnPropertyDescriptor(URL, 'canParse')
++        Object.defineProperty(URL, 'canParse', { configurable: true, value: undefined })
++        try {
++            const routed = await previewChatRequest(makeRouterPreset(), { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
++            expect(routed.body.session_id).toBe('chat-1')
++            const local = makePreset({ profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url: '/api/local/chat/completions' } }) })
++            const before = await previewChatRequest(local, { messages: userMessages }, { apiKey: 'sk' })
++            const after = await previewChatRequest(local, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
++            expect(after).toEqual(before)
++        } finally {
++            if (original) Object.defineProperty(URL, 'canParse', original)
++            else Reflect.deleteProperty(URL, 'canParse')
++        }
++    })
++
++    test('keeps one chat key for tool follow-ups and separates another chat', async () => {
++        const { fetchImpl, calls } = captureFetch(() => jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
++        const preset = makeRouterPreset()
++        const tools = [{ name: 'lookup', parameters: { type: 'object' } }]
++        const messages: AdapterChatMessage[] = [...userMessages]
++        await sendChatRequest(preset, { messages, tools, sessionId: 'chat-1', fetchImpl }, { apiKey: 'sk' })
++        messages.push(
++            { role: 'assistant', content: '', toolCalls: [{ id: 'call-1', name: 'lookup', arguments: '{}' }] },
++            { role: 'tool', content: 'result', toolCallId: 'call-1' },
++        )
++        await sendChatRequest(preset, { messages, tools, sessionId: 'chat-1', fetchImpl }, { apiKey: 'sk' })
++        await sendChatRequest(preset, { messages: userMessages, sessionId: 'chat-2', fetchImpl }, { apiKey: 'sk' })
++        expect(calls.map(({ body }) => body.session_id)).toEqual(['chat-1', 'chat-1', 'chat-2'])
++        expect(calls[1].body.messages).toHaveLength(4)
++    })
++
++    test('request gate requires opt-in, explicit main-chat identity and no cache exclusion, including preview', () => {
++        const request = readFileSync('src/ts/process/request/request.ts', 'utf8')
++        const expression = request.match(/const sessionId = ([\s\S]*?)(?:\r?\n){2}/)?.[1]
++        expect(expression).toBeDefined()
++        const evaluate = new Function('getDatabase', 'arg', 'toLogSource', 'mode', `return (${expression})`)
++        const gate = (enabled: boolean | undefined, arg: Record<string, unknown>, mode = 'model') => evaluate(
++            () => ({ risuBardCacheFriendlyContext: enabled }), arg,
++            (value: string) => value === 'model' ? 'main' : value, mode,
++        )
++        expect(gate(true, { realChatId: 'chat-1' })).toBe('chat-1')
++        expect(gate(true, { realChatId: 'chat-1', previewBody: true })).toBe('chat-1')
++        expect(gate(false, { realChatId: 'chat-1' })).toBeUndefined()
++        expect(gate(undefined, { realChatId: 'chat-1' })).toBeUndefined()
++        expect(gate(true, { realChatId: 'chat-1', disablePromptCache: true })).toBeUndefined()
++        expect(gate(true, { realChatId: 'chat-1', logSource: 'memory' })).toBeUndefined()
++        expect(gate(true, { realChatId: 'chat-1' }, 'memory')).toBeUndefined()
++        expect(gate(true, {})).toBeUndefined()
++        expect(request).toContain('messages, tools, fetchImpl, sessionId,')
++        expect(request).toContain('generationId: genId, cache, sessionId,')
++        expect(request).toContain('messages, tools, abortSignal, sessionId)')
++        expect(request).toContain('messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl, sessionId,')
++    })
++})
++
+ describe('sendChatRequest (non-stream)', () => {
+     test('classifies an explicit refusal separately from an empty successful response', async () => {
+         const { fetchImpl } = captureFetch(jsonResponse({
+@@ -511,6 +622,13 @@ describe('sendChatRequest (non-stream)', () => {
  })
  
  describe('streamChatRequest', () => {
@@ -171,10 +374,25 @@ index 94a1cc2..f2e0aba 100644
          const { fetchImpl, calls } = captureFetch(
              sseResponse([
 diff --git a/src/ts/preset/adapter/openaiCompatible.ts b/src/ts/preset/adapter/openaiCompatible.ts
-index 07312aa..4991a34 100644
+index 07312aa..590c9b7 100644
 --- a/src/ts/preset/adapter/openaiCompatible.ts
 +++ b/src/ts/preset/adapter/openaiCompatible.ts
-@@ -431,6 +431,11 @@ function extractThoughtSignature(extraContent: unknown): string | undefined {
+@@ -271,6 +271,14 @@ async function prepareOpenAiBody(
+         delete prepared.body.parallel_tool_calls
+         delete prepared.body.tool_choice
+     }
++    if (options.sessionId && options.sessionId.length <= 256
++        && !('session_id' in prepared.body)
++        && !('prompt_cache_key' in prepared.body)
++        && !Object.keys(prepared.headers).some((key) => key.toLowerCase() === 'x-session-id')) {
++        let hostname = ''
++        try { hostname = new URL(prepared.url).hostname } catch {}
++        if (hostname === 'openrouter.ai') prepared.body.session_id = options.sessionId
++    }
+     return prepared
+ }
+ 
+@@ -431,6 +439,11 @@ function extractThoughtSignature(extraContent: unknown): string | undefined {
  // Exported (pure) for job-journal recovery replay (process/request/jobRecovery.ts).
  export function parseChatStreamDelta(raw: unknown): AdapterChatStreamDelta | null {
      if (!isPlainObject(raw)) return null
@@ -186,6 +404,19 @@ index 07312aa..4991a34 100644
      const choices = raw['choices']
      let textDelta = ''
      let reasoningDelta = ''
+diff --git a/src/ts/preset/adapter/types.ts b/src/ts/preset/adapter/types.ts
+index 5847a03..e0d23a4 100644
+--- a/src/ts/preset/adapter/types.ts
++++ b/src/ts/preset/adapter/types.ts
+@@ -185,6 +185,8 @@ export interface AdapterCacheContext {
+ 
+ export interface AdapterChatOptions {
+     messages: AdapterChatMessage[]
++    /** Stable main-chat key for OpenRouter sticky routing; other endpoints ignore it. */
++    sessionId?: string
+     tools?: AdapterToolDef[]             // when present, enables tool use on the request
+     /** Authoritative per-call sampling controls. */
+     temperature?: number
 diff --git a/src/ts/process/request/google.ts b/src/ts/process/request/google.ts
 index 5ea228f..c9f834f 100644
 --- a/src/ts/process/request/google.ts
@@ -252,7 +483,7 @@ index feb961e..1587d71 100644
      const lock = db.nodeOnlyModelModeLock ?? 'none'
  
 diff --git a/src/ts/process/request/request.ts b/src/ts/process/request/request.ts
-index ca36f2f..1d04da5 100644
+index ca36f2f..57f2311 100644
 --- a/src/ts/process/request/request.ts
 +++ b/src/ts/process/request/request.ts
 @@ -1,4 +1,6 @@
@@ -289,7 +520,18 @@ index ca36f2f..1d04da5 100644
      // P4 dual-regime dispatch (plan v6 §7). Resolve the per-chat ModelPreset
      // binding BEFORE any classic model selection so a binding chat never touches
      // db.aiModel / db.seperateModels. Skipped when a staticModel (fallback retry)
-@@ -820,7 +830,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+@@ -802,6 +812,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+     const reportStatus = statusEnabled(arg.realChatId) && !!genId
+     const logSource = arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode))
+     const logPurpose = arg.logPurpose ?? defaultRequestPurpose(logSource)
++    const sessionId = getDatabase().risuBardCacheFriendlyContext === true
++        && !arg.disablePromptCache
++        && (arg.logSource ?? toLogSource(mode)) === 'main'
++        && arg.realChatId ? arg.realChatId : undefined
+ 
+     // Request logging wraps the transport, so the direct path and the
+     // server-side job path are recorded identically — the job path had no
+@@ -820,7 +834,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
          provider: preset.profileSnapshot.providerBaseId,
          streaming: resolvePresetStreaming(preset, arg),
      })
@@ -299,7 +541,7 @@ index ca36f2f..1d04da5 100644
  
      // Tool gating. Three guards:
      //  1) Per-preset opt-in (preset.toolUse, default OFF) — the hard regression
-@@ -860,7 +871,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+@@ -860,7 +875,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
      // (chat already generating) surfaces as an error instead, since falling
      // back would double-generate. All defaults off → proxiedFetch →
      // byte-identical to the previous behavior.
@@ -308,6 +550,50 @@ index ca36f2f..1d04da5 100644
          && !tools && !arg.previewBody
      const transportFetch = useServerJob
          ? makeJobFetch({
+@@ -1011,7 +1026,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+             // Mirror the real request's options so the preview shows the body that
+             // would actually be sent (cache breakpoints included).
+             const prepared = await previewModelPreset(kind, preset, {
+-                messages, tools, fetchImpl,
++                messages, tools, fetchImpl, sessionId,
+                 anthropicCache1h: getDatabase().claude1HourCaching === true,
+             }, credential)
+             return {
+@@ -1033,7 +1048,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+         // streaming tool_call assembly is a later stage. Status is NOT reported
+         // for the tool path in v1 (it bypasses the pump); see the toast infra note.
+         if (tools) {
+-            const { result, toolsExecuted } = await runModelPresetToolLoop(arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal)
++            const { result, toolsExecuted } = await runModelPresetToolLoop(arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal, sessionId)
+             // The tool loop issues one request per turn; each is its own log
+             // entry and all of them flush together here.
+             void logScope.close()
+@@ -1042,7 +1057,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+ 
+         const useStreaming = resolvePresetStreaming(preset, arg)
+         const options: AdapterChatOptions = {
+-            messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache,
++            messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache, sessionId,
+             ...presetGenerationOverrides(arg),
+             responseSchema: arg.schema
+                 ? convertInterfaceToSchema(arg.schema)
+@@ -1249,6 +1264,7 @@ async function runModelPresetToolLoop(
+     messages: AdapterChatMessage[],
+     tools: AdapterToolDef[],
+     abortSignal: AbortSignal | null,
++    sessionId?: string,
+ ): Promise<{ result: string; toolsExecuted: boolean }> {
+     // Tracks whether any tool actually ran, so the caller can block outer
+     // success-path retries that would otherwise re-execute side-effecting tools.
+@@ -1260,7 +1276,7 @@ async function runModelPresetToolLoop(
+         send: (convo) => sendModelPreset(
+             kind, preset,
+             {
+-                messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl,
++                messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl, sessionId,
+                 // Tool turns are ordinary billed requests: without this the cache
+                 // TTL silently drops back to 5 minutes for the whole tool loop.
+                 anthropicCache1h: getDatabase().claude1HourCaching === true,
 diff --git a/src/ts/tokenizer.ts b/src/ts/tokenizer.ts
 index 4a34491..716865b 100644
 --- a/src/ts/tokenizer.ts

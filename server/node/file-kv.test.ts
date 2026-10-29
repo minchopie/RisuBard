@@ -158,6 +158,25 @@ describe('file-native KV compatibility projection', () => {
         expect(store.snapshotFootprint('database/dbbackup-1.bin')).toBe(Buffer.byteLength('revision-1'))
     })
 
+    it('releases a replaced database object right away unless a snapshot shares it', () => {
+        const dataRoot = root()
+        const store = createFileKv({ dataRoot })
+        const objects = () => fs.readdirSync(path.join(dataRoot, 'kv', 'objects')).length
+        store.kvSet('database/database.bin', Buffer.from('revision-1'))
+        store.kvSet('database/database.bin', Buffer.from('revision-2'))
+        store.kvSet('database/database.bin', Buffer.from('revision-3'))
+        expect(objects()).toBe(1)
+
+        store.kvCopyValue('database/database.bin', 'database/dbbackup-1.bin')
+        store.kvSet('database/database.bin', Buffer.from('revision-4'))
+        expect(objects()).toBe(2)
+        expect(store.kvGet('database/dbbackup-1.bin')?.toString()).toBe('revision-3')
+
+        store.kvSet('assets/a', Buffer.from('asset-1'))
+        store.kvSet('assets/a', Buffer.from('asset-2'))
+        expect(objects()).toBe(4)
+    })
+
     it('supports prefix listing, sizes, deletion, and reclaiming unreferenced objects', () => {
         const dataRoot = root()
         const store = createFileKv({ dataRoot })

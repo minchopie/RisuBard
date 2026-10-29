@@ -14,6 +14,7 @@ import { exportCharacterCard, importCharacterProcess } from "../characterCards"
 import { hasher } from "../parser/parser.svelte"
 import { importAsset, runImport } from "../importSession"
 import { ImportCancelled, type ImportTransaction } from "../storage/importTransaction"
+import { BOT_LINEAGE_KEY } from "../characterUpdate"
 import { yieldImportTask } from "../importTaskYield"
 
 export interface MCPModule{
@@ -36,6 +37,14 @@ export interface RisuModule{
     customModuleToggle?:string
     mcp?:MCPModule
     icon?:string
+    /** Id of the module in the file it was installed from, so a later file finds it again. */
+    updateLineage?:string
+    /** RisuRealm item a module came from. */
+    realmId?:string
+    /** Asset key of the module as last installed, the base for merging the next update. */
+    updateBase?:string
+    /** Set on the copy kept before an update: the id of the module that was updated. */
+    updateBackupOf?:string
 }
 
 export async function exportModule(module:RisuModule, arg:{
@@ -44,6 +53,9 @@ export async function exportModule(module:RisuModule, arg:{
     const alertEnd = arg.alertEnd ?? true
 
     const char = convertModuleToCharacter(module)
+    // Lets the next install of this file offer to update the same module.
+    char.extentions ??= {}
+    char.extentions[BOT_LINEAGE_KEY] = module.updateLineage || module.id
     if(!char.image){
         const res = await fetch('/none.webp')
         const data = new Uint8Array(await res.arrayBuffer())
@@ -124,6 +136,15 @@ export async function exportModuleLegacy(module:RisuModule, arg:{
     }
 
     return apb.buffer
+}
+
+/** The module record of a .risum file, without saving its assets. */
+export async function readModuleMetadata(buf: Buffer): Promise<RisuModule | null> {
+    if (buf.length < 6 || buf.readUInt8(0) !== 111 || buf.readUInt8(1) !== 0) return null
+    const len = buf.readUInt32LE(2)
+    if (6 + len > buf.length) return null
+    const main = JSON.parse(Buffer.from(await decodeRPack(buf.subarray(6, 6 + len))).toString())
+    return main?.type === 'risuModule' && main.module ? main.module : null
 }
 
 export async function readModule(buf:Buffer, transaction?: ImportTransaction):Promise<RisuModule> {
@@ -334,16 +355,36 @@ export async function readModule(buf:Buffer, transaction?: ImportTransaction):Pr
         if (!transaction) alertClear()
     }
 
-    module.id = v4()
+    prepareImportedModule(module)
     return module
+}
+
+/**
+ * Gives an imported module a fresh id. The file's id becomes its lineage, so
+ * the next version of the same file can update this module; install
+ * bookkeeping from wherever the file was exported is dropped.
+ */
+export function prepareImportedModule(module: RisuModule) {
+    module.updateLineage = module.updateLineage || module.id
+    delete module.updateBase
+    delete module.updateBackupOf
+    module.id = v4()
+}
+
+/** Adds an imported module, or updates the installed module the user picks. */
+export async function installImportedModule(module: RisuModule, transaction?: ImportTransaction) {
+    // Loaded on use: the dialog flow pulls in the character pipeline.
+    const { tryUpdateExistingModule } = await import('../characterUpdateFlow.svelte')
+    if (await tryUpdateExistingModule(module, transaction) !== null) return
+    transaction?.register('module', module.id)
+    getDatabase().modules.push(module)
 }
 
 export async function importRisum(data: Uint8Array, transaction?: ImportTransaction): Promise<boolean> {
     if (!transaction) return (await runImport(tx => importRisum(data, tx))) === true
     const module = await readModule(Buffer.from(data), transaction)
     if (!module?.id || !module.name) throw new Error(language.errors.noData)
-    transaction.register('module', module.id)
-    getDatabase().modules.push(module)
+    await installImportedModule(module, transaction)
     return true
 }
 
@@ -374,7 +415,7 @@ async function importModuleFile(f: { name: string, data: Uint8Array }, transacti
             ){
                 throw new Error(language.errors.noData)
             }
-            importData.id = v4()
+            prepareImportedModule(importData)
 
             if(importData.lowLevelAccess){
                 const conf = await alertConfirm(language.lowLevelAccessConfirm)
@@ -382,8 +423,7 @@ async function importModuleFile(f: { name: string, data: Uint8Array }, transacti
                     throw new ImportCancelled()
                 }
             }
-            transaction.register('module', importData.id)
-            db.modules.push(importData)
+            await installImportedModule(importData, transaction)
             return
         }
         // importData.type === 'risu' in conflict with HypaV3 preset exports
@@ -396,8 +436,7 @@ async function importModuleFile(f: { name: string, data: Uint8Array }, transacti
                 lorebook: lores,
                 id: v4()
             }
-            transaction.register('module', importModule.id)
-            db.modules.push(importModule)
+            await installImportedModule(importModule, transaction)
             return
         }
         if(importData.entries){
@@ -408,8 +447,7 @@ async function importModuleFile(f: { name: string, data: Uint8Array }, transacti
                 lorebook: lores,
                 id: v4()
             }
-            transaction.register('module', importModule.id)
-            db.modules.push(importModule)
+            await installImportedModule(importModule, transaction)
             return
         }
         if(importData.type === 'regex'  && importData.data){
@@ -420,8 +458,7 @@ async function importModuleFile(f: { name: string, data: Uint8Array }, transacti
                 regex: regexs,
                 id: v4()
             }
-            transaction.register('module', importModule.id)
-            db.modules.push(importModule)
+            await installImportedModule(importModule, transaction)
             return
         }
     } catch (error) {

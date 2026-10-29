@@ -7,6 +7,7 @@ function registerModuleAssetRoutes(app, { auth, activeSession, queue, prepare, a
     const result = moduleId => ({
         ...assets.moduleStatus(moduleId),
         kv: kv.retiredStatus(MODULE_OWNER(moduleId)),
+        store: kv.assetStoreShare && assets.moduleOwnedKeys ? kv.assetStoreShare(assets.moduleOwnedKeys(moduleId)) : { stored: 0, bytes: 0 },
         diagnostics: assets.diagnostics(),
     });
     const restoreKv = moduleId => kv.restoreRetiredAssets(MODULE_OWNER(moduleId), (key, entry) => assets.read(key, entry));

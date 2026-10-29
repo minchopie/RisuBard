@@ -27,7 +27,7 @@ afterEach(() => { vi.useRealTimers() })
 
 test('transferRequest keeps the server code/status of a structured 423 and the message of any other failure', async () => {
     f.transferRequest.mockResolvedValueOnce(json({ error: 'NAS sync apply must finish before saving', code: 'NAS_SYNC_BUSY', transaction: 'tx' }, 423))
-    await expect(transferRequest('/native-rpc', { method: 'POST' })).rejects.toMatchObject({ message: 'NAS sync apply must finish before saving', code: 'NAS_SYNC_BUSY', status: 423 })
+    await expect(transferRequest('/native-rpc', { method: 'POST' })).rejects.toMatchObject({ message: 'NAS sync apply must finish before saving', code: 'NAS_SYNC_BUSY', status: 423, transaction: 'tx' })
     f.transferRequest.mockResolvedValueOnce(json({ error: 'disk full' }, 500))
     await expect(transferRequest('/x')).rejects.toMatchObject({ message: 'disk full', status: 500 })
     f.transferRequest.mockResolvedValueOnce(new Response('nope', { status: 502 }))
@@ -64,4 +64,27 @@ test('inbox poll: skipped while the gate is held at the start of a tick, abandon
     expect(ops()).toEqual(['network.start', 'usb.start', 'inbox.list']); expect(get(transferStatus)).toBe(''); native.mockClear(); syncSaveHold.set(false)
     // 7. Next tick with the gate open runs normally again.
     transferStatus.set(''); await tick(); expect(ops()).toEqual(['network.start', 'usb.start', 'inbox.list', 'state.write']); expect(get(transferStatus)).toBe('')
+    // 8. An explicit remote receive uses the same importer even with no native trust, and completes without a second user click.
+    const card = { chaId: 'new', name: 'remote', chats: [] }
+    let state = 'waiting'
+    const receiveRequest = async (path: string) => {
+        if (!path) return json([{ id: 'remote', direction: 'receive', state, trusted: false, applyRequested: true }])
+        if (path.endsWith('/inspect')) return json({ characters: [] })
+        if (path.endsWith('/prepare')) return json({ transaction: 'tx', newCharacters: [card], added: [], registry: {} })
+        if (path.endsWith('/finish')) state = 'applied'
+        return json({})
+    }
+    f.transferRequest.mockImplementation(receiveRequest)
+    await tick()
+    expect(state).toBe('applied')
+    expect(f.transferRequest.mock.calls.some(c => c[0] === '/remote/finish')).toBe(true)
+    // 9. A durable explicit false suppresses even a trusted legacy entry until the user chooses its target.
+    f.transferRequest.mockReset(); f.transferRequest.mockImplementation(async () => json([{ id: 'choice', direction: 'receive', state: 'waiting', trusted: true, applyRequested: false }]))
+    await tick()
+    expect(f.transferRequest.mock.calls.every(c => c[0] === '')).toBe(true)
+    // 10. Remote reception remains available when only the unrelated native transport is broken.
+    state = 'waiting'; f.transferRequest.mockReset(); f.transferRequest.mockImplementation(receiveRequest)
+    native.mockImplementationOnce(async () => { throw new Error('native bridge unavailable') })
+    await tick()
+    expect(state).toBe('applied')
 })

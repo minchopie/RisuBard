@@ -75,6 +75,8 @@
                             <label>시드<span class="hint">비우면 무작위</span><input aria-label="이미지 시드" type="number" min="0" max="4294967295" step="1" value={settings.seed ?? ''} onchange={event => { settings.seed = event.currentTarget.value === '' ? null : event.currentTarget.valueAsNumber; save() }} /></label>
                         </div>
                         {#if painterSizeMode(settings) === 'ai'}<p class="hint">프롬프트를 작성할 때 AI가 장면 구도에 맞춰 위의 다섯 가지 크기 중 하나를 고릅니다. 고르지 못하면 세로 832 × 1216으로 생성합니다.</p>{/if}
+                        <label>인물 위치<select aria-label="인물 위치" value={settings.positionMode ?? 'plan'} onchange={event => { settings.positionMode = event.currentTarget.value as 'plan' | 'novelai'; save() }}><option value="plan">AI가 정한 위치 사용</option><option value="novelai">NovelAI에 맡기기</option></select></label>
+                        <p class="hint">{(settings.positionMode ?? 'plan') === 'plan' ? '프롬프트를 작성할 때 AI가 인물과 사물마다 고른 위치를 NovelAI 캐릭터 좌표로 보냅니다. 위치가 없는 블록이 하나라도 있으면 좌표 없이 생성합니다.' : '좌표를 보내지 않고 NovelAI가 인물 위치를 정합니다. 좌표 때문에 구도가 어색할 때 사용하세요. AI가 고른 위치는 초안에 남아 있어 다시 바꾸면 바로 쓰입니다.'}</p>
                         <p class="hint">앱 설정에 저장된 NovelAI API 키를 사용합니다. 생성한 이미지는 원래 해상도의 WebP로 저장합니다.</p>
                     </section>
                 </fieldset>

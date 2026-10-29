@@ -19,6 +19,8 @@ export class ImportTransaction {
     private assets = new Set<string>()
     private owners: ImportOwner[] = []
     private pending = new Set<Promise<unknown>>()
+    // In-memory changes to existing entities (a bot update), undone before owners are removed.
+    private undo: (() => void)[] = []
     cancelled = false
     readonly id: string
     constructor(private existing: Set<string>, private deps: Dependencies, recovery?: ImportJournal) {
@@ -44,9 +46,14 @@ export class ImportTransaction {
         this.pending.add(writing)
         try { await writing } finally { this.pending.delete(writing) }
     }
+    onRollback(undo: () => void) {
+        this.check()
+        this.undo.push(undo)
+    }
     async rollback() {
         this.cancel()
         await Promise.allSettled([...this.pending])
+        for (const undo of this.undo.splice(0).reverse()) undo()
         if (!this.assets.size && !this.owners.length) { this.deps.journal(null); return }
         if (this.owners.length) await this.deps.prepareRollback?.(this.id)
         await this.deps.removeOwners(this.owners)

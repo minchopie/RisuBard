@@ -1,5 +1,4 @@
 <script>
-    import { alertConfirm, notifyError } from "../../ts/alert";
     import { language } from "../../lang";
     
     import { DBState } from 'src/ts/stores.svelte';
@@ -12,10 +11,18 @@
     import TextInput from "../UI/GUI/TextInput.svelte";
     import { changeChatTo, requestImmediateSave } from "src/ts/globalApi.svelte";
     import { v4 } from "uuid";
+    import { deleteCharacterChats } from "src/ts/risubard/chatListActions";
 
     let editMode = $state(false)
     /** @type {{close?: any}} */
     let { close = () => {} } = $props();
+
+    function activateOnKey(e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        e.stopPropagation()
+        e.currentTarget.click()
+    }
 
     function commitChatName(index) {
         const chats = DBState.db.characters[$selectedCharID].chats
@@ -48,31 +55,17 @@
                     <span>{chat.name}</span>
                 {/if}
                 <div class="grow flex justify-end">
-                    <div class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" role="button" tabindex="0" onclick={async (e) => {
+                    <div class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" role="button" tabindex="0" aria-label="챗 내보내기" onclick={async (e) => {
                         e.stopPropagation()
                         exportChat(i)
-                    }} onkeydown={() => {
-
-                    }}>
+                    }} onkeydown={activateOnKey}>
                         <DownloadIcon size={18}/>
                     </div>
-                    <div class="text-textcolor2 hover:text-danger/80 cursor-pointer" role="button" tabindex="0" onclick={async (e) => {
+                    <div class="text-textcolor2 hover:text-danger/80 cursor-pointer" role="button" tabindex="0" aria-label="챗 삭제" onclick={async (e) => {
                         e.stopPropagation()
-                        if(DBState.db.characters[$selectedCharID].chats.length === 1){
-                            notifyError(language.errors.onlyOneChat)
-                            return
-                        }
-                        const d = await alertConfirm(`${language.removeConfirm}${chat.name}`)
-                        if(d){
-                            changeChatTo(0)
-                            let chats = DBState.db.characters[$selectedCharID].chats
-                            chats.splice(i, 1)
-                            DBState.db.characters[$selectedCharID].chats = chats
-                            void requestImmediateSave()
-                        }
-                    }} onkeydown={() => {
-                        
-                    }}>
+                        // Same safeguards as the sidebar: painter work, gallery and the next chat.
+                        if (chat.id) await deleteCharacterChats(DBState.db.characters[$selectedCharID], [chat.id])
+                    }} onkeydown={activateOnKey}>
                         <TrashIcon size={18}/>
                     </div>
                 </div>

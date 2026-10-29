@@ -183,7 +183,8 @@ ${icon ? `<td style="width:64px;padding:12px 0 12px 14px;vertical-align:middle;"
 </section>`
     }).join('\n')
 
-    return `<div style="margin:1rem 0;color:${colors.text};background:${colors.background};border:1px solid ${colors.border};border-radius:16px;font-family:'Segoe UI',Roboto,Arial,sans-serif;font-size:${fontSizePx}px;line-height:1.6;">
+    return `<p><br></p>
+<div style="margin:1rem 0;color:${colors.text};background:${colors.background};border:1px solid ${colors.border};border-radius:16px;font-family:'Segoe UI',Roboto,Arial,sans-serif;font-size:${fontSizePx}px;line-height:1.6;">
 <div style="padding:22px;">
 <header style="margin:0 0 20px 0;padding:0 0 16px 0;border-bottom:1px solid ${colors.border};">
 <span style="display:block;margin-bottom:5px;color:${colors.mutedText};font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;">RisuBard Chat Log</span>

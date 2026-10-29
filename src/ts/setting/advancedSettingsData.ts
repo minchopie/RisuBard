@@ -186,7 +186,6 @@ const advancedSettingsCatalog: SettingItem[] = [
     { id: 'adv.antiOverload', type: 'check', labelKey: 'antiServerOverload', bindKey: 'antiServerOverloads', helpKey: 'antiServerOverload', classes: 'mt-4' },
     { id: 'adv.claudeCache', type: 'check', labelKey: 'claude1HourCaching', bindKey: 'claude1HourCaching', helpKey: 'claude1HourCaching', classes: 'mt-4' },
     { id: 'adv.claudeBatch', type: 'check', labelKey: 'claudeBatching', bindKey: 'claudeBatching', helpKey: 'claudeBatching', showExperimental: true, classes: 'mt-4' },
-    { id: 'adv.personaNote', type: 'check', labelKey: 'personaNote', bindKey: 'personaNote', helpKey: 'personaNote', showExperimental: true, classes: 'mt-4' },
     { id: 'adv.toolUsage', type: 'check', labelKey: 'rememberToolUsage', bindKey: 'rememberToolUsage', helpKey: 'rememberToolUsage', classes: 'mt-4' },
     { id: 'adv.bookmark', type: 'check', labelKey: 'bookmark', bindKey: 'enableBookmark', helpKey: 'bookmark', classes: 'mt-4' },
     { id: 'adv.simpleTool', type: 'check', labelKey: 'simplifiedToolUse', bindKey: 'simplifiedToolUse', helpKey: 'simplifiedToolUse', classes: 'mt-4' },
@@ -263,7 +262,7 @@ export const advancedInterfaceItems = selectAdvancedItems([
 
 export const advancedFeatureItems = selectAdvancedItems([
     'adv.legacyMedia', 'adv.newImgBeta', 'adv.allowExt', 'adv.dynAssets',
-    'adv.dynAssetsEdit', 'adv.realmOpen', 'adv.personaNote', 'adv.sync.realm',
+    'adv.dynAssetsEdit', 'adv.realmOpen', 'adv.sync.realm',
 ]);
 
 export const advancedCompatibilityItems = selectAdvancedItems([

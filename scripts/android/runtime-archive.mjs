@@ -3,6 +3,20 @@ import { createWriteStream } from 'node:fs';
 import { join, relative } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { ZipFile } from 'yazl';
+import yauzl from 'yauzl';
+import assert from 'node:assert/strict';
+import { crc32 } from 'node:zlib';
+
+export async function verifyRuntimeArchive(path) {
+    const zip = await yauzl.openPromise(path, { lazyEntries: true });
+    try {
+        for await (const entry of zip.eachEntry()) {
+            let crc = 0;
+            for await (const chunk of await zip.openReadStreamPromise(entry)) crc = crc32(chunk, crc);
+            assert.equal(crc, entry.crc32, 'Packaged runtime ZIP entry CRC mismatch: ' + entry.fileName);
+        }
+    } finally { zip.close(); }
+}
 
 export async function writeRuntimeArchive(source, destination) {
     const zip = new ZipFile();
