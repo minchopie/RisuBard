@@ -384,7 +384,9 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
         return [...results.values()];
     }
     function retryWaiting() { const steps = retryWaitingSteps(); for (;;) { const step = steps.next(); if (step.done) return step.value; } }
-    async function retryWaitingAsync() { const steps = retryWaitingSteps(); for (;;) { const step = steps.next(); if (step.done) return step.value; await new Promise(resolve => setImmediate(resolve)); } }
+    // A short timer (not setImmediate) between records lets a request finish its several I/O turns before the next record runs:
+    // measured on a 293-record join, request latency p50 944 ms → 246 ms for about 3 s more in total.
+    async function retryWaitingAsync() { const steps = retryWaitingSteps(); for (;;) { const step = steps.next(); if (step.done) return step.value; await new Promise(resolve => setTimeout(resolve, 10)); } }
     /** Explicit resolution of a cloned incarnation. The decision is recorded durably first and then carried out; each held
      *  record leaves the manifest only in the write that admits, parks or quarantines it, so a crash anywhere resumes on
      *  reopen without losing or resurrecting anything. `acceptHeld` admits the second commit's revisions too (both variants

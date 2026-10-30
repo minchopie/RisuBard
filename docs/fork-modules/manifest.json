@@ -1275,9 +1275,9 @@
       "path": "server/node/transfer-sync/nas-sync-store.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "bcfe698c74553ccbb15af53a638a50d52474bac8f958a43f568bb1b3d6cfadef",
-      "contentSha256": "bcfe698c74553ccbb15af53a638a50d52474bac8f958a43f568bb1b3d6cfadef",
-      "bytes": 43519
+      "sha256": "5d2ee5aabfbb124ef06f5d5deacd34cc1f625531711d12e102dae141cb6a9241",
+      "contentSha256": "5d2ee5aabfbb124ef06f5d5deacd34cc1f625531711d12e102dae141cb6a9241",
+      "bytes": 43755
     },
     {
       "path": "server/node/transfer-sync/nas-sync-vault.cjs",
