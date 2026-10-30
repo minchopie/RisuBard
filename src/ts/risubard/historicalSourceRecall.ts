@@ -31,6 +31,9 @@ export interface HistoricalSourceMessage {
     isComment?: unknown
 }
 
+/** Score of a source fetched because a selected event asked for it, not because it matched the query. */
+export const RESOLVED_SOURCE_SCORE = 1_000
+
 export interface HistoricalSourceMatch {
     retrieval?: 'semantic'
     messageId: string
@@ -87,7 +90,7 @@ export function resolveHistoricalSourceMatchesById(input: {
             content: input.queryByMessageId?.[messageId]?.trim()
                 ? semanticEvidenceExcerpt(content, input.queryByMessageId[messageId], MAX_SOURCE_EXCERPT_CHARACTERS)
                 : centeredExcerpt(content, anchor, MAX_SOURCE_EXCERPT_CHARACTERS),
-            score: 1_000, occurredAt: found.occurredAt }]
+            score: RESOLVED_SOURCE_SCORE, occurredAt: found.occurredAt }]
     })
 }
 

@@ -17,10 +17,10 @@ const legacyTokens = [
         contentExceptions: new Set([
             'README.en.md',
             'README.md',
-            'patchnote/0.8.14-arca.txt',
-            'patchnote/0.9.3-arca.txt',
-            'patchnote/0.9.32-arca.txt',
-            'patchnote/0.9.31.md',
+            'patchnote/old/0.8.14-arca.txt',
+            'patchnote/old/0.9.3-arca.txt',
+            'patchnote/old/0.9.32-arca.txt',
+            'patchnote/old/0.9.31.md',
             'src/lang/en.ts',
             'src/lang/ko.ts',
             'src/lang/zh-Hant.ts',
@@ -49,7 +49,7 @@ describe('brand boundary', () => {
     test('keeps the legacy product name in backup compatibility guidance', () => {
         const legacyProductName = ['Pocket', 'Risu'].join('')
         const compatibilityGuides = [
-            'patchnote/0.9.31.md',
+            'patchnote/old/0.9.31.md',
             'src/lang/en.ts',
             'src/lang/ko.ts',
             'src/lang/zh-Hant.ts',

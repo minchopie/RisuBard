@@ -12,6 +12,7 @@
         FileIcon,
         FileLock2Icon,
         BookCopyIcon,
+        Minimize2Icon,
         FolderIcon,
         FolderOpenIcon,
         RotateCcwIcon,
@@ -28,6 +29,7 @@
         CheckIcon,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
+    import { canCompressCanonDocument } from 'src/ts/risubard/canonCompression'
     import { v4 } from 'uuid'
     import { forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte'
     import { DBState } from 'src/ts/stores.svelte'
@@ -89,6 +91,8 @@
         onSelected?: (documentId: string) => void
         onFocusModeChange?: (focused: boolean) => void
         onNavigateSource?: (source: StorySourceRef) => void
+        /** Opens the canon compression dialog for the selected page. */
+        onCompress?: (documentId: string) => void
         highlightedDocumentIds?: string[] | null
         /** Asks the dock to fetch a body missing from a catalog entry. */
         onRequestBody?: (documentId: string) => void
@@ -116,6 +120,7 @@
         onSelected,
         onFocusModeChange,
         onNavigateSource,
+        onCompress,
         highlightedDocumentIds = null,
         onRequestBody,
         onSearch,
@@ -1212,6 +1217,11 @@
                 >
                     <BookCopyIcon size={14} /> <span data-wiki-action-label>로어북에 복사</span>
                 </ShButton>
+                {#if onCompress && selected && canCompressCanonDocument(selected)}
+                    <ShButton size="sm" variant="ghost" aria-label="정본 압축" title="이 문서를 압축" data-wiki-compress-document onclick={() => onCompress(selected.id)} disabled={locked || dirty || saving}>
+                        <Minimize2Icon size={14} /> <span data-wiki-action-label>압축</span>
+                    </ShButton>
+                {/if}
                 {#if selected?.type === 'event' && selected.status === 'active'}
                     <ShButton size="sm" variant="ghost" className="text-danger" aria-label="영구 삭제" title="영구 삭제" onclick={retractEvent} disabled={locked || saving}>
                         <Trash2Icon size={14} />

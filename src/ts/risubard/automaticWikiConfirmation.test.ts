@@ -57,7 +57,32 @@ describe('automatic BardWiki confirmation', () => {
         expect(block).toContain('targetMessageId: narrativeTurnToConfirm.targetMessageId')
         // A turn that does not confirm stops the pass so that no later turn overtakes it.
         const runner = processSource.slice(processSource.indexOf('async function runNarrativeBacklog('))
-        expect(runner.slice(0, 1600)).toMatch(/risubardMemoryConfirmed !== true\) break/)
+        expect(runner.slice(0, runner.search(/\r?\n\}\r?\n/))).toMatch(/risubardMemoryConfirmed !== true\)+ break/)
+    })
+
+    test('a user retry or additional analysis replaces the chat\'s analysis in flight instead of queueing behind it', () => {
+        const processSource = readFileSync('src/ts/process/index.svelte.ts', 'utf8')
+        const body = (name: string) => {
+            const start = processSource.indexOf(`export async function ${name}(`)
+            const rest = processSource.slice(start)
+            return rest.slice(0, rest.search(/\r?\n\}\r?\n/))
+        }
+        for (const name of ['retryNarrativeBacklog', 'forceCurrentNarrativeWikiUpdate']) {
+            const source = body(name)
+            const restart = source.indexOf('await restartChatWikiAnalysis(')
+            expect(restart, name).toBeGreaterThan(0)
+            expect(restart, name).toBeLessThan(source.search(/processNarrativeBacklog\(|confirmProjectedNarrativeTurn\(/))
+        }
+        // Queued analyses of that chat are dropped too, so they cannot hang on the same provider again.
+        expect(processSource).toMatch(/wikiChatCancellationEpoch\(chatKey\) === chatEpoch/)
+    })
+
+    test('semantic recall waits as long as the user\'s wiki lookup time and records why it was left out', () => {
+        const processSource = readFileSync('src/ts/process/index.svelte.ts', 'utf8')
+        // A fixed 2-second wait dropped every remote embedding model that answers in several seconds.
+        expect(processSource).toMatch(/wikiEmbeddingRuntime\.search\(currentInput, retrievalRecentContext,\s*inquirySettings\.risuBardInquiryTimeoutMs\)/)
+        expect(processSource).toMatch(/timeoutMs: inquirySettings\.risuBardInquiryTimeoutMs/)
+        expect(processSource).toContain('semanticSkip: wikiSemanticSkip')
     })
 
     test('keeps configurable confirmation delay out of the product path', () => {

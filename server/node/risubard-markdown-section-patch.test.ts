@@ -41,6 +41,19 @@ describe('canonical Markdown section patches', () => {
             .toBe(result)
     })
 
+    test('a heading repeated with Markdown marks patches the same section and repairs older copies', () => {
+        expect(applyCanonicalSectionPatches({
+            title: '미오',
+            markdown: '## 미오\n\n### 지식과 비밀\n\n- 규칙을 들었다.',
+            patches: [{ heading: '### 지식과 비밀', operation: 'upsert', content: '- 규칙과 비밀을 들었다.' }],
+        })).toBe('## 미오\n\n### 지식과 비밀\n\n- 규칙과 비밀을 들었다.')
+        expect(applyCanonicalSectionPatches({
+            title: '미오',
+            markdown: '## 미오\n\n### 지식과 비밀\n\n- 규칙을 들었다.\n\n### ### 지식과 비밀\n\n- 비밀을 들었다.',
+            patches: [],
+        })).toBe('## 미오\n\n### 지식과 비밀\n\n- 규칙을 들었다.\n\n- 비밀을 들었다.')
+    })
+
     test('replaces all duplicate occurrences with the complete updated section', () => {
         expect(applyCanonicalSectionPatches({
             title: 'Alice',

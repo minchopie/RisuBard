@@ -9,7 +9,10 @@ node scripts/fork-modules/module-stack.mjs generate
 node scripts/fork-modules/module-stack.mjs verify --target base --full --logs tmp/fork-modules-base
 node scripts/fork-modules/module-stack.mjs verify --target v0.9.81 --full --logs tmp/fork-modules-v081
 node scripts/fork-modules/module-stack.mjs verify --target v0.9.84 --full --logs tmp/fork-modules-v084
+node scripts/fork-modules/module-stack.mjs verify --target v0.9.86 --full --logs tmp/fork-modules-v086
 ```
+
+v0.9.86(`5c25a31f…`) 어댑터는 `compat/v0.9.86/`에 있다. 충돌한 transfer-integration·model-compat·distribution·host-bridges와 storage-recovery만 새로 두고 나머지는 .84 어댑터나 기준 패치를 그대로 쓴다. storage-recovery는 원작 `trash-cleanup.cjs`/`.test.ts`를 targetHosts(원작 SHA)로 소유해 기본 자동삭제를 끄고(`RISUBARD_TRASH_RETENTION_DAYS` 명시 시만 정리) transaction-recovery·shutdown-recovery를 보존한다. model-compat는 기준판에 이미 있는 Wiki 프리셋·문체 7경로를 ordinary host로 소유하며 기준판 내용은 그대로이고 .86 어댑터만 기존 저장 목록·선택·문체 값을 보존한다.
 
 모두 새 임시 체크아웃에서 실행한다. report.json의 work가 조립 결과 위치다. 설치본·save·NAS·장치는 건드리지 않는다. 원작 파일이 충돌하면 해당 기능에서 멈추며 원작 파일을 현재 포크 파일로 덮어쓰지 않는다. 새 파일도 원작에 다른 내용으로 생겼으면 중단한다. 세 대상의 `--full`은 서버 검사가 무거우므로 동시에 돌리지 말고 순서대로 실행한다.
 

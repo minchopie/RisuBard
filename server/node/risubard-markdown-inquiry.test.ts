@@ -2,6 +2,7 @@ import { get_encoding } from '@dqbd/tiktoken'
 import { describe, expect, test } from 'vitest'
 import type { MarkdownWikiDocument } from './risubard-markdown-wiki'
 import { inquireMarkdownDocuments } from './risubard-markdown-inquiry'
+import { RESOLVED_SOURCE_SCORE } from '../../src/ts/risubard/historicalSourceRecall'
 
 function document(
     input: Partial<MarkdownWikiDocument> & Pick<
@@ -679,6 +680,133 @@ describe('progressive Markdown inquiry', () => {
         ])
     })
 
+    test('a scene with several named characters keeps each one\'s current state', () => {
+        const names = ['미도리야', '바쿠고', '토도로키', '우라라카']
+        const documents = names.map((name, index) => document({ id: `character.${index}`, type: 'character', title: name,
+            relativePath: `characters/${index}.md`, content: [`## ${name}`, '', '### 현재 상태', '', `- 현재마커${index}: 훈련장에서 대기 중이다.`, '',
+                '### 지식과 비밀', '', ...Array.from({ length: 80 }, (_, turn) => `- ${turn + 1}번째 훈련에서 새 기술을 익혔다.`)].join('\n') }))
+        const result = inquireMarkdownDocuments({ documents, contextSelection: 'auto',
+            currentInput: `${names.join(', ')} 모두 훈련장에 모였다. 다들 지금 몸 상태가 어때?`,
+            tokenBudget: { target: 4_000, events: 3_000, perSource: 2_000, maximum: 7_500 } })
+        const context = result.sources.map((source) => source.content).join('\n')
+        expect(names.filter((_, index) => context.includes(`현재마커${index}:`))).toEqual(names)
+    })
+
+    test('a scene whose original comes along keeps only its heading, so two scenes fit whole', () => {
+        const scene = (id: string, title: string, messageId: string) => document({ id, type: 'event', title,
+            relativePath: `events/${id}.md`, sourceMessageIds: [messageId],
+            content: `## ${title}\n\n` + `- ${title} 장면에서 꽃다발 이야기가 길게 이어졌다.`.repeat(12) })
+        const original = (messageId: string, occurredAt: number, text: string) => ({
+            messageId, role: 'assistant' as const, occurredAt, score: 1_000, content: `${text} `.repeat(15) })
+        const result = inquireMarkdownDocuments({
+            currentInput: '던진 꽃다발이 다음 날 아침 어디 있었는지 기억나? 던진 꽃다발 다음 날 아침',
+            documents: [scene('throw', '던진 꽃다발', 'turn-1'), scene('morning', '다음 날 아침 꽃다발', 'turn-7')],
+            sourceMatches: [original('turn-1', 1, '폐품상은 꽃다발을 바닥에 던졌다.'),
+                original('turn-7', 7, '눈을 뜨니 배 위에 꽃다발이 올려져 있었다.')],
+            tokenBudget: { target: 200, events: 2_000, perSource: 1_000, maximum: 1_100 },
+        })
+        const ids = result.sources.map((source) => source.id)
+        expect(ids).toContain('narrative-memory:source:turn-1:1')
+        expect(ids).toContain('narrative-memory:source:turn-7:7')
+        for (const event of result.sources.filter((source) => source.id.includes(':wiki:events/'))) {
+            expect(event.content).toContain('[Summary omitted: the original text of this scene follows]')
+        }
+        expect(result.metrics.selectedTokens).toBeLessThanOrEqual(1_100)
+    })
+
+    test('the best query match comes before routed scenes even when no summary mentions it', () => {
+        const scene = (id: string, title: string, messageId: string) => document({ id, type: 'event', title,
+            relativePath: `events/${id}.md`, sourceMessageIds: [messageId],
+            content: `## ${title}\n\n- ${title}: 유메미가 전구 이야기를 했다.` })
+        const original = (messageId: string, occurredAt: number, score: number, text: string) => ({
+            messageId, role: 'assistant' as const, occurredAt, score, content: `${text} `.repeat(20) })
+        const result = inquireMarkdownDocuments({
+            currentInput: '유메미가 말한 전구 여분은 몇 개였고, 전기 흘려 봤을 때 쓸 수 있는 건 몇 개였지?',
+            documents: [scene('stock', '전구 재고 확인', 'turn-7'), scene('welcome', '첫 만남 전구 안내', 'turn-1')],
+            // The summary of turn 9 dropped the test result, so only its original text can answer.
+            sourceMatches: [
+                original('turn-7', 7, RESOLVED_SOURCE_SCORE, '예비 전구는 재고가 4개 남아 있다고 했다.'),
+                original('turn-1', 1, RESOLVED_SOURCE_SCORE, '유메미가 손님을 맞으며 전구 안내를 했다.'),
+                original('turn-9', 9, 4, '전기를 흘려 본 결과 4개 중에 2개의 전구가 무사했다.'),
+            ],
+            sourceLimit: 2,
+            tokenBudget: { target: 200, events: 2_000, perSource: 1_000, maximum: 1_500 },
+        })
+        const ids = result.sources.map((source) => source.id)
+        expect(ids).toContain('narrative-memory:source:turn-9:9')
+        expect(ids).toContain('narrative-memory:source:turn-7:7')
+        expect(ids).not.toContain('narrative-memory:source:turn-1:1')
+    })
+
+    test('ranked originals come before pages and replace the scored choice of originals', () => {
+        const page = document({ id: 'yumemi', type: 'character', title: '유메미', relativePath: 'characters/yumemi.md',
+            content: `## 유메미\n\n${'- 유메미는 플라네타리움의 안내 로봇이다. 전구 이야기를 좋아한다.\n'.repeat(40)}` })
+        const scene = document({ id: 'stock', type: 'event', title: '전구 재고 확인', relativePath: 'events/stock.md',
+            sourceMessageIds: ['turn-7'], content: '## 전구 재고 확인\n\n- 유메미가 전구 재고를 말했다.' })
+        const original = (messageId: string, occurredAt: number, score: number, text: string) => ({
+            messageId, role: 'assistant' as const, occurredAt, score, content: `${text} `.repeat(20) })
+        const input = {
+            currentInput: '유메미가 말한 전구 여분은 몇 개였고, 전기 흘려 봤을 때 쓸 수 있는 건 몇 개였지?',
+            documents: [page, scene],
+            sourceMatches: [
+                original('turn-9', 9, 4, '전기를 흘려 본 결과 4개 중에 2개의 전구가 무사했다.'),
+                original('turn-7', 7, RESOLVED_SOURCE_SCORE, '예비 전구는 재고가 4개 남아 있다고 했다.'),
+                original('turn-3', 3, 6, '유메미가 전구 이야기를 하며 웃었다.'),
+            ],
+            sourceLimit: 4,
+            tokenBudget: { target: 1_000, events: 1_000, perSource: 400, maximum: 1_400 },
+        }
+        const plain = inquireMarkdownDocuments(input).sources.map((source) => source.id)
+        expect(plain).toContain('narrative-memory:wiki:characters/yumemi.md')
+        const ranked = inquireMarkdownDocuments({ ...input, rankedSourceIds: ['turn-7', 'turn-9'] })
+        const ids = ranked.sources.map((source) => source.id)
+        // Both ranked originals fit although the page lane alone could have used the room.
+        expect(ids.filter((id) => id.includes(':source:'))).toEqual([
+            'narrative-memory:source:turn-7:7', 'narrative-memory:source:turn-9:9'])
+        expect(ranked.sources.find((source) => source.id.endsWith('turn-7:7'))?.displayName).toContain('전구 재고 확인')
+        expect(ranked.metrics.selectedTokens).toBeLessThanOrEqual(1_400)
+    })
+
+    test('a long canon page gives way to the original text of the selected event', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '유메미, 마지막 식량 섭취 때 내가 뭘 먹었지?',
+            documents: [
+                document({ id: 'yumemi', type: 'character', title: '유메미', relativePath: 'characters/yumemi.md',
+                    content: '## 유메미\n\n' + '유메미는 플라네타리움의 해설원 로봇이다. '.repeat(200) }),
+                document({ id: 'meal', type: 'event', title: '마지막 식량 섭취', relativePath: 'events/meal.md',
+                    sourceMessageIds: ['turn-5'], content: '## 마지막 식량 섭취\n\n- 배낭의 마지막 식량을 먹었다.' }),
+                document({ id: 'store', type: 'event', title: '식량 이야기', relativePath: 'events/store.md',
+                    sourceMessageIds: ['turn-9'], content: '## 식량 이야기\n\n- 식량이 바닥났다.' }),
+            ],
+            // Lexical recall scored the asked-for turn low; a requested turn came back at the resolver's score.
+            sourceMatches: [
+                { messageId: 'turn-9', role: 'assistant', occurredAt: 9, score: 1_000, content: '식량 창고는 비어 있었다. '.repeat(20) },
+                { messageId: 'turn-5', role: 'assistant', occurredAt: 5, score: 2, content: '정수기로 거른 물에서 녹 냄새가 났다. '.repeat(12) + '마지막 알루미늄 팩의 하드 비스킷을 물과 함께 삼켰다.' },
+            ],
+            sourceLimit: 1,
+            tokenBudget: { target: 700, events: 700, perSource: 400, maximum: 1_200 },
+        })
+        const sources = result.sources.map(source => source.id)
+        expect(sources).toContain('narrative-memory:source:turn-5:5')
+        expect(sources).not.toContain('narrative-memory:source:turn-9:9')
+        expect(sources).toContain('narrative-memory:wiki:events/meal.md')
+        expect(result.sources.find(source => source.id === 'narrative-memory:wiki:characters/yumemi.md')?.tokens ?? 0)
+            .toBeLessThan(400)
+    })
+
+    test('long canon pages placed before events leave room for the matching event', () => {
+        const page = (id: string, title: string) => document({ id, type: 'character', title,
+            relativePath: `characters/${id}.md`, content: `## ${title}\n\n` + `${title}는 프로그램 카드를 기억한다. `.repeat(200) })
+        const result = inquireMarkdownDocuments({
+            currentInput: '유메미, 폐품상에게 뽑아 준 프로그램 카드에 찍힌 제목은?',
+            documents: [page('yumemi', '유메미'), page('junker', '폐품상'), document({
+                id: 'card', type: 'event', title: '프로그램 카드 출력', relativePath: 'events/card.md',
+                content: '## 프로그램 카드 출력\n\n- 이번 달 투영 제목이 찍힌 프로그램 카드를 뽑아 주었다.' })],
+            tokenBudget: { target: 800, events: 800, perSource: 400, maximum: 1_200 },
+        })
+        expect(result.sources.map(source => source.id)).toContain('narrative-memory:wiki:events/card.md')
+    })
+
     test('labels event sources with their canonical title and stable ID', () => {
         const result = inquireMarkdownDocuments({
             currentInput: '네 처녀의 실종을 확인한다.',
@@ -1217,30 +1345,38 @@ describe('progressive Markdown inquiry', () => {
         }))
         const isSource = (source: { id: string }) => source.id.startsWith('narrative-memory:source:')
 
-        test('trims it to the room that is left instead of dropping it', () => {
+        test('gives each named page a share of the page lane and trims the last to what is left', () => {
             const input = { documents, currentInput: '미오와 하루가 함께 걷는다.' }
-            const trimmed = inquireMarkdownDocuments({
+            // A 1,200-token lane holds pages of at most 512 tokens, so both characters fit.
+            const shared = inquireMarkdownDocuments({
                 ...input, tokenBudget: { target: 1200, events: 256, perSource: 1000, maximum: 3000 },
             })
-            expect(trimmed.sources).toHaveLength(2)
-            const [first, second] = trimmed.sources
-            expect(first.content.startsWith('[Partial canon excerpt')).toBe(false)
-            expect(first.tokens).toBeGreaterThanOrEqual(900)
-            expect(second.content.startsWith(marker)).toBe(true)
-            expect(second.content).toContain('### 현재 상태')
-            expect(second.tokens).toBe(tokens(second.content))
-            expect(second.tokens).toBeLessThanOrEqual(1200 - first.tokens)
-            expect(trimmed.metrics.selectedTokens).toBeLessThanOrEqual(1200)
+            expect(shared.sources).toHaveLength(2)
+            for (const source of shared.sources) {
+                expect(source.tokens).toBeLessThanOrEqual(512)
+                expect(source.content).toContain('### 현재 상태')
+            }
+            expect(shared.metrics.selectedTokens).toBeLessThanOrEqual(1200)
 
-            // Less than 256 tokens of room is not worth a fragment.
             const tight = inquireMarkdownDocuments({
                 ...input, tokenBudget: { target: 1000, events: 256, perSource: 1000, maximum: 3000 },
             })
-            expect(tight.sources).toHaveLength(1)
-            expect(tight.sources[0].content.startsWith('[Partial canon excerpt')).toBe(false)
+            expect(tight.sources).toHaveLength(2)
+            const [first, second] = tight.sources
+            expect(first.content.startsWith('[Partial canon excerpt')).toBe(false)
+            expect(second.content.startsWith(marker)).toBe(true)
+            expect(second.content).toContain('### 현재 상태')
+            expect(second.tokens).toBe(tokens(second.content))
+            expect(second.tokens).toBeLessThanOrEqual(1000 - first.tokens)
+
+            // Less than 256 tokens of room is not worth a fragment.
+            const tiny = inquireMarkdownDocuments({
+                ...input, tokenBudget: { target: 700, events: 256, perSource: 1000, maximum: 3000 },
+            })
+            expect(tiny.sources).toHaveLength(1)
         })
 
-        test('only fills what is left after whole documents and original evidence are packed', () => {
+        test('original evidence uses the rest of the cap and never takes room from pages', () => {
             const input = {
                 documents, currentInput: '미오와 하루, 그때 무슨 말을 했는지 자세히 떠올려 줘.',
                 sourceMatches: [{
@@ -1248,25 +1384,22 @@ describe('progressive Markdown inquiry', () => {
                     content: '미오는 북문 앞에서 하루에게 약속을 지키겠다고 말했다. '.repeat(3).trim(),
                 }],
             }
-            const trimmed = inquireMarkdownDocuments({
-                ...input, tokenBudget: { target: 1400, events: 256, perSource: 1000, maximum: 3000 },
+            const result = inquireMarkdownDocuments({
+                ...input, tokenBudget: { target: 1100, events: 256, perSource: 1000, maximum: 1600 },
             })
-            const evidence = trimmed.sources.filter(isSource)
-            const canonSources = trimmed.sources.filter((source) => !isSource(source))
+            const evidence = result.sources.filter(isSource)
+            const pages = result.sources.filter((source) => !isSource(source))
             expect(evidence).toHaveLength(1)
-            expect(canonSources).toHaveLength(2)
-            expect(canonSources[0].content.startsWith('[Partial canon excerpt')).toBe(false)
-            expect(canonSources[1].content.startsWith(marker)).toBe(true)
-            expect(canonSources[1].tokens).toBeLessThanOrEqual(1400 - canonSources[0].tokens - evidence[0].tokens)
-            expect(trimmed.metrics.selectedTokens).toBeLessThanOrEqual(1400)
+            expect(pages).toHaveLength(2)
+            expect(pages.reduce((sum, source) => sum + source.tokens, 0)).toBeLessThanOrEqual(1100)
+            expect(result.metrics.selectedTokens).toBeLessThanOrEqual(1600)
 
-            // Without room for a fragment the evidence stays and the second document is absent.
-            const tight = inquireMarkdownDocuments({
-                ...input, tokenBudget: { target: 1100, events: 256, perSource: 1000, maximum: 3000 },
+            // With no room left under the cap, the pages stay and the evidence is left out.
+            const full = inquireMarkdownDocuments({
+                ...input, tokenBudget: { target: 1100, events: 256, perSource: 1000, maximum: 1050 },
             })
-            expect(tight.sources.filter(isSource)).toHaveLength(1)
-            expect(tight.sources.filter((source) => !isSource(source))).toHaveLength(1)
-            expect(tight.sources.some((source) => source.content.startsWith('[Partial canon excerpt'))).toBe(false)
+            expect(full.sources.filter(isSource)).toHaveLength(0)
+            expect(full.sources.filter((source) => !isSource(source)).length).toBeGreaterThan(0)
         })
     })
 })

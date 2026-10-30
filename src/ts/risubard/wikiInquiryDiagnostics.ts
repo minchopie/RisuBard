@@ -28,8 +28,17 @@ export function wikiInquiryFailure(error: unknown): WikiInquiryFailure {
     return { code: 'invalid-response' }
 }
 
+const semanticSkipLabels = {
+    'not-ready': '의미 검색 제외: 임베딩 색인 만드는 중',
+    'build-failed': '의미 검색 제외: 임베딩 색인 만들기 실패',
+    timeout: '의미 검색 제외: 위키 조회 제한 시간 안에 임베딩 응답 없음',
+    error: '의미 검색 제외: 임베딩 요청 실패',
+} as const
+
 export interface WikiInquiryDiagnostic {
     status: 'skipped' | 'failed' | 'empty' | 'not-injected' | 'partial' | 'injected'
+    /** Semantic search was on but contributed nothing, and why. */
+    semanticSkip?: keyof typeof semanticSkipLabels
     documentCount?: number
     candidateCount?: number
     selectedWikiCount?: number
@@ -43,6 +52,7 @@ export function createWikiInquiryDiagnostic(input: {
     documentCount?: number
     candidateCount?: number
     failure?: WikiInquiryFailure
+    semanticSkip?: WikiInquiryDiagnostic['semanticSkip']
     sources: readonly { id: string; content: string }[]
     messages: readonly { content: string }[]
 }): WikiInquiryDiagnostic {
@@ -59,6 +69,7 @@ export function createWikiInquiryDiagnostic(input: {
         ...(input.attempted && !input.failure ? { selectedWikiCount: wiki.length } : {}),
         injectedWikiCount: injected.length,
         ...(input.failure ? { failure: input.failure } : {}),
+        ...(input.semanticSkip && Object.hasOwn(semanticSkipLabels, input.semanticSkip) ? { semanticSkip: input.semanticSkip } : {}),
     }
 }
 
@@ -73,5 +84,6 @@ export function formatWikiInquiryDiagnostic(value: WikiInquiryDiagnostic): strin
         `검색 대상 문서 ${count(value.documentCount)}`, `후보 ${count(value.candidateCount)}`,
         `선택 위키 ${count(value.selectedWikiCount)}`, `최종 포함 ${count(value.injectedWikiCount)}`,
         ...(value.failure ? [`${failureLabels[value.failure.code]}${value.failure.httpStatus ? ` (HTTP ${value.failure.httpStatus})` : ''}`] : []),
+        ...(value.semanticSkip && Object.hasOwn(semanticSkipLabels, value.semanticSkip) ? [semanticSkipLabels[value.semanticSkip]] : []),
     ].join(' / ')
 }

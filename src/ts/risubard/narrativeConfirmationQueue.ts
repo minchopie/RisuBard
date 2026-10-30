@@ -31,6 +31,11 @@ export function enqueueNarrativeConfirmation<T>(
     return run
 }
 
+/** Settles once the chat's queued and running analyses have finished, however they ended. */
+export function narrativeConfirmationsSettled(key: string): Promise<void> {
+    return chains.get(key) ?? Promise.resolve()
+}
+
 export function pendingNarrativeConfirmationKeys(): string[] {
     return [...chains.keys()]
 }

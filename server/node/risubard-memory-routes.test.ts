@@ -826,6 +826,28 @@ describe('RisuBard memory routes', () => {
         expect(harness.response.statusCode).toBe(400)
         expect(service.inquireNarrative).toHaveBeenCalledTimes(2)
 
+        // A ranked id must name a supplied source: a rerank reorders text, never adds it.
+        for (const rankedSourceIds of [['message-0'], ['unknown'], ['message-0', 'message-0']]) {
+            await harness.routes.get('/api/risubard/memory/inquiry')!(
+                {
+                    body: {
+                        characterId: 'character',
+                        chatId: 'chat',
+                        currentInput: 'bridge',
+                        sourceMatches: [{ messageId: 'message-0', role: 'assistant', content: 'bounded source', score: 1, occurredAt: 0 }],
+                        rankedSourceIds,
+                    },
+                },
+                harness.response,
+                vi.fn()
+            )
+            if (rankedSourceIds.length === 1 && rankedSourceIds[0] === 'message-0') {
+                expect(service.inquireNarrative).toHaveBeenLastCalledWith(expect.objectContaining({ rankedSourceIds }))
+            }
+            else expect(harness.response.statusCode).toBe(400)
+        }
+        expect(service.inquireNarrative).toHaveBeenCalledTimes(3)
+
         await harness.routes.get('/api/risubard/memory/inquiry')!(
             {
                 body: {
@@ -842,7 +864,7 @@ describe('RisuBard memory routes', () => {
             vi.fn()
         )
         expect(harness.response.statusCode).toBe(400)
-        expect(service.inquireNarrative).toHaveBeenCalledTimes(2)
+        expect(service.inquireNarrative).toHaveBeenCalledTimes(3)
 
         await harness.routes.get('/api/risubard/memory/inquiry')!(
             {

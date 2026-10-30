@@ -37,6 +37,8 @@
         reanalyzeNarrativeMessage,
         doingChat,
         executeCurrentNarrativeWikiCommand,
+        previewCurrentCanonCompression,
+        applyCurrentCanonCompression,
         forceCurrentNarrativeWikiUpdate,
         retryNarrativeBacklog,
         skipNarrativeBacklogTurn,
@@ -2112,6 +2114,8 @@ import { isMobile } from 'src/ts/platform'
             onResumeWikiReboot={resumeCurrentWikiReboot}
             onCancelWikiReboot={cancelCurrentWikiReboot}
             onExecuteWikiCommand={executeCurrentNarrativeWikiCommand}
+            onPreviewCanonCompression={previewCurrentCanonCompression}
+            onApplyCanonCompression={applyCurrentCanonCompression}
             onNavigateStorySource={navigateStorySource}
             onNavigateOocMessage={scrollToMessage}
         />

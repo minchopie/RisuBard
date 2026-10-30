@@ -127,7 +127,7 @@ describe('actual narrative inquiry prompt', () => {
         })).rejects.toMatchObject({ code: 'budget-exceeded', httpStatus: 500 })
     })
 
-    it('re-excerpts an already supplied source using the verified semantic event identity', async () => {
+    it('keeps the excerpt of a source the query already found instead of re-requesting it', async () => {
         const request = { messageId: 'm', eventTitle: 'Archive', documentId: 'event' }
         const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
             mode: 'v2-current', graphRevision: 0, indexRevision: 0, cacheStatus: 'current',
@@ -145,11 +145,9 @@ describe('actual narrative inquiry prompt', () => {
             sourceMatches: [{ messageId: 'm', role: 'assistant', occurredAt: 1, score: 2, content: 'Misleading beginning.' }],
             resolveSourceMatches: resolve, fetchImpl, createAuth: async () => 'auth',
         })
-        expect(resolve).toHaveBeenCalledWith(['m'], [request])
-        expect(fetchImpl).toHaveBeenCalledTimes(2)
-        const body = JSON.parse((fetchImpl as any).mock.calls[1][1].body)
-        expect(body.sourceMatches[0].content).toContain('exact remembered sentence')
-        expect(body.semanticMatches[0]).toMatchObject({ contentHash: 'hash', start: 12000, end: 12500 })
+        // Re-centring a found source on a summary passage replaced excerpts that held the answer.
+        expect(resolve).not.toHaveBeenCalled()
+        expect(fetchImpl).toHaveBeenCalledTimes(1)
     })
 
     it('assigns one stable v2 session ID to an idless legacy chat', () => {

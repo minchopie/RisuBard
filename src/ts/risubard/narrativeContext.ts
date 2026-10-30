@@ -129,6 +129,8 @@ export async function loadNarrativeInquiry(input: {
     }[]
     sourceMatches?: readonly HistoricalSourceMatch[]
     sourceLimit?: number
+    /** Supplied sources a reranking model kept, best first; the server reads them before pages. */
+    rankedSourceIds?: readonly string[]
     timeline?: { messages: readonly { chatId: string; role: 'user' | 'char' }[] }
     resolveSourceMatches?: (
         messageIds: readonly string[],
@@ -208,6 +210,9 @@ export async function loadNarrativeInquiry(input: {
                                     32,
                                     Math.trunc(input.sourceLimit)
                                 )) }),
+                            ...(input.rankedSourceIds?.length
+                                ? { rankedSourceIds: input.rankedSourceIds.slice(0, 8) }
+                                : {}),
                             ...(input.timeline === undefined || input.timeline.messages.length === 0
                                 ? {}
                                 : { timeline: { messages: input.timeline.messages.slice(-96)
@@ -412,7 +417,8 @@ export async function loadNarrativeInquiry(input: {
         (input.sourceMatches ?? []).map((match) => match.messageId)
     )
     const missingSourceIds = evidenceRequests
-        .filter((request) => request.documentId || !suppliedSourceIds.has(request.messageId))
+        // A source the query already found keeps its excerpt; re-centring it on a summary passage lost the answer.
+        .filter((request) => !suppliedSourceIds.has(request.messageId))
         .map((request) => request.messageId)
     if (input.resolveSourceMatches && missingSourceIds.length > 0) {
         const resolved = await input.resolveSourceMatches(missingSourceIds, evidenceRequests)

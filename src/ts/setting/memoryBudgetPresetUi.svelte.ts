@@ -1,5 +1,6 @@
 import { detectMemoryBudgetPreset } from '../risubard/memoryBudgetPreset'
 import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings'
+import { normalizeRisuBardWikiSettingsView } from '../risubard/wikiScalePreset'
 import type { SettingContext } from './types'
 
 /**
@@ -8,7 +9,13 @@ import type { SettingContext } from './types'
  */
 export const memoryBudgetPresetUi = $state({ customOpen: false })
 
-/** The six individual entries are visible for 커스텀 (chosen explicitly or derived from non-tier values). */
-export function showMemoryBudgetFields({ db }: SettingContext): boolean {
-    return memoryBudgetPresetUi.customOpen || detectMemoryBudgetPreset(resolveRisuBardChatSettings(db)) === 'custom'
+/** Detailed BardWiki entries appear only in the advanced settings view. */
+export function showAdvancedWikiSettings({ db }: SettingContext): boolean {
+    return normalizeRisuBardWikiSettingsView(db.risuBardWikiSettingsView) === 'advanced'
+}
+
+/** The six individual entries are visible for 커스텀 (chosen explicitly or derived from non-tier values) in the advanced view. */
+export function showMemoryBudgetFields(ctx: SettingContext): boolean {
+    return showAdvancedWikiSettings(ctx) && (memoryBudgetPresetUi.customOpen
+        || detectMemoryBudgetPreset(resolveRisuBardChatSettings(ctx.db)) === 'custom')
 }

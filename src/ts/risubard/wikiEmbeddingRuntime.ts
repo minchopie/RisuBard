@@ -64,9 +64,10 @@ export class WikiEmbeddingRuntime<Settings extends { enabled: boolean }> {
         })()
     }
 
-    async search(current: string, recent: string) {
+    /** Waits for the query embedding up to the user's wiki lookup time; a remote model can take seconds. */
+    async search(current: string, recent: string, timeoutMs = 2000) {
         const entry = this.entry
-        const result = await entry?.index.search(current, recent, 2000, { maximumDocuments: 12, maximumPassagesPerDocument: 3 })
+        const result = await entry?.index.search(current, recent, timeoutMs, { maximumDocuments: 12, maximumPassagesPerDocument: 3 })
         return entry && this.entry === entry && result
             ? result : { matches: [], evidenceQuery: '', evidenceHints: {} as Record<string, string> }
     }

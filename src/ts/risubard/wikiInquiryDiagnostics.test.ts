@@ -23,6 +23,15 @@ describe('wiki inquiry diagnostics', () => {
         expect(formatWikiInquiryDiagnostic(diagnostic)).toContain('필수 위키')
         expect(formatWikiInquiryDiagnostic(diagnostic)).toContain('500')
     })
+    it('says when semantic search was on but left out, and why', () => {
+        const marker = `[source ${JSON.stringify(source.id)}]`
+        const diagnostic = createWikiInquiryDiagnostic({ ...observation, semanticSkip: 'timeout',
+            messages: [{ content: `${marker} ${source.content}` }] })
+        expect(diagnostic).toMatchObject({ status: 'injected', semanticSkip: 'timeout' })
+        expect(formatWikiInquiryDiagnostic(diagnostic)).toContain('의미 검색 제외: 위키 조회 제한 시간 안에 임베딩 응답 없음')
+        expect(createWikiInquiryDiagnostic({ ...observation, messages: [] }).semanticSkip).toBeUndefined()
+        expect(createWikiInquiryDiagnostic({ ...observation, semanticSkip: 'bogus' as never, messages: [] }).semanticSkip).toBeUndefined()
+    })
     it('does not retain raw exception messages or document bodies', () => {
         const failure = wikiInquiryFailure(new Error('secret prompt E:/private/file.md API_KEY=secret'))
         expect(JSON.stringify(failure)).not.toMatch(/secret|private|API_KEY/)

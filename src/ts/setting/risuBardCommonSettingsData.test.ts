@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { memoryBudgetPresetValues } from '../risubard/memoryBudgetPreset'
-import { memoryBudgetPresetUi, showMemoryBudgetFields } from './memoryBudgetPresetUi.svelte'
+import { memoryBudgetPresetUi, showAdvancedWikiSettings, showMemoryBudgetFields } from './memoryBudgetPresetUi.svelte'
 import { risuBardCommonSettingsItems } from './risuBardCommonSettingsData'
 
 describe('RisuBard common Arca settings', () => {
@@ -61,12 +61,14 @@ describe('RisuBard common memory budget preset settings', () => {
     it('gates only the six budget entries and keeps the other search entries visible', () => {
         for (const id of gatedIds) expect(find(id)?.condition, id).toBe(showMemoryBudgetFields)
         for (const id of ['risubard.chat.inquiryTimeoutMs', 'risubard.chat.historicalSourceMatchLimit', 'risubard.chat.analysisTokenLimit']) {
-            expect(find(id)?.condition, id).toBeUndefined()
+            expect(find(id)?.condition, id).toBe(showAdvancedWikiSettings)
         }
     })
 
     it('hides the entries for a tier and shows them for custom values or an explicit custom choice', () => {
-        const visible = (db: object) => gatedIds.map((id) => find(id)!.condition!({ db } as any))
+        const visible = (db: object, view = 'advanced') => gatedIds.map((id) =>
+            find(id)!.condition!({ db: { risuBardWikiSettingsView: view, ...db } } as any))
+        expect(visible({ risuBardDynamicMemoryMode: 'off' }, 'simple')).toEqual(gatedIds.map(() => false))
         expect(visible({})).toEqual(gatedIds.map(() => false))
         for (const id of ['economy', 'standard', 'generous'] as const) {
             expect(visible(memoryBudgetPresetValues(id))).toEqual(gatedIds.map(() => false))

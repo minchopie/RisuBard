@@ -38,6 +38,7 @@ import RisuBardArcPlotterPresets from 'src/lib/Setting/Pages/RisuBardArcPlotterP
 import RisuBardGrimoireLanguageSettings from 'src/lib/Setting/Pages/RisuBardGrimoireLanguageSettings.svelte';
 import WikiEmbeddingSettings from 'src/lib/Setting/Pages/WikiEmbeddingSettings.svelte';
 import RisuBardDynamicMemorySettings from 'src/lib/Setting/Pages/RisuBardDynamicMemorySettings.svelte';
+import RisuBardWikiSettingsView from 'src/lib/Setting/Pages/RisuBardWikiSettingsView.svelte';
 import RisuBardMemoryBudgetPreset from 'src/lib/Setting/Pages/RisuBardMemoryBudgetPreset.svelte';
 
 /**
@@ -69,6 +70,7 @@ export const customComponents: Record<string, Component<any>> = {
     'WikiEmbeddingSettings': WikiEmbeddingSettings,
     'RisuBardDynamicMemorySettings': RisuBardDynamicMemorySettings,
     'RisuBardMemoryBudgetPreset': RisuBardMemoryBudgetPreset,
+    'RisuBardWikiSettingsView': RisuBardWikiSettingsView,
     // Add more as we migrate complex settings
 } as const;
 

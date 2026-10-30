@@ -1,0 +1,1231 @@
+diff --git a/server/node/logs.cjs b/server/node/logs.cjs
+index 55a08a3..7f2c380 100644
+--- a/server/node/logs.cjs
++++ b/server/node/logs.cjs
+@@ -3,7 +3,7 @@
+ const path = require('path');
+ const fs = require('fs');
+ const os = require('os');
+-const { atomicWriteFile, atomicWriteJson, readVerifiedJson } = require('./file-store.cjs');
++const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
+ const { resolveDataRoot } = require('./data-root.cjs');
+ 
+ const MAX_ROWS = 5000;
+@@ -17,19 +17,21 @@ const logFile = path.join(logRoot, 'system.jsonl');
+ const stateFile = path.join(logRoot, 'state.json');
+ const writeLockFile = path.join(logRoot, '.write.lock');
+ const LOCK_WAIT_MS = 5;
+-const LOCK_TIMEOUT_MS = 5000;
++// Several processes can queue fsynced writes on a slow Windows disk.
++const LOCK_TIMEOUT_MS = 30000;
+ const LOCK_OWNER_GRACE_MS = 100;
+-const LOCK_STALE_MS = 30000;
+ const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
++let holdingWriteLock = false;
+ fs.mkdirSync(logRoot, { recursive: true });
+ 
+ function processIsAlive(pid) {
+     if (!Number.isInteger(pid) || pid < 1) return false;
++    if (pid === process.pid) return holdingWriteLock;
+     try {
+         process.kill(pid, 0);
+         return true;
+     } catch (error) {
+-        return error?.code !== 'ESRCH';
++        return error?.code !== 'ESRCH' && !(process.env.RISUBARD_EMBEDDED_ANDROID === '1' && error?.code === 'EPERM');
+     }
+ }
+ 
+@@ -39,7 +41,7 @@ function removeStaleWriteLock() {
+         const pid = Number.parseInt(fs.readFileSync(writeLockFile, 'utf8'), 10);
+         const age = Date.now() - stat.mtimeMs;
+         if (!Number.isInteger(pid) && age < LOCK_OWNER_GRACE_MS) return false;
+-        if (processIsAlive(pid) && age < LOCK_STALE_MS) return false;
++        if (processIsAlive(pid)) return false;
+         fs.unlinkSync(writeLockFile);
+         return true;
+     } catch (error) {
+@@ -52,7 +54,9 @@ function acquireWriteLock() {
+     while (Date.now() - startedAt < LOCK_TIMEOUT_MS) {
+         try {
+             const fd = fs.openSync(writeLockFile, 'wx', 0o600);
+-            fs.writeFileSync(fd, String(process.pid), 'utf8');
++            try { fs.writeFileSync(fd, String(process.pid), 'utf8'); }
++            catch (error) { fs.closeSync(fd); throw error; }
++            holdingWriteLock = true;
+             return fd;
+         } catch (error) {
+             const isWindowsLockContention = process.platform === 'win32'
+@@ -71,7 +75,8 @@ function withWriteLock(action) {
+         return action();
+     } finally {
+         try { fs.closeSync(fd); } catch {}
+-        try { fs.unlinkSync(writeLockFile); } catch {}
++        holdingWriteLock = false;
++        retryWindowsSharing(() => { try { fs.unlinkSync(writeLockFile); } catch (error) { if (error?.code !== 'ENOENT') throw error; } });
+     }
+ }
+ 
+@@ -177,7 +182,13 @@ const MASK_PATTERNS = [
+ 
+ function maskSensitive(value) {
+     if (typeof value !== 'string') return value;
+-    let out = value;
++    // Provider keys in URLs may be opaque and query names can be percent-encoded.
++    let out = value.replace(/([?&](?:amp;)?)([^=&#\s"']+)=([^&#\s"']*)/g, (match, prefix, name) => {
++        let key;
++        try { key = decodeURIComponent(name).toLowerCase(); } catch { return match; }
++        return /^(?:key|api[-_]?key|x-goog-api-key|token|access[-_]?token|refresh[-_]?token|auth|authorization|password|secret|signature|x-amz-signature|x-amz-credential|x-amz-security-token)$/.test(key)
++            ? `${prefix}${name}=[REDACTED]` : match;
++    });
+     for (const { re, replacement } of MASK_PATTERNS) {
+         out = out.replace(re, replacement);
+     }
+diff --git a/server/node/logs.test.ts b/server/node/logs.test.ts
+index 3ef5c95..5f51b76 100644
+--- a/server/node/logs.test.ts
++++ b/server/node/logs.test.ts
+@@ -40,6 +40,43 @@ afterEach(() => {
+ })
+ 
+ describe('file-native system logs', () => {
++    test('recovers its own abandoned lock and retries Windows lock release', () => {
++        const root = tempRoot()
++        const result = spawnSync(process.execPath, ['-e', `
++            const fs=require('node:fs'), path=require('node:path');
++            const lock=path.join(process.env.RISUBARD_DATA_ROOT,'logs','.write.lock');
++            fs.writeFileSync(lock,String(process.pid));
++            const logs=require(${JSON.stringify(logsModule)});
++            const unlink=fs.unlinkSync; let failures=0;
++            fs.unlinkSync=function(file){if(process.platform==='win32' && file===lock && failures++===0)throw Object.assign(Error('sharing'),{code:'EPERM'}); return unlink(file)};
++            logs.addLog({level:'info',message:'first'}); logs.addLog({level:'info',message:'second'});
++            if(fs.existsSync(lock))throw Error('left locked');
++        `], { env: { ...process.env, RISUBARD_DATA_ROOT: root }, encoding: 'utf8', timeout: 5000 })
++        expect(result.status, result.stderr).toBe(0)
++        expect(readFileSync(join(root, 'logs/system.jsonl'), 'utf8').trim().split('\n')).toHaveLength(2)
++    })
++    test('does not steal an old lock from a still-running owner', async () => {
++        const root = tempRoot()
++        const lockPath = join(root, 'logs', '.write.lock')
++        writeFileSync(lockPath, String(process.pid))
++        const old = new Date(Date.now() - 60_000)
++        utimesSync(lockPath, old, old)
++        const worker = fork(logsModule, [], {
++            env: { ...process.env, RISUBARD_DATA_ROOT: root },
++            stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
++        })
++        const exited = new Promise<number | null>(resolveExit => worker.once('exit', resolveExit))
++        try {
++            await new Promise(resolveWait => setTimeout(resolveWait, 600))
++            expect(existsSync(lockPath)).toBe(true)
++            expect(worker.exitCode).toBeNull()
++            expect(readFileSync(lockPath, 'utf8')).toBe(String(process.pid))
++        } finally {
++            if (existsSync(lockPath)) unlinkSync(lockPath)
++            await exited
++        }
++    })
++
+     test('repairs a valid log state checksum mismatch when the store opens', () => {
+         const root = tempRoot()
+         const statePath = join(root, 'logs', 'state.json')
+diff --git a/server/node/request-logs.test.ts b/server/node/request-logs.test.ts
+index 5b0b3a2..b970224 100644
+--- a/server/node/request-logs.test.ts
++++ b/server/node/request-logs.test.ts
+@@ -78,6 +78,18 @@ describe('truncation', () => {
+ })
+ 
+ describe('insert and query', () => {
++    it('masks opaque and encoded query credentials before persistence and detail display', () => {
++        const url = 'https://example.invalid/generate?model=keep&%6bey=url-secret&access_token=opaque-token&view=full'
++        logs.addRequestLogBatch([entry({ url, requestHeaders: '{"Authorization":"Bearer header-secret","x-api-key":"header-key"}', errorMessage: `Failed ${url}` })])
++        const row = logs.getRequestLog(logs.queryRequestLogs({})[0].id)
++        expect(row.url).toBe('https://example.invalid/generate?model=keep&%6bey=[REDACTED]&access_token=[REDACTED]&view=full')
++        const disk = fs.readFileSync(path.join(tmpDir, 'request-logs', 'requests.jsonl'), 'utf8')
++        for (const secret of ['url-secret', 'opaque-token', 'header-secret', 'header-key']) {
++            expect(JSON.stringify(row)).not.toContain(secret)
++            expect(disk).not.toContain(secret)
++        }
++    })
++
+     it('writes a request row and a matching usage row', () => {
+         expect(logs.addRequestLogBatch([entry()])).toBe(1)
+ 
+@@ -558,8 +570,20 @@ describe('routes', () => {
+         return false
+     }
+ 
++    // fetch rejects some OS-assigned ports client-side ("bad port") before any request is sent; node:http has no such list,
++    // so the fixture tests HTTP status/body rather than browser port policy (same pattern as play-transfer-http.test.ts).
++    const httpFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array } = {}) => new Promise<Response>((resolve, reject) => {
++        const req = http.request(url, { method: init.method, headers: init.headers }, response => {
++            const chunks: Buffer[] = []
++            response.on('data', chunk => chunks.push(chunk))
++            response.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode })))
++            response.on('error', reject)
++        })
++        req.on('error', reject); req.end(init.body)
++    })
++
+     function get(path: string) {
+-        return fetch(`${base}${path}`, { headers: { 'risu-auth': AUTH_TOKEN } })
++        return httpFetch(`${base}${path}`, { headers: { 'risu-auth': AUTH_TOKEN } })
+     }
+ 
+     beforeEach(async () => {
+@@ -582,7 +606,7 @@ describe('routes', () => {
+     })
+ 
+     async function post(body: unknown) {
+-        return fetch(`${base}/api/request-logs`, {
++        return httpFetch(`${base}/api/request-logs`, {
+             method: 'POST',
+             headers: { 'content-type': 'application/json', 'risu-auth': AUTH_TOKEN },
+             body: JSON.stringify(body),
+@@ -590,7 +614,7 @@ describe('routes', () => {
+     }
+ 
+     it('rejects unauthenticated reads', async () => {
+-        const res = await fetch(`${base}/api/request-logs`)
++        const res = await httpFetch(`${base}/api/request-logs`)
+         expect(res.status).toBe(400)
+     })
+ 
+@@ -673,11 +697,11 @@ describe('routes', () => {
+ 
+     it('clears logs but keeps usage unless asked', async () => {
+         await post(entry())
+-        await fetch(`${base}/api/request-logs`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
++        await httpFetch(`${base}/api/request-logs`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
+         expect((await (await get('/api/request-logs')).json()).total).toBe(0)
+         expect((await (await get('/api/request-logs/usage')).json()).total.requests).toBe(1)
+ 
+-        await fetch(`${base}/api/request-logs?usage=1`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
++        await httpFetch(`${base}/api/request-logs?usage=1`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
+         expect((await (await get('/api/request-logs/usage')).json()).total.requests).toBe(0)
+     })
+ })
+diff --git a/src/lang/help.en.ts b/src/lang/help.en.ts
+index df787b8..8f843b3 100644
+--- a/src/lang/help.en.ts
++++ b/src/lang/help.en.ts
+@@ -446,7 +446,7 @@ export const helpEn = {
+         risuBardResponseRecentMessages:
+             "Number of recent assistant turns referenced when generating a new response. The current user request is always included separately.",
+         risuBardCanonicalWritingStyle:
+-            "Writing style for event summaries and canonical Markdown, independent of wiki writing language. The default style drops decoration and narration and keeps facts a later question may ask about: counts, names, objects and key lines. The former Standard and Ultra concise styles were merged into it.",
++            "Writing style for event summaries and canonical Markdown, independent of wiki writing language. The default style drops decoration and narration and keeps facts a later question may ask about: counts, names, objects and key lines. New choices are Default or Custom; a previously saved Standard or Ultra concise choice is kept with its earlier instruction.",
+         risuBardWikiWritingLanguage:
+             "Language for event analysis, summaries and entire canonical bodies, independent of UI and conversation language. Current-chat settings can override this default. Takes priority over language requests in custom style and Wiki Guides. Existing titles, links, names and evidence quotations are preserved. Existing documents are not automatically translated; select a language and reboot to rebuild the entire wiki. Reboot keeps its starting language. Additional analysis cannot append to an event in another language.",
+         risuBardCanonicalCustomStyle:
+@@ -492,7 +492,7 @@ export const helpEn = {
+         risuBardSourceRerank:
+             "Off by default. Before each answer, the work model (sub or main) reads up to 16 past chat excerpts against the question and keeps up to 4 that actually state the asked quantity, name, line or order; they go in before wiki pages. If none qualifies or the request fails, the usual search result is used. Adds one model request per answer with 10k to 20k input tokens (about $0.002 with Claude Haiku 5.5). Turn it on when answers often get past details wrong.",
+         risuBardHideOocTurns: "Hide OOC replies and their user inputs from the main chat list. Off by default. Read the live transcript in BardWiki's OOC notepad. Applies to all chats without changing saved messages, AI context or wiki analysis settings.",
+-        risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. The current narrative baseline stays in the description position. Turn it off to restore the previous order.",
++        risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. Keeps the original character description and active lorebook text without also inserting their summarized narrative baseline. Turn it off to restore the previous order.",
+         risuBardAnalysisExcludeUsers:
+             "Exclude user messages from the confirmed turn and recent raw context used for BardWiki analysis, leaving assistant responses only.",
+         customBackground: "A custom image used as the chat background.",
+diff --git a/src/lang/help.ko.ts b/src/lang/help.ko.ts
+index 88e6fad..189db56 100644
+--- a/src/lang/help.ko.ts
++++ b/src/lang/help.ko.ts
+@@ -272,7 +272,7 @@ export const helpKo = {
+         "risuBardArcaChatTitleImageStyle": "큰 타원형, 정사각형 크롭, 또는 작은 썸네일을 타이틀 옆에 배치하는 형식 중 하나를 고릅니다.",
+         "risuBardRecentMessages": "BardWiki 분석에 문맥으로 추가할 최근 어시스턴트 턴 수입니다. 사용자 메시지는 ‘위키 분석에서 사용자 메시지 빼기’ 설정을 따릅니다.",
+         "risuBardResponseRecentMessages": "새 답변을 만들 때 참조할 최근 어시스턴트 턴 수입니다. 현재 사용자 요청은 별도로 항상 포함합니다.",
+-        "risuBardCanonicalWritingStyle": "사건 이야기 요약 및 정본 Markdown에 적용할 문체입니다. 위키 작성 언어와 독립적입니다. 기본 문체는 꾸밈과 줄거리 서술을 줄이고 숫자, 이름, 물건, 핵심 대사처럼 나중에 물어볼 만한 사실을 남깁니다. 이전의 표준과 초압축은 기본으로 합쳐졌습니다.",
++        "risuBardCanonicalWritingStyle": "사건 이야기 요약 및 정본 Markdown에 적용할 문체입니다. 위키 작성 언어와 독립적입니다. 기본 문체는 꾸밈과 줄거리 서술을 줄이고 숫자, 이름, 물건, 핵심 대사처럼 나중에 물어볼 만한 사실을 남깁니다. 새로 고를 수 있는 문체는 기본과 사용자 지정입니다. 이전에 저장한 표준·초압축 선택은 기존 지침 그대로 유지합니다.",
+         "risuBardWikiWritingLanguage": "사건 분석·요약과 정본 전체 본문을 작성할 언어입니다. UI·대화 언어와 독립적이며 현재 챗 설정으로 덮어쓸 수 있습니다. 사용자 문체·Wiki Guide의 언어 지시보다 우선합니다. 기존 제목·링크·고유명사·근거 인용은 보존합니다. 기존 문서는 자동 번역되지 않습니다. 전체 위키를 바꾸려면 언어 선택 후 리부트하세요. 리부트는 시작 언어를 유지하며 다른 언어의 기존 사건에 추가 분석을 덧붙이지 않습니다.",
+         "risuBardCanonicalCustomStyle": "문체와 표현 형식만 지정할 수 있습니다. 사실 선택, 근거, 구조와 안전 규칙은 이 지시문보다 우선합니다. 최대 1,000자입니다.",
+         "risuBardAnalysisTokenLimit": "각 메모리 분석·리부트·정본 생성 요청의 입력 및 출력 토큰 상한입니다. 긴 입력은 요청 전에 이 예산에 맞추며 모델 출력에도 같은 값이 적용됩니다. 기본값은 8,192이며 앱의 고정 최대값은 없지만 사용하는 모델의 컨텍스트·출력 한도 안에서 설정해야 합니다.",
+@@ -296,7 +296,7 @@ export const helpKo = {
+         "risuBardResponseExcludeUsers": "켜면 과거 사용자 메시지를 답변 생성용 최근 원문에서 제외합니다. 현재 사용자 요청은 항상 포함합니다.",
+         "risuBardSourceRerank": "기본 꺼짐. 켜면 답변 전에 작업 모델(보조 모델 또는 메인 모델)이 과거 원문 후보 최대 16개를 질문에 비추어 읽고, 묻는 수량, 이름, 대사, 순서를 실제로 담은 원문을 최대 4개 골라 위키 문서보다 먼저 넣습니다. 고를 원문이 없거나 요청이 실패하면 기존 검색 결과를 씁니다. 답변마다 모델 요청이 한 번 늘고 입력은 1만~2만 토큰입니다(Claude Haiku 5.5 기준 약 0.002달러). 지난 장면의 세부를 자주 틀릴 때 켜세요.",
+         risuBardHideOocTurns: "기본 꺼짐. OOC 응답과 대응 사용자 입력을 본문 챗 목록에서 숨깁니다. 바드위키의 OOC 메모장에서 원본과 연결된 내용을 볼 수 있습니다. 모든 챗에 적용하며 원본 기록, AI 대화 컨텍스트와 위키 분석 설정은 바꾸지 않습니다.",
+-        risuBardCacheFriendlyContext: "기본 꺼짐. 켜면 매 턴 바뀌는 바드위키 기억(항상 포함 문서 포함)을 프롬프트 맨 위와 캐릭터 설명 자리에서 빼고, 최신 사용자 메시지 바로 앞에 넣습니다. 프리셋, 캐릭터 설명, 로어북과 지난 대화가 턴마다 똑같이 유지되어 프롬프트 캐시가 더 오래 적중합니다. 현재 서사 기준선은 기존처럼 캐릭터 설명 자리에 둡니다. 끄면 이전 배치로 돌아갑니다.",
++        risuBardCacheFriendlyContext: "기본 꺼짐. 켜면 매 턴 바뀌는 바드위키 기억(항상 포함 문서 포함)을 프롬프트 맨 위와 캐릭터 설명 자리에서 빼고, 최신 사용자 메시지 바로 앞에 넣습니다. 프리셋, 캐릭터 설명, 로어북과 지난 대화가 턴마다 똑같이 유지되어 프롬프트 캐시가 더 오래 적중합니다. 캐릭터 설명과 활성 로어북 원문을 유지하고, 이를 요약한 서사 기준선은 중복 삽입하지 않습니다. 끄면 이전 배치로 돌아갑니다.",
+         "risuBardAnalysisExcludeUsers": "켜면 사용자 메시지를 BardWiki 갱신 분석의 확정 턴과 최근 원문에서 제외하고 AI 응답만 분석합니다.",
+         "customBackground": "채팅 배경에 사용할 커스텀 이미지입니다.",
+         "playMessageOnTranslateEnd": "번역이 끝났을 때 별도 알림음을 재생합니다. 자동 번역이 켜진 상태에서 본문이 다 번역되었는지 소리로 알 수 있습니다.",
+diff --git a/src/lib/Others/RisuBardCurrentChatSettings.svelte b/src/lib/Others/RisuBardCurrentChatSettings.svelte
+index 5ee52d5..f5771f2 100644
+--- a/src/lib/Others/RisuBardCurrentChatSettings.svelte
++++ b/src/lib/Others/RisuBardCurrentChatSettings.svelte
+@@ -634,6 +634,9 @@
+                 <select id="bardwiki-writing-style" value={settings.risuBardCanonicalWritingStyle}
+                     onchange={(event) => setValue('risuBardCanonicalWritingStyle', (event.currentTarget as HTMLSelectElement).value as RisuBardChatSettings['risuBardCanonicalWritingStyle'])}>
+                     <option value="concise">기본</option><option value="custom">사용자 지정</option>
++                    <!-- Personal fork: a saved legacy style is shown as saved instead of a blank choice. -->
++                    {#if settings.risuBardCanonicalWritingStyle === 'standard'}<option value="standard">표준</option>{/if}
++                    {#if settings.risuBardCanonicalWritingStyle === 'ultra-concise'}<option value="ultra-concise">초압축</option>{/if}
+                 </select>
+             </div>
+             <div class="setting-field" data-chat-setting-field="risuBardWikiWritingLanguage">
+diff --git a/src/lib/Setting/RisuBardModeSettings.test.ts b/src/lib/Setting/RisuBardModeSettings.test.ts
+index abd8925..57afe84 100644
+--- a/src/lib/Setting/RisuBardModeSettings.test.ts
++++ b/src/lib/Setting/RisuBardModeSettings.test.ts
+@@ -163,11 +163,12 @@ describe('RisuBard mode settings', () => {
+         expect(processSource).toContain("wikiWritingLanguage: job.writingLanguage ?? 'ko'")
+         // Live analysis and reboot both tell the writer who the player is.
+         expect(processSource.split('playerName: getUserName({ character, chat })').length).toBe(3)
+-        // Standard and ultra-concise were merged into the single built-in style.
+-        expect(settingsData).not.toContain("value: 'standard'")
++        // New choices are the single built-in style or custom; a saved legacy style is listed only while it is the saved value.
+         expect(settingsData).toContain("value: 'concise'")
+-        expect(settingsData).not.toContain("value: 'ultra-concise'")
+         expect(settingsData).toContain("value: 'custom'")
++        expect(settingsData).toContain("value: 'standard', labelKey: 'risuBardCanonicalStyleStandard', condition: (ctx) => ctx.db.risuBardCanonicalWritingStyle === 'standard'")
++        expect(settingsData).toContain("value: 'ultra-concise', labelKey: 'risuBardCanonicalStyleUltraConcise', condition: (ctx) => ctx.db.risuBardCanonicalWritingStyle === 'ultra-concise'")
++        expect(settingsData.indexOf("value: 'concise'")).toBeLessThan(settingsData.indexOf("value: 'standard'"))
+         expect(settingsData).toContain("bindKey: 'risuBardCanonicalCustomStyle'")
+         expect(settingsData).toContain("db.risuBardCanonicalWritingStyle === 'custom'")
+         expect(settingsData).toContain('normalizeRisuBardCanonicalCustomStyle(value)')
+diff --git a/src/ts/preset/adapter/openaiCompatible.test.ts b/src/ts/preset/adapter/openaiCompatible.test.ts
+index 94a1cc2..bad5676 100644
+--- a/src/ts/preset/adapter/openaiCompatible.test.ts
++++ b/src/ts/preset/adapter/openaiCompatible.test.ts
+@@ -1,4 +1,5 @@
+ import { describe, expect, test } from 'vitest'
++import { readFileSync } from 'node:fs'
+ import { loadBundledRegistry } from '../registry/loader'
+ import { resolveSnapshot } from '../registry/snapshot'
+ import type { ModelPreset, ResolvedModelProfileSnapshot } from '../types'
+@@ -112,6 +113,116 @@ function captureFetch(response: Response | (() => Response)): {
+     return { fetchImpl, calls }
+ }
+ 
++describe('OpenRouter main-chat session metadata', () => {
++    const makeRouterPreset = (overrides: Partial<ModelPreset> = {}) => makePreset({
++        profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url: 'https://openrouter.ai/api/v1/chat/completions' } }),
++        ...overrides,
++    })
++
++    test('adds only session metadata to non-streaming, streaming and preview requests', async () => {
++        const preset = makeRouterPreset({ customBody: { provider: { only: ['google-ai-studio/flex'] } } })
++        const original = structuredClone(preset)
++        const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
++        const options = { messages: userMessages, sessionId: 'chat-1', fetchImpl }
++        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
++        const preview = await previewChatRequest(preset, options, { apiKey: 'sk' })
++        expect(calls).toHaveLength(0)
++        expect(preview.body).toEqual({ ...before.body, session_id: 'chat-1' })
++        await sendChatRequest(preset, options, { apiKey: 'sk' })
++        expect(calls[0].body).toEqual(preview.body)
++
++        const streaming = captureFetch(sseResponse(['data: [DONE]\n\n']))
++        for await (const _ of streamChatRequest(preset, { ...options, fetchImpl: streaming.fetchImpl }, { apiKey: 'sk' })) { /* drain */ }
++        expect(streaming.calls[0].body).toEqual({ ...preview.body, stream: true })
++        expect(preset).toEqual(original)
++    })
++
++    test.each(['https://demo.test/v1/chat/completions', 'https://openrouter.ai.demo.test/api/v1/chat/completions', '/api/local/chat/completions'])(
++        'leaves non-OpenRouter endpoint %s unchanged', async (url) => {
++            const preset = makePreset({ profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url } }) })
++            const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
++            const after = await previewChatRequest(preset, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
++            expect(after).toEqual(before)
++        },
++    )
++
++    test.each([
++        { customBody: { session_id: 'user-session' } },
++        { customBody: { session_id: null } },
++        { customBody: { prompt_cache_key: 'user-cache-key' } },
++        { customHeaders: { 'X-SESSION-ID': 'user-header' } },
++        { additionalParamsText: 'header::X-Session-Id=user-header' },
++        { additionalParamsText: 'session_id=user-session' },
++    ])('preserves explicitly configured routing metadata %j', async (overrides) => {
++        const preset = makeRouterPreset(overrides)
++        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
++        const after = await previewChatRequest(preset, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
++        expect(after).toEqual(before)
++    })
++
++    test.each([undefined, '', 'x'.repeat(257)])('does not send an absent or invalid-length session key %j', async (sessionId) => {
++        const preset = makeRouterPreset()
++        const before = await previewChatRequest(preset, { messages: userMessages }, { apiKey: 'sk' })
++        const after = await previewChatRequest(preset, { messages: userMessages, sessionId }, { apiKey: 'sk' })
++        expect(after).toEqual(before)
++    })
++
++    test('works without URL.canParse on older browsers and preserves relative endpoints', async () => {
++        const original = Object.getOwnPropertyDescriptor(URL, 'canParse')
++        Object.defineProperty(URL, 'canParse', { configurable: true, value: undefined })
++        try {
++            const routed = await previewChatRequest(makeRouterPreset(), { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
++            expect(routed.body.session_id).toBe('chat-1')
++            const local = makePreset({ profileSnapshot: makeSnapshot({ endpoint: { kind: 'static', url: '/api/local/chat/completions' } }) })
++            const before = await previewChatRequest(local, { messages: userMessages }, { apiKey: 'sk' })
++            const after = await previewChatRequest(local, { messages: userMessages, sessionId: 'chat-1' }, { apiKey: 'sk' })
++            expect(after).toEqual(before)
++        } finally {
++            if (original) Object.defineProperty(URL, 'canParse', original)
++            else Reflect.deleteProperty(URL, 'canParse')
++        }
++    })
++
++    test('keeps one chat key for tool follow-ups and separates another chat', async () => {
++        const { fetchImpl, calls } = captureFetch(() => jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
++        const preset = makeRouterPreset()
++        const tools = [{ name: 'lookup', parameters: { type: 'object' } }]
++        const messages: AdapterChatMessage[] = [...userMessages]
++        await sendChatRequest(preset, { messages, tools, sessionId: 'chat-1', fetchImpl }, { apiKey: 'sk' })
++        messages.push(
++            { role: 'assistant', content: '', toolCalls: [{ id: 'call-1', name: 'lookup', arguments: '{}' }] },
++            { role: 'tool', content: 'result', toolCallId: 'call-1' },
++        )
++        await sendChatRequest(preset, { messages, tools, sessionId: 'chat-1', fetchImpl }, { apiKey: 'sk' })
++        await sendChatRequest(preset, { messages: userMessages, sessionId: 'chat-2', fetchImpl }, { apiKey: 'sk' })
++        expect(calls.map(({ body }) => body.session_id)).toEqual(['chat-1', 'chat-1', 'chat-2'])
++        expect(calls[1].body.messages).toHaveLength(4)
++    })
++
++    test('request gate requires opt-in, explicit main-chat identity and no cache exclusion, including preview', () => {
++        const request = readFileSync('src/ts/process/request/request.ts', 'utf8')
++        const expression = request.match(/const sessionId = ([\s\S]*?)(?:\r?\n){2}/)?.[1]
++        expect(expression).toBeDefined()
++        const evaluate = new Function('getDatabase', 'arg', 'toLogSource', 'mode', `return (${expression})`)
++        const gate = (enabled: boolean | undefined, arg: Record<string, unknown>, mode = 'model') => evaluate(
++            () => ({ risuBardCacheFriendlyContext: enabled }), arg,
++            (value: string) => value === 'model' ? 'main' : value, mode,
++        )
++        expect(gate(true, { realChatId: 'chat-1' })).toBe('chat-1')
++        expect(gate(true, { realChatId: 'chat-1', previewBody: true })).toBe('chat-1')
++        expect(gate(false, { realChatId: 'chat-1' })).toBeUndefined()
++        expect(gate(undefined, { realChatId: 'chat-1' })).toBeUndefined()
++        expect(gate(true, { realChatId: 'chat-1', disablePromptCache: true })).toBeUndefined()
++        expect(gate(true, { realChatId: 'chat-1', logSource: 'memory' })).toBeUndefined()
++        expect(gate(true, { realChatId: 'chat-1' }, 'memory')).toBeUndefined()
++        expect(gate(true, {})).toBeUndefined()
++        expect(request).toContain('messages, tools, fetchImpl, sessionId,')
++        expect(request).toContain('generationId: genId, cache, sessionId,')
++        expect(request).toContain('messages, tools, abortSignal, sessionId)')
++        expect(request).toContain('messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl, sessionId,')
++    })
++})
++
+ describe('sendChatRequest (non-stream)', () => {
+     test('classifies an explicit refusal separately from an empty successful response', async () => {
+         const { fetchImpl } = captureFetch(jsonResponse({
+@@ -511,6 +622,13 @@ describe('sendChatRequest (non-stream)', () => {
+ })
+ 
+ describe('streamChatRequest', () => {
++    test.each([400, 500])('surfaces a local engine SSE error instead of silently accepting an empty response (%s)', async (code) => {
++        const { fetchImpl } = captureFetch(sseResponse([
++            'data: ' + JSON.stringify({ error: { code, message: 'local engine failed', type: 'server_error' } }) + '\n\n',
++        ]))
++        const stream = streamChatRequest(makePreset(), { messages: userMessages, fetchImpl }, { apiKey: 'sk' })
++        await expect(stream.next()).rejects.toMatchObject({ message: 'local engine failed', status: code })
++    })
+     test('yields textDelta chunks and stops at [DONE]', async () => {
+         const { fetchImpl, calls } = captureFetch(
+             sseResponse([
+diff --git a/src/ts/preset/adapter/openaiCompatible.ts b/src/ts/preset/adapter/openaiCompatible.ts
+index 07312aa..590c9b7 100644
+--- a/src/ts/preset/adapter/openaiCompatible.ts
++++ b/src/ts/preset/adapter/openaiCompatible.ts
+@@ -271,6 +271,14 @@ async function prepareOpenAiBody(
+         delete prepared.body.parallel_tool_calls
+         delete prepared.body.tool_choice
+     }
++    if (options.sessionId && options.sessionId.length <= 256
++        && !('session_id' in prepared.body)
++        && !('prompt_cache_key' in prepared.body)
++        && !Object.keys(prepared.headers).some((key) => key.toLowerCase() === 'x-session-id')) {
++        let hostname = ''
++        try { hostname = new URL(prepared.url).hostname } catch {}
++        if (hostname === 'openrouter.ai') prepared.body.session_id = options.sessionId
++    }
+     return prepared
+ }
+ 
+@@ -431,6 +439,11 @@ function extractThoughtSignature(extraContent: unknown): string | undefined {
+ // Exported (pure) for job-journal recovery replay (process/request/jobRecovery.ts).
+ export function parseChatStreamDelta(raw: unknown): AdapterChatStreamDelta | null {
+     if (!isPlainObject(raw)) return null
++    if (raw.error !== undefined && raw.error !== null) {
++        const code = isPlainObject(raw.error) ? raw.error.code : undefined
++        const status = typeof code === 'number' && Number.isInteger(code) && code >= 400 && code < 600 ? code : 500
++        throw normalizeHttpStatus(status, extractErrorMessage(JSON.stringify(raw)) ?? 'Model stream failed')!
++    }
+     const choices = raw['choices']
+     let textDelta = ''
+     let reasoningDelta = ''
+diff --git a/src/ts/preset/adapter/types.ts b/src/ts/preset/adapter/types.ts
+index 5847a03..e0d23a4 100644
+--- a/src/ts/preset/adapter/types.ts
++++ b/src/ts/preset/adapter/types.ts
+@@ -185,6 +185,8 @@ export interface AdapterCacheContext {
+ 
+ export interface AdapterChatOptions {
+     messages: AdapterChatMessage[]
++    /** Stable main-chat key for OpenRouter sticky routing; other endpoints ignore it. */
++    sessionId?: string
+     tools?: AdapterToolDef[]             // when present, enables tool use on the request
+     /** Authoritative per-call sampling controls. */
+     temperature?: number
+diff --git a/src/ts/process/request/google.ts b/src/ts/process/request/google.ts
+index 5e0a537..2d03f7c 100644
+--- a/src/ts/process/request/google.ts
++++ b/src/ts/process/request/google.ts
+@@ -12,6 +12,7 @@ import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseCh
+ import { applyAdditionalParameters, applyParameters, getAdditionalParameters, type LLMParameter } from './shared'
+ import { bodyIntercepterStore } from "src/ts/stores.svelte"
+ import { resolveGeminiThinkingConfig } from "./geminiThinking"
++import { normalizePrivateMobileGeminiContents } from './privateMobileGeminiRequest'
+ 
+ type GeminiFunctionCall = {
+     id?: string;
+@@ -574,6 +575,10 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
+         body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel))
+     }
+ 
++    if (navigator.userAgent.includes('RisuBardAndroid/') && Array.isArray(body.contents)) {
++        body.contents = normalizePrivateMobileGeminiContents(body.contents)
++    }
++
+     if(arg.previewBody){
+         return {
+             type: 'success',
+diff --git a/src/ts/process/request/jobRecovery.test.ts b/src/ts/process/request/jobRecovery.test.ts
+index 1db38d2..cdba5ad 100644
+--- a/src/ts/process/request/jobRecovery.test.ts
++++ b/src/ts/process/request/jobRecovery.test.ts
+@@ -255,6 +255,17 @@ describe('recoverTerminalJob', () => {
+         expect(claims()).toEqual(['/api/model-jobs/job-1/claim'])
+     })
+ 
++    test.each([false, true])('claims a journal with an SSE error and preserves an existing partial message (%s)', async (hasPartial) => {
++        const { recovery } = await loadModules()
++        const chat = makeChat({ message: hasPartial ? [{ role: 'char', data: 'saved partial', generationInfo: { generationId: 'gen-1' } }] : [] })
++        mocks.db.characters = [makeChar(chat)]
++        const { claims } = setupServer({ journals: { 'job-1': 'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' + 'data: {"error":{"code":500,"message":"engine failed"}}\n\n' } })
++        await recovery.recoverTerminalJob(makeJob() as any)
++        expect(chat.message).toHaveLength(1)
++        expect(chat.message[0].data).toBe(hasPartial ? 'saved partial' : '```risuerror\nengine failed\n```')
++        expect(claims()).toEqual(['/api/model-jobs/job-1/claim'])
++    })
++
+     test('failed job with the live message already present adds no error block', async () => {
+         const { recovery } = await loadModules()
+         const chat = makeChat({ message: [{ role: 'char', data: 'partial', generationInfo: { generationId: 'gen-1' } }] })
+diff --git a/src/ts/process/request/modelPresetBinding.ts b/src/ts/process/request/modelPresetBinding.ts
+index feb961e..1587d71 100644
+--- a/src/ts/process/request/modelPresetBinding.ts
++++ b/src/ts/process/request/modelPresetBinding.ts
+@@ -2,6 +2,7 @@ import { getDatabase, type Chat, type Database } from 'src/ts/storage/database.s
+ import type { AdapterCredential } from 'src/ts/preset/adapter'
+ import type { ModelBindingSet, ModelPreset } from 'src/ts/preset/types'
+ import { resolveStoredSamplingParameter, resolveStoredTemperature, type ModelModeExtended } from './shared'
++import { localAI, localAIPreset } from 'src/ts/localAI.svelte'
+ 
+ /**
+  * P4 dual-regime resolution (plan v6 §7, model-preset-p4-task).
+@@ -66,6 +67,7 @@ export function resolveChatModelBinding(
+     mode: ModelModeExtended,
+     moduleId?: string,
+ ): ResolvedBinding {
++    if (localAI.available && localAI.enabled) return { kind: 'modelPreset', preset: localAIPreset() }
+     const db = getDatabase()
+     const lock = db.nodeOnlyModelModeLock ?? 'none'
+ 
+diff --git a/src/ts/process/request/request.ts b/src/ts/process/request/request.ts
+index ca36f2f..57f2311 100644
+--- a/src/ts/process/request/request.ts
++++ b/src/ts/process/request/request.ts
+@@ -1,4 +1,6 @@
+ import { Ollama } from 'ollama/dist/browser.mjs';
++import { localAI, localAIPreset, LOCAL_AI_PRESET } from 'src/ts/localAI.svelte';
++import { localAIFetch } from 'src/ts/localAI';
+ import { buildOllamaChatRequest, createOllamaFetch } from './ollamaRequest';
+ import { language } from "../../../lang";
+ import { globalFetch, fetchNative } from "../../globalApi.svelte";
+@@ -178,9 +180,9 @@ export async function requestChatData(arg:RequestDataArgumentExtended, model:Mod
+     const retryLimit = normalizeRequestRetryLimit(db.requestRetrys)
+     const internalOutput = Boolean(arg.schema) || arg.logSource === 'memory'
+     const fallBackModels = createModelAttemptOrder(
+-        safeStructuredClone(db?.fallbackModels?.[model] ?? [])
++        localAI.available && localAI.enabled ? [] : safeStructuredClone(db?.fallbackModels?.[model] ?? [])
+     )
+-    const tools = arg.tools ?? (await getTools())
++    const tools = localAI.available && localAI.enabled ? [] : arg.tools ?? (await getTools())
+     let da:requestDataResponse
+ 
+     if(arg.escape){
+@@ -450,6 +452,14 @@ export async function requestChatDataMain(arg:requestDataArgument, model:ModelMo
+     const db = arg.requestSettings ?? getDatabase()
+     const targ:RequestDataArgumentExtended = arg
+ 
++    if (localAI.available && localAI.enabled) {
++        if (arg.formated.some(message => message.multimodals?.length)) return {
++            type: 'fail', noRetry: true, fallbackEligible: false,
++            result: '현재 기기 내 AI는 텍스트 모델을 사용해요. 이미지 첨부를 빼거나 온라인 모드로 전환해 주세요.',
++        }
++        return requestModelPreset(targ, localAIPreset(), abortSignal, model)
++    }
++
+     // P4 dual-regime dispatch (plan v6 §7). Resolve the per-chat ModelPreset
+     // binding BEFORE any classic model selection so a binding chat never touches
+     // db.aiModel / db.seperateModels. Skipped when a staticModel (fallback retry)
+@@ -802,6 +812,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+     const reportStatus = statusEnabled(arg.realChatId) && !!genId
+     const logSource = arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode))
+     const logPurpose = arg.logPurpose ?? defaultRequestPurpose(logSource)
++    const sessionId = getDatabase().risuBardCacheFriendlyContext === true
++        && !arg.disablePromptCache
++        && (arg.logSource ?? toLogSource(mode)) === 'main'
++        && arg.realChatId ? arg.realChatId : undefined
+ 
+     // Request logging wraps the transport, so the direct path and the
+     // server-side job path are recorded identically — the job path had no
+@@ -820,7 +834,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+         provider: preset.profileSnapshot.providerBaseId,
+         streaming: resolvePresetStreaming(preset, arg),
+     })
+-    const proxiedFetch = makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route))
++    const onDevice = preset.id === LOCAL_AI_PRESET && localAI.available && localAI.enabled
++    const proxiedFetch = onDevice ? localAIFetch : makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route))
+ 
+     // Tool gating. Three guards:
+     //  1) Per-preset opt-in (preset.toolUse, default OFF) — the hard regression
+@@ -860,7 +875,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+     // (chat already generating) surfaces as an error instead, since falling
+     // back would double-generate. All defaults off → proxiedFetch →
+     // byte-identical to the previous behavior.
+-    const useServerJob = getDatabase().nodeOnlyServerSideRequests === true
++    const useServerJob = !onDevice && getDatabase().nodeOnlyServerSideRequests === true
+         && !tools && !arg.previewBody
+     const transportFetch = useServerJob
+         ? makeJobFetch({
+@@ -1011,7 +1026,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+             // Mirror the real request's options so the preview shows the body that
+             // would actually be sent (cache breakpoints included).
+             const prepared = await previewModelPreset(kind, preset, {
+-                messages, tools, fetchImpl,
++                messages, tools, fetchImpl, sessionId,
+                 anthropicCache1h: getDatabase().claude1HourCaching === true,
+             }, credential)
+             return {
+@@ -1033,7 +1048,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+         // streaming tool_call assembly is a later stage. Status is NOT reported
+         // for the tool path in v1 (it bypasses the pump); see the toast infra note.
+         if (tools) {
+-            const { result, toolsExecuted } = await runModelPresetToolLoop(arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal)
++            const { result, toolsExecuted } = await runModelPresetToolLoop(arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal, sessionId)
+             // The tool loop issues one request per turn; each is its own log
+             // entry and all of them flush together here.
+             void logScope.close()
+@@ -1042,7 +1057,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+ 
+         const useStreaming = resolvePresetStreaming(preset, arg)
+         const options: AdapterChatOptions = {
+-            messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache,
++            messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache, sessionId,
+             ...presetGenerationOverrides(arg),
+             responseSchema: arg.schema
+                 ? convertInterfaceToSchema(arg.schema)
+@@ -1249,6 +1264,7 @@ async function runModelPresetToolLoop(
+     messages: AdapterChatMessage[],
+     tools: AdapterToolDef[],
+     abortSignal: AbortSignal | null,
++    sessionId?: string,
+ ): Promise<{ result: string; toolsExecuted: boolean }> {
+     // Tracks whether any tool actually ran, so the caller can block outer
+     // success-path retries that would otherwise re-execute side-effecting tools.
+@@ -1260,7 +1276,7 @@ async function runModelPresetToolLoop(
+         send: (convo) => sendModelPreset(
+             kind, preset,
+             {
+-                messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl,
++                messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl, sessionId,
+                 // Tool turns are ordinary billed requests: without this the cache
+                 // TTL silently drops back to 5 minutes for the whole tool loop.
+                 anthropicCache1h: getDatabase().claude1HourCaching === true,
+diff --git a/src/ts/risubard/risuBardSettings.test.ts b/src/ts/risubard/risuBardSettings.test.ts
+index 58e9065..4a0f482 100644
+--- a/src/ts/risubard/risuBardSettings.test.ts
++++ b/src/ts/risubard/risuBardSettings.test.ts
+@@ -143,10 +143,14 @@ describe('RisuBard analysis settings', () => {
+     test('normalizes the shared canonical writing policy', () => {
+         expect(normalizeRisuBardCanonicalWritingStyle(undefined))
+             .toBe(RISUBARD_CANONICAL_WRITING_STYLE_DEFAULT)
+-        // Standard and ultra-concise were merged into the single built-in style.
+-        expect(normalizeRisuBardCanonicalWritingStyle('standard')).toBe('concise')
+-        expect(normalizeRisuBardCanonicalWritingStyle('ultra-concise')).toBe('concise')
++        // Personal fork: saved legacy choices stay as saved at every level.
++        expect(normalizeRisuBardCanonicalWritingStyle('standard')).toBe('standard')
++        expect(normalizeRisuBardCanonicalWritingStyle('ultra-concise')).toBe('ultra-concise')
+         expect(normalizeRisuBardCanonicalWritingStyle('custom')).toBe('custom')
++        const global = { risuBardCanonicalWritingStyle: 'concise' as const }
++        expect(resolveRisuBardChatSettings(global, { risuBardCanonicalWritingStyle: 'standard' }).risuBardCanonicalWritingStyle).toBe('standard')
++        expect(resolveRisuBardChatSettings(global, {}, { risuBardCanonicalWritingStyle: 'ultra-concise' }).risuBardCanonicalWritingStyle).toBe('ultra-concise')
++        expect(resolveRisuBardChatSettings({ risuBardCanonicalWritingStyle: 'standard' }).risuBardCanonicalWritingStyle).toBe('standard')
+         expect(normalizeRisuBardCanonicalWritingStyle('invalid')).toBe('concise')
+         expect(normalizeRisuBardCanonicalCustomStyle(`  ${'가'.repeat(1_200)}  `))
+             .toBe('가'.repeat(1_000))
+@@ -165,7 +169,9 @@ describe('RisuBard analysis settings', () => {
+         expect(buildRisuBardCanonicalWritingPolicy('concise', '')).toContain(
+             'One short sentence per fact'
+         )
+-        expect(buildRisuBardCanonicalWritingPolicy('standard', '')).toBe(buildRisuBardCanonicalWritingPolicy('concise', ''))
++        expect(buildRisuBardCanonicalWritingPolicy('standard', '')).toContain('Use natural, complete short sentences')
++        expect(buildRisuBardCanonicalWritingPolicy('ultra-concise', '')).toContain('Use telegraphic sentences and stable field labels')
++        expect(buildRisuBardCanonicalWritingPolicy('standard', '')).not.toContain('One short sentence per fact')
+         const custom = buildRisuBardCanonicalWritingPolicy(
+             'custom',
+             '항목마다 짧은 명사형으로 끝낸다.'
+diff --git a/src/ts/risubard/risuBardSettings.ts b/src/ts/risubard/risuBardSettings.ts
+index 06fd5b3..ebff5d2 100644
+--- a/src/ts/risubard/risuBardSettings.ts
++++ b/src/ts/risubard/risuBardSettings.ts
+@@ -315,8 +315,10 @@ const RISUBARD_FACT_DENSE_STYLE = 'One short sentence per fact; no atmosphere, e
+ export function normalizeRisuBardCanonicalWritingStyle(
+     value: unknown
+ ): RisuBardCanonicalWritingStyle {
+-    // Standard and ultra-concise were merged into the single built-in style.
+-    return value === 'custom' ? value : RISUBARD_CANONICAL_WRITING_STYLE_DEFAULT
++    // Personal fork: a saved standard or ultra-concise choice stays as saved; only invalid values take the default.
++    return value === 'standard' || value === 'concise' || value === 'ultra-concise' || value === 'custom'
++        ? value
++        : RISUBARD_CANONICAL_WRITING_STYLE_DEFAULT
+ }
+ 
+ export function normalizeRisuBardCanonicalCustomStyle(value: unknown): string {
+@@ -331,9 +333,14 @@ function resolveRisuBardWritingStyleInstruction(
+ ): string {
+     const normalizedStyle = normalizeRisuBardCanonicalWritingStyle(style)
+     const normalizedCustom = normalizeRisuBardCanonicalCustomStyle(customStyle)
+-    return normalizedStyle === 'custom' && normalizedCustom.length > 0
+-        ? `User style preference: ${normalizedCustom}`
+-        : RISUBARD_FACT_DENSE_STYLE
++    // The two legacy styles keep their earlier instruction; concise (the default) uses the current built-in style.
++    return normalizedStyle === 'standard'
++        ? 'Use natural, complete short sentences without unnecessary embellishment or repetition.'
++        : normalizedStyle === 'ultra-concise'
++            ? 'Use telegraphic sentences and stable field labels, one atomic fact per line. Explicitly preserve subjects, objects, negation, time and character knowledge boundaries. Do not invent abbreviations.'
++            : normalizedStyle === 'custom' && normalizedCustom.length > 0
++                ? `User style preference: ${normalizedCustom}`
++                : RISUBARD_FACT_DENSE_STYLE
+ }
+ 
+ export function normalizeRisuBardInquiryTimeoutMs(value: unknown): number {
+diff --git a/src/ts/risubard/wikiPromptPreset.test.ts b/src/ts/risubard/wikiPromptPreset.test.ts
+index f556b69..3ad545f 100644
+--- a/src/ts/risubard/wikiPromptPreset.test.ts
++++ b/src/ts/risubard/wikiPromptPreset.test.ts
+@@ -11,6 +11,7 @@ import type { WikiPromptPreset } from './wikiPromptPreset'
+ import {
+     compileWikiPromptGuide,
+     createDefaultWikiPromptPreset,
++    createWikiPromptPreset,
+     deleteWikiPromptPreset,
+     duplicateWikiPromptPreset,
+     normalizeWikiPromptPresetState,
+@@ -115,7 +116,9 @@ describe('Wiki prompt presets', () => {
+         expect(state.presets[0].blocks.some((block) =>
+             block.id.startsWith('default-puzzle-')
+         )).toBe(false)
+-        expect(state.chatPresetId).toBe(OFFICIAL_WIKI_CURRENT_ID)
++        // Personal fork: an imported list is kept as imported; a missing selection falls back to its first preset.
++        expect(state.presets.map(preset => preset.id)).toEqual(['unsafe'])
++        expect(state.chatPresetId).toBe('unsafe')
+     })
+ 
+     test('compiles stage blocks followed by character and chat injections', () => {
+@@ -332,9 +335,9 @@ describe('official preset release and archives', () => {
+             legacy('official-wiki-261003-v5', previousLocalizedOfficial.preset, '공식기본-261003-v5'),
+         ]
+         const state = normalizeWikiPromptPresetState({ presets, chatPresetId: 'official-wiki-261003' }, () => 'unused')
+-        expect(state.presets.map(preset => preset.name)).toEqual([
+-            CURRENT_NAME, '공식기본-261003-v5 Copy', '공식 기본 프리셋 (2026-10-28)', '공식 기본 프리셋 (2026-10-27)', '공식 기본 프리셋 (2026-10-21)',
+-        ])
++        // Personal fork: the saved list is not extended or renamed; only the one-locked-official rule still drops extra locked copies.
++        expect(state.presets.map(preset => preset.name)).toEqual(['공식기본', '공식기본-261003-v5 Copy'])
++        expect(state.presets[0]).toEqual(normalizeWikiPromptPresetState({ presets: [current] }, () => 'unused').presets[0])
+         expect(officialOf(state.presets).map(preset => preset.id)).toEqual([OFFICIAL_WIKI_CURRENT_ID])
+         expect(state.presets.find(preset => preset.id === OFFICIAL_WIKI_V3_BACKUP_ID)).toBeUndefined()
+         expect(state.presets.find(preset => preset.id === 'personal-copy')).toEqual(copy)
+@@ -355,7 +358,9 @@ describe('official preset release and archives', () => {
+ 
+     test('places archives in their folder and the official preset first only on a release upgrade', () => {
+         const mine = duplicateWikiPromptPreset(createDefaultWikiPromptPreset('x'), 'mine')
+-        const state = normalizeWikiPromptPresetState({ presets: [mine] }, () => 'unused')
++        // Personal fork: a saved list is kept as saved, so the archives come from a fresh install here.
++        expect(normalizeWikiPromptPresetState({ presets: [mine] }, () => 'unused').presets).toEqual([mine])
++        const state = { presets: [...normalizeWikiPromptPresetState(undefined, () => 'unused').presets, mine] }
+         const organized = organizeOfficialWikiArchives(undefined, state.presets, true)
+         expect(organized.folders).toEqual([{ id: OFFICIAL_WIKI_ARCHIVE_FOLDER_ID, name: '과거 공식 프리셋', createdAt: 0 }])
+         expect(organized.folderByItemId).toEqual({
+@@ -372,54 +377,80 @@ describe('official preset release and archives', () => {
+     })
+ })
+ 
+-test('keeps personal preset selection and policy while installing the official preset', () => {
++// Personal fork: a saved list without an official preset is kept as saved instead of receiving one.
++for (const [label, source, policy] of [
++    ['current', () => createDefaultWikiPromptPreset('seed'), 10],
++    ['imported v2', () => previousOfficial.preset as WikiPromptPreset, 2],
++] as const) {
++    test(`keeps a ${label} personal preset, its selection and policy without adding presets`, () => {
++        const personal = duplicateWikiPromptPreset(source(), 'personal')
++        personal.name = 'My wiki'
++        personal.blocks.find(block => block.id === 'main-wiki-guide')!.content = 'Track my custom facts.'
++        const state = normalizeWikiPromptPresetState({ presets: [personal], chatPresetId: personal.id }, () => 'generated')
++        expect(state.chatPresetId).toBe('personal')
++        expect(state.presets[0].writingPolicyVersion).toBe(policy)
++        expect(compileWikiPromptGuide(state.presets[0]).analysis).toContain('Track my custom facts.')
++        expect(state.presets).toEqual([personal])
++        expect(officialOf(state.presets)).toHaveLength(0)
++        expect(normalizeWikiPromptPresetState(state, () => 'unused')).toEqual(state)
++    })
++}
++
++test('rebuilds the locked continuity contract from the declared policy of a saved personal preset', () => {
+     const personal = duplicateWikiPromptPreset(createDefaultWikiPromptPreset('seed'), 'personal')
+     personal.writingPolicyVersion = 1
+-    personal.name = 'My wiki'
+     personal.blocks.find(block => block.id === 'main-wiki-guide')!.content = 'Track my custom facts.'
++    const continuity = (preset: WikiPromptPreset) => preset.blocks.find(block => block.id === 'core-character-continuity-contract')!.content
+     const state = normalizeWikiPromptPresetState({ presets: [personal], chatPresetId: personal.id }, () => 'generated')
+     expect(state.chatPresetId).toBe('personal')
+     expect(state.presets[0].writingPolicyVersion).toBe(1)
+     expect(compileWikiPromptGuide(state.presets[0]).analysis).toContain('Track my custom facts.')
+-    expect(officialOf(state.presets)).toHaveLength(1)
++    expect(officialOf(state.presets)).toHaveLength(0)
++    expect(continuity(state.presets[0])).not.toBe(continuity(personal))
++    expect(continuity(state.presets[0])).not.toContain('A character document is a current card, not a log.')
++    expect(state.presets[0].blocks.find(block => block.id === 'main-wiki-guide')!.content).toBe('Track my custom facts.')
+     expect(normalizeWikiPromptPresetState(state, () => 'unused')).toEqual(state)
+ })
+ 
+-describe('in-place official preset upgrades', () => {
++// Personal fork: a saved official preset keeps its ID, name, policy and optional toggles; it is not upgraded in place.
++describe('saved official presets are not upgraded in place', () => {
+     for (const [label, fixture] of [['v2', previousOfficial.preset], ['v3', previousRecallOfficial.preset]] as const) {
+-        test(`upgrades a selected ${label} official preset while retaining its ID and optional toggles`, () => {
++        test(`keeps a selected ${label} official preset with its ID, policy and optional toggles`, () => {
+             const old = structuredClone(fixture) as WikiPromptPreset
+             old.id = `selected-${label}`
+             old.blocks.find(block => block.id === 'default-character-equipment')!.enabled = false
+             old.blocks.find(block => block.id === 'default-length-compression')!.enabled = true
+             const state = normalizeWikiPromptPresetState({ presets: [old], chatPresetId: old.id }, () => 'unused')
+             const selected = resolveWikiPromptPreset(state.presets, state.chatPresetId)!
+-            expect(selected).toMatchObject({ id: old.id, name: CURRENT_NAME, builtin: true, writingPolicyVersion: 10 })
++            expect(selected).toMatchObject({ id: old.id, name: old.name, builtin: true, writingPolicyVersion: old.writingPolicyVersion ?? 1 })
++            expect(state.presets).toHaveLength(1)
+             expect(selected.blocks.find(block => block.id === 'default-character-equipment')?.enabled).toBe(false)
+             expect(selected.blocks.find(block => block.id === 'default-length-compression')?.enabled).toBe(true)
+         })
+     }
+ 
+-    test('upgrades v4 in place and enables compression', () => {
++    test('keeps v4 in place with its stored compression toggle', () => {
+         const old = structuredClone(previousCurrentStateOfficial.preset) as WikiPromptPreset
+         old.id = OFFICIAL_WIKI_CURRENT_ID
+         old.blocks.find(block => block.id === 'default-character-equipment')!.enabled = false
++        const storedCompression = old.blocks.find(block => block.id === 'default-length-compression')?.enabled
+         const state = normalizeWikiPromptPresetState({ presets: [old], chatPresetId: old.id }, () => 'unused')
+         const selected = resolveWikiPromptPreset(state.presets, state.chatPresetId)!
+-        expect(selected).toMatchObject({ id: old.id, name: CURRENT_NAME, writingPolicyVersion: 10 })
++        expect(selected).toMatchObject({ id: old.id, name: old.name, writingPolicyVersion: 4 })
+         expect(selected.blocks.find(block => block.id === 'default-character-equipment')?.enabled).toBe(false)
+-        expect(selected.blocks.find(block => block.id === 'default-length-compression')?.enabled).toBe(true)
++        expect(selected.blocks.find(block => block.id === 'default-length-compression')?.enabled).toBe(storedCompression)
+     })
+ 
+-    test('upgrades v5 in place and keeps its compression choice', () => {
++    test('keeps v5 in place with its compression choice while a new official preset gets the current card contract', () => {
+         const old = structuredClone(previousLocalizedOfficial.preset) as WikiPromptPreset
+         old.id = OFFICIAL_WIKI_CURRENT_ID
+         old.blocks.find(block => block.id === 'default-length-compression')!.enabled = false
+         const state = normalizeWikiPromptPresetState({ presets: [old], chatPresetId: old.id }, () => 'unused')
+         const selected = resolveWikiPromptPreset(state.presets, state.chatPresetId)!
+-        expect(selected).toMatchObject({ id: old.id, name: CURRENT_NAME, writingPolicyVersion: 10 })
++        expect(selected).toMatchObject({ id: old.id, name: old.name, writingPolicyVersion: 5 })
+         expect(selected.blocks.find(block => block.id === 'default-length-compression')?.enabled).toBe(false)
+-        const continuity = selected.blocks.find(block => block.id === 'core-character-continuity-contract')!.content
++        const continuity = normalizeWikiPromptPresetState(undefined, () => 'unused').presets[0].blocks
++            .find(block => block.id === 'core-character-continuity-contract')!.content
+         expect(continuity).toContain('A character document is a current card, not a log.')
+         expect(continuity).not.toContain('Silence is not')
+         expect(continuity).not.toContain('Retain who met whom and what each person learned.')
+@@ -428,21 +459,74 @@ describe('in-place official preset upgrades', () => {
+         expect(continuity).toContain('Every update rewrites the card; it never only appends.')
+     })
+ 
+-    test('upgrades the 2026-10-21 official preset so responses stop inventing unsupported past facts', () => {
++    // Personal fork: a saved list from the 2026-10-21 release is kept as saved; the new rules reach new installs and new presets.
++    test('keeps a saved 2026-10-21 official preset as saved while new presets stop inventing unsupported past facts', () => {
+         const old = structuredClone(previousFictionOfficial.preset) as WikiPromptPreset
+         old.id = OFFICIAL_WIKI_CURRENT_ID
+         const before = old.blocks.find(block => block.id === 'default-recall-response')!.content!
+         const state = normalizeWikiPromptPresetState({ presets: [old], chatPresetId: old.id, officialRelease: '2026-10-21' }, () => 'unused')
+         const selected = resolveWikiPromptPreset(state.presets, state.chatPresetId)!
+-        expect(selected).toMatchObject({ id: old.id, name: CURRENT_NAME, builtin: true, writingPolicyVersion: 10 })
+-        const response = compileWikiPromptGuide(selected).response
++        expect(selected).toMatchObject({ id: old.id, name: old.name, builtin: true, writingPolicyVersion: 7 })
++        expect(state.presets.map(preset => preset.id)).toEqual([old.id])
++        expect(state.officialRelease).toBe('2026-10-21')
++        expect(compileWikiPromptGuide(selected)).toEqual(compileWikiPromptGuide(old))
+         expect(before).toContain('Missing context remains uncertain.')
++        const response = compileWikiPromptGuide(createWikiPromptPreset('new-preset')).response
+         expect(response).toContain('Do not invent past facts that no supplied source supports')
+         expect(response).not.toContain('Missing context remains uncertain.')
+         // An in-character reply is not told to admit ignorance.
+         expect(response).not.toMatch(/say (?:that )?you do not know|admit/i)
+-        expect(state.presets.find(preset => preset.id === OFFICIAL_WIKI_V7_BACKUP_ID)?.blocks
+-            .find(block => block.id === 'default-recall-response')?.content).toBe(before)
++    })
++
++    test('keeps a saved earlier-release list, an edited retired archive ID and its selection across reloads', () => {
++        const official = { ...(structuredClone(previousFictionOfficial.preset) as WikiPromptPreset), id: OFFICIAL_WIKI_CURRENT_ID }
++        const edited = duplicateWikiPromptPreset(previousOctoberOfficial.preset as WikiPromptPreset, OFFICIAL_WIKI_V6_BACKUP_ID)
++        edited.name = 'My edited archive'
++        edited.blocks.find(block => block.id === 'main-wiki-guide')!.content = 'My archive edit.'
++        const personal = duplicateWikiPromptPreset(official, 'personal')
++        const saved = { presets: [personal, edited, official], chatPresetId: edited.id, officialRelease: '2026-10-21' }
++        const state = normalizeWikiPromptPresetState(structuredClone(saved), () => 'unused')
++        expect(state).toEqual(normalizeWikiPromptPresetState(structuredClone(state), () => 'unused'))
++        expect(state.presets.map(preset => [preset.id, preset.name, preset.builtin, preset.writingPolicyVersion]))
++            .toEqual(saved.presets.map(preset => [preset.id, preset.name, preset.builtin, preset.writingPolicyVersion]))
++        expect(state.chatPresetId).toBe(edited.id)
++        expect(state.officialRelease).toBe('2026-10-21')
++        expect(compileWikiPromptGuide(state.presets[1]).analysis).toContain('My archive edit.')
++        const organizer = { folders: [], folderByItemId: {}, itemOrder: saved.presets.map(preset => preset.id) }
++        expect(organizeOfficialWikiArchives(organizer, state.presets, saved.officialRelease !== state.officialRelease))
++            .toEqual(organizer)
++        // An empty saved list still receives the current release.
++        expect(normalizeWikiPromptPresetState({ presets: [], officialRelease: '2026-10-21' }, () => 'unused').officialRelease)
++            .toBe(OFFICIAL_WIKI_RELEASE)
++    })
++
++    test('keeps a saved list without a release, its selected retired archive ID and a custom folder', () => {
++        const official = { ...(structuredClone(previousFictionOfficial.preset) as WikiPromptPreset), id: OFFICIAL_WIKI_CURRENT_ID }
++        const retired = duplicateWikiPromptPreset(previousOctoberOfficial.preset as WikiPromptPreset, OFFICIAL_WIKI_V6_BACKUP_ID)
++        retired.blocks.find(block => block.id === 'main-wiki-guide')!.content = 'My retired archive edit.'
++        const saved = { presets: [official, retired], chatPresetId: retired.id }
++        const state = normalizeWikiPromptPresetState(structuredClone(saved), () => 'unused')
++        expect(state.presets.map(preset => [preset.id, preset.name, preset.writingPolicyVersion]))
++            .toEqual(saved.presets.map(preset => [preset.id, preset.name, preset.writingPolicyVersion]))
++        expect(state.chatPresetId).toBe(retired.id)
++        expect(state.officialRelease).toBe('')
++        expect(compileWikiPromptGuide(resolveWikiPromptPreset(state.presets, state.chatPresetId)!).analysis).toContain('My retired archive edit.')
++        expect(normalizeWikiPromptPresetState(structuredClone(state), () => 'unused')).toEqual(state)
++        // database.svelte.ts compares the stored release (absent counts as '') with the returned one.
++        const organizer = { folders: [{ id: 'mine', name: 'Mine', createdAt: 0 }], folderByItemId: { [official.id]: 'mine' }, itemOrder: [retired.id, official.id] }
++        expect(organizeOfficialWikiArchives(organizer, state.presets, ('' as string) !== state.officialRelease)).toEqual(organizer)
++    })
++
++    test('keeps an edited official name and an older policy saved under the current release', () => {
++        const edited = createDefaultWikiPromptPreset(OFFICIAL_WIKI_CURRENT_ID)
++        edited.name = 'My official name'
++        edited.blocks.find(block => block.id === 'main-wiki-guide')!.content = 'My official text.'
++        const edit = normalizeWikiPromptPresetState({ presets: [edited], chatPresetId: edited.id, officialRelease: OFFICIAL_WIKI_RELEASE }, () => 'unused')
++        expect(edit.presets).toEqual([edited])
++        const older = { ...(structuredClone(previousFictionOfficial.preset) as WikiPromptPreset), id: OFFICIAL_WIKI_CURRENT_ID }
++        const kept = normalizeWikiPromptPresetState({ presets: [older], chatPresetId: older.id, officialRelease: OFFICIAL_WIKI_RELEASE }, () => 'unused')
++        expect(kept.presets[0]).toMatchObject({ id: older.id, name: older.name, builtin: true, writingPolicyVersion: 7 })
++        expect(compileWikiPromptGuide(kept.presets[0])).toEqual(compileWikiPromptGuide(older))
+     })
+ 
+     test('optional compression survives normalization and does not discard essential facts', () => {
+diff --git a/src/ts/risubard/wikiPromptPreset.ts b/src/ts/risubard/wikiPromptPreset.ts
+index f49fdd9..cf6a890 100644
+--- a/src/ts/risubard/wikiPromptPreset.ts
++++ b/src/ts/risubard/wikiPromptPreset.ts
+@@ -627,11 +627,14 @@ export function normalizeWikiPromptPresetState(
+         : []
+     const storedRelease = boundedText(source.officialRelease, 40)
+     const upgrading = storedRelease !== OFFICIAL_WIKI_RELEASE
++    // Personal fork: any existing non-empty saved list keeps its IDs, order, names, policies, selection and stored release
++    // (each preset is still validated by normalizePreset); only a missing or empty list takes the current official release path.
++    const preserving = rawPresets.length > 0
+     // An archive is added once, when its release is superseded; a deleted archive stays deleted.
+-    const newArchives = upgrading
++    const newArchives = upgrading && !preserving
+         ? OFFICIAL_WIKI_ARCHIVES.filter(archive => !storedRelease || archive.date >= storedRelease)
+         : []
+-    const replacedIds = new Set([...RETIRED_OFFICIAL_IDS, ...newArchives.map(archive => archive.id)])
++    const replacedIds = new Set(preserving ? [] : [...RETIRED_OFFICIAL_IDS, ...newArchives.map(archive => archive.id)])
+     const presets: WikiPromptPreset[] = []
+     let official: WikiPromptPreset | undefined
+     for (const preset of rawPresets) {
+@@ -644,9 +647,18 @@ export function normalizeWikiPromptPresetState(
+         }
+         // Only one official preset stays locked; it keeps its stable ID and optional toggles.
+         if (official) continue
+-        official = normalized.writingPolicyVersion === 10 ? normalized : upgradeOfficialPreset(normalized)
++        official = preserving || normalized.writingPolicyVersion === 10 ? normalized : upgradeOfficialPreset(normalized)
+         presets.push(official)
+     }
++    if (preserving) {
++        const ids = new Set(presets.map((preset) => preset.id))
++        const chatPresetId = boundedText(source.chatPresetId, 120)
++        return {
++            presets,
++            chatPresetId: ids.has(chatPresetId) ? chatPresetId : (official ?? presets[0]).id,
++            officialRelease: storedRelease,
++        }
++    }
+     if (!official) {
+         official = createDefaultWikiPromptPreset(OFFICIAL_WIKI_CURRENT_ID)
+         presets.push(official)
+diff --git a/src/ts/setting/risuBardCommonSettingsData.ts b/src/ts/setting/risuBardCommonSettingsData.ts
+index 40dccd2..8d6cab1 100644
+--- a/src/ts/setting/risuBardCommonSettingsData.ts
++++ b/src/ts/setting/risuBardCommonSettingsData.ts
+@@ -377,6 +377,9 @@ export const risuBardCommonSettingsItems: SettingItem[] = [
+             selectOptions: [
+                 { value: 'concise', labelKey: 'risuBardCanonicalStyleConcise' },
+                 { value: 'custom', labelKey: 'risuBardCanonicalStyleCustom' },
++                // Personal fork: a saved legacy style stays listed, so opening this page never resets it to the first option.
++                { value: 'standard', labelKey: 'risuBardCanonicalStyleStandard', condition: (ctx) => ctx.db.risuBardCanonicalWritingStyle === 'standard' },
++                { value: 'ultra-concise', labelKey: 'risuBardCanonicalStyleUltraConcise', condition: (ctx) => ctx.db.risuBardCanonicalWritingStyle === 'ultra-concise' },
+             ],
+         },
+         keywords: ['canonical', 'writing', 'style', 'concise', '정본', '집필', '문체', '간결'],
+diff --git a/src/ts/tokenizer.ts b/src/ts/tokenizer.ts
+index 4a34491..716865b 100644
+--- a/src/ts/tokenizer.ts
++++ b/src/ts/tokenizer.ts
+@@ -1,5 +1,6 @@
+ import type { Tiktoken } from "@dqbd/tiktoken";
+ import type { Tokenizer } from "@mlc-ai/web-tokenizers";
++import { localAI } from './localAI.svelte';
+ import { type character, type Chat, getCurrentCharacter, getDatabase } from "./storage/database.svelte";
+ import type { MultiModal, OpenAIChat } from "./process/index.svelte";
+ import { supportsInlayImage } from "./process/files/inlays";
+@@ -72,6 +73,7 @@ export async function encodeWithTokenizer(data: string, tokenizerType: string):
+ }
+ 
+ export async function encode(data:string):Promise<(number[]|Uint32Array|Int32Array)>{
++    if (localAI.available && localAI.enabled) return tokenizeGGUFModel(data);
+     const db = getDatabase();
+     const modelInfo = getModelInfo(db.aiModel);
+     const pluginTokenizer = pluginV2.providerOptions.get(db.currentPluginProvider)?.tokenizer ?? "none";
+diff --git a/src/ts/translator/translator.ts b/src/ts/translator/translator.ts
+index f62fe64..48136fe 100644
+--- a/src/ts/translator/translator.ts
++++ b/src/ts/translator/translator.ts
+@@ -26,6 +26,11 @@ import { getModuleRegexScripts } from "../process/modules"
+ import { getNodetextToSentence, sleep } from "../util"
+ import { processScriptFull } from "../process/scripts"
+ import { playNotificationSound } from '../notificationSound'
++import { PrivateMobileGoogleTranslateGate, shouldBatchPrivateMobileGoogleTranslation } from './privateMobileGoogleTranslate'
++
++const mobileGoogleGate = new PrivateMobileGoogleTranslateGate()
++const isBardAndroid = () => navigator.userAgent.includes('RisuBardAndroid/')
++let googleFallbackNoticeAt = -Infinity
+ 
+ let cache={
+     origin: [''],
+@@ -471,8 +476,9 @@ export async function translate(text:string, reverse:boolean) {
+ }
+ 
+ export async function runTranslator(text:string, reverse:boolean, from:string,target:string, exarg?:{translatorNote?:string}) {
++    let transientFallback = false
+     const arg = {
+-
++        onFallback: () => { transientFallback = true },
+         from: reverse ? from : target,
+ 
+         to: reverse ? target : from,
+@@ -523,18 +529,20 @@ export async function runTranslator(text:string, reverse:boolean, from:string,ta
+         }
+     }
+ 
++    if (transientFallback) return text
+     const result = fullResult.join("\n").trim()
+ 
+-    cache.origin.push(reverse ? result : text)
+-        
+-    cache.trans.push(reverse ? text : result)
++    if (!transientFallback) {
++        cache.origin.push(reverse ? result : text)
++        cache.trans.push(reverse ? text : result)
++    }
+ 
+ 
+     return result
+ 
+ }
+ 
+-async function translateMain(text:string, arg:{from:string, to:string, host:string, translatorNote?:string}){
++async function translateMain(text:string, arg:{from:string, to:string, host:string, translatorNote?:string, onFallback?:()=>void}){
+     let db = getDatabase()
+     if(db.translatorType === 'llm'){
+         const tr = arg.to || 'en'
+@@ -636,15 +644,21 @@ async function translateMain(text:string, arg:{from:string, to:string, host:stri
+ 
+ 
+ 
+-    const f = await fetch(url, {
+-
+-        method: "GET",
+-
+-    })
+-
+-    const res = await f.json()
+-
+-    
++    const mobileGoogle = isBardAndroid() && db.translatorType === 'google'
++    const fallback = () => {
++        arg.onFallback?.()
++        const now = Date.now()
++        if (now - googleFallbackNoticeAt >= 30_000) {
++            googleFallbackNoticeAt = now
++            notifyError('Google 번역을 잠시 사용할 수 없어 원문을 표시합니다. 잠시 후 번역 재시도를 눌러 주세요.')
++        }
++        return text
++    }
++    const f = mobileGoogle ? await mobileGoogleGate.request(url) : await fetch(url, { method: 'GET' })
++    if (!f || (mobileGoogle && !f.ok)) return fallback()
++    let res: any
++    try { res = await f.json() }
++    catch (error) { if (mobileGoogle) return fallback(); throw error }
+ 
+     if(typeof(res) === 'string'){
+ 
+@@ -652,8 +666,8 @@ async function translateMain(text:string, arg:{from:string, to:string, host:stri
+ 
+     }
+ 
+-    if((!res[0]) || res[0].length === 0){
+-        return text
++    if ((mobileGoogle && !Array.isArray(res?.[0])) || !res[0] || res[0].length === 0) {
++        return mobileGoogle ? fallback() : text
+     }
+ 
+     const result = (res[0].map((s) => s[0]).filter(Boolean).join('') as string).replace(/\* ([^*]+)\*/g, '*$1*').replace(/\*([^*]+) \*/g, '*$1*');
+@@ -729,6 +743,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
+     console.log(html)
+ 
+     let promises: Promise<void>[] = [];
++    let translationError: unknown;
+     let translationChunks: {
+         chunks: string[],
+         resolvers: ((text:string) => void)[]
+@@ -759,24 +774,24 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
+             return
+         }
+ 
+-        const translated = await translate(text, reverse)
+-
+-        const split = translated.split('■')
+-
+-        console.log(split.length, currentChunk.chunks.length)
+-
+-        if(split.length !== currentChunk.chunks.length){
+-            //try translating one by one
+-            for(let i = 0; i < currentChunk.chunks.length; i++){
+-                currentChunk.resolvers[i](
+-                    await translate(currentChunk.chunks[i]
+-                , reverse))
++        try {
++            const translated = await translate(text, reverse)
++            if (translated === text) {
++                currentChunk.chunks.forEach((original, i) => currentChunk.resolvers[i](original))
++                return
+             }
+-        }
+-        
+-        for(let i = 0; i < split.length; i++){
+-            console.log(split[i])
+-            currentChunk.resolvers[i](split[i])
++            const split = translated.split('■')
++            if(split.length !== currentChunk.chunks.length){
++                for(let i = 0; i < currentChunk.chunks.length; i++){
++                    currentChunk.resolvers[i](await translate(currentChunk.chunks[i], reverse))
++                }
++                return
++            }
++            split.forEach((value, i) => currentChunk.resolvers[i](value))
++        } catch (error) {
++            // Settle every queued node before reporting a failed batch to the caller.
++            translationError ??= error
++            currentChunk.chunks.forEach((original, i) => currentChunk.resolvers[i](original))
+         }
+ 
+ 
+@@ -784,6 +799,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
+ 
+     async function translateNodeText(node:Node, reprocessDisplayScript:boolean = false) {
+         if(node.textContent.trim().length !== 0){
++            let translated: string;
+             if(needSuperChunkedTranslate()){
+                 const prm = new Promise<string>((resolve) => {
+                     translateTranslationChunks(false, node.textContent.length)
+@@ -791,19 +807,12 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
+                     translationChunks[translationChunks.length-1].chunks.push(node.textContent)
+                 })
+     
+-                node.textContent = await prm
+-                return
+-            }
+-
+-            const translateChunks = (node.textContent || '').split(/\n\n+/g);
+-            let translatedChunksPromises: Promise<string>[] = [];
+-            for (const chunk of translateChunks) {
+-                const translatedPromise = translate(chunk, reverse);
+-                translatedChunksPromises.push(translatedPromise);
++                translated = await prm
++            } else {
++                const translateChunks = (node.textContent || '').split(/\n\n+/g);
++                const translatedChunks = await Promise.all(translateChunks.map(chunk => translate(chunk, reverse)));
++                translated = translatedChunks.join("\n\n");
+             }
+-
+-            const translatedChunks = await Promise.all(translatedChunksPromises);
+-            let translated = translatedChunks.join("\n\n");
+             if (!reprocessDisplayScript) {
+                 node.textContent = translated;
+                 return;
+@@ -842,6 +851,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
+                     return
+                 }
+                 if(promises.length > 10){
++                    await translateTranslationChunks(true, 0)
+                     await Promise.all(promises)
+                     promises = []
+                 }
+@@ -875,13 +885,15 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
+                             const newNode = document.createElement("span");
+                             newNode.textContent = sentence;
+                             node.appendChild(newNode);
+-                            await translateNodeText(newNode, true);
++                            if (needSuperChunkedTranslate()) promises.push(translateNodeText(newNode, true));
++                            else await translateNodeText(newNode, true);
+                             node.appendChild(document.createElement("br"));
+                         }
+                     } else {
+                         // Single sentence
+                         node.innerHTML = sentences[0];
+-                        await translateNodeText(node, true);
++                        if (needSuperChunkedTranslate()) promises.push(translateNodeText(node, true));
++                        else await translateNodeText(node, true);
+                     }
+                     return;
+                 }
+@@ -903,6 +915,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
+     await translateTranslationChunks(true, 0)
+ 
+     await Promise.all(promises)
++    if (translationError) throw translationError
+     // Serialize the DOM back to HTML
+     const serializer = new XMLSerializer();
+     let translatedHTML = serializer.serializeToString(dom);
+@@ -918,7 +931,8 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
+ }
+ 
+ function needSuperChunkedTranslate(){
+-    return getDatabase().translatorType === 'deeplX'
++    const translatorType = getDatabase().translatorType
++    return translatorType === 'deeplX' || shouldBatchPrivateMobileGoogleTranslation(isBardAndroid(), translatorType)
+ }
+ 
+ async function translateLLM(text:string, arg:{to:string, from:string, regenerate?:boolean,translatorNote?:string, onCacheState?:(cached:boolean) => void}):Promise<string>{

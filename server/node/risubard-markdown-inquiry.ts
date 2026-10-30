@@ -6,7 +6,8 @@ import { createInquiryTimeline, type InquiryTimelineInput } from './risubard-inq
 import { normalizeRisuBardInquiryTokenBudget } from '../../src/ts/risubard/risuBardSettings'
 import { selectMarkdownExcerpt } from './risubard-markdown-excerpt'
 import { isStoryArcChapterTitle, isStoryArcTitle } from '../../src/ts/risubard/wikiWritingLanguage'
-import { normalizeWikiRetrievalLimits, type WikiRetrievalLimits } from '../../src/ts/risubard/wikiRetrievalLimits'
+import { normalizeWikiRetrievalLimits, wikiPageTokenCap, type WikiRetrievalLimits } from '../../src/ts/risubard/wikiRetrievalLimits'
+import { RESOLVED_SOURCE_SCORE } from '../../src/ts/risubard/historicalSourceRecall'
 
 const MAX_SELECTED_DOCUMENTS = 12
 // Client validation accepts at most 44 sources per inquiry.
@@ -129,6 +130,8 @@ export interface MarkdownInquiryInput {
         occurredAt: number
     }[]
     sourceLimit?: number
+    /** Supplied sources a reranking model judged to state the asked facts, best first. */
+    rankedSourceIds?: readonly string[]
     timeline?: InquiryTimelineInput
     tokenBudget?: {
         target: number
@@ -783,6 +786,7 @@ export function inquireMarkdownDocuments(
         input.tokenBudget?.events,
         input.tokenBudget?.perSource,
     )
+    const pageTokenCap = wikiPageTokenCap(tokenBudget)
     const prepared = [
         ...(input.contextSelection === 'auto' ? [] : requiredDocuments).map((document) => ({
             document,
@@ -794,27 +798,31 @@ export function inquireMarkdownDocuments(
         })),
         ...automatic,
     ].map((candidate) => {
+        // Each optional page gets a share of the page lane, so a long card cannot
+        // keep every other named character out; events and pinned pages keep the per-source cap.
+        const perSource = candidate.document.type === 'event' || requiredIds.has(candidate.document.id)
+            ? tokenBudget.perSource : pageTokenCap
         const passages = semanticPassages.get(candidate.document.id)
         const preferSemantic = passages?.length && !requiredIds.has(candidate.document.id)
             && !(currentStateIntent && candidate.document.type === 'character')
         let content = preferSemantic ? truncateToTokenBudget(
             passages!.map(passage => truncateToTokenBudget(
                 semanticExcerpt(candidate.document, passage.start, passage.end),
-                Math.max(1, Math.floor((tokenBudget.perSource - (passages!.length - 1) * 2) / passages!.length)),
+                Math.max(1, Math.floor((perSource - (passages!.length - 1) * 2) / passages!.length)),
             )).join('\n\n'),
-            tokenBudget.perSource,
+            perSource,
         ) : selectTokenBoundedExcerpt({
             content: candidate.document.content,
             documentType: candidate.document.type,
             query: retrievalInput,
             chronologyIntent,
-        }, tokenBudget.perSource)
+        }, perSource)
         if (preferSemantic && candidate.document.type === 'character'
             && !pastIntent && !chronologyIntent) {
             // Supplement current facts without shortening the selected evidence.
             // Spare capacity, not a recency quota, owns the extra context.
-            const currentBudget = Math.min(Math.floor(tokenBudget.perSource / 2),
-                tokenBudget.perSource - countInquiryTokens(content) - countInquiryTokens('\n\n'))
+            const currentBudget = Math.min(Math.floor(perSource / 2),
+                perSource - countInquiryTokens(content) - countInquiryTokens('\n\n'))
             if (currentBudget > 0) {
                 const current = selectTokenBoundedExcerpt({
                     content: candidate.document.content,
@@ -824,7 +832,7 @@ export function inquireMarkdownDocuments(
                     content = current
                 } else if (current.trim()) {
                     const combined = `${current}\n\n${content}`
-                    if (countInquiryTokens(combined) <= tokenBudget.perSource) content = combined
+                    if (countInquiryTokens(combined) <= perSource) content = combined
                 }
             }
         }
@@ -841,12 +849,17 @@ export function inquireMarkdownDocuments(
             : []
         const boundedContent = truncateToTokenBudget(
             labels.length > 0 ? `${labels.join('\n')}\n${content}` : content,
-            tokenBudget.perSource,
+            perSource,
         )
+        // When the scene's original text comes along, the label and title are enough to place it.
+        const heading = candidate.document.type === 'event'
+            ? [...labels, `## ${candidate.document.title}`, '[Summary omitted: the original text of this scene follows]'].join('\n')
+            : undefined
         return {
             ...candidate,
             content: boundedContent,
             tokens: countInquiryTokens(boundedContent),
+            ...(heading ? { heading, headingTokens: countInquiryTokens(heading) } : {}),
         }
     })
     const detailedIntent = /(?:자세히|상세히|모든\s+근거|근거까지|전부|모두|in detail|all evidence)/i
@@ -926,57 +939,134 @@ export function inquireMarkdownDocuments(
         else selectedMapTokens += entry.tokens
         return true
     }
+    // Events in the order they should be read: the strongest match first.
+    const eventCandidates = currentStateIntent
+        ? prepared
+            .filter((item) => !requiredIds.has(item.document.id)
+                && item.document.type === 'event' && (item.recencyBonus ?? 0) > 0)
+            // "Where are we now" is answered by what just happened, so the newest
+            // events before the transcript come along even without a word in common.
+            .sort((left, right) => (right.recencyBonus ?? 0) - (left.recencyBonus ?? 0)
+                || right.score - left.score
+                || left.document.id.localeCompare(right.document.id))
+            .slice(0, RECENT_EVENT_GUARANTEE)
+        : prepared.filter((item) =>
+            !requiredIds.has(item.document.id)
+            && item.document.type === 'event'
+            && !isRecencyOnly(item))
+    const sourceLimit = Number.isSafeInteger(input.sourceLimit)
+        ? Math.max(0, Math.min(MAX_SOURCE_MATCHES, input.sourceLimit as number))
+        : DEFAULT_SELECTED_SOURCE_MESSAGES
+    const suppliedSources = new Map((input.sourceMatches ?? []).slice(0, MAX_SOURCE_MATCHES)
+        .map((match) => [match.messageId, match] as const))
+    const selectedEventSources = new Map<string, string>()
+    const semanticEventSourceDocuments = new Map<string, string>()
+    const prepareSource = (
+        match: NonNullable<MarkdownInquiryInput['sourceMatches']>[number],
+        eventTitle = selectedEventSources.get(match.messageId),
+    ) => {
+        const routed = eventTitle !== undefined
+        const heading = `Original historical chat evidence (${match.role}, order ${match.occurredAt}):`
+        const bodyTokenBudget = Math.max(
+            1,
+            tokenBudget.perSource - countInquiryTokens(`${heading}\n`),
+        )
+        const semanticDocumentId = semanticEventSourceDocuments.get(match.messageId)
+        const semanticDocument = semanticDocumentId ? byId.get(semanticDocumentId) : undefined
+        const semanticPassage = semanticDocumentId ? semanticPassages.get(semanticDocumentId) : undefined
+        const evidenceQuery = semanticDocument && semanticPassage
+            ? semanticPassage.map(passage => semanticDocument.content.slice(passage.start, passage.end)).join('\n')
+            : retrievalInput
+        const excerpt = selectTokenBoundedExcerpt({
+            content: match.content,
+            documentType: 'other',
+            query: evidenceQuery,
+            chronologyIntent: false,
+        }, bodyTokenBudget)
+        const content = `${heading}\n${truncateToTokenBudget(
+            excerpt,
+            bodyTokenBudget,
+        )}`
+        return {
+            ...match,
+            content,
+            eventTitle,
+            routed,
+            effectiveScore: match.score
+                + (routed ? ROUTED_SOURCE_SCORE_BONUS : 0),
+            tokens: countInquiryTokens(content),
+        }
+    }
+    type PreparedSource = ReturnType<typeof prepareSource>
+    const selectedSourceMatches: PreparedSource[] = []
+    const selectedSourceIds = new Set<string>()
+    const addSource = (source: PreparedSource): boolean => {
+        if (selectedSourceMatches.length >= sourceLimit
+            || selectedSourceIds.has(source.messageId)
+            || selectedTokens + source.tokens > tokenBudget.maximum) return false
+        selectedSourceMatches.push(source)
+        selectedSourceIds.add(source.messageId)
+        selectedTokens += source.tokens
+        return true
+    }
+    // Ranked originals were read against the question by a model, so they come
+    // before pages and replace the score-based choice of originals entirely.
+    const rankedSources = (input.rankedSourceIds ?? [])
+        .flatMap((messageId) => suppliedSources.get(messageId) ?? [])
+    for (const match of rankedSources) {
+        addSource(prepareSource(match, eventCandidates
+            .find((candidate) => candidate.document.sourceMessageIds.includes(match.messageId))?.document.title))
+    }
+    const ranked = rankedSources.length > 0
     for (const candidate of prepared.filter((item) =>
         !requiredIds.has(item.document.id)
         && item.document.type !== 'event'
     ).slice(0, MAX_MAP_ANCHORS_BEFORE_EVENTS)) {
         addOptionalIfFits(candidate, 'map')
     }
-    if (eventEvidenceIntent) {
-        for (const candidate of prepared.filter((item) =>
-            !requiredIds.has(item.document.id)
-            && item.document.type === 'event'
-            && !isRecencyOnly(item)
-        )) {
-            addOptionalIfFits(candidate, 'event')
-        }
+    // The best historical match goes first even when no event summary routes it:
+    // a summary can leave out the very detail asked about, and routed scenes
+    // would otherwise use the room before it.
+    // An event's requested original is not a query match, so it never leads.
+    const leadingSource = ranked ? undefined : input.sourceMatches?.find((match) => match.score < RESOLVED_SOURCE_SCORE)
+    const leadingEventTitle = leadingSource && eventCandidates
+        .find((candidate) => candidate.document.sourceMessageIds.includes(leadingSource.messageId))?.document.title
+    if (leadingSource && sourceLimit > 0 && (historicalEvidenceIntent || leadingSource.retrieval === 'semantic'
+        || leadingSource.score >= MIN_UNROUTED_LEXICAL_SCORE)) {
+        addSource(prepareSource(leadingSource, leadingEventTitle))
     }
-    if (!eventEvidenceIntent && !currentStateIntent) {
-        for (const candidate of prepared.filter((item) =>
-            !requiredIds.has(item.document.id)
-            && item.document.type === 'event'
-            && !isRecencyOnly(item)
-        )) {
-            addOptionalIfFits(candidate, 'map')
-        }
-    }
-    if (currentStateIntent) {
-        // "Where are we now" is answered by what just happened, so the newest
-        // events before the transcript come along even without a word in common.
-        const newest = prepared
-            .filter((item) => !requiredIds.has(item.document.id)
-                && item.document.type === 'event' && (item.recencyBonus ?? 0) > 0)
-            .sort((left, right) => (right.recencyBonus ?? 0) - (left.recencyBonus ?? 0)
-                || right.score - left.score
-                || left.document.id.localeCompare(right.document.id))
-            .slice(0, RECENT_EVENT_GUARANTEE)
-        for (const candidate of newest) addOptionalIfFits(candidate, 'event')
-    }
-    const sourceLimit = Number.isSafeInteger(input.sourceLimit)
-        ? Math.max(0, Math.min(MAX_SOURCE_MATCHES, input.sourceLimit as number))
-        : DEFAULT_SELECTED_SOURCE_MESSAGES
-    const selectedEventSources = new Map<string, string>()
-    const semanticEventSourceDocuments = new Map<string, string>()
-    for (const candidate of selected) {
-        if (candidate.document.type !== 'event') continue
-        for (const messageId of candidate.document.sourceMessageIds) {
-            if (!selectedEventSources.has(messageId)) {
-                selectedEventSources.set(messageId, candidate.document.title)
-                if (semanticPassages.has(candidate.document.id)) {
-                    semanticEventSourceDocuments.set(messageId, candidate.document.id)
-                }
+    // Evidence is read scene by scene: an event and then its original text, so
+    // the best-matching scene arrives whole before weaker summaries use the room.
+    // Pages never give way here; their own lane is the target budget.
+    for (const candidate of eventCandidates) {
+        const newSourceIds = candidate.document.sourceMessageIds
+            .filter((messageId) => !selectedEventSources.has(messageId))
+        for (const messageId of newSourceIds) {
+            selectedEventSources.set(messageId, candidate.document.title)
+            if (semanticPassages.has(candidate.document.id)) {
+                semanticEventSourceDocuments.set(messageId, candidate.document.id)
             }
         }
+        const leadingOriginal = newSourceIds.some((messageId) => selectedSourceIds.has(messageId))
+        const originals = newSourceIds.flatMap((messageId) => {
+            const match = suppliedSources.get(messageId)
+            return match && !ranked && !selectedSourceIds.has(messageId) ? [prepareSource(match)] : []
+        })
+        // A scene whose original fits arrives as heading plus original, so two
+        // scenes' originals fit where one summary and one original did before.
+        const originalTokens = originals.reduce((sum, source) => sum + source.tokens, 0)
+        // A semantic passage of the summary is kept: it is the part that matched, not a repeat of the original.
+        const compact = (originals.length > 0 || leadingOriginal) && candidate.heading !== undefined
+            && !semanticPassages.has(candidate.document.id)
+            && selectedSourceMatches.length + originals.length <= sourceLimit
+            && selectedTokens + candidate.headingTokens! + originalTokens <= tokenBudget.maximum
+            ? { ...candidate, content: candidate.heading, tokens: candidate.headingTokens! }
+            : undefined
+        if (!addOptionalIfFits(compact ?? candidate, 'event')) {
+            for (const messageId of newSourceIds) selectedEventSources.delete(messageId)
+            continue
+        }
+        for (const source of originals) addSource(source)
     }
     const evidenceRequests = [...selectedEventSources]
         .slice(0, sourceLimit)
@@ -984,7 +1074,7 @@ export function inquireMarkdownDocuments(
             ...(semanticEventSourceDocuments.has(messageId)
                 ? { documentId: semanticEventSourceDocuments.get(messageId)! } : {}),
         }))
-    const strongLexicalSourceIds = new Set((input.sourceMatches ?? [])
+    const strongLexicalSourceIds = new Set([...suppliedSources.values()]
         .filter((match) => match.retrieval !== 'semantic'
             && !selectedEventSources.has(match.messageId)
             && match.score >= MIN_UNROUTED_LEXICAL_SCORE)
@@ -993,61 +1083,17 @@ export function inquireMarkdownDocuments(
             || left.messageId.localeCompare(right.messageId))
         .slice(0, MAX_UNROUTED_LEXICAL_SOURCES)
         .map((match) => match.messageId))
-    const preparedSourceMatches = (input.sourceMatches ?? [])
-        .slice(0, MAX_SOURCE_MATCHES)
-        .map((match) => {
-            const eventTitle = selectedEventSources.get(match.messageId)
-            const routed = eventTitle !== undefined
-            const heading = `Original historical chat evidence (${match.role}, order ${match.occurredAt}):`
-            const bodyTokenBudget = Math.max(
-                1,
-                tokenBudget.perSource - countInquiryTokens(`${heading}\n`),
-            )
-            const semanticDocumentId = semanticEventSourceDocuments.get(match.messageId)
-            const semanticDocument = semanticDocumentId ? byId.get(semanticDocumentId) : undefined
-            const semanticPassage = semanticDocumentId ? semanticPassages.get(semanticDocumentId) : undefined
-            const evidenceQuery = semanticDocument && semanticPassage
-                ? semanticPassage.map(passage => semanticDocument.content.slice(passage.start, passage.end)).join('\n')
-                : retrievalInput
-            const excerpt = selectTokenBoundedExcerpt({
-                content: match.content,
-                documentType: 'other',
-                query: evidenceQuery,
-                chronologyIntent: false,
-            }, bodyTokenBudget)
-            const content = `${heading}\n${truncateToTokenBudget(
-                excerpt,
-                bodyTokenBudget,
-            )}`
-            return {
-                ...match,
-                content,
-                eventTitle,
-                routed,
-                effectiveScore: match.score
-                    + (routed ? ROUTED_SOURCE_SCORE_BONUS : 0),
-                tokens: countInquiryTokens(content),
-            }
-        })
-        .filter((match) => historicalEvidenceIntent || match.routed
-            || match.retrieval === 'semantic' || strongLexicalSourceIds.has(match.messageId))
-        .sort((left, right) =>
-            Number(right.routed) - Number(left.routed)
-            || right.effectiveScore - left.effectiveScore
+    const unroutedSources = [...suppliedSources.values()]
+        .filter((match) => !ranked && !selectedSourceIds.has(match.messageId) && !selectedEventSources.has(match.messageId)
+            && (historicalEvidenceIntent || match.retrieval === 'semantic' || strongLexicalSourceIds.has(match.messageId)))
+        .map((match) => prepareSource(match))
+        .sort((left, right) => right.effectiveScore - left.effectiveScore
             || right.occurredAt - left.occurredAt
             || left.messageId.localeCompare(right.messageId))
-    const selectedSourceMatches: typeof preparedSourceMatches = []
-    const selectedSourceIds = new Set<string>()
-    for (const match of preparedSourceMatches) {
-        if (selectedSourceMatches.length >= sourceLimit
-            || selectedSourceIds.has(match.messageId)
-            || selectedTokens + match.tokens > tokenBudget.maximum
-            || selectedMapTokens + match.tokens > selectedMapTokenBudget) continue
-        selectedSourceMatches.push(match)
-        selectedSourceIds.add(match.messageId)
-        selectedTokens += match.tokens
-        selectedMapTokens += match.tokens
-    }
+    for (const source of unroutedSources) addSource(source)
+    // An unrouted lead only reserved its room early; scenes read in their own order before it.
+    const leading = selectedSourceMatches.findIndex((source) => source.messageId === leadingSource?.messageId)
+    if (leading >= 0 && leadingEventTitle === undefined) selectedSourceMatches.push(...selectedSourceMatches.splice(leading, 1))
     for (const candidate of prepared) {
         if (!requiredIds.has(candidate.document.id)
             && candidate.document.type !== 'event') {

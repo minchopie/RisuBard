@@ -50,6 +50,7 @@ const { createSaveObservation } = require('./save-observation.cjs');
 const { createProjectionShadow } = require('./projection-shadow.cjs');
 const { generateStorageDiagnosticReport } = require('./storage-diagnostic-report.cjs');
 const { atomicWriteFile, commitTransaction, moveToTrash, observeWrites } = require('./file-store.cjs');
+const { cleanupTrash, retentionDays } = require('./trash-cleanup.cjs');
 const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs');
 const { openServerBrowser } = require('./open-server-browser.cjs');
 const { releaseToUpdateInfo } = require('./release-update.cjs');
@@ -8181,6 +8182,16 @@ async function startServer() {
                 .then((moved) => { if (moved > 0) console.log(`[BardWiki] Moved ${moved} vectors out of the KV`); })
                 .catch((error) => console.error('[BardWiki] Vector move failed:', error?.message ?? error));
         }, 10_000));
+        // Empty trash entries past their retention window, once after start and then daily.
+        server.once('listening', () => {
+            const sweepTrash = () => cleanupTrash(savePath, { days: retentionDays(), logger })
+                .then((removed) => { if (removed.length > 0) console.log(`[Trash] Removed ${removed.length} old entries`); })
+                .catch((error) => logger.warn('[Trash] Cleanup failed:', error));
+            setTimeout(() => {
+                sweepTrash();
+                setInterval(sweepTrash, 24 * 60 * 60 * 1000).unref();
+            }, 120_000).unref();
+        });
         // Remove folders older self-updates left in the system temp folder. A
         // separate low-priority process keeps the deletion off this server.
         if (!embedded.enabled) server.once('listening', () => setTimeout(() => {

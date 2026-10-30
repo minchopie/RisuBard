@@ -25,6 +25,7 @@ const open = () => { mounted = mount(RisuBardMemoryBudgetPreset, { target: docum
 beforeEach(() => {
     for (const key of Object.keys(db())) delete db()[key]
     memoryBudgetPresetUi.customOpen = false
+    db().risuBardWikiSettingsView = 'advanced'
 })
 afterEach(async () => {
     if (mounted) await unmount(mounted)
@@ -33,6 +34,19 @@ afterEach(async () => {
 })
 
 describe('global memory budget preset control', () => {
+    it('offers only the three tiers in the simple view and locks stored custom values', () => {
+        db().risuBardWikiSettingsView = 'simple'
+        open()
+        expect([...select().options].map((option) => option.textContent)).toEqual(['Economy', 'Standard', 'Generous'])
+        unmount(mounted!)
+        db().risuBardInquirySourceTokenBudget = 2100
+        open()
+        const custom = [...select().options].find((option) => option.value === 'custom')!
+        expect(select().value).toBe('custom')
+        expect(custom.disabled).toBe(true)
+        expect(document.querySelector('[data-memory-budget-custom]')).not.toBeNull()
+    })
+
     it('shows the standard tier for an untouched database, with a summary and a help button', () => {
         open()
         expect([...select().options].map((option) => option.textContent)).toEqual(['Economy', 'Standard', 'Generous', 'Custom'])
@@ -52,6 +66,7 @@ describe('global memory budget preset control', () => {
         open()
         await choose('generous')
         expect(db()).toEqual({
+            risuBardWikiSettingsView: 'advanced',
             risuBardAnalysisTokenLimit: 9000,
             risuBardInquiryTimeoutMs: 5000,
             risuBardInquiryTargetTokenBudget: 6000,
@@ -69,7 +84,7 @@ describe('global memory budget preset control', () => {
         open()
         await choose('custom')
         expect(memoryBudgetPresetUi.customOpen).toBe(true)
-        expect(db()).toEqual({})
+        expect(db()).toEqual({ risuBardWikiSettingsView: 'advanced' })
         expect(select().value).toBe('custom')
         expect(summary()).toBeUndefined()
         await choose('economy')

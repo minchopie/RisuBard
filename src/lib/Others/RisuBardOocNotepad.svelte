@@ -2,18 +2,22 @@
     import { ParseMarkdown } from 'src/ts/parser/parser.svelte'
     import { ColorSchemeTypeStore } from 'src/ts/gui/colorscheme'
     import { DBState } from 'src/ts/stores.svelte'
-    import { ChevronLeftIcon, ChevronRightIcon, CircleQuestionMarkIcon, LocateFixedIcon } from '@lucide/svelte'
+    import { ChevronLeftIcon, ChevronRightIcon, CircleQuestionMarkIcon, LocateFixedIcon, Trash2Icon } from '@lucide/svelte'
     import ShDialog from 'src/lib/UI/GUI/ShDialog.svelte'
     import type { Message } from 'src/ts/storage/database.svelte'
     import { OOC_TURN_MARKER, buildOocGroups } from 'src/ts/risubard/oocTurns'
+    import { alertConfirmMulti, type AlertAction } from 'src/ts/alert'
     import { language } from 'src/lang'
 
-    let { messages, hideOoc = false, onHideChange, onNavigate }: {
+    let { messages, hideOoc = false, onHideChange, onNavigate, onDelete }: {
         messages: Message[]
         hideOoc?: boolean
         onHideChange: (value: boolean) => void
         onNavigate?: (index: number) => void
+        /** 원본 채팅에서 해당 인덱스의 메시지를 지운다. 지웠으면 true. */
+        onDelete?: (indices: number[]) => Promise<boolean>
     } = $props()
+    let deleting = $state(false)
     let query = $state('')
     let selectedGroupId = $state('')
     let helpOpen = $state(false)
@@ -37,6 +41,43 @@
         onNavigate?.(index)
     }
 
+    /** 사용자 입력이면 그 뒤에 이어진 AI 응답(다음 사용자 입력 전까지)이 연결된 응답이다. */
+    function linkedReplies(index: number): number[] {
+        const entries = groups.find(group => group.id === selectedGroup?.id)?.entries ?? []
+        const start = entries.findIndex(entry => entry.index === index)
+        const replies: number[] = []
+        for (const entry of entries.slice(start + 1)) {
+            if (entry.message.role === 'user') break
+            replies.push(entry.index)
+        }
+        return replies
+    }
+
+    async function remove(index: number) {
+        if (!onDelete || deleting) return
+        let indices = [index]
+        if (messages[index]?.role === 'user') {
+            const replies = linkedReplies(index)
+            if (replies.length > 0) {
+                const actions: AlertAction[] = [
+                    { label: `사용자 입력과 연결된 AI 응답 ${replies.length}개 함께 삭제`, variant: 'destructive' },
+                    { label: '사용자 입력만 삭제', variant: 'destructive' },
+                ]
+                const choice = await alertConfirmMulti(language.bardWikiDeleteWarning, actions)
+                if (choice < 0) return
+                if (choice === 0) indices = [index, ...replies]
+            } else {
+                const choice = await alertConfirmMulti(language.bardWikiDeleteWarning, [{ label: '사용자 입력 삭제', variant: 'destructive' }])
+                if (choice < 0) return
+            }
+        } else {
+            const choice = await alertConfirmMulti(language.bardWikiDeleteWarning, [{ label: 'AI 응답 삭제', variant: 'destructive' }])
+            if (choice < 0) return
+        }
+        deleting = true
+        try { await onDelete(indices) } finally { deleting = false }
+    }
+
     function setFontSize(event: Event) {
         const input = event.currentTarget as HTMLInputElement
         const value = input.valueAsNumber
@@ -48,7 +89,7 @@
 </script>
 
 <section class="ooc-notepad" data-ooc-notepad aria-label="OOC 메모장" bind:this={scroller}>
-    <header>
+    <header class="notepad-header">
         <div class="heading">
             <div class="title"><h2>OOC 메모장</h2>
                 <button type="button" class="icon-button" data-ooc-help aria-label="OOC 메모장 도움말" title="OOC 메모장 도움말" onclick={() => helpOpen = true}><CircleQuestionMarkIcon size={16} /></button>
@@ -82,6 +123,10 @@
                     <span>{turn === undefined ? `메시지 ${index + 1}` : `턴 ${turn}`}</span>
                     {#if message.disabled}<span>비활성</span>{/if}
                     <button type="button" class="source-button" data-ooc-source disabled={!onNavigate} onclick={() => navigate(index)}><LocateFixedIcon size={14} />원문으로 이동</button>
+                    <button type="button" class="delete-button" data-ooc-delete disabled={!onDelete || deleting}
+                        aria-label={message.role === 'user' ? '사용자 입력 삭제' : 'AI 응답 삭제'}
+                        title={message.role === 'user' ? '사용자 입력 삭제 (연결된 응답과 함께 삭제 선택 가능)' : 'AI 응답 삭제'}
+                        onclick={() => remove(index)}><Trash2Icon size={14} />삭제</button>
                 </div>
                 <div class="content" class:chattext={markdownEnabled} class:prose={markdownEnabled}
                     class:prose-invert={$ColorSchemeTypeStore === 'dark'}
@@ -121,8 +166,11 @@
 </ShDialog>
 
 <style>
-    .ooc-notepad { flex: 1; min-height: 0; overflow: auto; color: var(--color-textcolor); padding: clamp(.8rem, 3vw, 1.5rem); }
-    header { display: grid; gap: .65rem; margin-bottom: 1rem; }
+    .ooc-notepad { --ooc-pad: clamp(.8rem, 3vw, 1.5rem); flex: 1; min-height: 0; overflow: auto; color: var(--color-textcolor); }
+    /* 상단 메뉴는 본문 위 별도 레이어로 고정한다. 불투명 배경과 z-index로 스크롤되는 카드가 비쳐 보이지 않게 한다. */
+    .notepad-header { position: sticky; top: 0; z-index: 5; display: grid; gap: .65rem; padding: var(--ooc-pad) var(--ooc-pad) .75rem;
+        background: var(--color-bgcolor); border-bottom: 1px solid var(--color-darkborderc); }
+    .entries { padding: 1rem var(--ooc-pad) var(--ooc-pad); }
     .heading, .title, .display-options, .search-row { display: flex; align-items: center; gap: .5rem; }
     .heading { flex-wrap: wrap; justify-content: space-between; }
     .title { flex-shrink: 0; }
@@ -139,7 +187,9 @@
     button:hover:not(:disabled) { background: var(--color-darkbutton); color: var(--color-primary); }
     button:disabled { opacity: .4; }
     input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-    .entries { display: grid; gap: .9rem; }
+    .entries { display: grid; gap: .9rem; position: relative; z-index: 0; }
+    .delete-button { display: inline-flex; align-items: center; gap: .3rem; padding: .35rem; border-radius: .3rem; flex-shrink: 0; white-space: nowrap; color: var(--color-textcolor2); }
+    button.delete-button:hover:not(:disabled) { color: var(--color-danger); }
     article { min-width: 0; border: 1px solid var(--color-darkborderc); border-radius: .5rem; background: var(--color-darkbg); padding: 1rem; }
     article.user { border-left: 3px solid var(--color-primary); }
     .message-label { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .5rem; }

@@ -51,8 +51,24 @@ export function cancelWikiGeneration(): void {
     }
 }
 
+// The same, for one chat: a cancel there drops that chat's queued analyses only.
+const chatCancellationEpochs = new Map<string, number>()
+
+export function wikiChatCancellationEpoch(chatKey: string): number {
+    return chatCancellationEpochs.get(chatKey) ?? 0
+}
+
+/** Aborts one chat's running analyses, whose operation ids start with the prefix, and drops its queued ones. */
+export function cancelChatWikiGeneration(chatKey: string, operationPrefix: string): void {
+    chatCancellationEpochs.set(chatKey, wikiChatCancellationEpoch(chatKey) + 1)
+    for (const [operationId, controller] of wikiGenerationControllers) {
+        if (operationId.startsWith(operationPrefix)) controller.abort()
+    }
+}
+
 export function resetWikiGenerationState(): void {
     cancelWikiGeneration()
     wikiGenerationControllers.clear()
+    chatCancellationEpochs.clear()
     wikiGenerationOperations.set(new Set())
 }

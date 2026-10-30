@@ -43,7 +43,7 @@ describe('dynamic memory budgets', () => {
         expect(grown.maximum).toBe(11250)
         expect(grown.target).toBe(6000)
         expect(grown.events).toBe(4500)
-        expect(grown.analysis).toBe(12288)
+        expect(grown.analysis).toBe(49152)
         expect(grown.perSource).toBe(2000)
         expect(settings.risuBardInquiryMaximumTokenBudget).toBe(7500)
     })
@@ -72,11 +72,11 @@ describe('dynamic memory budgets', () => {
             risuBardInquiryTargetTokenBudget: 6000,
             risuBardInquiryEventTokenBudget: 4500,
             risuBardInquiryMaximumTokenBudget: 11250,
-            risuBardAnalysisTokenLimit: 12288,
+            risuBardAnalysisTokenLimit: 49152,
         })
-        expect(settings.risuBardAnalysisTokenLimit).toBe(8192)
-        expect(resolveDynamicMemoryBudget(settings, 50_000)).toMatchObject({ analysis: 8970, sourceLimit: 8, candidateLimit: 64, directSeedLimit: 32 })
-        expect(resolveDynamicMemoryBudget(settings, 5_000_000)).toMatchObject({ target: 6000, events: 4500, maximum: 11250, analysis: 12288 })
+        expect(settings.risuBardAnalysisTokenLimit).toBe(32768)
+        expect(resolveDynamicMemoryBudget(settings, 50_000)).toMatchObject({ analysis: 35881, sourceLimit: 8, candidateLimit: 64, directSeedLimit: 32 })
+        expect(resolveDynamicMemoryBudget(settings, 5_000_000)).toMatchObject({ target: 6000, events: 4500, maximum: 11250, analysis: 49152 })
     })
     test('effective settings skip the transcript when disabled and honor OOC exclusions when enabled', () => {
         const messages = [{ role: 'char', get data(): string { throw new Error('no scan when off') } }]

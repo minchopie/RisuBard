@@ -2,11 +2,13 @@ import { get } from 'svelte/store'
 import { beforeEach, describe, expect, test } from 'vitest'
 import {
     beginWikiGeneration,
+    cancelChatWikiGeneration,
     cancelWikiGeneration,
     endWikiGeneration,
     isWikiGenerating,
     resetWikiGenerationState,
     wikiCancellationEpoch,
+    wikiChatCancellationEpoch,
     wikiGenerationOperations,
 } from './wikiGenerationState'
 
@@ -21,6 +23,18 @@ describe('BardWiki generation activity', () => {
         expect(wikiCancellationEpoch()).toBe(before + 1)
         cancelWikiGeneration()
         expect(wikiCancellationEpoch()).toBe(before + 2)
+    })
+
+    test('a chat cancel aborts only that chat and advances only its epoch', () => {
+        const mine = beginWikiGeneration('analysis:["c","chat-a","m1"]')
+        const other = beginWikiGeneration('analysis:["c","chat-b","m1"]')
+        const global = wikiCancellationEpoch()
+        cancelChatWikiGeneration('["c","chat-a"]', 'analysis:["c","chat-a",')
+        expect(mine.aborted).toBe(true)
+        expect(other.aborted).toBe(false)
+        expect(wikiChatCancellationEpoch('["c","chat-a"]')).toBe(1)
+        expect(wikiChatCancellationEpoch('["c","chat-b"]')).toBe(0)
+        expect(wikiCancellationEpoch()).toBe(global)
     })
 
     test('stays active until every distinct operation ends', () => {

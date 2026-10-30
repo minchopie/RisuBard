@@ -49,7 +49,8 @@ import {
     projectRecentMemoryMessages,
     type MemoryAnalysisMessage,
 } from "../risubard/memoryAnalysisClient";
-import { enqueueNarrativeConfirmation } from '../risubard/narrativeConfirmationQueue';
+import { enqueueNarrativeConfirmation, narrativeConfirmationsSettled } from '../risubard/narrativeConfirmationQueue';
+import { groupNarrativeBacklog, NARRATIVE_BACKLOG_TURNS_PER_RUN, withoutRepeatedMessages } from '../risubard/narrativeBacklogBatch';
 import { projectActiveNarrativeSources } from "../risubard/sourceProjection";
 import {
     createNarrativeSourcesPrompt,
@@ -83,6 +84,13 @@ import {
 } from '../risubard/memoryWiki';
 import { announceRisuBardMemoryUpdated } from '../risubard/memoryEvents';
 import {
+    applyCanonCompression,
+    previewCanonCompression,
+    type CanonCompressionPreview,
+} from '../risubard/canonCompression';
+import { readModelResponseText } from '../../../packages/risubard-core/src/modelResponse';
+import type { WikiCatalogDocument } from '../risubard/memoryWiki';
+import {
     executeDirectWikiCommand,
     type DirectWikiContextSelection,
     type DirectWikiContextSources,
@@ -102,13 +110,18 @@ import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
 import { resolveDynamicMemorySettings } from '../risubard/dynamicMemoryBudget';
 import { requestWithProviderOutputLimit } from '../risubard/providerOutputTokenLimit';
 import {
+    buildSourceRerankInput, buildSourceRerankPool, parseSourceRerank,
+    SOURCE_RERANK_POOL_LIMIT, SOURCE_RERANK_SCHEMA, SOURCE_RERANK_SYSTEM_PROMPT,
+} from '../risubard/historicalSourceRerank';
+import {
     buildInquiryTimeline,
     findHistoricalSourceMatches,
     resolveHistoricalSourceMatchesById,
+    type HistoricalSourceMatch,
 } from '../risubard/historicalSourceRecall';
 import { activateWikiEmbeddings, refreshHistoricalSourceEmbeddings, searchHistoricalSourceEmbeddings, stopHistoricalSourceEmbeddings, wikiEmbeddingRuntime } from '../risubard/wikiEmbeddingService';
 import { mergeHistoricalSourceMatches } from '../risubard/historicalSourceEmbedding';
-import type { WikiSemanticMatch } from '../risubard/wikiEmbeddingIndex';
+import type { WikiSemanticMatch, WikiSemanticSkip } from '../risubard/wikiEmbeddingIndex';
 import { normalizeArcPlotterRuntimeSettings } from '../risubard/arcPlotterSettings';
 import {
     canonicalTurnNeedsRetry,
@@ -133,8 +146,10 @@ import {
 import { completeMemoryWikiFork } from '../risubard/memoryWikiFork';
 import {
     beginWikiGeneration,
+    cancelChatWikiGeneration,
     endWikiGeneration,
     wikiCancellationEpoch,
+    wikiChatCancellationEpoch,
 } from '../risubard/wikiGenerationState';
 import { composePromptBlockOverlay } from '../promptBlockOverlay';
 import {
@@ -241,11 +256,13 @@ async function confirmProjectedNarrativeTurn(input: {
     additionalAnalysis?: boolean
     historicalReanalysis?: boolean
     excludeCanonicalDocumentIds?: readonly string[]
+    /** Two or more waiting turns analyzed in one call; messages and target cover them all. */
+    batch?: readonly NarrativeTurn[]
 }): Promise<boolean> {
     const key = JSON.stringify([
         input.characterId,
         input.chatId,
-        input.targetMessageId,
+        ...(input.batch?.map((turn) => turn.targetMessageId) ?? [input.targetMessageId]),
     ])
     if (narrativeConfirmations.has(key)) return false
     narrativeConfirmations.add(key)
@@ -253,10 +270,12 @@ async function confirmProjectedNarrativeTurn(input: {
         // Analyses of one chat run one at a time; a parallel run would save
         // canon against a stale content hash and lose that turn's update.
         // A cancel while this one waits in the queue drops it as well.
+        const chatKey = JSON.stringify([input.characterId, input.chatId])
         const epoch = wikiCancellationEpoch()
+        const chatEpoch = wikiChatCancellationEpoch(chatKey)
         return await enqueueNarrativeConfirmation(
-            JSON.stringify([input.characterId, input.chatId]),
-            () => wikiCancellationEpoch() === epoch
+            chatKey,
+            () => wikiCancellationEpoch() === epoch && wikiChatCancellationEpoch(chatKey) === chatEpoch
                 ? runNarrativeConfirmation(input, key)
                 : Promise.resolve(false),
         )
@@ -308,12 +327,15 @@ async function collectAnalysisLoreReference(
     }
 }
 
+type NarrativeTurn = { targetMessageId: string; messages: readonly MemoryAnalysisMessage[] }
+
 async function runNarrativeConfirmation(
     input: Parameters<typeof confirmProjectedNarrativeTurn>[0],
     key: string,
 ): Promise<boolean> {
     const generationOperation = `analysis:${key}`
     const generationSignal = beginWikiGeneration(generationOperation)
+    const turns: readonly NarrativeTurn[] = input.batch ?? [input]
     try {
         const character = DBState.db.characters.find(
             (item) => item.chaId === input.characterId
@@ -352,9 +374,13 @@ async function runNarrativeConfirmation(
                 input.chatId
             )
             : undefined
-        const confirmedMessages = settings.risuBardAnalysisExcludeUserMessages
-            ? input.messages.filter((message) => message.role !== 'user')
-            : [...input.messages]
+        const keepMessage = (message: MemoryAnalysisMessage) =>
+            !settings.risuBardAnalysisExcludeUserMessages || message.role !== 'user'
+        const confirmedMessages = input.messages.filter(keepMessage)
+        const batchTurns = input.batch?.map((turn) => ({
+            assistantMessageId: turn.targetMessageId,
+            sourceMessageIds: turn.messages.filter(keepMessage).map((message) => message.messageId),
+        }))
         const contextMessages = chat
             ? projectRecentMemoryMessages(
                 chat.message,
@@ -389,6 +415,7 @@ async function runNarrativeConfirmation(
             },
             canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
             canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
+            ...(character && chat ? { playerName: getUserName({ character, chat }) } : {}),
             wikiWritingLanguage: settings.risuBardWikiWritingLanguage,
             arcPlotterSettings: resolvedArcPlotterSettings(),
             ...(compiledWikiPromptGuide ? {
@@ -399,8 +426,9 @@ async function runNarrativeConfirmation(
             } : {}),
             ...(loreReference ? { loreReference } : {}),
             ...(input.additionalAnalysis ? { additionalAnalysis: true } : {}),
-            ...(!input.additionalAnalysis && !input.historicalReanalysis && previousCanonicalReceipt
+            ...(!input.additionalAnalysis && !input.historicalReanalysis && !batchTurns && previousCanonicalReceipt
                 ? { previousCanonicalReceipt } : {}),
+            ...(batchTurns ? { batchTurns } : {}),
             ...(input.historicalReanalysis ? { historicalReanalysis: true } : {}),
             ...(input.excludeCanonicalDocumentIds ? {
                 excludeCanonicalDocumentIds:
@@ -423,35 +451,37 @@ async function runNarrativeConfirmation(
                 message: retryWarning,
             })
         }
-        const message = chat?.message.find(
-            (item) => item.chatId === input.targetMessageId
-        )
-        const accepted = input.messages.at(-1)
-        if (message && accepted?.role === 'assistant' && message.data !== accepted.content) {
-            message.risubardWikiPending = {
-                reason: '분석하는 동안 메시지 내용이 바뀌어 다시 분석합니다.',
-                failedAt: new Date().toISOString(),
-            }
-        }
-        if (message
-            && accepted?.role === 'assistant'
-            && message.data === accepted.content) {
-            if (receipt && canonicalTurnNeedsRetry(receipt)) {
-                delete message.risubardMemoryConfirmed
+        for (const turn of turns) {
+            const message = chat?.message.find(
+                (item) => item.chatId === turn.targetMessageId
+            )
+            const accepted = turn.messages.at(-1)
+            if (message && accepted?.role === 'assistant' && message.data !== accepted.content) {
                 message.risubardWikiPending = {
-                    reason: canonicalTurnRetryWarning(receipt)?.slice(0, 512),
+                    reason: '분석하는 동안 메시지 내용이 바뀌어 다시 분석합니다.',
                     failedAt: new Date().toISOString(),
                 }
             }
-            else {
-                message.risubardMemoryConfirmed = true
-                delete message.risubardWikiPending
-            }
-            if (receipt) {
-                message.risubardCanonicalReceipt = mergeCanonicalTurnReceipts(
-                    message.risubardCanonicalReceipt,
-                    receipt
-                )
+            if (message
+                && accepted?.role === 'assistant'
+                && message.data === accepted.content) {
+                if (receipt && canonicalTurnNeedsRetry(receipt)) {
+                    delete message.risubardMemoryConfirmed
+                    message.risubardWikiPending = {
+                        reason: canonicalTurnRetryWarning(receipt)?.slice(0, 512),
+                        failedAt: new Date().toISOString(),
+                    }
+                }
+                else {
+                    message.risubardMemoryConfirmed = true
+                    delete message.risubardWikiPending
+                }
+                if (receipt) {
+                    message.risubardCanonicalReceipt = mergeCanonicalTurnReceipts(
+                        message.risubardCanonicalReceipt,
+                        receipt
+                    )
+                }
             }
         }
         return true
@@ -461,11 +491,13 @@ async function runNarrativeConfirmation(
         const reason = (error instanceof Error
             ? error.message
             : String(error)).trim().slice(0, 512)
-        const failed = findNarrativeMessage(input.characterId, input.chatId, input.targetMessageId)
-        if (failed && failed.risubardMemoryConfirmed !== true) {
-            failed.risubardWikiPending = {
-                reason: reason || '알 수 없는 오류',
-                failedAt: new Date().toISOString(),
+        for (const turn of turns) {
+            const failed = findNarrativeMessage(input.characterId, input.chatId, turn.targetMessageId)
+            if (failed && failed.risubardMemoryConfirmed !== true) {
+                failed.risubardWikiPending = {
+                    reason: reason || '알 수 없는 오류',
+                    failedAt: new Date().toISOString(),
+                }
             }
         }
         publishRisuBardMemoryActivity({
@@ -488,11 +520,9 @@ function findNarrativeMessage(characterId: string, chatId: string, messageId: st
         ?.message.find((item) => item.chatId === messageId && item.role === 'char')
 }
 
-const NARRATIVE_BACKLOG_TURNS_PER_RUN = 4
-
 /**
- * Analyzes the chat's queued turns in story order, at most a few per call,
- * and stops at the first turn that does not confirm so that no later turn
+ * Analyzes the chat's queued turns in story order, as many per model call as
+ * fit, and stops at the first batch that does not confirm so that no later turn
  * overtakes it. The target turn is queued first.
  */
 const narrativeBacklogRuns = new Map<string, Promise<void>>()
@@ -529,37 +559,48 @@ async function runNarrativeBacklog(input: {
         limit: NARRATIVE_BACKLOG_TURNS_PER_RUN,
         ignoreOocTurns: true,
     })
-    for (const turn of turns) {
+    const analysisTokenLimit = resolvedRisuBardSettings(chat, true).risuBardAnalysisTokenLimit
+    const batches = groupNarrativeBacklog(turns, analysisTokenLimit)
+    const epoch = wikiCancellationEpoch()
+    for (let batch = batches.shift(); batch; batch = batches.shift()) {
+        const last = batch.at(-1)!
+        const turnsOnce = withoutRepeatedMessages(batch)
+        const projected = batch.length === 1 ? last : {
+            targetMessageId: last.targetMessageId,
+            messages: turnsOnce.flatMap((turn) => turn.messages),
+            batch: turnsOnce,
+        }
         try {
             await confirmProjectedNarrativeTurn({
                 characterId: input.characterId,
                 chatId: input.chatId,
-                ...turn,
+                ...projected,
             })
         }
         catch (error) {
             console.warn('[RisuBard memory confirmation]', error)
-        }
-        const message = findNarrativeMessage(input.characterId, input.chatId, turn.targetMessageId)
-        if (message && message.risubardMemoryConfirmed !== true) break
-        // Candidates over the target limit get one more pass on the same turn's
-        // evidence; the saved documents are excluded so nothing is redone.
-        const receipt = message?.risubardCanonicalReceipt
-        if (receipt?.warnings.some((warning) => warning.startsWith('자동 정본 대상 한도('))) {
-            const followUp = projectConfirmedMemoryTurn(chat.message, turn.targetMessageId, {
-                includeConfirmed: true, ignoreOocTurns: true,
-            })
-            if (followUp) {
-                await confirmProjectedNarrativeTurn({
-                    characterId: input.characterId,
-                    chatId: input.chatId,
-                    additionalAnalysis: true,
-                    excludeCanonicalDocumentIds: receipt.changes.map((change) => change.documentId),
-                    ...followUp,
-                }).catch((error: unknown) => console.warn('[RisuBard memory confirmation]', error))
+            // A batch the model cannot answer must not hold every turn back; retry them one by one.
+            if (batch.length > 1 && wikiCancellationEpoch() === epoch) {
+                batches.unshift(...batch.map((turn) => [turn]))
+                continue
             }
         }
+        if (batch.some((turn) => findNarrativeMessage(input.characterId, input.chatId, turn.targetMessageId)
+            ?.risubardMemoryConfirmed !== true)) break
     }
+}
+
+/**
+ * A retry the user asks for replaces this chat's analysis still in flight. A
+ * provider that never answers holds the request for minutes per attempt, and a
+ * retry queued behind it would only wait with it.
+ */
+async function restartChatWikiAnalysis(characterId: string, chatId: string): Promise<void> {
+    const key = JSON.stringify([characterId, chatId])
+    cancelChatWikiGeneration(key, `analysis:${key.slice(0, -1)},`)
+    await narrativeConfirmationsSettled(key)
+    // The cancelled run releases its duplicate guard just after the queue settles.
+    await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 /** Runs the current chat's waiting wiki turns now, from the oldest. */
@@ -567,9 +608,11 @@ export async function retryNarrativeBacklog(): Promise<void> {
     const character = DBState.db.characters[get(selectedCharID)]
     const chat = character?.chats[character.chatPage]
     if (!character || !chat) return
+    const chatId = ensureNarrativeSessionChatId(chat, v4)
+    await restartChatWikiAnalysis(character.chaId, chatId)
     await processNarrativeBacklog({
         characterId: character.chaId,
-        chatId: ensureNarrativeSessionChatId(chat, v4),
+        chatId,
     })
 }
 
@@ -666,9 +709,11 @@ export async function forceCurrentNarrativeWikiUpdate(): Promise<boolean> {
         { includeConfirmed: true, ignoreOocTurns: true }
     )
     if (!projected) return false
+    const chatId = ensureNarrativeSessionChatId(chat, v4)
+    await restartChatWikiAnalysis(character.chaId, chatId)
     return confirmProjectedNarrativeTurn({
         characterId: character.chaId,
-        chatId: ensureNarrativeSessionChatId(chat, v4),
+        chatId,
         additionalAnalysis: true,
         excludeCanonicalDocumentIds: target.risubardCanonicalReceipt
             ?.changes
@@ -932,6 +977,7 @@ async function runWikiReboot(
                     },
                     canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
                     canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
+                    playerName: getUserName({ character, chat }),
                     wikiWritingLanguage: job.writingLanguage ?? 'ko',
                     arcPlotterSettings: resolvedArcPlotterSettings(),
                     ...(compiledWikiPromptGuide ? {
@@ -1302,6 +1348,114 @@ export async function executeCurrentNarrativeWikiCommand(
     }
     finally {
         endWikiGeneration(generationOperation)
+    }
+}
+
+/** Runs the canon maintenance pass on chosen wiki pages and returns previews; nothing is saved. */
+export async function previewCurrentCanonCompression(
+    targetIds: readonly string[],
+    catalog: readonly WikiCatalogDocument[],
+    onProgress?: (done: number, total: number, title: string) => void
+): Promise<CanonCompressionPreview[]> {
+    const character = DBState.db.characters[get(selectedCharID)]
+    const chat = character?.chats[character.chatPage]
+    if (!character || !chat) throw new Error('현재 채팅을 찾을 수 없습니다.')
+    const characterId = character.chaId
+    const chatId = ensureNarrativeSessionChatId(chat, v4)
+    const settings = resolvedRisuBardSettings(chat, true)
+    const wikiPromptPreset = resolveWikiPromptPreset(
+        DBState.db.risuBardWikiPromptPresets,
+        DBState.db.risuBardChatWikiPromptPresetId
+    )
+    const policy = wikiPromptPreset
+        ? renderWikiPromptGuide(compileWikiPromptGuide(wikiPromptPreset, {
+            characterGuide: risuChatParser(character.risuBardWikiGuide ?? '', { chara: character }),
+            chatGuide: risuChatParser(chat.risuBardWikiGuide ?? '', { chara: character }),
+        }), character, chat).canonicalRewrite
+        : ''
+    const operation = `compress:${characterId}:${chatId}`
+    const signal = beginWikiGeneration(operation)
+    try {
+        return await previewCanonCompression({
+            characterId, chatId, targetIds, catalog, policy, signal, onProgress,
+            fetchImpl: fetch,
+            createAuth: () => forageStorage.createAuth(),
+            request: async (prompt) => readModelResponseText(await requestWithProviderOutputLimit(
+                {
+                    formated: [
+                        { role: 'system' as const, content: prompt.system },
+                        { role: 'user' as const, content: prompt.input },
+                    ],
+                    useStreaming: false,
+                    noMultiGen: true,
+                    tools: [],
+                    maxTokens: settings.risuBardAnalysisTokenLimit,
+                    temperature: 0,
+                    bias: {},
+                    extractJson: '',
+                    schema: prompt.schema,
+                    logSource: 'wiki-admin' as const,
+                    logPurpose: 'bardwiki-admin' as const,
+                    realChatId: chatId,
+                },
+                (attempt) => requestChatData(attempt, settings.risuBardModelMode, signal)
+            )),
+        })
+    }
+    finally {
+        endWikiGeneration(operation)
+    }
+}
+
+/** Saves the ready previews with an undo point, so the wiki's last-change undo restores them. */
+export async function applyCurrentCanonCompression(
+    previews: readonly CanonCompressionPreview[]
+): Promise<{ applied: string[]; failed: Array<{ title: string; reason: string }> }> {
+    const character = DBState.db.characters[get(selectedCharID)]
+    const chat = character?.chats[character.chatPage]
+    if (!character || !chat) throw new Error('현재 채팅을 찾을 수 없습니다.')
+    const characterId = character.chaId
+    const chatId = ensureNarrativeSessionChatId(chat, v4)
+    const createAuth = () => forageStorage.createAuth()
+    let undoStarted = false
+    try {
+        const result = await applyCanonCompression({
+            previews,
+            beforeApply: async () => {
+                await beginBardChatUndo({ characterId, chatId, fetchImpl: fetch, createAuth })
+                undoStarted = true
+            },
+            save: (preview) => saveManualWikiDocument({
+                characterId, chatId,
+                documentId: preview.documentId,
+                type: preview.type,
+                title: preview.title,
+                aliases: preview.aliases,
+                markdown: preview.markdown,
+                expectedContentHash: preview.contentHash,
+                fetchImpl: fetch,
+                createAuth,
+            }),
+        })
+        if (undoStarted) {
+            await finalizeBardChatUndo({ characterId, chatId, fetchImpl: fetch, createAuth })
+            undoStarted = false
+        }
+        announceRisuBardMemoryUpdated({ characterId, chatId })
+        publishRisuBardMemoryActivity({
+            characterId, chatId,
+            operation: result.failed.length > 0 ? 'error' : 'wiki-save',
+            timestamp: Date.now(),
+            message: `정본 압축: ${result.applied.length}건 적용${result.failed.length > 0 ? `, ${result.failed.length}건 미적용` : ''}`,
+        })
+        return result
+    }
+    catch (cause) {
+        if (undoStarted) {
+            try { await finalizeBardChatUndo({ characterId, chatId, fetchImpl: fetch, createAuth }) }
+            catch { /* Preserve the original failure. */ }
+        }
+        throw cause
     }
 }
 
@@ -1806,6 +1960,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     })
     let wikiInquiryAttempted = false
     let wikiInquiryError: WikiInquiryFailure | undefined
+    let wikiSemanticSkip: WikiSemanticSkip | undefined
     let wikiInquirySources: Awaited<ReturnType<typeof loadNarrativeInquiry>>['sources'] = []
     let requiredWikiSources: typeof wikiInquirySources = []
     let requiredWikiDocumentCount = 0
@@ -1943,13 +2098,17 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                             !inquirySettings.risuBardResponseExcludeUserMessages,
                             true,
                         ))
-                    const embedded = await wikiEmbeddingRuntime.search(currentInput, retrievalRecentContext)
+                    // A remote embedding model can take several seconds; wait as long as the wiki lookup may.
+                    const embedded = await wikiEmbeddingRuntime.search(currentInput, retrievalRecentContext,
+                        inquirySettings.risuBardInquiryTimeoutMs)
+                    wikiSemanticSkip = embedded.skipped
                     // Refresh does not delay this response; inquiry verifies old ranges against live hashes.
                     wikiEmbeddingRuntime.refresh()
                     const historicalOptions = {
                         ignoreOocTurns: true,
                         excludeRecentMessages: normalizeNarrativeWorkingMessageLimit(inquirySettings.risuBardResponseMessageCount),
                         maximumMatches: inquirySettings.risuBardHistoricalSourceMatchLimit,
+                        timeoutMs: inquirySettings.risuBardInquiryTimeoutMs,
                     }
                     const historicalMatches = mergeHistoricalSourceMatches(
                         findHistoricalSourceMatches({ ...historicalOptions, currentInput, messages: currentChat.message }),
@@ -1960,7 +2119,24 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         currentChat.message,
                         normalizeNarrativeWorkingMessageLimit(inquirySettings.risuBardResponseMessageCount),
                     )
-                    const loadInquiry = (semanticMatches?: readonly WikiSemanticMatch[]) => loadNarrativeInquiry({
+                    const resolveSources = (messageIds: readonly string[], evidenceRequests: readonly { messageId: string; documentId?: string }[]) =>
+                        resolveHistoricalSourceMatchesById({
+                            ignoreOocTurns: true,
+                            messageIds,
+                            messages: currentChat.message,
+                            currentInput,
+                            queryByMessageId: Object.fromEntries(evidenceRequests
+                                .filter(request => request.documentId && embedded.evidenceHints[request.documentId])
+                                .map(request => [request.messageId, embedded.evidenceHints[request.documentId!]])),
+                            excludeRecentMessages:
+                                normalizeNarrativeWorkingMessageLimit(
+                                    inquirySettings.risuBardResponseMessageCount
+                                ),
+                        })
+                    const loadInquiry = (semanticMatches?: readonly WikiSemanticMatch[], ranked?: {
+                        sourceMatches: readonly HistoricalSourceMatch[]
+                        rankedSourceIds: readonly string[]
+                    }) => loadNarrativeInquiry({
                         contextSelection: 'auto',
                         timeline: inquiryTimeline,
                         characterId: currentChar.chaId,
@@ -1976,29 +2152,63 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         ),
                         entityHints: lorepmt.bardWikiEntityHints,
                         tokenBudget: optionalWikiBudget!,
-                        sourceMatches: historicalMatches,
+                        sourceMatches: ranked?.sourceMatches ?? historicalMatches,
                         sourceLimit:
                             inquirySettings.risuBardHistoricalSourceMatchLimit,
-                        resolveSourceMatches: (messageIds, evidenceRequests) =>
-                            resolveHistoricalSourceMatchesById({
-                                ignoreOocTurns: true,
-                                messageIds,
-                                messages: currentChat.message,
-                                currentInput,
-                                queryByMessageId: Object.fromEntries(evidenceRequests
-                                    .filter(request => request.documentId && embedded.evidenceHints[request.documentId])
-                                    .map(request => [request.messageId, embedded.evidenceHints[request.documentId!]])),
-                                excludeRecentMessages:
-                                    normalizeNarrativeWorkingMessageLimit(
-                                        inquirySettings.risuBardResponseMessageCount
-                                    ),
-                            }),
+                        ...(ranked
+                            ? { rankedSourceIds: ranked.rankedSourceIds }
+                            : { resolveSourceMatches: resolveSources }),
                         fetchImpl: fetch,
                         createAuth: () => forageStorage.createAuth(),
                         timeoutMs: inquirySettings.risuBardInquiryTimeoutMs,
                         ...(semanticMatches ? { semanticMatches } : {}),
                     })
-                    const inquiry = await loadInquiry(embedded.matches)
+                    let inquiry = await loadInquiry(embedded.matches)
+                    if (inquirySettings.risuBardSourceRerank) {
+                        // A model reads the candidate originals against the question; any failure keeps the scored choice.
+                        try {
+                            const known = new Set(historicalMatches.map(match => match.messageId))
+                            const pool = buildSourceRerankPool(
+                                historicalMatches,
+                                await resolveSources(inquiry.evidenceRequests
+                                    .filter(request => !known.has(request.messageId))
+                                    .map(request => request.messageId), inquiry.evidenceRequests),
+                                findHistoricalSourceMatches({ ...historicalOptions, maximumMatches: SOURCE_RERANK_POOL_LIMIT,
+                                    currentInput, messages: currentChat.message }),
+                            )
+                            const rankedSourceIds = pool.length === 0 ? [] : parseSourceRerank(readModelResponseText(
+                                await requestWithProviderOutputLimit({
+                                    formated: [
+                                        { role: 'system' as const, content: SOURCE_RERANK_SYSTEM_PROMPT },
+                                        { role: 'user' as const, content: buildSourceRerankInput(currentInput, pool) },
+                                    ],
+                                    useStreaming: false,
+                                    noMultiGen: true,
+                                    tools: [],
+                                    maxTokens: 512,
+                                    temperature: 0,
+                                    bias: {},
+                                    extractJson: '',
+                                    schema: SOURCE_RERANK_SCHEMA,
+                                    logSource: 'memory' as const,
+                                    logPurpose: 'bardwiki-source-rerank' as const,
+                                    realChatId,
+                                }, (attempt) => requestChatData(attempt, inquirySettings.risuBardModelMode, arg.signal))), pool)
+                            if (rankedSourceIds.length > 0) {
+                                inquiry = await loadInquiry(embedded.matches, {
+                                    sourceMatches: buildSourceRerankPool(
+                                        rankedSourceIds.map(id => pool.find(match => match.messageId === id)!),
+                                        pool,
+                                    ),
+                                    rankedSourceIds,
+                                })
+                            }
+                        }
+                        catch (error) {
+                            if (arg.signal?.aborted) throw error
+                            console.warn('RisuBard source rerank skipped', error)
+                        }
+                    }
                     sources = inquiry.sources
                     wikiInquirySources = [...requiredWikiSources, ...sources]
                     narrativeContextObservation.promptMode = inquiry.mode
@@ -3201,6 +3411,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     candidateCount: narrativeContextObservation.candidateCount,
                 } : {}),
                 failure: wikiInquiryError,
+                ...(wikiSemanticSkip ? { semanticSkip: wikiSemanticSkip } : {}),
                 sources: wikiInquirySources,
                 messages: formated,
             }),

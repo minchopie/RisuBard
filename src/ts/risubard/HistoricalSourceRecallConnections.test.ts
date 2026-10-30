@@ -14,14 +14,15 @@ describe('historical source recall connections', () => {
         expect(recallEnd).toBeGreaterThan(recallStart)
         const recallCall = source.slice(recallStart, recallEnd)
         const exactRecallCall = source.match(
-            /resolveSourceMatches: \(messageIds, evidenceRequests\) =>[\s\S]{0,1600}?\}\),/
+            /const resolveSources = \(messageIds[\s\S]{0,1600}?\}\)\r?\n/
         )?.[0] ?? ''
 
         expect(source).toContain('findHistoricalSourceMatches,')
         expect(source).toContain('resolveHistoricalSourceMatchesById,')
         expect(recallCall).toContain('findHistoricalSourceMatches({ ...historicalOptions,')
         expect(recallCall).toContain('mergeHistoricalSourceMatches(')
-        expect(source).toContain('sourceMatches: historicalMatches,')
+        expect(source).toContain('sourceMatches: ranked?.sourceMatches ?? historicalMatches,')
+        expect(source).toContain('resolveSourceMatches: resolveSources')
         expect(recallCall).toContain('messages: currentChat.message')
         expect(recallCall).toContain('ignoreOocTurns: true')
         expect(recallCall).toContain(

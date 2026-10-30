@@ -26,7 +26,7 @@
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import ShDialog from 'src/lib/UI/GUI/ShDialog.svelte'
     import { language } from 'src/lang'
-    import { forageStorage, downloadFile } from 'src/ts/globalApi.svelte'
+    import { forageStorage, downloadFile, trackChatForSave } from 'src/ts/globalApi.svelte'
     import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte'
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte'
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte'
@@ -43,6 +43,7 @@
         loadWikiDocumentBodies,
         loadWikiStorySummaries,
         restoreBardChatUndo,
+        retractWikiEventsBySourceMessages,
         searchWikiDocuments,
         warmWikiCatalog,
         type NarrativeMemoryWiki,
@@ -53,6 +54,7 @@
     import { findStoryArcDocument } from 'src/ts/risubard/storyArcView'
     import {
         RISUBARD_MEMORY_UPDATED_EVENT,
+        announceRisuBardMemoryUpdated,
         type RisuBardMemoryUpdatedDetail,
     } from 'src/ts/risubard/memoryEvents'
     import { DBState } from 'src/ts/stores.svelte'
@@ -75,7 +77,8 @@
         DirectWikiContextSelection,
     } from 'src/ts/risubard/directWikiCommand'
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar'
-    import { alertConfirm, alertError } from 'src/ts/alert'
+    import { alertConfirm, alertConfirmMulti, alertError, notifyInfo, notifySuccess } from 'src/ts/alert'
+    import { canCompressCanonDocument, type CanonCompressionPreview } from 'src/ts/risubard/canonCompression'
     import {
         resolveWikiRebootViewChatId,
         type WikiRebootBatchSize,
@@ -109,6 +112,14 @@
         ) => Promise<DirectWikiCommandResult>
         onNavigateStorySource?: (source: StorySourceRef) => void
         onNavigateOocMessage?: (index: number) => void
+        onPreviewCanonCompression?: (
+            documentIds: readonly string[],
+            catalog: readonly WikiCatalogDocument[],
+            onProgress?: (done: number, total: number, title: string) => void
+        ) => Promise<CanonCompressionPreview[]>
+        onApplyCanonCompression?: (
+            previews: readonly CanonCompressionPreview[]
+        ) => Promise<{ applied: string[]; failed: Array<{ title: string; reason: string }> }>
     }
 
     type MemoryWikiLayout = 'desktop' | 'mobile'
@@ -128,6 +139,8 @@
         onExecuteWikiCommand,
         onNavigateStorySource,
         onNavigateOocMessage,
+        onPreviewCanonCompression,
+        onApplyCanonCompression,
     }: Props = $props()
     // The dock loads a table of contents; page bodies, story summaries and
     // export data are fetched only when a view needs them.
@@ -317,6 +330,98 @@
             character.chaId === characterId
         )?.chats.find((chat) => chat.id === chatId)?.message ?? []
     )
+    type CompressPhase = 'choose' | 'running' | 'preview' | 'applying' | 'done'
+    let compressOpen = $state(false)
+    let compressPhase = $state<CompressPhase>('choose')
+    let compressScope = $state<'selected' | 'characters'>('characters')
+    let compressDocumentId = $state('')
+    let compressProgress = $state('')
+    let compressPreviews = $state<CanonCompressionPreview[]>([])
+    let compressChecked = $state<Record<string, boolean>>({})
+    let compressMessage = $state('')
+    let compressibleCharacters = $derived(markdownDocuments.filter((document) =>
+        document.type === 'character' && canCompressCanonDocument(document)))
+    let compressTargets = $derived(compressScope === 'selected' && compressDocumentId
+        ? [compressDocumentId] : compressibleCharacters.map((document) => document.id))
+    let compressReady = $derived(compressPreviews.filter((preview) =>
+        preview.outcome === 'ready' && compressChecked[preview.documentId]))
+
+    function openCompression(documentId?: string) {
+        compressDocumentId = documentId ?? ''
+        compressScope = documentId ? 'selected' : 'characters'
+        compressPhase = 'choose'
+        compressPreviews = []
+        compressMessage = ''
+        compressOpen = true
+    }
+
+    async function runCompressionPreview() {
+        if (!onPreviewCanonCompression || compressTargets.length === 0) return
+        compressPhase = 'running'
+        compressMessage = ''
+        compressProgress = `0 / ${compressTargets.length}`
+        try {
+            const previews = await onPreviewCanonCompression(compressTargets, markdownDocuments, (done, total, title) => {
+                compressProgress = title ? `${done + 1} / ${total} · ${title}` : `${total} / ${total}`
+            })
+            compressPreviews = previews
+            compressChecked = Object.fromEntries(previews.map((preview) => [preview.documentId, preview.outcome === 'ready']))
+            compressPhase = 'preview'
+        }
+        catch (cause) {
+            compressMessage = cause instanceof Error ? cause.message : String(cause)
+            compressPhase = 'choose'
+        }
+    }
+
+    async function applyCompression() {
+        if (!onApplyCanonCompression || compressReady.length === 0) return
+        compressPhase = 'applying'
+        try {
+            const result = await onApplyCanonCompression(compressReady)
+            const failures = result.failed.map((item) => `${item.title}: ${item.reason}`)
+            compressMessage = `${result.applied.length}건 적용했습니다. 문서가 마음에 들지 않으면 되돌리기 버튼으로 되돌릴 수 있습니다.`
+                + (failures.length > 0 ? `\n미적용: ${failures.join(' / ')}` : '')
+            await loadWiki()
+            await refreshBardChatUndoStatus()
+        }
+        catch (cause) {
+            compressMessage = `적용하지 못했습니다: ${cause instanceof Error ? cause.message : String(cause)}`
+        }
+        compressPhase = 'done'
+    }
+
+    /** OOC 메모장에서 고른 메시지를 원본 채팅에서 지운다. 연결된 BardWiki 사건도 함께 철회한다. */
+    async function deleteOocMessages(indices: number[]): Promise<boolean> {
+        const character = DBState.db.characters?.find((item) => item.chaId === characterId)
+        const chat = character?.chats.find((item) => item.id === chatId)
+        if (!character || !chat || indices.length === 0) return false
+        if (chat.isStreaming) {
+            notifyInfo('응답을 생성하는 중에는 메시지를 삭제할 수 없습니다.')
+            return false
+        }
+        const targets = new Set(indices)
+        const sourceMessageIds = chat.message
+            .filter((message, index) => targets.has(index) && typeof message?.chatId === 'string' && message.chatId.length > 0)
+            .map((message) => message.chatId as string)
+        if (sourceMessageIds.length > 0) {
+            try {
+                const { retractedIds } = await retractWikiEventsBySourceMessages({
+                    characterId, chatId, sourceMessageIds,
+                    fetchImpl: fetch,
+                    createAuth: () => forageStorage.createAuth(),
+                })
+                if (retractedIds.length > 0) announceRisuBardMemoryUpdated({ characterId, chatId })
+            } catch (cause) {
+                notifyInfo(`연결된 BardWiki 사건을 철회하지 못해 메시지 삭제를 중단했습니다: ${cause instanceof Error ? cause.message : String(cause)}`)
+                return false
+            }
+        }
+        chat.message = chat.message.filter((_, index) => !targets.has(index))
+        trackChatForSave(characterId, chatId)
+        notifySuccess(indices.length > 1 ? language.messagesRemoved.replace('{}', String(indices.length)) : language.messageRemoved)
+        return true
+    }
     let currentCharacter = $derived(
         DBState.db.characters?.find((character) =>
             character.chaId === characterId
@@ -996,6 +1101,7 @@
                             disabled={rebootActionBusy || transferBusy || forceUpdating || loading || (!rebootJob && ($isWikiGenerating || $isAnyGenerating || !!currentChat?.isStreaming)) || rebootJob?.status === 'stop-requested' || rebootJob?.status === 'finalizing' || (!rebootJob && !onStartWikiReboot)}>
                             {rebootButtonLabel}
                         </ShDropdownMenuItem>
+                        <ShDropdownMenuItem data-wiki-compress disabled={!onPreviewCanonCompression || !!rebootJob || transferBlocked || compressibleCharacters.length === 0} onclick={() => openCompression()}>정본 압축</ShDropdownMenuItem>
                         <ShDropdownMenuItem data-wiki-new-chat disabled={transferBlocked} onclick={startWithWiki}>이 위키로 새 챗 시작</ShDropdownMenuItem>
                         <ShDropdownMenuItem data-wiki-export disabled={transferBlocked} onclick={() => { exportScope = `${characterId}\u0000${chatId}`; exportOpen = true }}>위키 내보내기</ShDropdownMenuItem>
                         <ShDropdownMenuItem data-wiki-import disabled={transferBlocked} onclick={() => { importScope = { characterId, chatId }; importInput?.click() }}>위키 들여오기</ShDropdownMenuItem>
@@ -1235,6 +1341,7 @@
                     hideOoc={DBState.db.risuBardHideOocTurns === true}
                     onHideChange={(value) => DBState.db.risuBardHideOocTurns = value}
                     onNavigate={onNavigateOocMessage}
+                    onDelete={deleteOocMessages}
                 />
             {/key}
         {:else if loading && !wiki}
@@ -1285,6 +1392,7 @@
                             fieldsExpanded={editorFieldsExpanded}
                             onFieldsExpandedChange={setEditorFieldsExpanded}
                             onDirtyChange={(dirty) => editorDirty = dirty}
+                            onCompress={onPreviewCanonCompression ? openCompression : undefined}
                         />
                     </div>
                     {#if onExecuteWikiCommand && !rebootJob}
@@ -1366,6 +1474,57 @@
 <input bind:this={importInput} type="file" accept=".bardwiki.json,application/json" hidden onchange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void importFile(file, importScope) }} />
 {#if exportOpen}
     <RisuBardWikiExportDialog bind:open={exportOpen} documents={markdownDocuments} onExport={exportWiki} disabled={transferBlocked} />
+{/if}
+
+{#if compressOpen}
+    <ShDialog
+        open={true}
+        onOpenChange={(value) => { if (!value && compressPhase !== 'running' && compressPhase !== 'applying') compressOpen = false }}
+        size="default"
+        tier="top"
+    >
+        {#snippet title()}정본 압축{/snippet}
+        <div class="compress-dialog" data-wiki-compress-dialog>
+            {#if compressPhase === 'choose'}
+                <p>AI가 캐릭터 문서의 겹치는 줄을 합치고, 사건 문서가 이미 기록한 줄을 정리합니다. 적용 전에 결과를 보여 드리며, 적용한 뒤에도 되돌릴 수 있습니다.</p>
+                <label><input type="radio" name="compress-scope" value="selected" bind:group={compressScope} disabled={!compressDocumentId} /> 현재 문서만</label>
+                <label><input type="radio" name="compress-scope" value="characters" bind:group={compressScope} /> 캐릭터 문서 전체 ({compressibleCharacters.length}개)</label>
+                <p class="compress-cost">AI 호출 {compressTargets.length}회가 필요합니다(문서마다 1회).</p>
+                {#if compressMessage}<p role="alert" class="compress-error">{compressMessage}</p>{/if}
+                <div class="compress-actions">
+                    <ShButton size="sm" variant="ghost" onclick={() => compressOpen = false}>닫기</ShButton>
+                    <ShButton size="sm" data-wiki-compress-run disabled={compressTargets.length === 0} onclick={() => void runCompressionPreview()}>압축 미리보기</ShButton>
+                </div>
+            {:else if compressPhase === 'running' || compressPhase === 'applying'}
+                <div class="ledger-state" role="status">
+                    <LoaderCircleIcon class="animate-spin" size={24} />
+                    <span>{compressPhase === 'running' ? `압축안을 만드는 중... ${compressProgress}` : '적용하는 중...'}</span>
+                </div>
+            {:else if compressPhase === 'preview'}
+                <ul class="compress-list">
+                    {#each compressPreviews as preview (preview.documentId)}
+                        <li class:compress-skip={preview.outcome !== 'ready'}>
+                            <label>
+                                <input type="checkbox" disabled={preview.outcome !== 'ready'} bind:checked={compressChecked[preview.documentId]} />
+                                <strong>{preview.title}</strong>
+                            </label>
+                            {#if preview.outcome === 'ready' && preview.charsAfter !== undefined}
+                                <span>{preview.charsBefore.toLocaleString()}자 → {preview.charsAfter.toLocaleString()}자 ({Math.round((1 - preview.charsAfter / Math.max(1, preview.charsBefore)) * 100)}% 감소)</span>
+                            {/if}
+                            <small>{preview.note}</small>
+                        </li>
+                    {/each}
+                </ul>
+                <div class="compress-actions">
+                    <ShButton size="sm" variant="ghost" onclick={() => compressOpen = false}>취소</ShButton>
+                    <ShButton size="sm" data-wiki-compress-apply disabled={compressReady.length === 0} onclick={() => void applyCompression()}>{compressReady.length}건 적용</ShButton>
+                </div>
+            {:else}
+                <p class="compress-result">{compressMessage}</p>
+                <div class="compress-actions"><ShButton size="sm" onclick={() => compressOpen = false}>닫기</ShButton></div>
+            {/if}
+        </div>
+    </ShDialog>
 {/if}
 
 {#if rebootChooserOpen}
@@ -1776,6 +1935,15 @@
     .memory-wiki-dock.compact-view .dock-views-shell { flex: 1 1 auto; }
     .memory-wiki-dock.compact-view .dock-views { min-height: 2.5rem; padding-block: .15rem; }
     .dock-compact-actions { display: flex; flex: 0 0 auto; align-items: center; gap: .15rem; }
+    .compress-dialog { display: grid; gap: .6rem; font-size: .9rem; min-width: 0; }
+    .compress-dialog label { display: flex; align-items: center; gap: .4rem; cursor: pointer; }
+    .compress-cost, .compress-list small { color: var(--color-textcolor2); font-size: .8rem; }
+    .compress-error { color: var(--color-danger); }
+    .compress-result { white-space: pre-line; }
+    .compress-list { display: grid; gap: .5rem; list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+    .compress-list li { display: grid; gap: .15rem; padding: .55rem .7rem; border: 1px solid var(--color-darkborderc); border-radius: .4rem; }
+    .compress-list li.compress-skip { opacity: .65; }
+    .compress-actions { display: flex; justify-content: flex-end; gap: .5rem; }
     .reboot-choice-intro {
         margin: 0 0 .65rem;
         color: var(--risu-theme-textcolor2);

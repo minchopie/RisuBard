@@ -328,7 +328,26 @@ describe('memory analysis runner', () => {
         expect(saveCanonicalDocument.mock.calls.map(([input]) => input.title)).toEqual(['B'])
     })
 
-    test('reports dropped optional input, candidates over the target limit and changed canon units', async () => {
+    test('writes candidates over the target limit in further calls and reports changed canon units', async () => {
+        const analyze = vi.fn(async (request: MemoryAnalysisModelRequest) => ({
+            type: 'success' as const,
+            inputReport: { omitted: ['로어 참고 2개'], limit: 8_192 },
+            result: request.format === 'memory-draft'
+                ? JSON.stringify({ title: 'Arrival', establishedEvents: ['Alice and Bob arrived.'], stateChanges: [],
+                    characterKnowledge: [], persistentFacts: [], openContinuity: [], canonicalUpdateCandidates: ['Alice', 'Bob'].map((title) => ({
+                        type: 'character', title, reason: 'Arrival', action: title === 'Alice' ? 'update' : 'create',
+                        targetDocumentId: title === 'Alice' ? 'character.Alice' : null, confidence: 1,
+                    })) })
+                : JSON.parse(request.input).targets[0].target.title === 'Bob'
+                ? JSON.stringify({ documents: [{ candidateIndex: 0, sections: [
+                    { heading: 'Current State', operation: 'upsert', content: '- Arrived with Alice.', add: [], replace: [], remove: [] },
+                ] }] })
+                : JSON.stringify({ documents: [{ candidateIndex: 0, sections: [
+                    { heading: 'Current State', operation: 'upsert', content: '- At the gate.', add: [], replace: [], remove: [] },
+                    { heading: 'Knowledge', operation: 'edit', content: '', add: [],
+                        replace: [{ index: 2, text: 'Knows the bell tower.' }], remove: [] },
+                ] }] }),
+        }))
         const runner = createMemoryAnalysisRunner({
             memoryService: { loadState: vi.fn(), applyDelta: vi.fn() }, nativeV2Analysis: true,
             markdownWikiService: {
@@ -343,27 +362,16 @@ describe('memory analysis runner', () => {
                     type: 'character' as const, relativePath: 'characters/Alice.md', contentHash: 'alice-new' })),
             },
             onError: vi.fn(),
-            analyze: vi.fn(async (request: MemoryAnalysisModelRequest) => ({
-                type: 'success',
-                inputReport: { omitted: ['로어 참고 2개'], limit: 8_192 },
-                result: request.format === 'memory-draft'
-                    ? JSON.stringify({ title: 'Arrival', establishedEvents: ['Alice and Bob arrived.'], stateChanges: [],
-                        characterKnowledge: [], persistentFacts: [], openContinuity: [], canonicalUpdateCandidates: ['Alice', 'Bob'].map((title) => ({
-                            type: 'character', title, reason: 'Arrival', action: title === 'Alice' ? 'update' : 'create',
-                            targetDocumentId: title === 'Alice' ? 'character.Alice' : null, confidence: 1,
-                        })) })
-                    : JSON.stringify({ documents: [{ candidateIndex: 0, sections: [
-                        { heading: 'Current State', operation: 'upsert', content: '- At the gate.', add: [], replace: [], remove: [] },
-                        { heading: 'Knowledge', operation: 'edit', content: '', add: [],
-                            replace: [{ index: 2, text: 'Knows the bell tower.' }], remove: [] },
-                    ] }] }),
-            })),
+            analyze,
         })
 
         const result = await runner.run({ characterId: 'character', chatId: 'chat', canonicalTargetLimit: 1,
             messages: [{ messageId: 'assistant-1', role: 'assistant', content: 'Alice and Bob arrived.' }] })
 
-        expect(result.canonicalReceipt?.warnings).toContain('자동 정본 대상 한도(1개)를 넘은 후보 1개는 추가 분석으로 이어서 반영합니다: Bob')
+        expect(result.canonicalReceipt?.warnings.join(' ')).not.toContain('자동 정본 대상 한도')
+        expect(result.canonicalReceipt?.changes.map((change) => change.title)).toEqual(['Alice', 'Bob'])
+        expect(vi.mocked(analyze).mock.calls.map(([request]) => request.format))
+            .toEqual(['memory-draft', 'canonical-batch', 'canonical-batch'])
         expect(canonicalTurnNeedsRetry(result.canonicalReceipt!)).toBe(false)
         expect(result.canonicalReceipt?.notes).toEqual([
             '분석 입력 조정: 분석 토큰 상한에 맞추려고 로어 참고 2개를 뺐습니다.',
@@ -419,7 +427,7 @@ describe('memory analysis runner', () => {
         expect(result.canonicalReceipt?.notes).toContain('정본 항목 편집: Alice (삭제 1, 되살림 1)')
     })
 
-    test('retries maintenance of an oversized place after new sources instead of raising its baseline', async () => {
+    test('retries maintenance of an oversized place after a few new sources instead of raising its baseline', async () => {
         const units = Array.from({ length: 30 }, (_, index) => `The north gate has rule number ${index + 1} for travelers.`)
         const gate = {
             id: 'location.gate', type: 'location' as const, title: 'North Gate', aliases: [],
@@ -464,7 +472,7 @@ describe('memory analysis runner', () => {
                 messages: [{ messageId: `assistant-${turn}`, role: 'assistant', content: 'The gate stayed closed.' }] })
         }
 
-        expect(maintenanceSystems).toHaveLength(2)
+        expect(maintenanceSystems).toHaveLength(3)
         expect(maintenanceSystems[0]).toContain('place, group, creature, item, concept or open thread')
     })
 
@@ -690,7 +698,7 @@ describe('memory analysis runner', () => {
             onError: vi.fn(),
         })
         await runner.run({
-            characterId: 'character', chatId: 'chat', analysisTokenLimit: 3_072,
+            characterId: 'character', chatId: 'chat', analysisTokenLimit: 3_072, playerName: '플레이어',
             messages: [{
                 messageId: 'accepted', role: 'assistant',
                 content: '지휘자 라비안과 동료 세라가 탐색대의 역할을 설명했다.',
@@ -705,6 +713,90 @@ describe('memory analysis runner', () => {
         finally {
             tokenizer.free()
         }
+    })
+
+    test('analyzes waiting turns in one batch call without reboot recovery', async () => {
+        const formats: Array<string | undefined> = []
+        const responseSchemas: Array<string | undefined> = []
+        const savedEvents: string[][] = []
+        const beginRebootBatch = vi.fn(async () => ({ canonicalCount: 0 }))
+        const recordRebootBatchReceipt = vi.fn(async (input) => input.receipt)
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
+            nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                beginRebootBatch,
+                recordRebootBatchReceipt,
+                loadDocuments: vi.fn(async () => []),
+                saveConfirmedTurn: vi.fn(async (input) => {
+                    savedEvents.push(input.sourceMessageIds)
+                    const id = `event.${input.sourceMessageIds.at(-1)}`
+                    return {
+                        id, type: 'event' as const, status: 'active' as const,
+                        title: id, relativePath: `${id}.md`,
+                        sourceMessageIds: input.sourceMessageIds, updated: 'now',
+                        content: input.markdown, links: [], contextMode: 'auto' as const,
+                        contentHash: id,
+                    }
+                }),
+            },
+            onError: vi.fn(),
+            analyze: async (request) => {
+                formats.push(request.format)
+                responseSchemas.push(request.responseSchema)
+                return JSON.stringify({
+                    turns: ['도착', '대화', '출발'].map((title) => ({
+                        title, establishedEvents: [`${title}했다.`],
+                    })),
+                    stateChanges: [], characterKnowledge: [], persistentFacts: [],
+                    openContinuity: [], canonicalUpdateCandidates: [],
+                })
+            },
+        })
+        const result = await runner.run({
+            characterId: 'character', chatId: 'chat',
+            messages: [
+                { messageId: 'u1', role: 'user', content: '들어간다.' },
+                { messageId: 'a1', role: 'assistant', content: '도착했다.' },
+                { messageId: 'a2', role: 'assistant', content: '대화했다.' },
+                { messageId: 'u3', role: 'user', content: '나간다.' },
+                { messageId: 'a3', role: 'assistant', content: '출발했다.' },
+            ],
+            batchTurns: [
+                { assistantMessageId: 'a1', sourceMessageIds: ['u1', 'a1'] },
+                { assistantMessageId: 'a2', sourceMessageIds: ['a2'] },
+                { assistantMessageId: 'a3', sourceMessageIds: ['u3', 'a3'] },
+            ],
+            additionalSearchLimit: 0,
+        })
+        expect(formats).toEqual(['reboot-batch'])
+        expect(JSON.parse(responseSchemas[0] ?? '{}').properties.turns)
+            .toMatchObject({ minItems: 3, maxItems: 3 })
+        expect(savedEvents).toEqual([['u1', 'a1'], ['a2'], ['u3', 'a3']])
+        expect(result.canonicalReceipt?.eventIds).toEqual(['event.a1', 'event.a2', 'event.a3'])
+        expect(beginRebootBatch).not.toHaveBeenCalled()
+        expect(recordRebootBatchReceipt).not.toHaveBeenCalled()
+    })
+
+    test('rejects mixed or oversized turn groups', async () => {
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
+            onError: vi.fn(),
+            analyze: vi.fn(),
+        })
+        const messages = [1, 2, 3, 4, 5].map((index) => ({
+            messageId: `a${index}`, role: 'assistant' as const, content: `${index}`,
+        }))
+        const turns = messages.map((message) => ({
+            assistantMessageId: message.messageId, sourceMessageIds: [message.messageId],
+        }))
+        await expect(runner.run({ characterId: 'c', chatId: 'chat', messages,
+            rebootTurns: turns.slice(0, 1), batchTurns: turns.slice(1, 2) })).rejects.toThrow('both')
+        await expect(runner.run({ characterId: 'c', chatId: 'chat', messages,
+            rebootTurns: turns.slice(0, 3) })).rejects.toThrow('one to 2')
+        await expect(runner.run({ characterId: 'c', chatId: 'chat', messages,
+            batchTurns: turns })).rejects.toThrow('one to 4')
     })
 
     test.each(['ko', 'en'] as const)('retries a malformed reboot batch with its explicit field contract (%s)', async (wikiWritingLanguage) => {
@@ -1054,6 +1146,34 @@ describe('memory analysis runner', () => {
         expect(result.canonicalReceipt?.warnings).toHaveLength(failed ? 2 : 0)
     })
 
+    test('splits a truncated canonical batch in halves instead of one call per document', async () => {
+        const saveCanonicalDocument = vi.fn(async (input) => ({ ...input, id: `character.${input.title}`, contentHash: 'hash', relativePath: `${input.title}.md` }))
+        const batchSizes: number[] = []
+        const analyze = vi.fn(async (request: MemoryAnalysisModelRequest) => {
+            if (request.format === 'memory-draft') return JSON.stringify({
+                schemaVersion: 1, title: 'Arrival', establishedEvents: ['A, B, C and D arrived.'],
+                stateChanges: [], characterKnowledge: [], persistentFacts: [], openContinuity: [],
+                canonicalUpdateCandidates: ['A', 'B', 'C', 'D'].map((title) => ({ type: 'character', title, reason: 'Arrived', action: 'create', targetDocumentId: null, confidence: 0.99 })),
+            })
+            const { targets } = JSON.parse(request.input)
+            batchSizes.push(targets.length)
+            if (targets.length > 2) throw new ModelOutputError('truncated')
+            return JSON.stringify({ schemaVersion: 1, documents: targets.map((target: { target: { title: string } }, candidateIndex: number) => ({
+                candidateIndex, sections: [{ heading: 'Current State', operation: 'upsert', content: `- ${target.target.title} arrived.`, add: [], replace: [], remove: [] }],
+            })) })
+        })
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() }, nativeV2Analysis: true,
+            markdownWikiService: { inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                loadDocuments: vi.fn(async () => []), saveConfirmedTurn: vi.fn(async () => undefined), saveCanonicalDocument },
+            onError: vi.fn(), analyze,
+        })
+        const result = await runner.run({ characterId: 'character', chatId: 'chat', messages: [{ messageId: 'assistant-1', role: 'assistant', content: 'A, B, C and D arrived.' }] })
+        expect(batchSizes).toEqual([4, 2, 2])
+        expect(saveCanonicalDocument).toHaveBeenCalledTimes(4)
+        expect(result.canonicalReceipt?.warnings).toEqual([])
+    })
+
     test('recovers a malformed single canonical target with Markdown sections', async () => {
         const saveCanonicalDocument = vi.fn(async (input) => ({
             ...input,
@@ -1361,6 +1481,7 @@ describe('memory analysis runner', () => {
             autoCanonicalUpdates: true,
             canonicalWritingStyle: 'custom',
             canonicalCustomStyle: '항목마다 짧은 명사형으로 끝낸다.',
+            playerName: '라비안',
             wikiPromptGuide: {
                 analysis: '경험치 변화를 반드시 분석 후보에 포함한다.',
                 canonicalRewrite: '정본의 RPG 능력치 표 형식을 유지한다.',
@@ -1371,6 +1492,8 @@ describe('memory analysis runner', () => {
         expect(systems).toHaveLength(2)
         expect(systems[0]).toContain('항목마다 짧은 명사형으로 끝낸다.')
         expect(systems[1]).toContain('항목마다 짧은 명사형으로 끝낸다.')
+        // Named once per request: the analysis prompt carries both policies.
+        expect(systems.every((system) => system.split('Player character: "라비안".').length === 2)).toBe(true)
         expect(systems[0]).toContain('경험치 변화를 반드시 분석 후보에 포함한다.')
         // The first request can now produce canonical patches as well as the event.
         expect(systems[0]).toContain('정본의 RPG 능력치 표 형식을 유지한다.')
@@ -3711,7 +3834,7 @@ describe('canonical maintenance during turn analysis', () => {
         dispositions: knowledge.map((_, old) => ({ role: 'knowledge', old, action: 'merged', newIndex: 0,
             moveTo: null, movedText: null, documentId: null })),
     })
-    const setup = (maintenance: () => Promise<string>, options: { sources?: string[]; saveFails?: boolean } = {}) => {
+    const setup = (maintenance: () => Promise<string>, options: { sources?: string[]; saveFails?: boolean; reboot?: boolean } = {}) => {
         const targetSources = options.sources ?? ['old-1']
         const saveCanonicalDocument = vi.fn(async (input) => {
             if (options.saveFails) throw new Error('disk full')
@@ -3719,8 +3842,11 @@ describe('canonical maintenance during turn analysis', () => {
                 type: 'character' as const, relativePath: 'characters/mio.md', contentHash: 'mio-new' }
         })
         const analyze = vi.fn(async (request: MemoryAnalysisModelRequest) => {
-            if (request.format === 'memory-draft') return JSON.stringify({
-                title: '비', establishedEvents: ['비가 그쳤다.'], stateChanges: [], characterKnowledge: [],
+            if (request.format === 'memory-draft' || request.format === 'reboot-batch') return JSON.stringify({
+                ...(options.reboot
+                    ? { schemaVersion: 1, turns: [{ title: '비', establishedEvents: ['비가 그쳤다.'] }] }
+                    : { title: '비', establishedEvents: ['비가 그쳤다.'] }),
+                stateChanges: [], characterKnowledge: [],
                 persistentFacts: [], openContinuity: [], canonicalUpdateCandidates: [{
                     type: 'character', title: '미오', reason: '날씨', action: 'update',
                     targetDocumentId: 'character.mio', confidence: 1,
@@ -3739,6 +3865,8 @@ describe('canonical maintenance during turn analysis', () => {
                 }]),
                 saveConfirmedTurn: vi.fn(async () => undefined),
                 saveCanonicalDocument,
+                beginRebootBatch: vi.fn(async () => ({ canonicalCount: 0 })),
+                recordRebootBatchReceipt: vi.fn(async (input) => input.receipt),
             },
             onError: vi.fn(), analyze,
         })
@@ -3769,6 +3897,13 @@ describe('canonical maintenance during turn analysis', () => {
         expect(result.canonicalReceipt?.warnings).toEqual([])
         expect(result.canonicalReceipt?.notes).toHaveLength(1)
         expect(result.canonicalReceipt?.notes?.[0]).toMatch(/^정본 정리: 미오 지식과 비밀 14→1항목 \(\d+→\d+토큰\)$/u)
+    })
+
+    test('maintains an oversized card during a wiki reboot as well', async () => {
+        const { run, analyze, saveCanonicalDocument } = setup(async () => merged, { reboot: true })
+        await run('assistant-1', { rebootTurns: [{ assistantMessageId: 'assistant-1', sourceMessageIds: ['assistant-1'] }] })
+        expect(maintenanceCalls(analyze)).toBe(1)
+        expect(saveCanonicalDocument.mock.calls[0][0].markdown).toContain('### 지식과 비밀\n\n- [[하루]]에게 마을 규칙을 들었다.')
     })
 
     test('does not maintain a card that stays below the retrieval ceiling', async () => {
@@ -3807,6 +3942,14 @@ describe('canonical maintenance during turn analysis', () => {
         expect(result.canonicalReceipt?.warnings).toEqual([])
         expect(result.canonicalReceipt?.notes?.[0]).toMatch(/^정본 정리 보류: 미오/u)
         expect(canonicalTurnNeedsRetry(result.canonicalReceipt!)).toBe(false)
+    })
+
+    test('rests after an applied consolidation until 8 new sources arrive', async () => {
+        const { run, analyze } = setup(async () => merged)
+        for (let index = 1; index <= 8; index++) await run(`assistant-${index}`)
+        expect(maintenanceCalls(analyze)).toBe(1)
+        await run('assistant-9')
+        expect(maintenanceCalls(analyze)).toBe(2)
     })
 
     test('waits for new sources before trying the same document again', async () => {

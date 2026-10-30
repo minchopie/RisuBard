@@ -992,6 +992,7 @@ export function setDatabase(data:Database){
     )
     data.risuBardAnalysisLoreIncludeAlwaysActive =
         data.risuBardAnalysisLoreIncludeAlwaysActive === true
+    data.risuBardSourceRerank = data.risuBardSourceRerank === true
     data.risuBardAnalysisLoreExcludeWords = normalizeRisuBardAnalysisLoreExcludeWords(
         data.risuBardAnalysisLoreExcludeWords
     )
@@ -1069,7 +1070,8 @@ export function setDatabase(data:Database){
     data.collectionOrganizers.wikiPromptPresets = organizeOfficialWikiArchives(
         data.collectionOrganizers.wikiPromptPresets,
         wikiPromptState.presets,
-        data.risuBardWikiPromptOfficialRelease !== wikiPromptState.officialRelease,
+        // Personal fork: an absent stored release equals the '' kept for a preserved list, so it is not an upgrade.
+        (data.risuBardWikiPromptOfficialRelease ?? '') !== wikiPromptState.officialRelease,
     )
     data.risuBardWikiPromptPresets = wikiPromptState.presets
     data.risuBardChatWikiPromptPresetId = wikiPromptState.chatPresetId
@@ -1978,6 +1980,7 @@ export interface Database{
     risuBardAnalysisLoreTokenLimit?: number
     risuBardAnalysisLoreIncludeAlwaysActive?: boolean
     risuBardAnalysisLoreExcludeWords?: string
+    risuBardSourceRerank?: boolean
     risuBardAnalysisTokenLimit?: number
     risuBardAdditionalSearchLimit?: number
     risuBardCanonicalTargetLimit?: number
@@ -1989,6 +1992,8 @@ export interface Database{
     risuBardDynamicMemoryMaximumTokens?: number
     /** Set to 2 once the old memory budget defaults were migrated to the 보통 tier (see memoryBudgetPreset.ts). */
     risuBardMemoryBudgetDefaultsVersion?: number
+    /** Simple or advanced BardWiki settings view, shared by the sidebar panel and the settings page. */
+    risuBardWikiSettingsView?: import('../risubard/wikiScalePreset').RisuBardWikiSettingsView
     risuBardInquiryTimeoutMs?: number
     risuBardHistoricalSourceMatchLimit?: number
     risuBardCanonicalWritingStyle?: import('../risubard/risuBardSettings').RisuBardCanonicalWritingStyle

@@ -44,7 +44,7 @@ describe('historical source semantic retrieval',()=>{
         await provider.embed(['question'],'document')
         expect(embed).toHaveBeenCalledTimes(2)
     })
-    it('filters recent matches before semantic ranking and keeps the semantic excerpt on duplicate IDs',async()=>{
+    it('filters recent matches before semantic ranking and keeps the lexical excerpt and score on duplicate IDs',async()=>{
         const old = {role:'char',chatId:'old',data:'과거의 은빛 증표'}
         const recent = Array.from({length:40},(_,i)=>({role:'char',chatId:`recent-${i}`,data:`최근 대화 ${i}`}))
         const index = new HistoricalSourceEmbeddingIndex({identity:'ranking',embed:async(texts,purpose)=>texts.map(text=>
@@ -52,8 +52,10 @@ describe('historical source semantic retrieval',()=>{
         await index.refresh([old,...recent],true)
         const result = await index.search('증표','',[old,...recent],{...options,excludeRecentMessages:40})
         expect(result.map(item=>item.messageId)).toEqual(['old'])
-        const lexical = {...result[0],content:'앞부분의 일반적인 언급'}
-        expect(mergeHistoricalSourceMatches([lexical],result,8)[0].content).toContain('은빛 증표')
+        // The lexical excerpt is centred on the asked words; in the 45-turn measurement the semantic chunk lost answers.
+        const lexical = {messageId:'old',role:'assistant' as const,occurredAt:0,score:5,content:'앞부분의 일반적인 언급'}
+        expect(mergeHistoricalSourceMatches([lexical],result,8)[0]).toMatchObject({content:'앞부분의 일반적인 언급',score:5})
+        expect(mergeHistoricalSourceMatches([],result,8)[0].content).toContain('은빛 증표')
         index.dispose()
     })
     it('merges distinct lexical and semantic sources without inflating the source quota',()=>{

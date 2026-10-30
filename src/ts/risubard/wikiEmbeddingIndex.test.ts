@@ -83,7 +83,8 @@ describe('optional wiki embedding index', () => {
             ])
             for (const match of result.matches) {
                 expect(match.start).toBe(10)
-                expect(match.score).toBeCloseTo(recent ? 0.71 : 0.8, 12)
+                // direct 0.8 and contextual 0.6, weighted 0.9 and 0.1.
+                expect(match.score).toBeCloseTo(recent ? 0.78 : 0.8, 12)
             }
             expect(result.evidenceQuery).toBe('early strongest\nearly strongest\nearly strongest')
             expect(Object.values(result.evidenceHints)).toEqual(Array(12).fill('early strongest'))
@@ -142,7 +143,8 @@ describe('optional wiki embedding index', () => {
             : text.includes('다리') ? [1, 0] : [0.7, 0.7])
         const index = new WikiEmbeddingIndex({ identity: 'local', embed }, cache())
         await index.refresh(page([chunk('bridge', '다리에서 재회하기로 맹세했다.'), chunk('shop', '상점에서 빚을 갚기로 했다.')]))
-        expect((await index.search('그때 약속 기억해?', '우리는 무너진 다리에 도착했다.')).matches.map(x => x.documentId)).toEqual(['bridge'])
+        // Recent context only breaks the tie; it no longer decides what is kept.
+        expect((await index.search('그때 약속 기억해?', '우리는 무너진 다리에 도착했다.')).matches[0].documentId).toBe('bridge')
     })
 
     it('reuses unchanged vectors, embeds edits, and drops deleted documents', async () => {
@@ -190,6 +192,27 @@ describe('optional wiki embedding index', () => {
         expect((await index.search('query', '')).matches).toEqual([])
         embed.mockImplementationOnce(() => new Promise(() => {}))
         expect((await index.search('query', '', 5)).matches).toEqual([])
+    })
+
+    it('reports why a search contributed nothing, and waits as long as it is told to', async () => {
+        const embed = vi.fn(async (texts: string[]) => texts.map(() => [1, 0]))
+        const index = new WikiEmbeddingIndex({ identity: 'local', embed }, cache())
+        expect((await index.search('query', '')).skipped).toBe('not-ready')
+        // A failed build must not keep saying "preparing" forever.
+        embed.mockRejectedValueOnce(new Error('bad key'))
+        await expect(index.refresh(page())).rejects.toThrow('bad key')
+        expect((await index.search('query', '')).skipped).toBe('build-failed')
+        await index.refresh(page())
+        embed.mockRejectedValueOnce(new Error('offline'))
+        expect((await index.search('query', '')).skipped).toBe('error')
+        embed.mockImplementationOnce(() => new Promise(() => {}))
+        expect((await index.search('query', '', 5)).skipped).toBe('timeout')
+        // A remote model answering after 30 ms still counts when the caller allows 1,000 ms.
+        embed.mockImplementationOnce((texts: string[]) => new Promise((resolve) =>
+            setTimeout(() => resolve(texts.map(() => [1, 0])), 30)))
+        const slow = await index.search('query', '', 1_000)
+        expect(slow.skipped).toBeUndefined()
+        expect(slow.matches.length).toBeGreaterThan(0)
     })
 
     it('rejects malformed vector batches and never publishes a partial revision', async () => {

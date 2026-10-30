@@ -23,7 +23,10 @@ export interface WikiVectorCache {
 }
 
 type IndexedChunk = { chunk: WikiEmbeddingChunk; vector: number[] }
-const emptyResult = () => ({ matches: [] as WikiSemanticMatch[], evidenceQuery: '', evidenceHints: {} as Record<string, string> })
+/** Why a search returned nothing although semantic search is on, for the inquiry diagnostic. */
+export type WikiSemanticSkip = 'not-ready' | 'build-failed' | 'timeout' | 'error'
+const emptyResult = (skipped?: WikiSemanticSkip) => ({ matches: [] as WikiSemanticMatch[], evidenceQuery: '', evidenceHints: {} as Record<string, string>,
+    ...(skipped ? { skipped } : {}) })
 
 export function buildWikiEmbeddingQueries(current: string, recent: string): string[] {
     const query = current.trim().slice(0, 2048)
@@ -33,6 +36,14 @@ export function buildWikiEmbeddingQueries(current: string, recent: string): stri
         ? [query, `${context}\nCurrent request: ${query}`]
         : [query]
 }
+
+/**
+ * Weight of the query padded with recent conversation. It only separates
+ * look-alike passages for an implicit reference; at 0.45 it matched the latest
+ * scenes whatever was asked and cut full evidence recall from 15 to 9 of 25
+ * questions in the 45-turn measurement.
+ */
+export const CONTEXTUAL_QUERY_WEIGHT = 0.1
 
 function validVector(value: unknown): value is number[] {
     return Array.isArray(value) && value.length > 0
@@ -56,6 +67,8 @@ export class WikiEmbeddingIndex {
     private refreshPromise?: Promise<void>
     private controller = new AbortController()
     ready = false
+    /** The last index build failed, so "preparing" would be a lie until a rebuild succeeds. */
+    buildFailed = false
 
     constructor(private provider: WikiVectorProvider, private cache: WikiVectorCache) {}
 
@@ -66,7 +79,12 @@ export class WikiEmbeddingIndex {
         active: () => boolean = () => true,
     ): Promise<void> {
         if (this.refreshPromise) return this.refreshPromise
-        this.refreshPromise = this.rebuild(loadPage, active).finally(() => {
+        this.refreshPromise = this.rebuild(loadPage, active).then(() => {
+            this.buildFailed = false
+        }, (error) => {
+            this.buildFailed = true
+            throw error
+        }).finally(() => {
             this.refreshPromise = undefined
         })
         return this.refreshPromise
@@ -154,7 +172,9 @@ export class WikiEmbeddingIndex {
     async search(current: string, recent: string, timeoutMs = 2000, options: { maximumDocuments?: number; maximumPassagesPerDocument?: number; allowedDocumentIds?: ReadonlySet<string> } = {}) {
         const entries = options.allowedDocumentIds ? this.entries.filter(entry => options.allowedDocumentIds!.has(entry.chunk.documentId)) : this.entries
         const queries = buildWikiEmbeddingQueries(current, recent)
-        if (!this.ready || !entries.length || !queries.length) return emptyResult()
+        if (!queries.length) return emptyResult()
+        if (!this.ready) return emptyResult(this.buildFailed ? 'build-failed' : 'not-ready')
+        if (!entries.length) return emptyResult()
         let timer: ReturnType<typeof setTimeout> | undefined
         const controller = new AbortController()
         const abort = () => controller.abort()
@@ -167,13 +187,14 @@ export class WikiEmbeddingIndex {
                 }),
             ])
             if (vectors.length !== queries.length || !vectors.every(validVector)
-                || vectors.some(vector => vector.length !== entries[0].vector.length)) return emptyResult()
+                || vectors.some(vector => vector.length !== entries[0].vector.length)) return emptyResult('error')
             const bestByDocument = new Map<string, IndexedChunk & { score: number; order: number }>()
             const passages: (IndexedChunk & { score: number; order: number })[] = []
             entries.forEach((entry, order) => {
                 const direct = cosine(entry.vector, vectors[0])
                 const contextual = vectors[1] ? cosine(entry.vector, vectors[1]) : direct
-                const score = Math.max(0, Math.min(1, direct * 0.55 + contextual * 0.45))
+                const score = Math.max(0, Math.min(1,
+                    direct * (1 - CONTEXTUAL_QUERY_WEIGHT) + contextual * CONTEXTUAL_QUERY_WEIGHT))
                 if (score < 0.4) return
                 passages.push({ ...entry, score, order })
                 const previous = bestByDocument.get(entry.chunk.documentId)
@@ -205,7 +226,9 @@ export class WikiEmbeddingIndex {
                 evidenceQuery: selected.slice(0, 3).map(item => item.chunk.text).join('\n').slice(0, 3072),
                 evidenceHints: Object.fromEntries([...winners].map(([id, items]) => [id, items.map(item => item.chunk.text).join('\n').slice(0, 3072)])),
             }
-        } catch { return emptyResult() }
+        } catch (error) {
+            return emptyResult(error instanceof Error && error.message === 'Embedding query timeout' ? 'timeout' : 'error')
+        }
         finally {
             if (timer !== undefined) clearTimeout(timer)
             controller.abort()

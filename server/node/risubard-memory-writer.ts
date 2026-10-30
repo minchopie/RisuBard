@@ -124,7 +124,10 @@ export const memoryWriterDraftSchema = JSON.stringify({
 
 const memoryWriterProperties = JSON.parse(memoryWriterDraftSchema).properties
 
-export function buildRebootBatchDraftSchema(turnCount?: 1 | 2): string {
+/** Turns one analysis call may cover; a reboot batch stays at two. */
+export const MEMORY_BATCH_MAX_TURNS = 4
+
+export function buildRebootBatchDraftSchema(turnCount?: number): string {
     return JSON.stringify({
         type: 'object',
         additionalProperties: false,
@@ -565,10 +568,10 @@ export function parseRebootBatchDraft(
         'persistentFacts', 'openContinuity', 'canonicalUpdateCandidates',
     ], 'reboot batch draft')
     if (expectedAssistantMessageIds.length < 1
-        || expectedAssistantMessageIds.length > 2) {
-        throw new Error('Reboot batch requires one or two assistant IDs')
+        || expectedAssistantMessageIds.length > MEMORY_BATCH_MAX_TURNS) {
+        throw new Error(`Reboot batch requires one to ${MEMORY_BATCH_MAX_TURNS} assistant IDs`)
     }
-    const rawTurns = boundedArray(parsed.turns, 'reboot batch turns', 2)
+    const rawTurns = boundedArray(parsed.turns, 'reboot batch turns', MEMORY_BATCH_MAX_TURNS)
     if (rawTurns.length !== expectedAssistantMessageIds.length) {
         throw new Error('Reboot batch turn count does not match assistant IDs')
     }

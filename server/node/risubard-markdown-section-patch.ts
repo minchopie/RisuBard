@@ -24,8 +24,13 @@ interface ParsedCanonicalMarkdown {
     sections: CanonicalSection[]
 }
 
+/** A model sometimes repeats the Markdown marks in a heading; the section is the same. */
+export function stripHeadingMarks(value: string): string {
+    return value.trim().replace(/^#{1,6}[ \t]+/u, '').trim()
+}
+
 export function normalizeCanonicalSectionHeading(value: string): string {
-    return value.normalize('NFKC').toLowerCase().trim()
+    return stripHeadingMarks(value.normalize('NFKC')).toLowerCase()
 }
 
 function markdownLines(value: string): MarkdownLine[] {
@@ -235,7 +240,7 @@ function replacementSection(
     hasFollowingSection = false,
 ): string {
     const hashes = '#'.repeat(parsed.title.level + 1)
-    const headingLine = existing?.line.text ?? `${hashes} ${heading.trim()}`
+    const headingLine = existing?.line.text ?? `${hashes} ${stripHeadingMarks(heading)}`
     return `${headingLine}${parsed.newline}${parsed.newline}${content.trim()}${
         hasFollowingSection ? `${parsed.newline}${parsed.newline}` : ''
     }`

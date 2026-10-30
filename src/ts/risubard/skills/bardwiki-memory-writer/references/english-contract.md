@@ -46,11 +46,11 @@ Distinguish first registration from updates to existing canon. Return exactly on
 
 ## Runtime field contract
 
-- When the schema includes keywords, return up to 24 concise grounded retrieval cues (actions, subjects, objects and natural synonyms). These are search hints, never additional facts. Avoid generic narrative words. Candidate keywords describe only that candidate.
+- When the schema includes keywords, return up to 24 concise grounded retrieval cues (actions, subjects, objects and natural synonyms). Include plain synonyms for objects and actions. These are search hints, never additional facts. Avoid generic narrative words. Candidate keywords describe only that candidate.
 - When the schema includes temporalHint, describe elapsed story days since previousStoryEvent, not elapsed wall-clock time. Quote a short exact passage from confirmedMessages as evidence. Use elapsedDays 0 only for explicitly continuous action in the same scene/day; use null with empty evidence for unspecified jumps, flashbacks, recollections, conflicting chronology or an unavailable anchor. A character recalling "last week" does not advance the current scene by seven days. The program calculates the day-zero timeline; do not generate absolute timestamps.
 
 - title: a short title identifying the event or change, without Markdown markers.
-- establishedEvents: up to 12 chronological events actually established in the confirmed text; together they must tell a coherent story. Exclude management proposals.
+- establishedEvents: up to 12 chronological events actually established in the confirmed text; together they must tell a coherent story. Exclude management proposals. One short fact per item; recall often shows this summary instead of the original.
 - stateChanges: subject, before, after; use null for an unsupported before state.
 - characterKnowledge: character, fact, stance; knows means directly known, believes means a belief regardless of objective truth.
 - persistentFacts: current facts expected to remain true in later scenes.

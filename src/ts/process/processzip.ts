@@ -43,23 +43,39 @@ export async function processZip(dataArray: Uint8Array): Promise<string> {
     }
 }
 
+const CRC_TABLE = (() => {
+    const table = new Int32Array(256)
+    for (let n = 0; n < 256; n++) {
+        let c = n
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1
+        table[n] = c
+    }
+    return table
+})()
+
+function crc32(data: Uint8Array) {
+    let c = -1
+    for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 255] ^ (c >>> 8)
+    return (c ^ -1) >>> 0
+}
+
+/**
+ * Writes a ZIP whose local headers carry each entry's sizes and CRC.
+ * fflate's streaming Zip writes data descriptors instead, and streaming readers
+ * (RisuBard and RisuAI both use fflate Unzip) end an entry early when its bytes
+ * happen to contain the descriptor signature PK\x07\x08.
+ */
 export class CharXWriter{
-    zip:fflate.Zip
-    writeEnd:boolean = false
     apb = new AppendableBuffer()
     #takenFilenames:Set<string> = new Set()
+    #central:Uint8Array[] = []
+    #offset = 0
+    #dosTime:number
+    #dosDate:number
     constructor(private writer:LocalWriter|WritableStreamDefaultWriter<Uint8Array>|VirtualWriter){
-        const handlerAsync = (err:Error, dat:Uint8Array, final:boolean) => {
-            if(dat){
-                this.apb.append(dat)
-            }
-            if(final){
-                this.writeEnd = true
-            }
-        }
-
-        this.zip = new fflate.Zip()
-        this.zip.ondata = handlerAsync
+        const now = new Date()
+        this.#dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)
+        this.#dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()
     }
     async init(){
         //do nothing, just to make compatible with other writer
@@ -95,18 +111,41 @@ export class CharXWriter{
         else{
             dat = data
         }
-        this.writeEnd = false
-        const file = new fflate.ZipDeflate(key, {
-            level: level ?? 0
-        });
-        this.zip.add(file)
-        file.push(dat, true)
+        const name = new TextEncoder().encode(key)
+        const method = level ? 8 : 0
+        const body = level ? fflate.deflateSync(dat, { level }) : dat
+        const crc = crc32(dat)
+        const header = this.#header(false, name, method, crc, body.length, dat.length, 0)
+        if (this.#offset + header.length + body.length > 0xFFFFFFFF) {
+            throw new Error('CHARX export is larger than 4 GB')
+        }
+        this.#central.push(this.#header(true, name, method, crc, body.length, dat.length, this.#offset))
+        this.#offset += header.length + body.length
+        this.apb.append(header)
+        this.apb.append(body)
         await this.writer.write(this.apb.buffer)
         this.apb.clear()
-        if(this.writeEnd){
-            await this.writer.close()
-        }
-        
+    }
+
+    #header(central:boolean, name:Uint8Array, method:number, crc:number, compressedSize:number, size:number, offset:number){
+        const d = new Uint8Array((central ? 46 : 30) + name.length)
+        const v = new DataView(d.buffer)
+        let p = 0
+        v.setUint32(p, central ? 0x02014b50 : 0x04034b50, true); p += 4
+        if (central) { v.setUint16(p, 20, true); p += 2 }
+        v.setUint16(p, 20, true)
+        v.setUint16(p + 2, 0x0800, true) // UTF-8 names
+        v.setUint16(p + 4, method, true)
+        v.setUint16(p + 6, this.#dosTime, true)
+        v.setUint16(p + 8, this.#dosDate, true)
+        v.setUint32(p + 10, crc, true)
+        v.setUint32(p + 14, compressedSize, true)
+        v.setUint32(p + 18, size, true)
+        v.setUint16(p + 22, name.length, true)
+        p += 26
+        if (central) { v.setUint32(p + 10, offset, true); p += 14 }
+        d.set(name, p)
+        return d
     }
 
     #sanitizeZipFilename(filename:string) {
@@ -135,12 +174,26 @@ export class CharXWriter{
     }
 
     async end(){
-        this.zip.end()
+        const entries = this.#central.length
+        let directorySize = 0
+        for (const entry of this.#central) {
+            this.apb.append(entry)
+            directorySize += entry.length
+        }
+        if (entries > 0xFFFF || this.#offset + directorySize > 0xFFFFFFFF) {
+            throw new Error('CHARX export has too many files or is larger than 4 GB')
+        }
+        const eocd = new Uint8Array(22)
+        const v = new DataView(eocd.buffer)
+        v.setUint32(0, 0x06054b50, true)
+        v.setUint16(8, entries, true)
+        v.setUint16(10, entries, true)
+        v.setUint32(12, directorySize, true)
+        v.setUint32(16, this.#offset, true)
+        this.apb.append(eocd)
         await this.writer.write(this.apb.buffer)
         this.apb.clear()
-        if(this.writeEnd){
-            await this.writer.close()
-        }
+        await this.writer.close()
     }
 }
 

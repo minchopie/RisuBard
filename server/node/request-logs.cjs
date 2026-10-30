@@ -21,6 +21,7 @@ const PURPOSES = [
     'bardwiki-analysis',
     'bardwiki-bard-chan-rerank',
     'bardwiki-canonical-update',
+    'bardwiki-source-rerank',
     'bardwiki-admin',
     'persona-builder',
     'lore-builder',

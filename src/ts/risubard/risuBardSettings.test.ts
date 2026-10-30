@@ -15,6 +15,7 @@ import {
     normalizeRisuBardAnalysisTokenLimit,
     normalizeRisuBardAdditionalSearchLimit,
     normalizeRisuBardCanonicalCustomStyle,
+    normalizeRisuBardPlayerName,
     normalizeRisuBardCanonicalTargetLimit,
     normalizeRisuBardCanonicalWritingStyle,
     normalizeRisuBardDynamicMemoryMode,
@@ -53,7 +54,7 @@ describe('RisuBard analysis settings', () => {
     )
 
     test('uses conservative defaults for missing and invalid values', () => {
-        expect(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT).toBe(8_192)
+        expect(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT).toBe(32_768)
         expect(normalizeRisuBardAnalysisTokenLimit(undefined))
             .toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
         expect(normalizeRisuBardAdditionalSearchLimit('2'))
@@ -142,17 +143,35 @@ describe('RisuBard analysis settings', () => {
     test('normalizes the shared canonical writing policy', () => {
         expect(normalizeRisuBardCanonicalWritingStyle(undefined))
             .toBe(RISUBARD_CANONICAL_WRITING_STYLE_DEFAULT)
+        // Personal fork: saved legacy choices stay as saved at every level.
         expect(normalizeRisuBardCanonicalWritingStyle('standard')).toBe('standard')
         expect(normalizeRisuBardCanonicalWritingStyle('ultra-concise')).toBe('ultra-concise')
+        expect(normalizeRisuBardCanonicalWritingStyle('custom')).toBe('custom')
+        const global = { risuBardCanonicalWritingStyle: 'concise' as const }
+        expect(resolveRisuBardChatSettings(global, { risuBardCanonicalWritingStyle: 'standard' }).risuBardCanonicalWritingStyle).toBe('standard')
+        expect(resolveRisuBardChatSettings(global, {}, { risuBardCanonicalWritingStyle: 'ultra-concise' }).risuBardCanonicalWritingStyle).toBe('ultra-concise')
+        expect(resolveRisuBardChatSettings({ risuBardCanonicalWritingStyle: 'standard' }).risuBardCanonicalWritingStyle).toBe('standard')
         expect(normalizeRisuBardCanonicalWritingStyle('invalid')).toBe('concise')
         expect(normalizeRisuBardCanonicalCustomStyle(`  ${'가'.repeat(1_200)}  `))
             .toBe('가'.repeat(1_000))
     })
 
+    test('names the player character so a first-person story is not written about a guessed name', () => {
+        const policy = buildRisuBardCanonicalWritingPolicy('concise', '', 'ko', '폐품상')
+        expect(policy).toContain('Player character: "폐품상".')
+        expect(buildRisuBardEventWritingPolicy('concise', '', 'ko', '폐품상')).toContain('"폐품상"')
+        expect(buildRisuBardEventWritingPolicy('concise', '', 'ko')).not.toContain('player character')
+        expect(normalizeRisuBardPlayerName(' 이름\n')).toBe('이름')
+        expect(normalizeRisuBardPlayerName(42)).toBe('')
+    })
+
     test('keeps custom style text without weakening the shared memory rules', () => {
         expect(buildRisuBardCanonicalWritingPolicy('concise', '')).toContain(
-            'Use one sentence per fact'
+            'One short sentence per fact'
         )
+        expect(buildRisuBardCanonicalWritingPolicy('standard', '')).toContain('Use natural, complete short sentences')
+        expect(buildRisuBardCanonicalWritingPolicy('ultra-concise', '')).toContain('Use telegraphic sentences and stable field labels')
+        expect(buildRisuBardCanonicalWritingPolicy('standard', '')).not.toContain('One short sentence per fact')
         const custom = buildRisuBardCanonicalWritingPolicy(
             'custom',
             '항목마다 짧은 명사형으로 끝낸다.'

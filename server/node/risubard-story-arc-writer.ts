@@ -200,7 +200,13 @@ export function buildStoryArcUpdatePlan(input: {
         return undefined
     }
 
-    const events = repairEvents ?? pending.slice(0, settings.checkpointSize)
+    // A batch analysis saves several events at once; take as many whole
+    // checkpoints as it added so the plot never falls further behind.
+    const checkpoints = Math.min(
+        Math.floor(pending.length / settings.checkpointSize),
+        Math.max(1, Math.ceil(input.savedEvents.length / settings.checkpointSize)),
+    )
+    const events = repairEvents ?? pending.slice(0, settings.checkpointSize * checkpoints)
     const title = existing?.title ?? wikiWritingLocales[input.writingLanguage].storyArc.title
     const eventTitles = events.map((event) => `[[${event.title}]]`).join(', ')
     const reason = repairEvents

@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
         }
         risuBardMemoryDockRatio?: number
         risuBardMemoryWorkspaceHeight?: number
+        risuBardWikiSettingsView?: 'simple' | 'advanced'
         risuBardModelMode?: 'memory' | 'model'
         risuBardRecentMessageCount?: number
         risuBardResponseMessageCount?: number
@@ -1022,6 +1023,7 @@ describe('RisuBardMemoryWiki', () => {
             wikiPath: 'C:\\wiki',
             documents: [],
         })
+        mocks.db.risuBardWikiSettingsView = 'advanced'
         mocks.db.characters = [{ chaId: 'character', chats: [{ id: 'chat', message: [] }] }]
         const target = document.createElement('div')
         document.body.appendChild(target)
@@ -1191,7 +1193,7 @@ describe('RisuBardMemoryWiki', () => {
         await vi.waitFor(() => expect(document.querySelector('[data-wiki-export]')).not.toBeNull())
         const toolLabels = [...document.querySelectorAll('[data-slot="dropdown-menu-item"]')].map(item => item.textContent?.trim())
         expect(document.querySelector('[data-slot="dropdown-menu-item"]')?.hasAttribute('data-risubard-wiki-reboot')).toBe(true)
-        expect(toolLabels.slice(1, 4)).toEqual(['이 위키로 새 챗 시작', '위키 내보내기', '위키 들여오기'])
+        expect(toolLabels.slice(1, 5)).toEqual(['정본 압축', '이 위키로 새 챗 시작', '위키 내보내기', '위키 들여오기'])
         const exportItem = document.querySelector<HTMLElement>('[data-wiki-export]')!
         exportItem.focus()
         exportItem.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))

@@ -20,7 +20,7 @@ const disposition = (role: string, old: number, action: string, extra: Record<st
     role, old, action, newIndex: null, moveTo: null, movedText: null, documentId: null, ...extra,
 })
 const chars = (value: string) => [...value].length
-const dueInput = { countTokens: chars, perSourceTokens: 400 }
+const dueInput = { countTokens: chars, perSourceTokens: 320 }
 const card = [
     '## 미오', '',
     '### 인물 핵심', '', '- 우산을 든 소녀.', '',
@@ -48,12 +48,12 @@ const apply = (response: unknown) => applyMaintenanceResponse({
 })
 
 describe('canonical maintenance', () => {
-    test('is due only near the retrieval ceiling or after outgrowing the last baseline', () => {
-        expect(cardMaintenanceDue({ tokens: 1700, perSourceTokens: 2000 })).toBe(true)
-        expect(cardMaintenanceDue({ tokens: 1500, perSourceTokens: 2000 })).toBe(false)
-        expect(cardMaintenanceDue({ tokens: 1700, perSourceTokens: 2000, baselineTokens: 1500 })).toBe(false)
-        expect(cardMaintenanceDue({ tokens: 1900, perSourceTokens: 2000, baselineTokens: 1500 })).toBe(true)
-        expect(cardMaintenanceDue({ tokens: 1700, perSourceTokens: 2000, baselineTokens: 1000 })).toBe(true)
+    test('is due only past the per-page retrieval share or after outgrowing the last baseline', () => {
+        expect(cardMaintenanceDue({ tokens: 1100, perSourceTokens: 1000 })).toBe(true)
+        expect(cardMaintenanceDue({ tokens: 1000, perSourceTokens: 1000 })).toBe(false)
+        expect(cardMaintenanceDue({ tokens: 1100, perSourceTokens: 1000, baselineTokens: 1000 })).toBe(false)
+        expect(cardMaintenanceDue({ tokens: 1300, perSourceTokens: 1000, baselineTokens: 1000 })).toBe(true)
+        expect(cardMaintenanceDue({ tokens: 1100, perSourceTokens: 1000, baselineTokens: 600 })).toBe(true)
     })
 
     test('does not call the model while the card is not due', async () => {
@@ -302,6 +302,14 @@ describe('canonical maintenance', () => {
             { content: markdown, sourceMessageIds: ['m1'] },
             [{ id: 'event.walk', type: 'event', title: '산책', sourceMessageIds: ['m1'], content: walkBody }],
         )).toEqual([{ id: 'event.walk', title: '산책', content: walkBody }])
+        // A stored card keeps only its latest sources, so the (#N) mark is how an older unit finds its event.
+        expect(maintenanceCoverDocuments(
+            { content: '## 미오\n\n### 지식과 비밀\n\n- 폐공장에서 수면향을 목격했다. (#8)', sourceMessageIds: ['m20'] },
+            [
+                { id: 'event.factory', type: 'event', title: '폐공장', sourceMessageIds: ['m15'], sequence: 8 },
+                { id: 'event.later', type: 'event', title: '순찰차', sourceMessageIds: ['m17'], sequence: 9 },
+            ],
+        ).map((document) => document.id)).toEqual(['event.factory'])
     })
 
     test('reports applied, skipped and failed maintenance without throwing', async () => {

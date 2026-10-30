@@ -42,12 +42,12 @@ function chatWithLongMessages(): Chat {
 describe('RisuBardCurrentChatSettings', () => {
     test.each([
         ['bardwiki-maximum-tokens', 'risuBardInquiryMaximumTokenBudget', '7500', '8213'],
-        ['bardwiki-analysis-tokens', 'risuBardAnalysisTokenLimit', '8192', '8970'],
+        ['bardwiki-analysis-tokens', 'risuBardAnalysisTokenLimit', '32768', '35881'],
     ] as const)('%s keeps the baseline in the input and shows its dynamic limit separately', async (id, key, base, effective) => {
         const chat = chatWithLongMessages()
         chat.message = [{ role: 'char', data: '가'.repeat(50_000) }]
         chat.risuBardSettings = { risuBardDynamicMemoryMode: 'balanced' }
-        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {} } })
+        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' } } })
         const input = document.querySelector<HTMLInputElement>(`#${id}`)!
         expect(input.value).toBe(base)
         expect(document.querySelector(`#${id}-dynamic`)?.textContent).toContain(Number(effective).toLocaleString('ko-KR'))
@@ -78,7 +78,7 @@ describe('RisuBardCurrentChatSettings', () => {
         expect(document.querySelector('#bardwiki-source-tokens')?.classList.contains('dynamic-value')).toBe(false)
     })
     test('edits global dynamic defaults independently of chat overrides', async () => {
-        const global: RisuBardChatSettings = {}
+        const global: RisuBardChatSettings & { risuBardWikiSettingsView?: 'simple' | 'advanced' } = { risuBardWikiSettingsView: 'advanced' }
         const chat = chatWithLongMessages()
         chat.risuBardSettings!.risuBardDynamicMemoryMode = 'recall'
         mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global, globalDynamicOnly: true } })
@@ -95,7 +95,7 @@ describe('RisuBardCurrentChatSettings', () => {
     test('stores dynamic policy, shows computed limits and restores the baseline when disabled', async () => {
         const chat = chatWithLongMessages()
         chat.message = Array.from({ length: 700 }, () => ({ role: 'char' as const, data: '가'.repeat(1000) }))
-        const global: RisuBardChatSettings = {}
+        const global: RisuBardChatSettings & { risuBardWikiSettingsView?: 'simple' | 'advanced' } = { risuBardWikiSettingsView: 'advanced' }
         mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global } })
         expect(document.querySelector('#bardwiki-dynamic-maximum')).toBeNull()
         expect(document.querySelector('#bardwiki-dynamic-memory')).toBeNull()
@@ -110,8 +110,8 @@ describe('RisuBardCurrentChatSettings', () => {
         await tick()
         expect(document.querySelector<HTMLInputElement>('#bardwiki-maximum-tokens')?.value).toBe('7500')
         expect(document.querySelector('#bardwiki-maximum-tokens-dynamic')?.textContent).toContain('11,250')
-        expect(document.querySelector<HTMLInputElement>('#bardwiki-analysis-tokens')?.value).toBe('8192')
-        expect(document.querySelector('#bardwiki-analysis-tokens-dynamic')?.textContent).toContain('12,288')
+        expect(document.querySelector<HTMLInputElement>('#bardwiki-analysis-tokens')?.value).toBe('32768')
+        expect(document.querySelector('#bardwiki-analysis-tokens-dynamic')?.textContent).toContain('49,152')
         expect(document.querySelector<HTMLInputElement>('#bardwiki-history-limit')?.value).toBe('8')
         expect(document.querySelectorAll('.dynamic-value')).toHaveLength(4)
         const maximum = document.querySelector<HTMLInputElement>('#bardwiki-dynamic-maximum')!
@@ -140,11 +140,11 @@ describe('RisuBardCurrentChatSettings', () => {
         const chat = chatWithLongMessages()
         chat.message = [{role: 'char', data: '가'.repeat(500_000)}]
         chat.risuBardSettings = {risuBardDynamicMemoryMode: 'recall'}
-        mounted = mount(RisuBardCurrentChatSettings, {target: document.body, props: {chat, global: {}}})
+        mounted = mount(RisuBardCurrentChatSettings, {target: document.body, props: {chat, global: { risuBardWikiSettingsView: 'advanced' }}})
         const input = document.querySelector<HTMLInputElement>('#bardwiki-analysis-tokens')!
         const description = () => document.querySelector('#bardwiki-analysis-tokens-dynamic')!.textContent
-        expect(input.value).toBe('8192')
-        expect(description()).toContain('16,384')
+        expect(input.value).toBe('32768')
+        expect(description()).toContain('65,536')
         expect(description()).toContain('동적 요청')
         expect(description()).toContain('모델 출력 상한')
         for (const [typed, saved, requested] of [['4096', 4096, '8,192'], ['1000', 3072, '6,144']] as const) {
@@ -161,16 +161,16 @@ describe('RisuBardCurrentChatSettings', () => {
         }
         const saved = JSON.parse(JSON.stringify(chat))
         await unmount(mounted)
-        mounted = mount(RisuBardCurrentChatSettings, {target: document.body, props: {chat: saved, global: {}}})
+        mounted = mount(RisuBardCurrentChatSettings, {target: document.body, props: {chat: saved, global: { risuBardWikiSettingsView: 'advanced' }}})
         expect(document.querySelector<HTMLInputElement>('#bardwiki-analysis-tokens')!.value).toBe('3072')
         expect(description()).toContain('6,144')
     })
     test('keeps ordinary analysis input unchanged when dynamic memory is off', async () => {
         const chat = chatWithLongMessages()
         chat.risuBardSettings!.risuBardDynamicMemoryMode = 'off'
-        mounted = mount(RisuBardCurrentChatSettings, {target: document.body, props: {chat, global: {}}})
+        mounted = mount(RisuBardCurrentChatSettings, {target: document.body, props: {chat, global: { risuBardWikiSettingsView: 'advanced' }}})
         const input = document.querySelector<HTMLInputElement>('#bardwiki-analysis-tokens')!
-        expect(input.value).toBe('8192')
+        expect(input.value).toBe('32768')
         expect(document.querySelector('#bardwiki-analysis-tokens-dynamic')).toBeNull()
         input.focus()
         await tick()
@@ -185,7 +185,7 @@ describe('RisuBardCurrentChatSettings', () => {
     test('pins current values across existing and new chats, persists edits, and unpins locally', async () => {
         const chat = chatWithLongMessages()
         const character: { risuBardPinnedSettings?: RisuBardChatSettings } = {}
-        const global: RisuBardChatSettings = { risuBardResponseMessageCount: 12 }
+        const global: RisuBardChatSettings & { risuBardWikiSettingsView?: 'simple' | 'advanced' } = { risuBardWikiSettingsView: 'advanced', risuBardResponseMessageCount: 12 }
         mounted = mount(RisuBardCurrentChatSettings, {
             target: document.body,
             props: { chat, global, character },
@@ -223,7 +223,8 @@ describe('RisuBardCurrentChatSettings', () => {
 
     test('promotes the current chat values to global settings', async () => {
         const chat = chatWithLongMessages()
-        const global: RisuBardChatSettings = {
+        const global: RisuBardChatSettings & { risuBardWikiSettingsView?: 'simple' | 'advanced' } = {
+            risuBardWikiSettingsView: 'advanced',
             risuBardResponseMessageCount: 12,
             risuBardModelMode: 'memory',
             showRequestStatus: true,
@@ -256,7 +257,7 @@ describe('RisuBardCurrentChatSettings', () => {
         chat.risuBardSettings = { risuBardResponseMessageCount: 12 }
         mounted = mount(RisuBardCurrentChatSettings, {
             target: document.body,
-            props: { chat, global: { risuBardResponseMessageCount: 12 } },
+            props: { chat, global: { risuBardWikiSettingsView: 'advanced', risuBardResponseMessageCount: 12 } },
         })
         expect(document.querySelector<HTMLButtonElement>('[data-apply-chat-settings-global]')!.disabled).toBe(true)
     })
@@ -264,7 +265,7 @@ describe('RisuBardCurrentChatSettings', () => {
     test('names the save scope in the title and a visible line, unpinned and pinned', async () => {
         const chat = chatWithLongMessages()
         const character: { risuBardPinnedSettings?: RisuBardChatSettings } = {}
-        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {}, character } })
+        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' }, character } })
         const title = () => document.querySelector('.settings-title strong')?.textContent?.trim()
         const scope = () => document.querySelector('[data-chat-settings-scope]')?.textContent?.trim()
         expect(title()).toBe('이 챗 설정')
@@ -280,14 +281,14 @@ describe('RisuBardCurrentChatSettings', () => {
     test('unpinning to global removes the pin and the chat overrides so the chat follows global', async () => {
         const chat = chatWithLongMessages()
         const character: { risuBardPinnedSettings?: RisuBardChatSettings } = { risuBardPinnedSettings: { risuBardResponseMessageCount: 3 } }
-        const global: RisuBardChatSettings = { risuBardResponseMessageCount: 12 }
+        const global: RisuBardChatSettings & { risuBardWikiSettingsView?: 'simple' | 'advanced' } = { risuBardWikiSettingsView: 'advanced', risuBardResponseMessageCount: 12 }
         mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global, character } })
         expect(document.querySelector<HTMLInputElement>('#bardwiki-response-messages')!.value).toBe('3')
         document.querySelector<HTMLButtonElement>('[data-reset-chat-settings-global]')!.click()
         await tick()
         expect(character.risuBardPinnedSettings).toBeUndefined()
         expect(chat.risuBardSettings).toBeUndefined()
-        expect(global).toEqual({ risuBardResponseMessageCount: 12 })
+        expect(global).toEqual({ risuBardWikiSettingsView: 'advanced', risuBardResponseMessageCount: 12 })
         expect(document.querySelector<HTMLInputElement>('[data-pin-chat-settings-character]')!.checked).toBe(false)
         expect(document.querySelector<HTMLInputElement>('#bardwiki-response-messages')!.value).toBe('12')
         expect(document.querySelector('.settings-title strong')?.textContent?.trim()).toBe('이 챗 설정')
@@ -295,7 +296,7 @@ describe('RisuBardCurrentChatSettings', () => {
 
     test('using global without a pin drops only the chat overrides', async () => {
         const chat = chatWithLongMessages()
-        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {} } })
+        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' } } })
         document.querySelector<HTMLButtonElement>('[data-reset-chat-settings-global]')!.click()
         await tick()
         expect(chat.risuBardSettings).toBeUndefined()
@@ -307,7 +308,7 @@ describe('RisuBardCurrentChatSettings', () => {
         ['bardwiki-analysis-exclude-user', 'risuBardAnalysisExcludeUserMessages', '분석에 사용자 메시지 넣기'],
     ] as const)('%s is checked when user messages are included and stores the inverted flag', async (id, key, label) => {
         const chat = chatWithLongMessages()
-        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {} } })
+        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' } } })
         const field = document.querySelector(`[data-chat-setting-field="${key}"]`)!
         const input = document.querySelector<HTMLInputElement>(`#${id}`)!
         expect(field.textContent).toContain(label)
@@ -327,7 +328,7 @@ describe('RisuBardCurrentChatSettings', () => {
 
     test('stores the lorebook reference settings and disables them at zero tokens', async () => {
         const chat = chatWithLongMessages()
-        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {} } })
+        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' } } })
         const tokens = document.querySelector<HTMLInputElement>('#bardwiki-analysis-lore-tokens')!
         const always = document.querySelector<HTMLInputElement>('#bardwiki-analysis-lore-always')!
         const words = document.querySelector<HTMLTextAreaElement>('#bardwiki-analysis-lore-exclude')!
@@ -364,7 +365,7 @@ describe('RisuBardCurrentChatSettings', () => {
 
         test('keeps the stored value for an empty input and writes it back', async () => {
             const chat = chatWithLongMessages()
-            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {} } })
+            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' } } })
             const input = await change('#bardwiki-response-messages', '')
             expect(chat.risuBardSettings!.risuBardResponseMessageCount).toBe(4)
             expect(input.value).toBe('4')
@@ -375,7 +376,7 @@ describe('RisuBardCurrentChatSettings', () => {
             vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
             const chat = chatWithLongMessages()
             chat.risuBardSettings!.risuBardInquiryTimeoutMs = 5_000
-            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {} } })
+            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' } } })
             let input = await change('#bardwiki-timeout', '99999')
             expect(chat.risuBardSettings!.risuBardInquiryTimeoutMs).toBe(10_000)
             expect(input.value).toBe('10000')
@@ -404,7 +405,7 @@ describe('RisuBardCurrentChatSettings', () => {
             const chat = chatWithLongMessages()
             chat.risuBardSettings!.risuBardDynamicMemoryMode = 'off'
             chat.risuBardSettings!.risuBardInquiryTargetTokenBudget = 3500
-            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {} } })
+            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' } } })
             const inputs = [...document.querySelectorAll<HTMLInputElement>('input[type="number"]')]
             expect(inputs.length).toBeGreaterThanOrEqual(11)
             for (const input of inputs) {
@@ -426,7 +427,7 @@ describe('RisuBardCurrentChatSettings', () => {
     })
 
     test('disables the whole form with a reason when no chat is open', () => {
-        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { global: {} } })
+        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { global: { risuBardWikiSettingsView: 'advanced' } } })
         const form = document.querySelector<HTMLFieldSetElement>('fieldset[data-chat-settings-form]')!
         expect(form.disabled).toBe(true)
         expect(document.querySelector('[data-chat-settings-disabled-reason]')?.textContent?.trim()).toBe('챗을 연 뒤 바꿀 수 있습니다.')
@@ -438,18 +439,18 @@ describe('RisuBardCurrentChatSettings', () => {
     ] as const)('keeps the form enabled %s', (_name, withChat, globalDynamicOnly) => {
         mounted = mount(RisuBardCurrentChatSettings, {
             target: document.body,
-            props: { chat: withChat ? chatWithLongMessages() : undefined, global: {}, globalDynamicOnly },
+            props: { chat: withChat ? chatWithLongMessages() : undefined, global: { risuBardWikiSettingsView: 'advanced' }, globalDynamicOnly },
         })
         expect(document.querySelector<HTMLFieldSetElement>('fieldset[data-chat-settings-form]')!.disabled).toBe(false)
         expect(document.querySelector('[data-chat-settings-disabled-reason]')).toBeNull()
     })
 
     test('uses plain names for the count and limit fields', () => {
-        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat: chatWithLongMessages(), global: {} } })
+        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat: chatWithLongMessages(), global: { risuBardWikiSettingsView: 'advanced' } } })
         const fieldText = (key: string) => document.querySelector(`[data-chat-setting-field="${key}"] .setting-heading label`)?.textContent
         expect(fieldText('risuBardResponseMessageCount')).toBe('답변에 그대로 넣을 최근 응답 수')
         expect(fieldText('risuBardRecentMessageCount')).toBe('위키 분석이 읽을 최근 응답 수')
-        expect(fieldText('risuBardCanonicalTargetLimit')).toBe('한 번에 고칠 위키 문서 수')
+        expect(fieldText('risuBardCanonicalTargetLimit')).toBeUndefined()
         expect(fieldText('risuBardAdditionalSearchLimit')).toBe('근거 부족 시 다시 찾기 횟수')
         expect(fieldText('risuBardAnalysisTokenLimit')).toBe('위키 분석 최대 길이(토큰)')
         expect(document.body.textContent).not.toContain('·')
@@ -468,7 +469,7 @@ describe('RisuBardCurrentChatSettings', () => {
         const dynamicIds = ['#bardwiki-dynamic-memory', '#bardwiki-dynamic-maximum']
 
         test('shows the standard tier summary and hides the six fields while keeping the other search fields', () => {
-            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat: chatWithLongMessages(), global: {} } })
+            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat: chatWithLongMessages(), global: { risuBardWikiSettingsView: 'advanced' } } })
             const select = document.querySelector<HTMLSelectElement>('#bardwiki-memory-budget')!
             expect([...select.options].map(option => option.textContent)).toEqual(['절약', '보통', '넉넉', '사용자 지정'])
             expect(select.value).toBe('standard')
@@ -488,7 +489,7 @@ describe('RisuBardCurrentChatSettings', () => {
 
         test('writes the six tier values to the chat, keeps 커스텀 open without changing them, and tiers close it again', async () => {
             const chat = chatWithLongMessages()
-            const global: RisuBardChatSettings = {}
+            const global: RisuBardChatSettings & { risuBardWikiSettingsView?: 'simple' | 'advanced' } = { risuBardWikiSettingsView: 'advanced' }
             mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global } })
             await choose('generous')
             expect(chat.risuBardSettings).toMatchObject({
@@ -500,7 +501,7 @@ describe('RisuBardCurrentChatSettings', () => {
                 risuBardDynamicMemoryMaximumTokens: 16000,
                 risuBardResponseMessageCount: 4,
             })
-            expect(global).toEqual({})
+            expect(global).toEqual({ risuBardWikiSettingsView: 'advanced' })
             expect(document.querySelector<HTMLSelectElement>('#bardwiki-memory-budget')!.value).toBe('generous')
             expect(summary()).toBe('검색 목표 6,000 / 사건 4,000 / 자료별 2,500 / 최대 10,500 / 동적 한도 균형형')
             expect(document.querySelector('#bardwiki-target-tokens')).toBeNull()
@@ -538,14 +539,14 @@ describe('RisuBardCurrentChatSettings', () => {
         test('shows the fields for values that match no tier and re-detects a saved tier on remount', async () => {
             const chat = chatWithLongMessages()
             chat.risuBardSettings!.risuBardInquiryTargetTokenBudget = 3500
-            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {} } })
+            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' } } })
             expect(document.querySelector<HTMLSelectElement>('#bardwiki-memory-budget')!.value).toBe('custom')
             expect(summary()).toBeUndefined()
             expect(document.querySelector<HTMLInputElement>('#bardwiki-target-tokens')!.value).toBe('3500')
             await choose('standard')
             const saved = JSON.parse(JSON.stringify(chat))
             await unmount(mounted)
-            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat: saved, global: {} } })
+            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat: saved, global: { risuBardWikiSettingsView: 'advanced' } } })
             expect(document.querySelector<HTMLSelectElement>('#bardwiki-memory-budget')!.value).toBe('standard')
             expect(document.querySelector('#bardwiki-target-tokens')).toBeNull()
         })
@@ -563,26 +564,51 @@ describe('RisuBardCurrentChatSettings', () => {
         test('follows the pinned bot target and stays disabled without a chat', async () => {
             const chat = chatWithLongMessages()
             const character: { risuBardPinnedSettings?: RisuBardChatSettings } = { risuBardPinnedSettings: { risuBardResponseMessageCount: 4 } }
-            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: {}, character } })
+            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global: { risuBardWikiSettingsView: 'advanced' }, character } })
             await choose('economy')
             expect(character.risuBardPinnedSettings).toMatchObject({ risuBardInquiryMaximumTokenBudget: 5500, risuBardDynamicMemoryMode: 'economy' })
             expect(chat.risuBardSettings!.risuBardInquiryMaximumTokenBudget).toBeUndefined()
             await unmount(mounted)
-            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { global: {} } })
+            mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { global: { risuBardWikiSettingsView: 'advanced' } } })
             expect(document.querySelector<HTMLSelectElement>('#bardwiki-memory-budget')!.disabled).toBe(true)
         })
+    })
+
+    test('the simple view shows the work scale, model, source rerank and language and writes a scale to the chat', async () => {
+        const chat = chatWithLongMessages()
+        chat.risuBardSettings = {}
+        const global: RisuBardChatSettings & { risuBardWikiSettingsView?: 'simple' | 'advanced' } = {}
+        mounted = mount(RisuBardCurrentChatSettings, { target: document.body, props: { chat, global } })
+        const fields = () => [...document.querySelectorAll<HTMLElement>('[data-chat-setting-field]')].map((field) => field.dataset.chatSettingField)
+        expect(fields()).toEqual(['risuBardWikiScale', 'risuBardModelMode', 'risuBardSourceRerank', 'risuBardWikiWritingLanguage', 'risuBardMemoryBudgetPreset'])
+        const scale = (value: string) => document.querySelector<HTMLInputElement>(`input[name="bardwiki-wiki-scale"][value="${value}"]`)!
+        expect(scale('standard').checked).toBe(true)
+        scale('large').click()
+        await tick()
+        expect(chat.risuBardSettings).toEqual({
+            risuBardAnalysisTokenLimit: 65_536, risuBardAnalysisLoreTokenLimit: 2_000,
+        })
+        chat.risuBardSettings.risuBardAnalysisTokenLimit = 40_000
+        document.querySelector<HTMLButtonElement>('[data-wiki-settings-view="advanced"]')!.click()
+        await tick()
+        expect(global.risuBardWikiSettingsView).toBe('advanced')
+        expect(document.querySelector<HTMLInputElement>('#bardwiki-analysis-tokens')?.value).toBe('40000')
+        document.querySelector<HTMLButtonElement>('[data-wiki-settings-view="simple"]')!.click()
+        await tick()
+        expect(document.querySelector('[data-wiki-scale-custom]')?.textContent).toContain('40,000')
+        expect(document.querySelector('#bardwiki-analysis-tokens')).toBeNull()
     })
 
     test('gives every visible option contextual help without step validation hints', () => {
         const chat = chatWithLongMessages()
         mounted = mount(RisuBardCurrentChatSettings, {
             target: document.body,
-            props: { chat, global: {} },
+            props: { chat, global: { risuBardWikiSettingsView: 'advanced' } },
         })
 
         const fields = [...document.querySelectorAll('[data-chat-setting-field]')]
         const helpButtons = [...document.querySelectorAll('[data-chat-setting-help]')]
-        expect(fields).toHaveLength(17)
+        expect(fields).toHaveLength(18)
         expect(document.querySelector('[data-chat-setting-field^="risuBardBardChan"]')).toBeNull()
         expect(document.querySelector('#bardwiki-ignore-ooc')).toBeNull()
         expect(helpButtons).toHaveLength(fields.length)

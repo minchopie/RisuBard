@@ -9,9 +9,12 @@
     } from 'src/ts/risubard/memoryBudgetPreset'
     import { resolveRisuBardChatSettings } from 'src/ts/risubard/risuBardSettings'
     import { memoryBudgetPresetUi } from 'src/ts/setting/memoryBudgetPresetUi.svelte'
+    import { normalizeRisuBardWikiSettingsView } from 'src/ts/risubard/wikiScalePreset'
     import { DBState } from 'src/ts/stores.svelte'
 
     let settings = $derived(resolveRisuBardChatSettings(DBState.db))
+    // The simple view offers only the three tiers; custom values from the advanced view stay selected but locked.
+    let simple = $derived(normalizeRisuBardWikiSettingsView(DBState.db.risuBardWikiSettingsView) === 'simple')
     // The selection is derived from the six stored values; only choosing custom keeps the entries open without changing them.
     let selection = $derived<MemoryBudgetPresetId | 'custom'>(
         memoryBudgetPresetUi.customOpen ? 'custom' : detectMemoryBudgetPreset(settings)
@@ -60,6 +63,9 @@
             <label for="risubard-memory-budget-preset">{language.risuBardMemoryBudgetPreset}</label>
             <Help key="risuBardMemoryBudgetPreset" name={language.risuBardMemoryBudgetPreset} />
         </span>
+        {#if simple && selection === 'custom'}
+            <p class="mt-0.5 wrap-break-word text-xs text-textcolor2" data-memory-budget-custom>{language.risuBardWikiScaleCustom.replace(' ({summary})', '')}</p>
+        {/if}
         {#if summaryParts.length}
             <p id="risubard-memory-budget-summary" class="mt-0.5 wrap-break-word text-xs text-textcolor2">{#each summaryParts as part, index}{#if index > 0}{' / '}{/if}<span class="whitespace-nowrap">{part}</span>{/each}</p>
         {/if}
@@ -74,6 +80,8 @@
         {#each MEMORY_BUDGET_PRESET_IDS as id (id)}
             <option value={id} class="bg-darkbg">{labels[id]}</option>
         {/each}
-        <option value="custom" class="bg-darkbg">{labels.custom}</option>
+        {#if !simple || selection === 'custom'}
+            <option value="custom" class="bg-darkbg" disabled={simple}>{labels.custom}</option>
+        {/if}
     </select>
 </div>

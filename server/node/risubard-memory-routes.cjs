@@ -121,6 +121,15 @@ function validEntityHints(value) {
         )
 }
 
+// Ranked ids name supplied sources only, so a rerank can reorder but never add text.
+function validRankedSourceIds(value, sourceMatches) {
+    return Array.isArray(value)
+        && value.length <= 8
+        && Array.isArray(sourceMatches)
+        && value.every((id) => hasBoundedId(id) && sourceMatches.some((match) => match.messageId === id))
+        && new Set(value).size === value.length
+}
+
 function validSourceMatches(value) {
     return Array.isArray(value)
         && value.length <= 32
@@ -591,6 +600,7 @@ function registerRisuBardMemoryRoutes(app, options) {
                 ...(req.body.sourceLimit === undefined
                     ? []
                     : ['sourceLimit']),
+                ...(req.body.rankedSourceIds === undefined ? [] : ['rankedSourceIds']),
                 ...(req.body.retrievalLimits === undefined ? [] : ['retrievalLimits']),
                 ...(req.body.timeline === undefined ? [] : ['timeline']),
             ])
@@ -619,6 +629,8 @@ function registerRisuBardMemoryRoutes(app, options) {
                     && (!Number.isSafeInteger(req.body.sourceLimit)
                         || req.body.sourceLimit < 0
                         || req.body.sourceLimit > 32))
+                || (req.body.rankedSourceIds !== undefined
+                    && !validRankedSourceIds(req.body.rankedSourceIds, req.body.sourceMatches))
                 || Buffer.byteLength(JSON.stringify(req.body), 'utf8')
                     > 256 * 1_024) {
                 res.status(400).send({

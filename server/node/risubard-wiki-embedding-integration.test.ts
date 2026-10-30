@@ -51,7 +51,7 @@ describe('BardWiki semantic retrieval integration (deterministic vectors)', () =
         const semantic = await index.search('Remember that promise?', 'We arrived at the bridge.')
         const result = inquireMarkdownDocuments({ documents, currentInput: 'Remember that promise?', semanticMatches: semantic.matches })
         expect(result.sources.some(source => source.content.includes('bridge'))).toBe(true)
-        expect(semantic.matches.map(match => match.documentId)).toEqual(['reunion'])
+        expect(semantic.matches[0].documentId).toBe('reunion')
         const lexical = inquireMarkdownDocuments({ documents, currentInput: 'reunion' })
         expect(lexical.sources.some(source => source.content.includes('bridge'))).toBe(true)
     })

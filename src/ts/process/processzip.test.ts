@@ -40,7 +40,7 @@ vi.mock('../util', () => ({
     },
 }))
 
-import { CharXImporter } from './processzip'
+import { CharXImporter, CharXWriter } from './processzip'
 import { ImportTransaction } from '../storage/importTransaction'
 
 describe('CharXImporter asset persistence', () => {
@@ -133,4 +133,27 @@ describe('CharXImporter asset persistence', () => {
         expect(importer.assets['assets/animation.webp']).toBe('single-write')
     }, 30_000)
 
+})
+
+describe('CharXWriter', () => {
+    it('writes sizes in local headers so stored bytes with PK\\x07\\x08 still stream', async () => {
+        const chunks: Uint8Array[] = []
+        const writer = new CharXWriter({ write: async (d: Uint8Array) => { chunks.push(Buffer.from(d)) }, close: async () => {} } as any)
+        const tricky = Uint8Array.of(1, 2, 0x50, 0x4b, 0x07, 0x08, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 3)
+        await writer.write('card.json', '{}', 6)
+        await writer.write('assets/other/image/모모.webp', tricky)
+        await writer.write('module.risum', Uint8Array.of(111, 0))
+        await writer.end()
+        const archive = Buffer.concat(chunks)
+
+        expect(archive[6] & 8).toBe(0)
+        expect(fflate.unzipSync(archive)['assets/other/image/모모.webp']).toEqual(tricky)
+
+        const importer = new CharXImporter()
+        await importer.parse(archive)
+        await importer.done()
+        expect(importer.cardData).toBe('{}')
+        expect([...importer.moduleData!]).toEqual([111, 0])
+        expect(Object.keys(importer.assets)).toEqual(['assets/other/image/모모.webp'])
+    })
 })

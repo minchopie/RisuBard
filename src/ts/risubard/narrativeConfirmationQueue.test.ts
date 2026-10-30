@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { enqueueNarrativeConfirmation, pendingNarrativeConfirmationKeys } from './narrativeConfirmationQueue'
+import { enqueueNarrativeConfirmation, narrativeConfirmationsSettled, pendingNarrativeConfirmationKeys } from './narrativeConfirmationQueue'
 
 const defer = () => {
     let resolve!: () => void
@@ -9,6 +9,22 @@ const defer = () => {
 }
 
 describe('per-chat narrative confirmation queue', () => {
+    test('settles once the running and queued analyses have ended, failed ones included', async () => {
+        let release!: () => void
+        const running = enqueueNarrativeConfirmation('chat-settle', () => new Promise<void>((resolve) => { release = resolve }))
+        const failing = enqueueNarrativeConfirmation('chat-settle', async () => { throw new Error('down') })
+        let settled = false
+        void narrativeConfirmationsSettled('chat-settle').then(() => { settled = true })
+        await Promise.resolve()
+        expect(settled).toBe(false)
+        release()
+        await running
+        await expect(failing).rejects.toThrow('down')
+        await narrativeConfirmationsSettled('chat-settle')
+        expect(settled).toBe(true)
+        await expect(narrativeConfirmationsSettled('chat-idle')).resolves.toBeUndefined()
+    })
+
     test('runs tasks for the same chat one after another in enqueue order', async () => {
         const first = defer()
         const order: string[] = []

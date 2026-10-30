@@ -446,13 +446,15 @@ export const helpEn = {
         risuBardResponseRecentMessages:
             "Number of recent assistant turns referenced when generating a new response. The current user request is always included separately.",
         risuBardCanonicalWritingStyle:
-            "Writing style for event summaries and canonical Markdown, independent of wiki writing language. Concise is the default.",
+            "Writing style for event summaries and canonical Markdown, independent of wiki writing language. The default style drops decoration and narration and keeps facts a later question may ask about: counts, names, objects and key lines. New choices are Default or Custom; a previously saved Standard or Ultra concise choice is kept with its earlier instruction.",
         risuBardWikiWritingLanguage:
             "Language for event analysis, summaries and entire canonical bodies, independent of UI and conversation language. Current-chat settings can override this default. Takes priority over language requests in custom style and Wiki Guides. Existing titles, links, names and evidence quotations are preserved. Existing documents are not automatically translated; select a language and reboot to rebuild the entire wiki. Reboot keeps its starting language. Additional analysis cannot append to an event in another language.",
         risuBardCanonicalCustomStyle:
             "Controls style and expression only. Fact selection, evidence, structure, and safety rules take priority. Limited to 1,000 characters.",
         risuBardAnalysisTokenLimit:
             "Input and output token limit for each memory analysis, reboot, and canonical writing request. Long input is fitted before sending, and the same value is applied to model output. The default is 8,192. There is no fixed app maximum; choose a value within your model's context and output limits.",
+        risuBardWikiScale:
+            "How much the wiki analysis reads at once. It also sets how many queued turns can be analyzed together.\n\n**Light** (24K): for models with a small input limit or short replies.\n\n**Standard** (32K): the default.\n\n**Roomy** (48K), **Large** (64K): analyze long replies and several turns at once without cutting them. Each call gets heavier.\n\nLorebook tokens for analysis (750/1,000/1,500/2,000) follow the scale. Editing either in Advanced makes it custom.",
         risuBardMemoryBudgetPreset:
             "Sets the six wiki search budget values at once: search target, event search, per-source search, search maximum, and the long-term memory dynamic limit with its ceiling.\n\n**Economy** (search target 3,000 / events 2,000 / per source 1,500 / maximum 5,500): holds about two main character cards and a little other memory per response to save tokens.\n\n**Standard** (4,000 / 3,000 / 2,000 / 7,500): the default. Two main character cards plus room for other memory and event documents.\n\n**Generous** (6,000 / 4,000 / 2,500 / 10,500, balanced dynamic limit): puts more memory into each response for long chats with many characters and events. It uses the most tokens.\n\nEditing any value yourself switches to Custom. Choose Custom to see and edit the individual values.",
         risuBardInquiryTargetTokenBudget:
@@ -464,13 +466,13 @@ export const helpEn = {
         risuBardInquiryMaximumTokenBudget:
             "Absolute token limit for one wiki inquiry, including detailed retrieval and required documents. A lower maximum also clamps the target.",
         risuBardInquiryTimeoutMs:
-            "Time limit for each wiki inquiry round. The default and maximum are 10,000 ms; the minimum is 1 ms.",
+            "Time limit for each wiki inquiry round. With semantic search on, the query embedding is also awaited this long; a remote embedding model slower than this is left out of that response, and the wiki inquiry diagnostic says why. The default and maximum are 10,000 ms; the minimum is 1 ms.",
         risuBardHistoricalSourceMatchLimit:
             "Maximum historical chat excerpts admitted from lexical candidates and exact source IDs of selected events. Relevance and token budgets may select fewer. The default is 8, the safety ceiling is 32, and 0 disables historical chat recall.",
         risuBardAdditionalSearchLimit:
             "Maximum extra wiki searches when the first analysis does not find enough canonical candidates.",
         risuBardCanonicalTargetLimit:
-            "Maximum canonical documents created or updated by one automatic analysis.",
+            "Canonical documents created or updated together in one rewrite call. Extra candidates are written in further calls from the same analysis.",
         risuBardArcPlotter:
             "Whenever the configured number of confirmed events accumulates, the existing BardWiki writer updates the reserved Story Arc Plot document. The plot keeps only arcs, turning points, open threads, and representative event links instead of repeating the full chat or character histories, providing a route back to relevant past events in very long chats. It adds no embedding or separate AI call. Event documents and retrieved source chat remain the authority for exact details.",
         risuBardArcPlotterEnabled:
@@ -487,6 +489,8 @@ export const helpEn = {
             "Maximum characters in the complete reserved plot Markdown. Higher values preserve more threads but can enlarge canonical-writer input and later search candidates.",
         risuBardResponseExcludeUsers:
             "Exclude earlier user messages from response context. The current user request is always retained.",
+        risuBardSourceRerank:
+            "Off by default. Before each answer, the work model (sub or main) reads up to 16 past chat excerpts against the question and keeps up to 4 that actually state the asked quantity, name, line or order; they go in before wiki pages. If none qualifies or the request fails, the usual search result is used. Adds one model request per answer with 10k to 20k input tokens (about $0.002 with Claude Haiku 5.5). Turn it on when answers often get past details wrong.",
         risuBardHideOocTurns: "Hide OOC replies and their user inputs from the main chat list. Off by default. Read the live transcript in BardWiki's OOC notepad. Applies to all chats without changing saved messages, AI context or wiki analysis settings.",
         risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. Keeps the original character description and active lorebook text without also inserting their summarized narrative baseline. Turn it off to restore the previous order.",
         risuBardAnalysisExcludeUsers:

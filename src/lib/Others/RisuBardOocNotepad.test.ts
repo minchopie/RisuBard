@@ -5,6 +5,14 @@ import RisuBardOocNotepad from './RisuBardOocNotepad.svelte'
 import type { Message } from 'src/ts/storage/database.svelte'
 import { DBState } from 'src/ts/stores.svelte'
 
+const confirmChoice = vi.hoisted(() => ({ value: 0, labels: [] as string[] }))
+vi.mock('src/ts/alert', () => ({
+    alertConfirmMulti: async (_prompt: string, actions: { label: string }[]) => {
+        confirmChoice.labels = actions.map(action => action.label)
+        return confirmChoice.value
+    },
+}))
+
 vi.mock('src/ts/stores.svelte', () => ({
     DBState: { db: { zoomsize: 100, lineHeight: 1.25 } },
     selIdState: { selId: -1 },
@@ -27,6 +35,29 @@ const transcript = (): Message[] => [
 ]
 
 describe('OOC live notepad', () => {
+    test('deleting a user turn can take its linked AI replies along', async () => {
+        const onDelete = vi.fn(async () => true)
+        component = createClassComponent({
+            component: RisuBardOocNotepad, target: document.body,
+            props: { messages: transcript(), onHideChange: vi.fn(), onDelete },
+        })
+        const header = document.querySelector<HTMLElement>('.notepad-header')!
+        expect(header).not.toBeNull()
+        confirmChoice.value = 0
+        document.querySelector<HTMLButtonElement>('[data-ooc-message-index="2"] [data-ooc-delete]')!.click()
+        await vi.waitFor(() => expect(onDelete).toHaveBeenCalledWith([2, 3]))
+        confirmChoice.value = 1
+        document.querySelector<HTMLButtonElement>('[data-ooc-message-index="2"] [data-ooc-delete]')!.click()
+        await vi.waitFor(() => expect(onDelete).toHaveBeenLastCalledWith([2]))
+        confirmChoice.value = 0
+        document.querySelector<HTMLButtonElement>('[data-ooc-message-index="3"] [data-ooc-delete]')!.click()
+        await vi.waitFor(() => expect(onDelete).toHaveBeenLastCalledWith([3]))
+        confirmChoice.value = -1
+        document.querySelector<HTMLButtonElement>('[data-ooc-message-index="3"] [data-ooc-delete]')!.click()
+        await tick()
+        expect(onDelete).toHaveBeenCalledTimes(3)
+    })
+
     test('navigates groups, reveals the exact source, and switches Markdown off', async () => {
         const calls: unknown[] = []
         component = createClassComponent({

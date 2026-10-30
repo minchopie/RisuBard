@@ -2008,6 +2008,62 @@
       "bytes": 91629
     },
     {
+      "path": "src/ts/risubard/wikiPromptPreset.ts",
+      "module": "model-compat",
+      "kind": "hosts",
+      "sha256": "7cb91503a5679a8f01384227809acd9792844be084c97a50f19baeff59791c6c",
+      "contentSha256": "7cb91503a5679a8f01384227809acd9792844be084c97a50f19baeff59791c6c",
+      "bytes": 44231
+    },
+    {
+      "path": "src/ts/risubard/wikiPromptPreset.test.ts",
+      "module": "model-compat",
+      "kind": "hosts",
+      "sha256": "1c07f3cec44f6314507355da8df6bcdb1f4bda3f2e989286759c54f596733135",
+      "contentSha256": "1c07f3cec44f6314507355da8df6bcdb1f4bda3f2e989286759c54f596733135",
+      "bytes": 25900
+    },
+    {
+      "path": "src/ts/risubard/risuBardSettings.ts",
+      "module": "model-compat",
+      "kind": "hosts",
+      "sha256": "47b8e0351583502ee5cc8ecc4996038c05b532ba588690c0d83172937914c645",
+      "contentSha256": "47b8e0351583502ee5cc8ecc4996038c05b532ba588690c0d83172937914c645",
+      "bytes": 16062
+    },
+    {
+      "path": "src/ts/risubard/risuBardSettings.test.ts",
+      "module": "model-compat",
+      "kind": "hosts",
+      "sha256": "c89df42a06b9685b660ba450af6464da2c97a17060a53a8e8331366a83084740",
+      "contentSha256": "c89df42a06b9685b660ba450af6464da2c97a17060a53a8e8331366a83084740",
+      "bytes": 12139
+    },
+    {
+      "path": "src/ts/setting/risuBardCommonSettingsData.ts",
+      "module": "model-compat",
+      "kind": "hosts",
+      "sha256": "e37d93f31b5118b17bef2ce290b2385d0cf274b87c20e4cfe0200baa7811a1f9",
+      "contentSha256": "e37d93f31b5118b17bef2ce290b2385d0cf274b87c20e4cfe0200baa7811a1f9",
+      "bytes": 22788
+    },
+    {
+      "path": "src/lib/Others/RisuBardCurrentChatSettings.svelte",
+      "module": "model-compat",
+      "kind": "hosts",
+      "sha256": "24ee08473e75162b1a36153a15be1f7e41f4a49ac8445a56e2a71a03e1d5d18e",
+      "contentSha256": "24ee08473e75162b1a36153a15be1f7e41f4a49ac8445a56e2a71a03e1d5d18e",
+      "bytes": 34963
+    },
+    {
+      "path": "src/lib/Setting/RisuBardModeSettings.test.ts",
+      "module": "model-compat",
+      "kind": "hosts",
+      "sha256": "61900be03cf88b1534daebe77819be2a65a9a262a209a6641aaf4384f6e8945a",
+      "contentSha256": "61900be03cf88b1534daebe77819be2a65a9a262a209a6641aaf4384f6e8945a",
+      "bytes": 14516
+    },
+    {
       "path": "src/ts/process/request/googleAndroidRequest.test.ts",
       "module": "model-compat",
       "kind": "files",
@@ -2675,8 +2731,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "7838e5c250ec5b852fb1207edf149a0d220e7972b7ee18dc3b59001d036aed80",
-      "contentSha256": "dd3b7acbbbf2109675c898087acbc8c4d2ac8fb62db652861a8f80f466a43ad4",
+      "sha256": "dc50411aee24bbd07494d6bf1c7bc81dabb008c59a88c6e5da0f35a2bd851334",
+      "contentSha256": "bfc9536c2a0f90aa01c19deaff3641bb521564726014c60b6804952c0e69e269",
       "bytes": 6615
     },
     {
@@ -2806,6 +2862,14 @@
       "sha256": "00424acc27beb6dced10f5491e39db4cb7a0808228e59eefe2a83e726ab454c2",
       "contentSha256": "00424acc27beb6dced10f5491e39db4cb7a0808228e59eefe2a83e726ab454c2",
       "bytes": 1089
+    },
+    {
+      "path": "patchnote/0.9.102.md",
+      "module": "distribution",
+      "kind": "files",
+      "sha256": "f3b3855b1479d2eca55662887de6b7de0b60e0e749a599f7e347555725e37e60",
+      "contentSha256": "f3b3855b1479d2eca55662887de6b7de0b60e0e749a599f7e347555725e37e60",
+      "bytes": 1333
     },
     {
       "path": "server/node/server.cjs",
@@ -4342,7 +4406,14 @@
         "server/node/logs.test.ts",
         "src/ts/preset/adapter/types.ts",
         "src/lang/help.ko.ts",
-        "src/lang/help.en.ts"
+        "src/lang/help.en.ts",
+        "src/ts/risubard/wikiPromptPreset.ts",
+        "src/ts/risubard/wikiPromptPreset.test.ts",
+        "src/ts/risubard/risuBardSettings.ts",
+        "src/ts/risubard/risuBardSettings.test.ts",
+        "src/ts/setting/risuBardCommonSettingsData.ts",
+        "src/lib/Others/RisuBardCurrentChatSettings.svelte",
+        "src/lib/Setting/RisuBardModeSettings.test.ts"
       ],
       "files": [
         "src/ts/process/request/googleAndroidRequest.test.ts",
@@ -4492,11 +4563,12 @@
         "patchnote/0.9.98.md",
         "patchnote/0.9.99.md",
         "patchnote/0.9.100.md",
-        "patchnote/0.9.101.md"
+        "patchnote/0.9.101.md",
+        "patchnote/0.9.102.md"
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "72b87a0c3ff2d4fd5cd183a1a2dbcb0692c92d08c4c33d3b2be137fd128fbeb7"
+        "sha256": "698a93f0a86c8eacac7473f09b4276f907a67604820b9b59bb75063d92c30e29"
       }
     },
     {
@@ -4718,7 +4790,7 @@
     },
     {
       "path": "docs/fork-modules/README.md",
-      "sha256": "029562a72cfa55c18ea37f3b3df4706c8a84181ba8a7a289d243bb687c312801"
+      "sha256": "87fb98c26b8125af5dc624259f98ccd1a1b1a59598498391de5b27c37b7318c4"
     },
     {
       "path": "docs/fork-modules/CROSSOVER-20261024.md",
@@ -4726,7 +4798,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "a3b008bc239eaba0df23e189da08f97238d1364c4301e95f0f2d8b14fc44d02c"
+      "sha256": "250a544e12356e2ccdd07656d2e6d6580c98ac077fc7b00e74ec43651beecdd8"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -4781,8 +4853,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "72b87a0c3ff2d4fd5cd183a1a2dbcb0692c92d08c4c33d3b2be137fd128fbeb7",
-          "sha256": "b5c91f0b2e872021834b4dbe8d329b8ebd42b4cd9cb76812a621ff8639304106"
+          "sourceSha256": "698a93f0a86c8eacac7473f09b4276f907a67604820b9b59bb75063d92c30e29",
+          "sha256": "ca7ad55b5de4e27aedbf09be39fa67d97582467e7fd3f13d19b4196f098d21c3"
         },
         {
           "module": "host-bridges",
@@ -4865,8 +4937,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "72b87a0c3ff2d4fd5cd183a1a2dbcb0692c92d08c4c33d3b2be137fd128fbeb7",
-          "sha256": "bc3e93ff3b1ff6c2eb1188d97dd652375713ee1c88fbbed1d5e0f8dc605c1140"
+          "sourceSha256": "698a93f0a86c8eacac7473f09b4276f907a67604820b9b59bb75063d92c30e29",
+          "sha256": "d8d5f0084271b688acaf8c04e302f539b57a2e917806c8f081d284abcbcdd74f"
         },
         {
           "module": "lore-lua",
@@ -4969,6 +5041,175 @@
         "server/node/risubard-markdown-wiki.ts": [
           "setDocumentGrade",
           "workspace.snapshotsDirectory"
+        ]
+      }
+    },
+    {
+      "tag": "v0.9.86",
+      "targetSha": "5c25a31f31d570c455169d668b6b3bf954e4d026",
+      "patches": [
+        {
+          "module": "transfer-integration",
+          "path": "docs/fork-modules/compat/v0.9.86/transfer-integration.patch",
+          "sourceSha256": "f629bd265e9e60abacd8ca8fe9902036e3d45eef9f0fb6a1d195f930663566df",
+          "sha256": "79e9dc997ebe537d9f6be17cd70eb27c93d2cf6871795c1e9e4d3002a8bb915c"
+        },
+        {
+          "module": "mobile-ui",
+          "path": "docs/fork-modules/compat/v0.9.84/mobile-ui.patch",
+          "sourceSha256": "80772f2e16f9c65627df8db974ea53a70047976732def7a36217d22bd03257cc",
+          "sha256": "115b9eadc68e9f8fbb7ae46aae6c41fa930ee4c34c326d0d98c0cd709eab67a9"
+        },
+        {
+          "module": "model-compat",
+          "path": "docs/fork-modules/compat/v0.9.86/model-compat.patch",
+          "sourceSha256": "ffa0eda275b22be12eed0c4f6b733187dc36a1fcd7b0000ad937ceaa9c8698b8",
+          "sha256": "9215cc5dd757921500d3fc3f6b65e399c36eb2370c1b57c362746224a7079ac7"
+        },
+        {
+          "module": "storage-recovery",
+          "path": "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
+          "sourceSha256": "ba8da34b6ba00080782b1800285fe96f4b5fff84ab6900836082d7a5fe567d1e",
+          "targetHosts": [
+            {
+              "path": "server/node/risubard-story-order.test.ts",
+              "sha256": "76395b6770051a5801bcb8314fb619086c025ec93237915955e2cabed3f894e5"
+            },
+            {
+              "path": "server/node/trash-cleanup.cjs",
+              "sha256": "c469ae78092d24e1629f2b85c1eb1e3e4a091c6818b1d5d99e48fdcf6c96246e"
+            },
+            {
+              "path": "server/node/trash-cleanup.test.ts",
+              "sha256": "5ec486474cca47299b2749076ad99aba2e09d98c128868d6bb87a9f5955f2cf1"
+            }
+          ],
+          "sha256": "49326d79fe00cd53fbb49f5764aa729792c4d9d8905f03bcfc46597ec0aed350"
+        },
+        {
+          "module": "distribution",
+          "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
+          "sourceSha256": "698a93f0a86c8eacac7473f09b4276f907a67604820b9b59bb75063d92c30e29",
+          "sha256": "ec2710099ec538ba7a2b554cbf6c453512863119d832cfaaba28f4dca163f5a5"
+        },
+        {
+          "module": "lore-lua",
+          "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
+          "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742",
+          "sha256": "710891d087ca30da59cf53fe703f75311a94db84383cb56a24f9863398f44be8"
+        },
+        {
+          "module": "host-bridges",
+          "path": "docs/fork-modules/compat/v0.9.86/host-bridges.patch",
+          "sourceSha256": "af27115de17ea3daf37f9bd07d26f324dd799852d0b2c4a510b73176472e0480",
+          "sha256": "d9066a9bded1aa5a3fa81ed1e680627baaf907a1292f2e0fd042855853d61b68"
+        },
+        {
+          "module": "file-export",
+          "path": "docs/fork-modules/compat/v0.9.84/file-export.patch",
+          "sourceSha256": "353f0ca7403d9bc5e522753ed3dd9097ef339f9a66c9988717bb16082aa3bc5b",
+          "sha256": "10f5f0e4efccc871851601cbaba09a66f9608dd9db82079c97990775579ac2f3"
+        },
+        {
+          "module": "bardwiki-cache-prefix",
+          "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
+          "sourceSha256": "76619cabf56c0b01e6761d5236dddc92f8df650b628c71274f1d8e370d938b9e",
+          "sha256": "469d40af854285d8b34574ef3572cfbd26658d156bf9fc838438a88da1632dcc"
+        }
+      ],
+      "payloadTargets": {
+        "patchnote/0.9.72.md": "docs/fork-modules/history/patchnote/0.9.72.md",
+        "patchnote/0.9.73.md": "docs/fork-modules/history/patchnote/0.9.73.md",
+        "patchnote/0.9.74.md": "docs/fork-modules/history/patchnote/0.9.74.md",
+        "patchnote/0.9.75.md": "docs/fork-modules/history/patchnote/0.9.75.md",
+        "patchnote/0.9.76.md": "docs/fork-modules/history/patchnote/0.9.76.md",
+        "patchnote/0.9.77.md": "docs/fork-modules/history/patchnote/0.9.77.md",
+        "patchnote/0.9.78.md": "docs/fork-modules/history/patchnote/0.9.78.md",
+        "patchnote/0.9.79.md": "docs/fork-modules/history/patchnote/0.9.79.md",
+        "patchnote/0.9.80.md": "docs/fork-modules/history/patchnote/0.9.80.md",
+        "patchnote/0.9.81.md": "docs/fork-modules/history/patchnote/0.9.81.md",
+        "patchnote/0.9.82.md": "docs/fork-modules/history/patchnote/0.9.82.md",
+        "patchnote/0.9.83.md": "docs/fork-modules/history/patchnote/0.9.83.md",
+        "patchnote/0.9.84.md": "docs/fork-modules/history/patchnote/0.9.84.md",
+        "patchnote/0.9.85.md": "docs/fork-modules/history/patchnote/0.9.85.md",
+        "patchnote/0.9.86.md": "docs/fork-modules/history/patchnote/0.9.86.md",
+        "src/ts/viewportHeight.test.ts": "src/ts/viewportHeight.fork.test.ts"
+      },
+      "probes": {
+        "server/node/server.cjs": [
+          "allowDuringAccountImport",
+          "const risuAccountImport =",
+          "keepChatBodiesAheadOfDisk",
+          "liveFilesAdoption.reviewMerge",
+          "err?.type === 'entity.too.large'",
+          "registerAssetStoreRoutes",
+          "removeAssetStoreKeys",
+          "assetStoreDirectory: preparedKv.assetStoreDirectory",
+          "const { cleanupTrash, retentionDays } = require('./trash-cleanup.cjs');",
+          "cleanupTrash(savePath, { days: retentionDays(), logger })"
+        ],
+        "src/ts/globalApi.svelte.ts": [
+          "trackChatForSave",
+          "trackCharacterForSaveImpl",
+          "export function trackCharacterForSave"
+        ],
+        "src/ts/storage/nodeStorage.ts": [
+          "risu-session-deactivated",
+          "assetStoreTransition"
+        ],
+        "src/lib/ChatScreens/Chat.svelte": [
+          "onsubmitcapture={handleFormTriggerWithin}",
+          "mobileMessageActionsInline"
+        ],
+        "src/ts/viewportHeight.ts": [
+          "'focusout'",
+          "'resize'",
+          "isEditable"
+        ],
+        "src/ts/process/lorebook.svelte.ts": [
+          "regex.lastIndex = 0"
+        ],
+        "src/lib/ChatScreens/DefaultChatScreen.svelte": [
+          "runInputAssistant",
+          "retryNarrativeBacklog",
+          "skipNarrativeBacklogTurn"
+        ],
+        "server/node/file-kv.cjs": [
+          "convertToAssetStore",
+          "revertAssetStore",
+          "assetStore.pathOf"
+        ],
+        "src/ts/storage/database.svelte.ts": [
+          "risubardWikiPending",
+          "updateBase?:string",
+          "mobileMessageActionsInline",
+          "data.risuBardSourceRerank = data.risuBardSourceRerank === true"
+        ],
+        "src/ts/process/index.svelte.ts": [
+          "selectAnalysisLoreReference",
+          "enqueueNarrativeConfirmation",
+          "inquirySettings.risuBardSourceRerank"
+        ],
+        "server/node/risubard-memory-runtime.cjs": [
+          "setWikiDocumentGrade"
+        ],
+        "src/App.svelte": [
+          "CharacterUpdateDialog"
+        ],
+        "server/node/risubard-markdown-wiki.ts": [
+          "setDocumentGrade",
+          "workspace.snapshotsDirectory"
+        ],
+        "src/lang/help.en.ts": [
+          "risuBardSourceRerank:"
+        ],
+        "src/ts/risubard/wikiPromptPreset.ts": [
+          "export const OFFICIAL_WIKI_RELEASE = '2026-10-29'",
+          "function createV9WikiPromptPreset"
+        ],
+        "src/ts/risubard/risuBardSettings.ts": [
+          "const RISUBARD_FACT_DENSE_STYLE",
+          "risuBardSourceRerank: value('risuBardSourceRerank') === true"
         ]
       }
     }

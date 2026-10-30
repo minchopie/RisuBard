@@ -5,6 +5,7 @@ export type RequestPurpose =
     | 'bardwiki-analysis'
     | 'bardwiki-bard-chan-rerank'
     | 'bardwiki-canonical-update'
+    | 'bardwiki-source-rerank'
     | 'bardwiki-admin'
     | 'persona-builder'
     | 'lore-builder'
@@ -19,6 +20,7 @@ export const requestPurposeLabels: Record<RequestPurpose, string> = {
     'bardwiki-analysis': 'BardWiki 의미 분석',
     'bardwiki-bard-chan-rerank': '바드쨩 검색 재정렬',
     'bardwiki-canonical-update': 'BardWiki 정본 갱신',
+    'bardwiki-source-rerank': 'BardWiki 과거 원문 재순위',
     'bardwiki-admin': 'BardWiki 관리자 명령',
     'persona-builder': '페르소나 빌더',
     'lore-builder': '로어 빌더',

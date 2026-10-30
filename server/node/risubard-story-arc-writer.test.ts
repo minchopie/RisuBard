@@ -66,6 +66,19 @@ describe('story arc writer', () => {
         })).toBeUndefined()
     })
 
+    test('a batch that saves several events advances as many whole checkpoints as it added', () => {
+        const arc = { id: 'other.arc', type: 'other', title: 'Story Arc Map', sourceMessageIds: [],
+            content: stampStoryArcCheckpoint('## Story Arc Map\n\n[[사건 1]]', 'event.1') }
+        const saved = [2, 3, 4, 5].map(event)
+        const plan = (savedEvents: ReturnType<typeof event>[], checkpointSize: number) => buildStoryArcUpdatePlan({
+            documents: [event(1), arc], savedEvents, writingLanguage: 'en', settings: { checkpointSize },
+        })
+        expect(plan(saved, 1)?.events.map((item) => item.id)).toEqual(['event.2', 'event.3', 'event.4', 'event.5'])
+        expect(plan(saved, 1)?.checkpointEventId).toBe('event.5')
+        expect(plan(saved, 3)?.events.map((item) => item.id)).toEqual(['event.2', 'event.3', 'event.4'])
+        expect(plan(saved.slice(0, 1), 1)?.events.map((item) => item.id)).toEqual(['event.2'])
+    })
+
     test('groups events by source turns and does not treat a late repair as a new checkpoint', () => {
         const sourceMessageOrder = Array.from({ length: 8 }, (_, index) => ({
             chatId: `assistant-${index + 1}`, role: 'char',

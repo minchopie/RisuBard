@@ -33,6 +33,7 @@ export const risuBardCurrentChatSettingKeys = [
     'risuBardInquiryMaximumTokenBudget',
     'risuBardInquiryTimeoutMs',
     'risuBardHistoricalSourceMatchLimit',
+    'risuBardSourceRerank',
     'risuBardAnalysisTokenLimit',
     'risuBardAdditionalSearchLimit',
     'risuBardCanonicalTargetLimit',
@@ -129,6 +130,8 @@ function recommendation(
             return '토큰에는 영향이 없으므로 보통 최대값인 10,000ms를 그대로 두고, 답변 시작이 너무 늦을 때만 줄이세요.'
         case 'risuBardHistoricalSourceMatchLimit':
             return `현재 규모에는 ${longChat ? '8~12' : mediumChat ? '6~8' : '4~6'}개를 권장합니다. 긴 메시지가 많아 토큰이 빠듯하면 먼저 이 수를 줄이세요.`
+        case 'risuBardSourceRerank':
+            return '과거 장면의 수량, 이름, 대사, 순서를 자주 틀리면 켜기를 권장합니다. 답변마다 작업 모델 요청이 한 번 늘고, 입력은 원문 후보 16개(약 1만~2만 토큰)입니다.'
         case 'risuBardAnalysisTokenLimit':
             return `현재 규모에는 ${longChat || longMessage ? '8,192' : '6,144'}를 권장합니다. 짧은 챗은 4,096~6,144, 100턴 이상 또는 평균 1,000자 이상은 8,192부터 시작하세요.`
         case 'risuBardAdditionalSearchLimit':
@@ -162,7 +165,7 @@ function recommendation(
         case 'risuBardAnalysisLoreExcludeWords':
             return '기본값은 이미지 에셋 문법(<img, {{asset::, {{img::, {{image::)입니다. 봇마다 에셋 항목에 공통으로 들어가는 표시가 있다면 그 단어를 한 줄에 하나씩 더하세요.'
         case 'risuBardCanonicalWritingStyle':
-            return '100턴 이상이거나 메시지가 길수록 ‘간결’을 권장합니다. 뉘앙스를 더 보존하려면 ‘표준’, 토큰을 극도로 줄이려면 ‘초간결’을 쓰세요.'
+            return '‘기본’을 권장합니다. 꾸밈과 줄거리 서술은 줄이고 숫자, 이름, 물건, 핵심 대사처럼 나중에 물어볼 만한 사실을 남깁니다. 직접 규칙을 쓰려면 ‘사용자 지정’을 고르세요.'
         case 'risuBardCanonicalCustomStyle':
             return '1~3개의 짧고 구체적인 규칙을 권장합니다. 긴 지시문은 모든 정본 갱신에 반복되어 토큰을 늘립니다.'
         case 'risuBardWikiWritingLanguage':
@@ -182,6 +185,7 @@ const roles: Record<RisuBardChatSettingHelpKey, string> = {
     risuBardInquiryMaximumTokenBudget: '모든 위키 검색 결과를 합친 절대 토큰 상한입니다.',
     risuBardInquiryTimeoutMs: '위키 조회를 기다리는 최대 시간입니다. 시간이 지나면 가능한 결과로 계속 진행합니다.',
     risuBardHistoricalSourceMatchLimit: '분석 때 다시 확인할 과거 원문 후보의 최대 개수입니다.',
+    risuBardSourceRerank: '켜면 답변 전에 작업 모델이 과거 원문 후보를 질문에 비추어 읽고, 묻는 사실을 담은 원문을 골라 위키 문서보다 먼저 넣습니다. 고를 원문이 없거나 요청이 실패하면 기존 검색 결과를 그대로 씁니다.',
     risuBardAnalysisTokenLimit: '위키를 갱신하는 분석 단계가 사용할 수 있는 최대 출력 토큰입니다. 정본 절에는 4,000자 고정 상한이 없습니다. 공급자가 출력 한도 종료를 보고하거나 응답 구조가 불완전하면 기존 문서에 저장하지 않고 재시도합니다.',
     risuBardAdditionalSearchLimit: '첫 분석에서 근거가 부족할 때 위키를 다시 찾을 수 있는 최대 횟수입니다.',
     risuBardCanonicalTargetLimit: '한 번의 분석에서 새로 만들거나 고칠 위키 문서(정본)의 최대 개수입니다.',
@@ -192,7 +196,7 @@ const roles: Record<RisuBardChatSettingHelpKey, string> = {
     risuBardAnalysisLoreTokenLimit: '위키 분석이 참고할 로어북 본문의 최대 토큰입니다. 분석한 턴까지의 채팅으로 켜지는 로어북 항목을 조건문과 변수까지 평가해 우선순위 순으로 넣고, 한도를 넘는 항목은 통째로 뺍니다. 0이면 로어북을 넣지 않습니다. 로어북은 인물과 설정을 확인하는 참고 자료로만 쓰고, 채팅에 나오지 않은 비밀은 위키에 적지 않습니다.',
     risuBardAnalysisLoreIncludeAlwaysActive: '켜면 항상 켜진 로어북 항목도 위키 분석에 넣습니다. 끄면 키워드로 켜진 항목만 넣습니다.',
     risuBardAnalysisLoreExcludeWords: '한 줄에 하나씩 적은 단어가 로어북 항목의 제목이나 본문 원문에 들어 있으면 그 항목을 위키 분석에 넣지 않습니다. 대소문자는 구분하지 않습니다. 모두 지우면 아무것도 빼지 않습니다.',
-    risuBardCanonicalWritingStyle: '정본 위키 문서를 얼마나 압축해서 작성할지 정합니다.',
+    risuBardCanonicalWritingStyle: '사건 요약과 정본 문서를 어떤 문체로 쓸지 정합니다.',
     risuBardCanonicalCustomStyle: '사용자 지정 정본 문체일 때 반복 적용할 짧은 작성 규칙입니다.',
     risuBardWikiWritingLanguage: 'BardWiki 정본 문서가 사용할 언어를 정합니다.',
 }

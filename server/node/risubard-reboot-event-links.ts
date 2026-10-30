@@ -13,7 +13,7 @@ export function repairRebootEventLinks(
     events: readonly EventLinkDocument[],
     documents: readonly EventLinkDocument[],
 ): string {
-    if (events.length !== 2 || new Set(events.map((event) => event.id)).size !== 2) {
+    if (events.length < 2 || new Set(events.map((event) => event.id)).size !== events.length) {
         return content
     }
     const owners = (title: string) => new Set(documents.filter((document) =>
