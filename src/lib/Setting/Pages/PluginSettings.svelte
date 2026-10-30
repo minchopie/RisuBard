@@ -2,7 +2,7 @@
     import { PlusIcon, TrashIcon, LinkIcon, CodeXmlIcon, PowerIcon, PowerOffIcon, ShieldIcon, RefreshCwIcon, DownloadIcon, SaveIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import SettingPage from "src/lib/UI/GUI/SettingPage.svelte";
-    import { alertConfirm, alertMd, alertSelect, notifyError, notifySuccess } from "src/ts/alert";
+    import { alertError, alertConfirm, alertMd, alertSelect, notifyError, notifySuccess } from "src/ts/alert";
     import { TriangleAlert } from '@lucide/svelte';
 
     import { DBState, hotReloading } from "src/ts/stores.svelte";
@@ -197,12 +197,17 @@
                 ]))
                 if (v === 0) await importPluginsToSelectedFolder(hotReloadPluginFiles)
                 if (v === 1) {
-                    const a = document.createElement('a')
-                    a.href = '/plugin_start.7z'
-                    a.download = 'plugin_starter.7z'
-                    document.body.appendChild(a)
-                    a.click()
-                    a.remove()
+                    if (!(globalThis as any).RisuPlay) {
+                        const a = document.createElement('a')
+                        a.href = '/plugin_start.7z'; a.download = 'plugin_starter.7z'
+                        document.body.appendChild(a); a.click(); a.remove()
+                        return
+                    }
+                    try {
+                        const response = await fetch('/plugin_start.7z')
+                        if (!response.ok) throw new Error(`파일 다운로드 실패 (${response.status})`)
+                        await downloadFile('plugin_starter.7z', await response.arrayBuffer()).catch(error => { if (!(globalThis as any).RisuPlay) throw error })
+                    } catch (error) { alertError(String(error)) }
                 }
             }}><CodeXmlIcon /></ShButton>
         </div>

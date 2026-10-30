@@ -26,6 +26,11 @@ import { getModuleRegexScripts } from "../process/modules"
 import { getNodetextToSentence, sleep } from "../util"
 import { processScriptFull } from "../process/scripts"
 import { playNotificationSound } from '../notificationSound'
+import { PrivateMobileGoogleTranslateGate, shouldBatchPrivateMobileGoogleTranslation } from './privateMobileGoogleTranslate'
+
+const mobileGoogleGate = new PrivateMobileGoogleTranslateGate()
+const isBardAndroid = () => navigator.userAgent.includes('RisuBardAndroid/')
+let googleFallbackNoticeAt = -Infinity
 
 let cache={
     origin: [''],
@@ -471,8 +476,9 @@ export async function translate(text:string, reverse:boolean) {
 }
 
 export async function runTranslator(text:string, reverse:boolean, from:string,target:string, exarg?:{translatorNote?:string}) {
+    let transientFallback = false
     const arg = {
-
+        onFallback: () => { transientFallback = true },
         from: reverse ? from : target,
 
         to: reverse ? target : from,
@@ -523,18 +529,20 @@ export async function runTranslator(text:string, reverse:boolean, from:string,ta
         }
     }
 
+    if (transientFallback) return text
     const result = fullResult.join("\n").trim()
 
-    cache.origin.push(reverse ? result : text)
-        
-    cache.trans.push(reverse ? text : result)
+    if (!transientFallback) {
+        cache.origin.push(reverse ? result : text)
+        cache.trans.push(reverse ? text : result)
+    }
 
 
     return result
 
 }
 
-async function translateMain(text:string, arg:{from:string, to:string, host:string, translatorNote?:string}){
+async function translateMain(text:string, arg:{from:string, to:string, host:string, translatorNote?:string, onFallback?:()=>void}){
     let db = getDatabase()
     if(db.translatorType === 'llm'){
         const tr = arg.to || 'en'
@@ -636,15 +644,21 @@ async function translateMain(text:string, arg:{from:string, to:string, host:stri
 
 
 
-    const f = await fetch(url, {
-
-        method: "GET",
-
-    })
-
-    const res = await f.json()
-
-    
+    const mobileGoogle = isBardAndroid() && db.translatorType === 'google'
+    const fallback = () => {
+        arg.onFallback?.()
+        const now = Date.now()
+        if (now - googleFallbackNoticeAt >= 30_000) {
+            googleFallbackNoticeAt = now
+            notifyError('Google 번역을 잠시 사용할 수 없어 원문을 표시합니다. 잠시 후 번역 재시도를 눌러 주세요.')
+        }
+        return text
+    }
+    const f = mobileGoogle ? await mobileGoogleGate.request(url) : await fetch(url, { method: 'GET' })
+    if (!f || (mobileGoogle && !f.ok)) return fallback()
+    let res: any
+    try { res = await f.json() }
+    catch (error) { if (mobileGoogle) return fallback(); throw error }
 
     if(typeof(res) === 'string'){
 
@@ -652,8 +666,8 @@ async function translateMain(text:string, arg:{from:string, to:string, host:stri
 
     }
 
-    if((!res[0]) || res[0].length === 0){
-        return text
+    if ((mobileGoogle && !Array.isArray(res?.[0])) || !res[0] || res[0].length === 0) {
+        return mobileGoogle ? fallback() : text
     }
 
     const result = (res[0].map((s) => s[0]).filter(Boolean).join('') as string).replace(/\* ([^*]+)\*/g, '*$1*').replace(/\*([^*]+) \*/g, '*$1*');
@@ -729,6 +743,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
     console.log(html)
 
     let promises: Promise<void>[] = [];
+    let translationError: unknown;
     let translationChunks: {
         chunks: string[],
         resolvers: ((text:string) => void)[]
@@ -759,24 +774,24 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
             return
         }
 
-        const translated = await translate(text, reverse)
-
-        const split = translated.split('■')
-
-        console.log(split.length, currentChunk.chunks.length)
-
-        if(split.length !== currentChunk.chunks.length){
-            //try translating one by one
-            for(let i = 0; i < currentChunk.chunks.length; i++){
-                currentChunk.resolvers[i](
-                    await translate(currentChunk.chunks[i]
-                , reverse))
+        try {
+            const translated = await translate(text, reverse)
+            if (translated === text) {
+                currentChunk.chunks.forEach((original, i) => currentChunk.resolvers[i](original))
+                return
             }
-        }
-        
-        for(let i = 0; i < split.length; i++){
-            console.log(split[i])
-            currentChunk.resolvers[i](split[i])
+            const split = translated.split('■')
+            if(split.length !== currentChunk.chunks.length){
+                for(let i = 0; i < currentChunk.chunks.length; i++){
+                    currentChunk.resolvers[i](await translate(currentChunk.chunks[i], reverse))
+                }
+                return
+            }
+            split.forEach((value, i) => currentChunk.resolvers[i](value))
+        } catch (error) {
+            // Settle every queued node before reporting a failed batch to the caller.
+            translationError ??= error
+            currentChunk.chunks.forEach((original, i) => currentChunk.resolvers[i](original))
         }
 
 
@@ -784,6 +799,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
 
     async function translateNodeText(node:Node, reprocessDisplayScript:boolean = false) {
         if(node.textContent.trim().length !== 0){
+            let translated: string;
             if(needSuperChunkedTranslate()){
                 const prm = new Promise<string>((resolve) => {
                     translateTranslationChunks(false, node.textContent.length)
@@ -791,19 +807,12 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
                     translationChunks[translationChunks.length-1].chunks.push(node.textContent)
                 })
     
-                node.textContent = await prm
-                return
+                translated = await prm
+            } else {
+                const translateChunks = (node.textContent || '').split(/\n\n+/g);
+                const translatedChunks = await Promise.all(translateChunks.map(chunk => translate(chunk, reverse)));
+                translated = translatedChunks.join("\n\n");
             }
-
-            const translateChunks = (node.textContent || '').split(/\n\n+/g);
-            let translatedChunksPromises: Promise<string>[] = [];
-            for (const chunk of translateChunks) {
-                const translatedPromise = translate(chunk, reverse);
-                translatedChunksPromises.push(translatedPromise);
-            }
-
-            const translatedChunks = await Promise.all(translatedChunksPromises);
-            let translated = translatedChunks.join("\n\n");
             if (!reprocessDisplayScript) {
                 node.textContent = translated;
                 return;
@@ -842,6 +851,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
                     return
                 }
                 if(promises.length > 10){
+                    await translateTranslationChunks(true, 0)
                     await Promise.all(promises)
                     promises = []
                 }
@@ -875,13 +885,15 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
                             const newNode = document.createElement("span");
                             newNode.textContent = sentence;
                             node.appendChild(newNode);
-                            await translateNodeText(newNode, true);
+                            if (needSuperChunkedTranslate()) promises.push(translateNodeText(newNode, true));
+                            else await translateNodeText(newNode, true);
                             node.appendChild(document.createElement("br"));
                         }
                     } else {
                         // Single sentence
                         node.innerHTML = sentences[0];
-                        await translateNodeText(node, true);
+                        if (needSuperChunkedTranslate()) promises.push(translateNodeText(node, true));
+                        else await translateNodeText(node, true);
                     }
                     return;
                 }
@@ -903,6 +915,7 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
     await translateTranslationChunks(true, 0)
 
     await Promise.all(promises)
+    if (translationError) throw translationError
     // Serialize the DOM back to HTML
     const serializer = new XMLSerializer();
     let translatedHTML = serializer.serializeToString(dom);
@@ -918,7 +931,8 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
 }
 
 function needSuperChunkedTranslate(){
-    return getDatabase().translatorType === 'deeplX'
+    const translatorType = getDatabase().translatorType
+    return translatorType === 'deeplX' || shouldBatchPrivateMobileGoogleTranslation(isBardAndroid(), translatorType)
 }
 
 async function translateLLM(text:string, arg:{to:string, from:string, regenerate?:boolean,translatorNote?:string, onCacheState?:(cached:boolean) => void}):Promise<string>{

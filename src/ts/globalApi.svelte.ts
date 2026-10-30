@@ -1,3 +1,4 @@
+import { checkCharacterOrder } from '../../shared/play-set/characterOrder'
 import { changeFullscreen, checkNullish, sleep } from "./util"
 import { v4 as uuidv4, v4 } from 'uuid';
 import { tick } from "svelte";
@@ -7,7 +8,7 @@ import { createGenerationSaveTracker } from './storage/generationSaveTracking';
 import streamSaver from 'streamsaver';
 import { setDatabase, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadChatBindings, syncActiveBotPresetFromMirror, syncActiveThemePresetFromMirror } from "./storage/database.svelte";
 import { checkRisuUpdate } from "./update";
-import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, loadingOverlayStore, chatDeselected } from "./stores.svelte";
+import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, loadingOverlayStore, chatDeselected, alertStore } from "./stores.svelte";
 import { loadPlugins } from "./plugins/plugins.svelte";
 import { alertConfirm, alertConfirmMulti, alertError, alertMd, alertSelect, alertTOS, waitAlert, notifySuccess, notifyError, notifyInfo } from "./alert";
 import { hasher } from "./parser/parser.svelte";
@@ -57,6 +58,15 @@ export async function downloadFile(name: string, dat: Uint8Array | ArrayBuffer |
         dat = Buffer.from(dat, 'utf-8')
     }
     const data = new Uint8Array(dat)
+    if ((globalThis as any).RisuPlay) {
+        try {
+            const { nativeDownloadStream } = await import('./transfer-sync/nativeDownload')
+            const writer = (await nativeDownloadStream(name)).getWriter()
+            await writer.write(data)
+            await writer.close()
+        } catch (error) { notifyError(String(error)); throw error }
+        return
+    }
     const downloadURL = (data: string, fileName: string) => {
         const a = document.createElement('a')
         a.href = data
@@ -266,11 +276,14 @@ export let requiresFullEncoderReload = $state({
 })
 
 let requestImmediateSaveImpl: ((options?: {
+    chats?: [string, string][]
+    characters?: string[]
     forceFullWrite?: boolean
     flushServer?: boolean | 'canonical' | 'canonical-background'
     // Waits for the flush without the write timeout; abort to stop waiting.
     flushSignal?: AbortSignal
     rejectOnFailure?: boolean
+    syncOwned?: boolean
 }) => Promise<void> | void) = () => {}
 let patchSyncBaseline: Database | null = null
 
@@ -375,14 +388,25 @@ export function previewPersistFailureToast() {
     })
 }
 
+import { syncSaveHold, canonicalSaveSettled } from './transferState'
 export function requestImmediateSave(options?: {
+    chats?: [string, string][]
+    characters?: string[]
     forceFullWrite?: boolean
+    /** The NAS sync apply's own save: allowed while syncSaveHold blocks every other save. */
+    syncOwned?: boolean
     flushServer?: boolean | 'canonical' | 'canonical-background'
     // Waits for the flush without the write timeout; abort to stop waiting.
     flushSignal?: AbortSignal
     rejectOnFailure?: boolean
 }) {
     return requestImmediateSaveImpl(options)
+}
+
+let trackedChangesImpl: (() => toSaveType | null) = () => null
+/** Read-only copy of the changes the save runtime has tracked but not yet persisted (null before the runtime starts). */
+export function pendingTrackedChanges(): toSaveType | null {
+    return trackedChangesImpl()
 }
 
 export function setPatchSyncBaseline(data: Database | null) {
@@ -566,6 +590,7 @@ export async function saveDb() {
     // After an unsuccessful attempt, rebuild a full snapshot instead of
     // treating an empty retry diff as proof that the server has the changes.
     let forceFullWriteOnRetry = false
+    let saveFailureNotified = false
     // Immediate saves diff only tracked characters; the next background save
     // runs the full untracked-character sweep so missed edits still persist.
     let untrackedSweepPending = false
@@ -827,16 +852,20 @@ export async function saveDb() {
                 saveTimeout = null;
             }
             changed = true;
-            void triggerSave({
+            const pending = triggerSave({
                 skipBroadcast: true,
             })
             void flushServerDbKeepalive()
+            if (navigator.userAgent.includes('RisuBardAndroid/')) {
+                void pending.then(flushServerDbKeepalive, () => {})
+            }
         }
         const handleVisibilityFlush = () => {
             if (document.visibilityState === 'hidden') flushImmediate();
         }
         document.addEventListener('visibilitychange', handleVisibilityFlush);
         window.addEventListener('pagehide', flushImmediate);
+        if (navigator.userAgent.includes('RisuBardAndroid/')) window.addEventListener('risubard-native-background', flushImmediate);
 
         $effect(() => {
             for (const key in DBState.db) {
@@ -847,8 +876,11 @@ export async function saveDb() {
                     deepTouch(DBState.db[key])
                 }
             }
-            const botPresetMirrored = syncActiveBotPresetFromMirror()
-            const themePresetMirrored = syncActiveThemePresetFromMirror()
+            // Inside a NAS sync apply (hold on) the planned preset entries must reach the disk verbatim: the server verifies the saved
+            // bytes against the plan, and the mirrors would rewrite the active entries from root values. Ordinary saves keep mirroring.
+            const mirroring = !get(syncSaveHold)
+            const botPresetMirrored = mirroring && syncActiveBotPresetFromMirror()
+            const themePresetMirrored = mirroring && syncActiveThemePresetFromMirror()
             if (botPresetMirrored) changeTracker.botPreset = true
             if (!didInitRootEffect) {
                 didInitRootEffect = true
@@ -986,6 +1018,7 @@ export async function saveDb() {
             unsubscribeSelectedCharacter()
             document.removeEventListener('visibilitychange', handleVisibilityFlush)
             window.removeEventListener('pagehide', flushImmediate)
+            window.removeEventListener('risubard-native-background', flushImmediate)
         }
     })
     saveRuntime.addCleanup(disposeSaveEffects)
@@ -1505,12 +1538,18 @@ export async function saveDb() {
         skipBroadcast?: boolean
         rejectOnFailure?: boolean
         refresh?: boolean
+        syncOwned?: boolean
     }) {
         if (!saveRuntime.isActive()) return
+        // Common save entry (autosave loop, immediate saves, visibility/unload flushes): while a NAS sync apply is unresolved,
+        // only that transaction's own save may persist; everything else waits for recovery to settle the outcome.
+        if (get(syncSaveHold) && !options?.syncOwned) return
         while (saveInFlight) {
             try { await saveInFlight } catch {}
         }
         if (!saveRuntime.isActive()) return
+        // Re-check after waiting: a save queued before the hold must not resume with its stale admission.
+        if (get(syncSaveHold) && !options?.syncOwned) return
 
         if (gotChannel) {
             if (options?.rejectOnFailure) throw new Error(language.sessionSavePausedTitle)
@@ -1546,8 +1585,14 @@ export async function saveDb() {
                     changed = true
                 }
                 if (result === 'saved') {
+                    // Android can kill the embedded server with the UI; finish disk persistence before acknowledging a save.
+                    if (supportsPatchSync && navigator.userAgent.includes('RisuBardAndroid/')) await flushServerDbNow(false, true)
                     forceFullWriteOnRetry = false
                     savetrys = 0
+                    saveFailureNotified = false
+                    // A user save settled: the NAS sync coordinator (if enabled) snapshots after its debounce. The sync apply's own
+                    // save is not a trigger, so a received apply never echoes into a snapshot cycle.
+                    if (!options?.syncOwned) canonicalSaveSettled.set(Date.now())
                     // Node clients use the server lock. A failed/passive save
                     // must not kick another tab through a second authority.
                     if (!supportsPatchSync && channel && !options?.skipBroadcast) {
@@ -1583,19 +1628,18 @@ export async function saveDb() {
                 forceFullWriteOnRetry ||= supportsPatchSync
                 if (toSave) requeueTrackedChanges(toSave)
                 savetrys += 1
-                if (options?.rejectOnFailure) {
-                    changed = true
-                    throw error
-                }
-                if (savetrys > 4) {
-                    alertError(error)
-                    savetrys = 0
-                }
-                else {
+                changed = true
+                if (options?.rejectOnFailure) throw error
+                if (savetrys > 4 && !saveFailureNotified && !['wait', 'wait2', 'progress'].includes(get(alertStore).type)) {
+                    saveFailureNotified = true
+                    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : null
+                    if (cause) console.error(error, cause)
+                    else console.error(error)
+                    notifyError('아직 저장하지 못했습니다. 편집 내용은 앱에 남아 있으며 자동으로 재시도합니다.', { source: 'save-retry' })
+                } else if (savetrys <= 4) {
                     console.error(error)
-                    await sleep(Math.min(500 * savetrys, 3000))
-                    changed = true
                 }
+                await sleep(Math.min(500 * savetrys, 3000))
             } finally {
                 saving.state = false
                 saveInFlight = null
@@ -1610,12 +1654,22 @@ export async function saveDb() {
             void sessionHandoff.show()
             throw new Error(language.sessionSavePausedTitle)
         }
+        if (get(syncSaveHold) && !options?.syncOwned) throw new Error('NAS 동기화 적용이 끝날 때까지 저장이 잠겨 있어요.')
+        for (const id of options?.characters ?? []) {
+            if (!changeTracker.character.includes(id)) changeTracker.character.push(id)
+        }
+        // Imports can append chats without selecting their character in the UI.
+        for (const [id, chatId] of options?.chats ?? []) {
+            if (!changeTracker.character.includes(id)) changeTracker.character.push(id)
+            if (!changeTracker.chat.some(pair => pair[0] === id && pair[1] === chatId)) changeTracker.chat.push([id, chatId])
+        }
         changed = true
         await tick()
         await triggerSave({
             forceFullWrite: options?.forceFullWrite,
             rejectOnFailure: options?.rejectOnFailure,
             refresh: true,
+            syncOwned: options?.syncOwned,
         })
         if (options?.flushServer === 'canonical-background' && supportsPatchSync) {
             // The server already holds the patch; durable files follow without
@@ -1627,8 +1681,9 @@ export async function saveDb() {
     }
 
     let savetrys = 0
+    trackedChangesImpl = () => saveRuntime.isActive() ? safeStructuredClone(changeTracker) : null
     while (saveRuntime.isActive()) {
-        if (!changed || gotChannel) {
+        if (!changed || gotChannel || get(syncSaveHold)) {
             await sleep(200)
             continue
         }
@@ -2007,63 +2062,7 @@ export function replaceDbResources(db: Database, replacer: { [key: string]: stri
  * Ensures that all characters are properly ordered and removes any invalid entries.
  */
 export function checkCharOrder() {
-    let db = getDatabase()
-    db.characterOrder = db.characterOrder ?? []
-    let ordered = []
-    for (let i = 0; i < db.characterOrder.length; i++) {
-        const folder = db.characterOrder[i]
-        if (typeof (folder) !== 'string' && folder) {
-            for (const f of folder.data) {
-                ordered.push(f)
-            }
-        }
-        if (typeof (folder) === 'string') {
-            ordered.push(folder)
-        }
-    }
-
-    let charIdList: string[] = []
-
-    for (let i = 0; i < db.characters.length; i++) {
-        const char = db.characters[i]
-        const charId = char.chaId
-        if (!char.trashTime) {
-            charIdList.push(charId)
-        }
-        if (!ordered.includes(charId)) {
-            if (charId !== '§temp' && charId !== '§playground' && !char.trashTime) {
-                db.characterOrder.push(charId)
-            }
-        }
-    }
-
-
-    for (let i = 0; i < db.characterOrder.length; i++) {
-        const data = db.characterOrder[i]
-        if (typeof (data) !== 'string') {
-            if (!data) {
-                db.characterOrder.splice(i, 1)
-                i--;
-                continue
-            }
-            for (let i2 = 0; i2 < data.data.length; i2++) {
-                const data2 = data.data[i2]
-                if (!charIdList.includes(data2)) {
-                    data.data.splice(i2, 1)
-                    i2--;
-                }
-            }
-            db.characterOrder[i] = data
-        }
-        else {
-            if (!charIdList.includes(data)) {
-                db.characterOrder.splice(i, 1)
-                i--;
-            }
-        }
-    }
-
-
+    checkCharacterOrder(getDatabase())
 }
 
 /**
@@ -2114,7 +2113,9 @@ export class LocalWriter {
      * @returns {Promise<boolean>} - A promise that resolves to a boolean indicating success.
      */
     async init(name = 'Binary', ext = ['bin']): Promise<boolean> {
-        const writableStream = streamSaver.createWriteStream(name + '.' + ext[0])
+        const writableStream = (globalThis as any).RisuPlay
+            ? await (await import('./transfer-sync/nativeDownload')).nativeDownloadStream(name + '.' + ext[0])
+            : streamSaver.createWriteStream(name + '.' + ext[0])
         this.writer = writableStream.getWriter()
         return true
     }
@@ -3153,6 +3154,8 @@ export function changeChatTo(IdOrIndex: string | number) {
     chatDeselected.set(false)
     const char = DBState.db.characters[selIdState.selId]
     char.chatPage = index
+    // A chat was (re)opened by the user: the NAS sync coordinator treats this instant as a safe window for incoming changes to this chat.
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('risubard-chat-opened'))
     const newChat = char.chats[index]
     if(newChat){
         if(newChat._placeholder){

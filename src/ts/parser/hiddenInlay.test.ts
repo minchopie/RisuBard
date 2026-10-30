@@ -53,7 +53,7 @@ test('cached and pending inlays carry identical IDs and occurrence indices for t
     const code = ts.transpileModule(source.slice(start, source.indexOf('// Global resolve queue', start))
         .replace('export function', 'function'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
     const cache = new Map<string, { type: string, url: string }>()
-    const context: any = { blobUrlCache: cache, DBState: { db: {} } }
+    const context: any = { blobUrlCache: cache, DBState: { db: {} }, transferMediaScope: () => undefined }
     runInNewContext(code, context)
     const text = '{{inlay::scene}} {{inlayed::scene}} {{inlay::other}}'
     const root = document.createElement('div')

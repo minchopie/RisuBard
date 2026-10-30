@@ -1,0 +1,101 @@
+{
+  "archiveSha256": "670a0ecc9989cf4640fe218b4d0bccee07a26930d21463513d3e10b622d93833",
+  "node": {
+    "sha256": "3bbbd62ffbd90187cd464cc06b7c462f009e920e1c64888907b346c04622147a",
+    "machine": 62,
+    "loads": [
+      {
+        "offset": 0,
+        "address": 0,
+        "alignment": 16384
+      },
+      {
+        "offset": 95781296,
+        "address": 95797680,
+        "alignment": 16384
+      },
+      {
+        "offset": 97026048,
+        "address": 97058816,
+        "alignment": 16384
+      }
+    ]
+  },
+  "buildExitCode": 0,
+  "runtimeVerified": true,
+  "dynamicDependencies": [
+    "libm.so",
+    "libdl.so",
+    "liblog.so",
+    "libc.so"
+  ],
+  "rawExecutableProbe": {
+    "target": "emulator-5570",
+    "pageSize": 16384,
+    "nodeVersion": "v24.21.0",
+    "success": true,
+    "applicationUidProbe": "passed on 16KiB x86_64 emulator"
+  },
+  "apk": {
+    "sha256": "ea9c8ead5149fb466709ef7c8e678c3fe31c3e35456d795090c0f171be103ff5",
+    "id": "app.risubard.personal.debug",
+    "scope": "APK9 x86_64 only; ARM64 runtime in same prototype remains 4KiB",
+    "checks": [
+      "session cookie and JWT",
+      "writer lock free after native bootstrap",
+      "Keystore repair preserves user-data marker",
+      "connection refused restarts process",
+      "read timeout preserves process",
+      "crypto",
+      "msgpack",
+      "image WASM",
+      "Lua WASM",
+      "mock streaming",
+      "server image route",
+      "server Wiki route",
+      "disk-space probe",
+      "persisted run counter"
+    ],
+    "evidence": "tmp/emulator16k-apk9-instrumentation.log",
+    "finalSourceVerified": false
+  },
+  "additionalProbes": [
+    {
+      "apk": "APK9",
+      "evidence": "tmp/emulator16k-apk9-restart.log",
+      "persistedRuns": 2,
+      "forceStopRestart": true
+    },
+    {
+      "apk": "APK10",
+      "sha256": "c95bbdf3b90d306a707befac2d822c949170b0d5ee5aec230f952990af30d00f",
+      "evidence": "tmp/emulator16k-apk10-instrumentation.log",
+      "recoveryExport": true
+    },
+    {
+      "apk": "APK11",
+      "sha256": "2e64a51efe3f5eebd62eee379889efb096e0dfc0f81a3451d624e0ea7aa05c23",
+      "evidence": "tmp/emulator16k-apk11-instrumentation.log",
+      "persistedRuns": 4,
+      "stableBackupDirectory": true,
+      "prototypeBackupPreserved": true,
+      "recoveryExport": true,
+      "systemPickerAutomated": false,
+      "physicalDevice": false
+    },
+    {
+      "apk": "APK12",
+      "sha256": "e39c21c4eefb6528617d45d0be08939a822877be522f90f1f281e004bcd3a3d2",
+      "evidence": "tmp/emulator16k-apk12-instrumentation.log",
+      "persistedRuns": 6,
+      "stableBackupDirectory": true,
+      "serverBackupWritten": true,
+      "prototypeBackupPreserved": true,
+      "emptyPrototypeBackupCleaned": true,
+      "recoveryExport": true,
+      "systemPickerAutomated": false,
+      "physicalDevice": false,
+      "containsBoth16KiBArchitectures": true
+    }
+  ]
+}

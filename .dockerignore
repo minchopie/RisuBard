@@ -1,6 +1,9 @@
 node_modules
 save
 .git
-.github
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/release.yml
 .claude
 dist

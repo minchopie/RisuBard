@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const root = path.resolve(__dirname, '..', '..')
+const sqliteRuntime = /better-sqlite3|new\s+Database\s*\(|(?<!\.)\.db(?:['"`]|\b)/i
 
 function runtimeFiles(directory: string): string[] {
     const files: string[] = []
@@ -16,12 +17,17 @@ function runtimeFiles(directory: string): string[] {
 }
 
 describe('native SQLite removal', () => {
+    it('distinguishes object spread from SQLite file paths', () => {
+        expect(sqliteRuntime.test('return { ...db, characters }')).toBe(false)
+        expect(sqliteRuntime.test("open('risuai.db')")).toBe(true)
+        expect(sqliteRuntime.test('new Database(file)')).toBe(true)
+    })
     it('has no runtime SQLite import or database creation', () => {
         const offenders = runtimeFiles(path.join(root, 'server'))
             // db.cjs is the one-shot dispatcher that notices an old risuai.db;
             // only the importer may load a SQLite reader.
             .filter(file => !['legacy-sqlite-import.cjs', 'db.cjs'].includes(path.basename(file)))
-            .filter(file => /better-sqlite3|new\s+Database\s*\(|\.db(?:['"`]|\b)/i.test(fs.readFileSync(file, 'utf8')))
+            .filter(file => sqliteRuntime.test(fs.readFileSync(file, 'utf8')))
             .map(file => path.relative(root, file))
         expect(offenders).toEqual([])
     })

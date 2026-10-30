@@ -1,4 +1,6 @@
 import { Ollama } from 'ollama/dist/browser.mjs';
+import { localAI, localAIPreset, LOCAL_AI_PRESET } from 'src/ts/localAI.svelte';
+import { localAIFetch } from 'src/ts/localAI';
 import { buildOllamaChatRequest, createOllamaFetch } from './ollamaRequest';
 import { language } from "../../../lang";
 import { globalFetch, fetchNative } from "../../globalApi.svelte";
@@ -178,9 +180,9 @@ export async function requestChatData(arg:RequestDataArgumentExtended, model:Mod
     const retryLimit = normalizeRequestRetryLimit(db.requestRetrys)
     const internalOutput = Boolean(arg.schema) || arg.logSource === 'memory'
     const fallBackModels = createModelAttemptOrder(
-        safeStructuredClone(db?.fallbackModels?.[model] ?? [])
+        localAI.available && localAI.enabled ? [] : safeStructuredClone(db?.fallbackModels?.[model] ?? [])
     )
-    const tools = arg.tools ?? (await getTools())
+    const tools = localAI.available && localAI.enabled ? [] : arg.tools ?? (await getTools())
     let da:requestDataResponse
 
     if(arg.escape){
@@ -449,6 +451,14 @@ export function reformater(formated:OpenAIChat[],modelInfo:LLMModel|LLMFlags[]){
 export async function requestChatDataMain(arg:requestDataArgument, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
     const db = arg.requestSettings ?? getDatabase()
     const targ:RequestDataArgumentExtended = arg
+
+    if (localAI.available && localAI.enabled) {
+        if (arg.formated.some(message => message.multimodals?.length)) return {
+            type: 'fail', noRetry: true, fallbackEligible: false,
+            result: '현재 기기 내 AI는 텍스트 모델을 사용해요. 이미지 첨부를 빼거나 온라인 모드로 전환해 주세요.',
+        }
+        return requestModelPreset(targ, localAIPreset(), abortSignal, model)
+    }
 
     // P4 dual-regime dispatch (plan v6 §7). Resolve the per-chat ModelPreset
     // binding BEFORE any classic model selection so a binding chat never touches
@@ -802,6 +812,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     const reportStatus = statusEnabled(arg.realChatId) && !!genId
     const logSource = arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode))
     const logPurpose = arg.logPurpose ?? defaultRequestPurpose(logSource)
+    const sessionId = getDatabase().risuBardCacheFriendlyContext === true
+        && !arg.disablePromptCache
+        && (arg.logSource ?? toLogSource(mode)) === 'main'
+        && arg.realChatId ? arg.realChatId : undefined
 
     // Request logging wraps the transport, so the direct path and the
     // server-side job path are recorded identically — the job path had no
@@ -820,7 +834,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         provider: preset.profileSnapshot.providerBaseId,
         streaming: resolvePresetStreaming(preset, arg),
     })
-    const proxiedFetch = makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route))
+    const onDevice = preset.id === LOCAL_AI_PRESET && localAI.available && localAI.enabled
+    const proxiedFetch = onDevice ? localAIFetch : makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route))
 
     // Tool gating. Three guards:
     //  1) Per-preset opt-in (preset.toolUse, default OFF) — the hard regression
@@ -860,7 +875,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // (chat already generating) surfaces as an error instead, since falling
     // back would double-generate. All defaults off → proxiedFetch →
     // byte-identical to the previous behavior.
-    const useServerJob = getDatabase().nodeOnlyServerSideRequests === true
+    const useServerJob = !onDevice && getDatabase().nodeOnlyServerSideRequests === true
         && !tools && !arg.previewBody
     const transportFetch = useServerJob
         ? makeJobFetch({
@@ -1011,7 +1026,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // Mirror the real request's options so the preview shows the body that
             // would actually be sent (cache breakpoints included).
             const prepared = await previewModelPreset(kind, preset, {
-                messages, tools, fetchImpl,
+                messages, tools, fetchImpl, sessionId,
                 anthropicCache1h: getDatabase().claude1HourCaching === true,
             }, credential)
             return {
@@ -1033,7 +1048,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         // streaming tool_call assembly is a later stage. Status is NOT reported
         // for the tool path in v1 (it bypasses the pump); see the toast infra note.
         if (tools) {
-            const { result, toolsExecuted } = await runModelPresetToolLoop(arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal)
+            const { result, toolsExecuted } = await runModelPresetToolLoop(arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal, sessionId)
             // The tool loop issues one request per turn; each is its own log
             // entry and all of them flush together here.
             void logScope.close()
@@ -1042,7 +1057,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
 
         const useStreaming = resolvePresetStreaming(preset, arg)
         const options: AdapterChatOptions = {
-            messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache,
+            messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache, sessionId,
             ...presetGenerationOverrides(arg),
             responseSchema: arg.schema
                 ? convertInterfaceToSchema(arg.schema)
@@ -1249,6 +1264,7 @@ async function runModelPresetToolLoop(
     messages: AdapterChatMessage[],
     tools: AdapterToolDef[],
     abortSignal: AbortSignal | null,
+    sessionId?: string,
 ): Promise<{ result: string; toolsExecuted: boolean }> {
     // Tracks whether any tool actually ran, so the caller can block outer
     // success-path retries that would otherwise re-execute side-effecting tools.
@@ -1260,7 +1276,7 @@ async function runModelPresetToolLoop(
         send: (convo) => sendModelPreset(
             kind, preset,
             {
-                messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl,
+                messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl, sessionId,
                 // Tool turns are ordinary billed requests: without this the cache
                 // TTL silently drops back to 5 minutes for the whole tool loop.
                 anthropicCache1h: getDatabase().claude1HourCaching === true,

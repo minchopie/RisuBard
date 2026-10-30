@@ -491,7 +491,7 @@ export const helpEn = {
         risuBardResponseExcludeUsers:
             "Exclude earlier user messages from response context. The current user request is always retained.",
         risuBardHideOocTurns: "Hide OOC replies and their user inputs from the main chat list. Off by default. Read the live transcript in BardWiki's OOC notepad. Applies to all chats without changing saved messages, AI context or wiki analysis settings.",
-        risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. The current narrative baseline stays in the description position. Turn it off to restore the previous order.",
+        risuBardCacheFriendlyContext: "Off by default. Moves BardWiki memory, including always-included documents, out of the top of the prompt and the character description, and sends it right before the latest user message. The preset, character description, lorebook and earlier chat stay identical between turns, so prompt caching holds longer. Keeps the original character description and active lorebook text without also inserting their summarized narrative baseline. Turn it off to restore the previous order.",
         risuBardAnalysisExcludeUsers:
             "Exclude user messages from the confirmed turn and recent raw context used for BardWiki analysis, leaving assistant responses only.",
         customBackground: "A custom image used as the chat background.",

@@ -1,6 +1,10 @@
 <script lang="ts">
 
+    import { restoreOpenDeletion, acceptOpenDeletion } from 'src/ts/nasSync';
+    import { transferBusy, syncSaveHold } from 'src/ts/transferState';
     import Suggestion from './Suggestion.svelte';
+    import { localAI } from 'src/ts/localAI.svelte';
+    import { openSettings, SettingsRoute } from 'src/ts/routing';
     import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, FileTextIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, BookOpenIcon } from "@lucide/svelte";
     import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte';
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
@@ -1006,11 +1010,11 @@ import { isMobile } from 'src/ts/platform'
     let inputTranslateHeight = $state("44px")
     let inputTranslateEle:HTMLTextAreaElement = $state()
 
-    // Standard theme: composer width follows the configured chat width (matches message cards).
+    // Mobile/tablet uses the full chat pane; desktop follows the configured message width.
     // Other themes: no width limit (original full-width behavior).
     let isStandardTheme = $derived(DBState.db.theme === '')
     let composerWidthClass = $derived(
-        !isStandardTheme ? '' :
+        !isStandardTheme || isMobile ? '' :
         DBState.db.nodeOnlyStandardChatWidth === 'full' ? 'max-w-full' :
         DBState.db.nodeOnlyStandardChatWidth === 'wide' ? 'max-w-6xl' :
         'max-w-3xl'
@@ -1198,7 +1202,16 @@ import { isMobile } from 'src/ts/platform'
 
 <div class="w-full h-full relative flex overflow-hidden" data-chat-wiki-workspace style={customStyle}>
     <main class="relative z-0 h-full min-w-0 flex-1" data-chat-pane use:trackNavigatorViewport>
-    
+    {#if (currentChatSlot as any)?.risuSyncDeleted && currentCharacter}
+        <!-- NAS sync kept this open chat through a remote deletion: inline restore state, no navigation, no popup. -->
+        <div class="absolute left-2 right-2 top-2 z-30 flex flex-wrap items-center gap-2 rounded-lg border border-darkborderc bg-bgcolor/95 px-3 py-2 text-sm shadow" role="status" aria-live="polite" data-sync-deleted-banner>
+            <span class="min-w-0 flex-1">다른 기기에서 이 대화를 지웠어요. 이 기기에는 그대로 남아 있어요.</span>
+            <!-- Admission is the common helper's (transferUnavailable + busy ownership); the buttons also disable while anything runs. -->
+            <button type="button" class="rounded border border-darkborderc px-2 py-1 disabled:opacity-50" disabled={$transferBusy || $syncSaveHold || currentChatSlot.isStreaming || $doingChat} onclick={() => { void restoreOpenDeletion(currentCharacter.chaId, currentChatSlot.id!).catch(error => alertError(String(error))) }}>되살리기</button>
+            <button type="button" class="rounded border border-darkborderc px-2 py-1 disabled:opacity-50" disabled={$transferBusy || $syncSaveHold || currentChatSlot.isStreaming || $doingChat} onclick={() => { void acceptOpenDeletion(currentCharacter.chaId, currentChatSlot.id!).catch(error => alertError(String(error))) }}>삭제 적용</button>
+        </div>
+    {/if}
+
     {#if DBState.db.nodeOnlyScrollButtonType !== 'off' && currentChat.length > 0}
         <div
             data-chat-scroll-navigator
@@ -1325,6 +1338,12 @@ import { isMobile } from 'src/ts/platform'
                     style="{DBState.db.fixedChatTextarea ? 'z-index:29;' : ''}"
             >
               <div class="mx-auto w-full {composerWidthClass} px-2">
+                {#if localAI.available && localAI.enabled}
+                    <button type="button" data-local-ai-status class="mb-2 w-full break-words text-left text-sm text-textcolor2 underline"
+                        onclick={() => openSettings(SettingsRoute.ModelPreset)}>
+                        기기 내 AI · {localAI.model?.name ?? 'AI 설정에서 GGUF 모델을 선택해 주세요'}
+                    </button>
+                {/if}
                 {#if currentCharacter?.chaId
                     && currentCharacter.chaId !== '§playground'
                     && !$chatDeselected

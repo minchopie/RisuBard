@@ -1,0 +1,87 @@
+{
+  "method": "literal import/require inventory; non-literal imports require separate review",
+  "sourceFileCount": 163,
+  "imports": {
+    "@dqbd/tiktoken": [
+      "server/node/risubard-markdown-inquiry.ts",
+      "server/node/risubard-memory-analysis.ts",
+      "src/ts/risubard/directWikiBlocks.ts",
+      "src/ts/risubard/memoryAnalysisClient.ts"
+    ],
+    "@aws-crypto/sha256-js": [
+      "server/node/risubard-memory-analysis.ts"
+    ],
+    "sucrase": [
+      "server/node/risubard-memory-routes.cjs",
+      "server/node/risubard-memory-runtime.cjs"
+    ],
+    "express": [
+      "server/node/server.cjs"
+    ],
+    "compression": [
+      "server/node/server.cjs"
+    ],
+    "node-html-parser": [
+      "server/node/server.cjs"
+    ],
+    "express-rate-limit": [
+      "server/node/server.cjs"
+    ],
+    "ws": [
+      "server/node/server.cjs"
+    ],
+    "wasm-vips": [
+      "server/node/server.cjs"
+    ],
+    "fast-json-patch": [
+      "server/node/server.cjs"
+    ],
+    "fflate": [
+      "server/node/server.cjs",
+      "server/node/utils.cjs"
+    ],
+    "msgpackr": [
+      "server/node/utils.cjs",
+      "src/ts/risubard/memorySaveSlots.ts"
+    ],
+    "compression-streams-polyfill": [
+      "server/node/utils.cjs",
+      "server/node/utils.cjs"
+    ],
+    "svelte": [
+      "src/ts/risubard/characterAssistantPlayRuntime.ts",
+      "src/ts/risubard/wikiEmbeddingService.ts",
+      "src/ts/risubard/wikiGenerationState.ts",
+      "src/ts/risubard/wikiTransfer.ts"
+    ],
+    "uuid": [
+      "src/ts/risubard/characterAssistantPlayRuntime.ts",
+      "src/ts/risubard/characterAssistantStore.ts",
+      "src/ts/risubard/chatMerge.ts",
+      "src/ts/risubard/promptAssistantStore.ts",
+      "src/ts/risubard/wikiTransfer.ts"
+    ],
+    "src": [
+      "src/ts/risubard/chatRequestEvidence.ts",
+      "src/ts/risubard/chatRequestEvidence.ts",
+      "src/ts/risubard/chatRequestEvidence.ts",
+      "src/ts/risubard/chatRequestEvidence.ts",
+      "src/ts/risubard/chatRequestEvidence.ts"
+    ],
+    "markdown-it": [
+      "src/ts/risubard/wikiLink.ts"
+    ]
+  },
+  "frontendOnly": [
+    "svelte",
+    "uuid",
+    "src (Vite alias)",
+    "markdown-it"
+  ],
+  "serverNonLiteralLoaders": [
+    "sucrase/register in risubard-memory-runtime.cjs and risubard-memory-routes.cjs"
+  ],
+  "notes": [
+    "All server/node and packages/risubard-core external literal imports are covered by package-runtime.mjs roots. Frontend-only imports in src/ts/risubard are bundled by Vite; server-reachable TypeScript modules need runtime route tests."
+  ]
+}

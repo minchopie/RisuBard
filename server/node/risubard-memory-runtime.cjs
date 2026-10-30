@@ -29,6 +29,7 @@ const {
 } = require('./risubard-memory-save.ts')
 const { revealLocalFile } = require('./reveal-local-file.cjs')
 const { inheritWikiWorkspace, importWikiWorkspace } = require('./risubard-wiki-transfer.ts')
+const { capturePlaySetMemory } = require('./play-set-memory.cjs')
 
 function createRuntimeMemoryService(userDataDirectory, options = {}) {
     const memory = createNarrativeMemoryService(userDataDirectory)
@@ -113,6 +114,11 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
     )
     return {
         ...memory,
+        invalidateTransferCache: (characterId, chatId) => wiki.invalidateCache(characterId, chatId),
+        capturePlaySetMemory: (input) => scheduled([
+            ...input.chatIds.map(chatId => [input.characterId, chatId]),
+            [input.characterId, SAVE_STORE_LANE],
+        ], [], () => capturePlaySetMemory({ ...input, userDataDirectory })),
         inheritWiki: (input) => serializedMany([
             [input.characterId, input.sourceChatId],
             [input.characterId, input.destinationChatId],
@@ -200,11 +206,10 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
             memorySaveWorkspaceId(input.saveId),
             () => previewSaveSlot({ userDataDirectory, ...input })
         ),
-        renameMemorySave: (input) => serialized(
-            input.characterId,
-            memorySaveWorkspaceId(input.saveId),
-            () => renameSaveSlot({ userDataDirectory, ...input })
-        ),
+        renameMemorySave: (input) => serializedMany([
+            [input.characterId, memorySaveWorkspaceId(input.saveId)],
+            [input.characterId, SAVE_STORE_LANE],
+        ], () => renameSaveSlot({ userDataDirectory, ...input })),
         deleteMemorySave: (input) => serializedMany([
             [input.characterId, memorySaveWorkspaceId(input.saveId)],
             [input.characterId, SAVE_STORE_LANE],

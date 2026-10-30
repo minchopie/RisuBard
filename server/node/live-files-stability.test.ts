@@ -154,6 +154,7 @@ test.each(['before-publication', 'after-publication'])('failed adoption retries 
         persistCanonicalProjection: (_db: any, options: any) => {
             if (persists++ === 0) { published = failureStage === 'after-publication'; throw new Error('disk full') }
             if (published && options.externalRevision !== 'published') throw new Error('stale revision blocks retry')
+            return { acceptedRevision: 'saved-revision' }
         },
         saveTimers: {}, directWriteTracker: { clear: () => {} }, encodeRisuSaveLegacyBuffer: JSON.stringify,
         kvSet: () => {}, initChatStore: () => {}, computeBufferEtag: () => 'etag', nodeCrypto: { randomUUID: () => 'new' }, logger: { info: () => {} },

@@ -243,6 +243,19 @@ function createFileKv(options = {}) {
         return value;
     }
 
+    async function kvExportFile(key, destination) {
+        const entry = entryOf(key);
+        if (!entry) return false;
+        const source = resolveInside(dataRoot, path.join('kv', 'objects', entry.object));
+        if ((await inspectFileAsync(source)).hash !== entry.object) throw new Error(`Content object checksum mismatch for ${key}`);
+        await fsp.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
+        if ((await inspectFileAsync(destination)).hash !== entry.object) {
+            await fsp.unlink(destination);
+            throw new Error(`Content object changed while exporting ${key}`);
+        }
+        return true;
+    }
+
     function kvSet(key, value) {
         const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
         const hash = digest(data);
@@ -606,6 +619,7 @@ function createFileKv(options = {}) {
 
     return {
         kvGet,
+        kvExportFile,
         kvSet,
         kvSetMany,
         kvSetManyAsync,

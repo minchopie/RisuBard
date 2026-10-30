@@ -1,5 +1,11 @@
 import { changeFullscreen, checkNullish } from "./util"
 import { installDynamicViewportHeight } from "./viewportHeight"
+import { isOfflineBuild, localAI } from './localAI.svelte'
+import { refreshLocalAI } from './localAI'
+import { recoverTransfers, startTransferInbox } from './playTransfer'
+import { recoverSync } from './nasSync'
+import { startSyncCoordinator } from './nasSyncCoordinator'
+import { initializeNativeTransfers } from './transferNative'
 import { v4 as uuidv4 } from 'uuid';
 import { get } from "svelte/store";
 import { setDatabase, defaultSdDataFunc, getDatabase, changeToThemePreset } from "./storage/database.svelte";
@@ -49,6 +55,7 @@ export async function loadData() {
             {
                 await stage(language.startupLoading.storage)
                 await forageStorage.Init()
+                if (isOfflineBuild) await refreshLocalAI().catch(error => { localAI.error = String(error) })
 
                 await stage(language.startupLoading.localSave)
                 let gotStorage: Uint8Array = await forageStorage.getItem('database/database.bin') as unknown as Uint8Array
@@ -85,6 +92,10 @@ export async function loadData() {
                     }
                 }
 
+                await initializeNativeTransfers()
+                await recoverTransfers()
+                // NAS sync apply recovery runs here too: before autosave, plugins and generation, after manual-transfer recovery.
+                await recoverSync()
                 if (getDatabase().didFirstSetup) {
                     characterURLImport()
                 }
@@ -174,6 +185,9 @@ export async function loadData() {
             assignIds()
             registerModelDynamic()
             loadedStore.set(true)
+            startTransferInbox()
+            // NAS sync foreground coordinator: Node/embedded runtime only, and it does nothing until sync was enabled on the server.
+            void startSyncCoordinator().catch(error => console.warn('[NAS sync] coordinator did not start:', String(error?.message ?? error)))
             saveDb()
             moduleUpdate()
             // cleanChunks는 화면 진입 후 유휴 시간에 실행 (부트 블로킹 제거)

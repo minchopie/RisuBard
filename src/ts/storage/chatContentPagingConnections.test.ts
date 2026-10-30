@@ -18,3 +18,14 @@ describe('chunked chat hydration connections', () => {
         expect(storage).toContain('fetchFullChatContent')
     })
 })
+
+
+it('keeps the client page size within the existing server cap and concurrency at four', () => {
+    const storage = readFileSync('src/ts/storage/nodeStorage.ts', 'utf8')
+    const server = readFileSync('server/node/chat-content-page.cjs', 'utf8')
+    const clientLimit = Number(storage.match(/CHAT_CONTENT_TRANSFER_PAGE_SIZE = (\d+)/)?.[1])
+    const serverLimit = Number(server.match(/MAX_CHAT_CONTENT_PAGE_SIZE = (\d+)/)?.[1])
+    expect(clientLimit).toBeGreaterThan(0)
+    expect(clientLimit).toBeLessThanOrEqual(serverLimit)
+    expect(storage).toContain('CHAT_CONTENT_TRANSFER_CONCURRENCY = 4')
+})

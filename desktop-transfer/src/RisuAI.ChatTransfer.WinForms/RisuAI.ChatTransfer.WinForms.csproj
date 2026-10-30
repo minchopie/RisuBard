@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>RisuAI-Chat-Transfer</AssemblyName>
+    <RootNamespace>RisuAI.ChatTransfer.WinForms</RootNamespace>
+    <Version>1.5.0</Version>
+    <AssemblyVersion>1.5.0.0</AssemblyVersion>
+    <FileVersion>1.5.0.0</FileVersion>
+    <ApplicationIcon>Assets\transfer.ico</ApplicationIcon>
+    <Product>RisuAI 대화·페르소나 직접 전송</Product>
+    <Authors>RisuAI Mobile Private</Authors>
+    <Description>RisuAI chat and persona bidirectional one-shot encrypted transfer companion</Description>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\transfer.ico" LogicalName="TransferIcon" />
+    <ProjectReference Include="..\RisuAI.ChatTransfer.Core\RisuAI.ChatTransfer.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+</Project>

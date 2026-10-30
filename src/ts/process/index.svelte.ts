@@ -1,4 +1,5 @@
 import { captureGenerationTarget, createGenerationScope, type GenerationTarget } from "./generationTarget";
+import { transferBusy, syncSaveHold } from '../transferState';
 import { isOocAssistantTurn, isOocToggleActive } from '../risubard/oocTurns'
 import { captureChatContext } from '../risubard/chatContextCapture'
 import { createRequiredWikiMessage, reserveRequiredWikiBudget } from '../risubard/requiredWikiContext'
@@ -37,6 +38,7 @@ import { getModuleAssets, getModuleLorebooksWithSources, getModuleToggles } from
 import { forageStorage, readImage, refreshLiveFiles } from "../globalApi.svelte";
 import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { waitForSendSync } from './sendPreparation';
+import { preSendSync } from '../nasSyncCoordinator';
 import {
     buildBoundedNarrativeInquiryFallback,
     createStoredResponseMemoryAnalysis,
@@ -1179,6 +1181,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     target?: GenerationTarget
     requestSettings?: Database
 } = {}):Promise<boolean> {
+    if (get(transferBusy) || get(syncSaveHold)) return false
     const requestSettings = arg.requestSettings ?? { ...DBState.db }
     const target = arg.target ?? captureGenerationTarget(DBState.db.characters[get(selectedCharID)])
     const generationScope = createGenerationScope(() => DBState.db.characters, target)
@@ -1202,7 +1205,10 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
     chatProcessStage.set(0)
     const abortSignal = arg.signal ?? (new AbortController()).signal
-    
+    // NAS sync never delays a send: `preSendSync` only refuses while an apply is left unresolved (hold kept); publish/pull run in the
+    // background after the save settles. The local send preparation above keeps its own unlimited, cancel-only wait.
+    if (!await preSendSync(abortSignal)) { if (!abortSignal.aborted) notifyError(language.chatSendPreparationFailed + ': NAS 동기화 적용이 끝나지 않았어요.'); return false }
+
     // NOTE: `throwError()` can be called before these are populated (e.g. HypaV3 early validation errors).
     // Keep them declared up-front to avoid TDZ ReferenceErrors in production builds.
     let currentChar:character
@@ -1309,6 +1315,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             return false
         }
     }
+    if (get(transferBusy) || get(syncSaveHold)) return false
     const generationId = v4()
     startGeneration(genKey, generationId)
     if(chatProcessIndex === -1 && requestSettings.presetChain){
@@ -1833,9 +1840,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         performance.now() - inquiryStartedAt
                 }
             }
-            // Cache-friendly mode keeps the slow-changing baseline in the
-            // description slot and moves per-turn sources next to the latest
-            // user message, after the stable prompt prefix.
+            // Cache-friendly mode keeps original character/lore text; its
+            // baseline is a lossy summary of the same text, not extra memory.
             const currentPrompt = narrativeContext.sourceChanged
                 ? null
                 : createNarrativeSourcesPrompt(
@@ -1844,10 +1850,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     undefined,
                     requiredWikiSources.length ? '' : responseWikiPromptGuide
                 )
-            const baselinePrompt = cacheFriendlyContext
-                && !narrativeContext.sourceChanged
-                ? createNarrativeSourcesPrompt([], narrativeContext.baseline ?? '')
-                : null
+            const baselinePrompt = null
             if (currentPrompt || baselinePrompt) {
                 narrativeContextObservation.mode = 'current'
                 narrativeContextObservation.reason =
@@ -1899,9 +1902,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     cacheFriendlyNarrativeMessage = currentContextMessage
                 }
                 const staticContextMessage: OpenAIChat | null = cacheFriendlyContext
-                    ? baselinePrompt
-                        ? { role: 'system', content: baselinePrompt, requestStatusSources: baselineStatusSources }
-                        : null
+                    ? null
                     : currentContextMessage
                 if (staticContextMessage) {
                 const mergedContext = mergeNarrativeContextWithStaticPrompt({

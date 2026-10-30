@@ -8,6 +8,7 @@ const DATABASE_KEY = 'database/database.bin';
 function attachCompatibilityCache({ store, repository, dataRoot, enabled = false, canInvalidate, record }) {
     const original = { ...store };
     let recorder = record;
+    let recover = () => repository.recoverPendingTransactions?.();
     let verified = false;
     const hasCanonical = () => fs.existsSync(path.join(dataRoot, 'index/sidebar.json'));
     const observe = row => { try { recorder?.(row); } catch {} };
@@ -16,7 +17,7 @@ function attachCompatibilityCache({ store, repository, dataRoot, enabled = false
         if (!hasCanonical()) return null;
         const started = performance.now();
         try {
-            repository.recoverPendingTransactions?.();
+            recover();
             const bytes = encodeRisuSaveLegacyBuffer(repository.exportLegacyDatabase());
             original.kvSet(DATABASE_KEY, bytes);
             observe({ kind: 'compatibility-materialize', trigger, outcome: 'success',
@@ -61,6 +62,7 @@ function attachCompatibilityCache({ store, repository, dataRoot, enabled = false
         invalidate: () => original.kvDel(DATABASE_KEY),
         materialize,
         setRecorder: callback => { recorder = callback; },
+        setRecoveryHandler: callback => { recover = callback; },
     };
 }
 

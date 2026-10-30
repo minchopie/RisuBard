@@ -40,6 +40,43 @@ afterEach(() => {
 })
 
 describe('file-native system logs', () => {
+    test('recovers its own abandoned lock and retries Windows lock release', () => {
+        const root = tempRoot()
+        const result = spawnSync(process.execPath, ['-e', `
+            const fs=require('node:fs'), path=require('node:path');
+            const lock=path.join(process.env.RISUBARD_DATA_ROOT,'logs','.write.lock');
+            fs.writeFileSync(lock,String(process.pid));
+            const logs=require(${JSON.stringify(logsModule)});
+            const unlink=fs.unlinkSync; let failures=0;
+            fs.unlinkSync=function(file){if(process.platform==='win32' && file===lock && failures++===0)throw Object.assign(Error('sharing'),{code:'EPERM'}); return unlink(file)};
+            logs.addLog({level:'info',message:'first'}); logs.addLog({level:'info',message:'second'});
+            if(fs.existsSync(lock))throw Error('left locked');
+        `], { env: { ...process.env, RISUBARD_DATA_ROOT: root }, encoding: 'utf8', timeout: 5000 })
+        expect(result.status, result.stderr).toBe(0)
+        expect(readFileSync(join(root, 'logs/system.jsonl'), 'utf8').trim().split('\n')).toHaveLength(2)
+    })
+    test('does not steal an old lock from a still-running owner', async () => {
+        const root = tempRoot()
+        const lockPath = join(root, 'logs', '.write.lock')
+        writeFileSync(lockPath, String(process.pid))
+        const old = new Date(Date.now() - 60_000)
+        utimesSync(lockPath, old, old)
+        const worker = fork(logsModule, [], {
+            env: { ...process.env, RISUBARD_DATA_ROOT: root },
+            stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+        })
+        const exited = new Promise<number | null>(resolveExit => worker.once('exit', resolveExit))
+        try {
+            await new Promise(resolveWait => setTimeout(resolveWait, 600))
+            expect(existsSync(lockPath)).toBe(true)
+            expect(worker.exitCode).toBeNull()
+            expect(readFileSync(lockPath, 'utf8')).toBe(String(process.pid))
+        } finally {
+            if (existsSync(lockPath)) unlinkSync(lockPath)
+            await exited
+        }
+    })
+
     test('repairs a valid log state checksum mismatch when the store opens', () => {
         const root = tempRoot()
         const statePath = join(root, 'logs', 'state.json')

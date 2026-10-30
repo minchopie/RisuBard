@@ -9,7 +9,7 @@
 // every step shrinks the lag from the full URL-bar height to a few px.
 //
 // Deliberately skipped:
-// - while an editable element is focused: the on-screen keyboard also resizes
+// - in browsers while an editable element is focused: the on-screen keyboard also resizes
 //   the visual viewport, and the platform keyboard path (pan/lift, see the
 //   rootScrollGuard removal in 37ef6e3b) must keep its native behavior.
 // - while pinch-zoomed (scale != 1): vv.height is in visual px there, not a
@@ -18,12 +18,14 @@ export function installDynamicViewportHeight() {
     if (typeof window === 'undefined') return
     const vv = window.visualViewport
     if (!vv) return
+    // The APK resizes its WebView for IME insets; it has no browser pan/lift path.
+    const embeddedAndroid = /\bRisuBardAndroid\//.test(navigator.userAgent)
     let raf = 0
     const apply = () => {
         raf = 0
         if (Math.abs(vv.scale - 1) > 0.01) return
         const ae = document.activeElement as HTMLElement | null
-        if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable)) return
+        if (!embeddedAndroid && ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable)) return
         document.documentElement.style.setProperty('--risu-height-size', `${Math.round(vv.height)}px`)
     }
     vv.addEventListener('resize', () => { if (!raf) raf = requestAnimationFrame(apply) })

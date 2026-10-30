@@ -1,6 +1,8 @@
 <script lang="ts">
     import { DynamicGUI, settingsOpen, sideBarStore, openPresetList, openModelPresetList, openModelProfileBrowser, openPersonaList, openPersonaManager, personaSelectCallback, openHypaV3PresetList, openThemePresetList, MobileGUI, loadedStore, alertStore, LoadingStatusState, bookmarkListOpen, popupStore, popUpEditorStore, promptAssistantOpen, characterAssistantOpen } from './ts/stores.svelte';
     import Sidebar from './lib/SideBars/Sidebar.svelte';
+    import { transferBusy, transferStatus, syncBusyOwned, syncApplyRecovery } from './ts/transferState';
+    import { syncCoordinator } from './ts/nasSyncCoordinator';
     import { DBState } from './ts/stores.svelte';
     import ChatScreen from './lib/ChatScreens/ChatScreen.svelte';
     import RisuBardPromptAssistant from './lib/Others/RisuBardPromptAssistant.svelte';
@@ -81,7 +83,8 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<main class="flex bg-bgcolor w-full h-full max-w-100vw text-textcolor" ondragover={(e) => {
+<div class="flex h-full w-full flex-col">
+<main inert={$transferBusy} class="flex bg-bgcolor w-full h-full min-h-0 flex-1 max-w-100vw text-textcolor" ondragover={(e) => {
     const dropEffect = getMainDropEffect(e)
     e.preventDefault()
     e.dataTransfer.dropEffect = dropEffect
@@ -340,3 +343,25 @@
     <Toaster />
     <RequestStatusToaster />
 </main>
+    {#if $transferBusy && $syncBusyOwned}
+        <!-- Automatic NAS sync (armed apply / startup recovery): an in-flow, non-modal status row that reserves its own space — nothing is
+             covered, not the composer, not the keyboard area. `inert` on <main> still protects the write admission for exactly as long as
+             the armed commit/recovery runs (no duration is promised). -->
+        <div class="shrink-0 flex flex-wrap items-center gap-3 border-t border-darkborderc bg-bgcolor px-3 py-1 text-sm text-textcolor" role="status" aria-live="polite" aria-busy="true" data-sync-status-row>
+            <p class="min-w-0 flex-1 {$syncApplyRecovery ? 'basis-full' : 'truncate'}">{$transferStatus || 'NAS 동기화 변경을 저장하는 중…'}</p>
+            {#if $syncApplyRecovery}
+                <button class="shrink-0 rounded-md border border-darkborderc px-2 py-0.5 text-xs" disabled={$syncApplyRecovery === 'running'} onclick={() => syncCoordinator().retryApply()}>{$syncApplyRecovery === 'running' ? '확인 중…' : '적용 결과 다시 확인'}</button>
+            {/if}
+            <!-- Reachable while the app is inert: pause takes effect once the current (armed) apply settles; the next cycle does not start. -->
+            <button class="shrink-0 rounded-md border border-darkborderc px-2 py-0.5 text-xs" onclick={() => { syncCoordinator().pause(true); transferStatus.set('이번 적용이 끝나면 NAS 동기화를 일시 중지해요. 설정 → NAS 자동 동기화에서 다시 켤 수 있어요.') }}>이번 적용 뒤 일시 중지</button>
+        </div>
+    {/if}
+</div>
+    {#if $transferBusy && !$syncBusyOwned}
+        <!-- Manual transfer (file/USB/Wi-Fi receive or import): the user started it; the modal overlay stays. -->
+        <div class="fixed inset-0 z-[100000] flex items-center justify-center bg-bgcolor/60 p-4" role="alert" aria-busy="true">
+            <div class="rounded-lg bg-bgcolor p-6 text-textcolor flex flex-col gap-3 items-center">
+                <p>{$transferStatus || '받은 자료를 복구하는 중…'}</p>
+            </div>
+        </div>
+    {/if}

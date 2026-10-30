@@ -192,6 +192,42 @@ describe('canonical save racing an external edit', () => {
         expect(f.sync.hasExternalChanges()).toBe(false)
     })
 
+    it('a journal retry preserves a later external edit instead of publishing over it', () => {
+        const f = fixture()
+        const {commitTransaction,recoverTransactions}=require('./file-store.cjs')
+        const save=f.sync.beginSave()
+        const changed={...JSON.parse(fs.readFileSync(path.join(f.repository.dataRoot,f.metadata),'utf8')),desc:'app retry'}
+        expect(()=>observeWrites(save,()=>commitTransaction(f.repository.dataRoot,[
+            {path:'presets/first.json',data:Buffer.from('{}')},
+            {path:f.metadata,data:Buffer.from(JSON.stringify(changed))},
+        ],{failAfterPublish:1}))).toThrow('simulated crash')
+        f.editExternally()
+        expect(()=>observeWrites(save,()=>recoverTransactions(f.repository.dataRoot))).toThrow(expect.objectContaining({code:'CANONICAL_FILES_CHANGED'}))
+        expect(f.desc()).toBe('external')
+        expect(fs.readdirSync(path.join(f.repository.dataRoot,'.journal')).filter(name=>name.endsWith('.json'))).toHaveLength(1)
+    })
+
+    it.each([false, true])('asset failure settles published files while preserving real external changes: %s', external => {
+        const f = fixture()
+        f.database.characters[1].desc = 'acknowledged app edit'
+        const source = fs.readFileSync(path.join(import.meta.dirname, 'server.cjs'), 'utf8')
+        const begin = source.indexOf('function persistCanonicalProjection(')
+        const body = source.slice(begin, source.indexOf('function adoptExternallyChangedCanonicalProjection(', begin))
+        const deps = {
+            elapsedMs: () => 0, nodeCrypto: crypto, reportImportProgress() {}, externalEditSession: null,
+            canonicalProjectionSync: f.sync, observeWrites,
+            writeCanonicalProjection: () => ({ result: f.save(), strategy: 'full-sync' }),
+            userDataRepository: f.repository, canonicalProjectionReady: true,
+            characterAssets: { sync() { if (external) f.editExternally(); throw new Error('asset write failed') } },
+            saveObservation: { record() {} },
+        }
+        const persist = new Function('deps', `with (deps) { ${body}; return persistCanonicalProjection; }`)(deps)
+        expect(() => persist(f.database)).toThrow('asset write failed')
+        expect(f.sync.hasExternalChanges()).toBe(external)
+        expect(JSON.parse(fs.readFileSync(path.join(f.repository.dataRoot, 'characters/other/metadata.json'), 'utf8')).desc).toBe('acknowledged app edit')
+        if (external) expect(f.desc()).toBe('external')
+    })
+
     it('leaves a file edited during an unrelated save pending for review', () => {
         const f = fixture()
         f.database.characters[1].chats[0].message.push({ role: 'char', data: 'yo', chatId: 'other-m2' })
@@ -201,6 +237,53 @@ describe('canonical save racing an external edit', () => {
         expect(save.settle()).toBeNull()
         expect(f.sync.hasExternalChanges()).toBe(true)
         expect(f.sync.changedFiles()).toEqual([{ path: f.metadata, status: 'changed' }])
+    })
+
+    it.each([false, true])('adoption never accepts a later external edit it did not load (merge: %s)', merge => {
+        const f = fixture()
+        f.editExternally()
+        const changed = f.sync.loadExternalChanges()
+        changed.previous = structuredClone(f.database)
+        const pending = structuredClone(f.database)
+        pending.characters[1].desc = 'pending app change'
+        const editLater = () => {
+            const target = path.join(f.repository.dataRoot, f.metadata)
+            const value = JSON.parse(fs.readFileSync(target, 'utf8'))
+            value.desc = 'later external edit'
+            fs.writeFileSync(target, JSON.stringify(value))
+        }
+        const source = fs.readFileSync(path.join(import.meta.dirname, 'server.cjs'), 'utf8')
+        const begin = source.indexOf('function adoptExternallyChangedCanonicalProjection(')
+        const body = source.slice(begin, source.indexOf('async function adoptSettledExternalProjection(', begin))
+        const deps = {
+            canonicalProjectionReady: true,
+            canonicalProjectionSync: { ...f.sync, loadExternalChanges: () => changed },
+            liveCharacterFiles: { isEnabled: () => false, invalidate() {}, accept() {} },
+            liveFilesAdoption: null, liveFilesPendingWrites: merge,
+            normalizeJSON: (value: unknown) => structuredClone(value),
+            reassembleFullDb: () => pending, stripChatsFromDb: (value: unknown) => value,
+            mergePendingLiveDatabase: require('./live-character-files.cjs').mergePendingLiveDatabase,
+            preserveLiveFileRecovery: () => ({}),
+            persistCanonicalProjection: (database: unknown) => {
+                const save = f.sync.beginSave()
+                observeWrites(save, () => f.save(database as typeof f.database))
+                editLater()
+                return { acceptedRevision: save.settle() }
+            },
+            userDataRepository: f.repository,
+            dbCache: { db: {} }, DB_HEX_KEY: 'db', saveTimers: {}, directWriteTracker: { clear() {} },
+            encodeRisuSaveLegacyBuffer: (value: unknown) => { if (!merge) editLater(); return JSON.stringify(value) },
+            kvSet() {}, initChatStore() {}, computeBufferEtag: () => 'etag',
+            dbEtag: null, externallyAdoptedDbEtag: null, liveFileRecovery: { complete() {} },
+            liveFilesRecovery: null, liveFilesRevision: null, liveFilesChatPrevious: null,
+            nodeCrypto: crypto, logger: { info() {} },
+        }
+        const adopt = new Function('deps', `with (deps) { ${body}; return adoptExternallyChangedCanonicalProjection; }`)(deps)
+        if (merge) expect(() => adopt()).toThrow(expect.objectContaining({ code: 'CANONICAL_FILES_CHANGED' }))
+        else adopt()
+        expect(f.sync.hasExternalChanges()).toBe(true)
+        expect(f.desc()).toBe('later external edit')
+        if (merge) expect(deps.liveFilesAdoption).not.toBeNull()
     })
 
     it('refuses to replace a file another program rewrote after the save began', () => {

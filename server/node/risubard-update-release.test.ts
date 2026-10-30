@@ -39,17 +39,17 @@ const languageSources = ['en.ts', 'ko.ts', 'zh-Hant.ts'].map(name =>
 )
 
 describe('RisuBard release updater target', () => {
-    test('checks and downloads releases from rpaddict/RisuBard', () => {
+    test('checks and downloads releases from minchopie/RisuBard', () => {
         const server = readFileSync(serverSource, 'utf8')
         const updater = readFileSync(updaterSource, 'utf8')
         const sourceUpdater = readFileSync(sourceUpdaterSource, 'utf8')
 
-        expect(server).toContain("const GITHUB_REPO = 'rpaddict/RisuBard';")
+        expect(server).toContain("const GITHUB_REPO = 'minchopie/RisuBard';")
         expect(server).toContain(
             'https://api.github.com/repos/${GITHUB_REPO}/releases/latest'
         )
-        expect(updater).toContain("const REPO = 'rpaddict/RisuBard';")
-        expect(sourceUpdater).toContain('REPO="rpaddict/RisuBard"')
+        expect(updater).toContain("const REPO = 'minchopie/RisuBard';")
+        expect(sourceUpdater).toContain('REPO="minchopie/RisuBard"')
     })
 
     test('does not expose inherited upstream public statistics', () => {

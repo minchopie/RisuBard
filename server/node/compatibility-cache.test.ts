@@ -29,6 +29,27 @@ function fixture() {
 }
 
 describe('P1 regenerable compatibility cache', () => {
+    it('retains the pending save observer when a legacy reader rebuilds the cache', () => {
+        const f = fixture(); f.cache.invalidate()
+        const { createCanonicalProjectionSync } = require('./canonical-projection-sync.cjs')
+        const { commitTransaction, observeWrites } = require('./file-store.cjs')
+        const sync = createCanonicalProjectionSync({ repository: f.repository, readAcceptedRevision: () => null, writeAcceptedRevision: () => {} })
+        sync.accept()
+        const save = sync.beginSave()
+        const target = 'characters/char-1/metadata.json'
+        const original = JSON.parse(fs.readFileSync(path.join(f.root, target), 'utf8'))
+        const external = JSON.stringify({ ...original, name: 'external' })
+        expect(() => observeWrites(save, () => commitTransaction(f.root, [
+            { path: 'presets/first.json', data: Buffer.from('{}') },
+            { path: target, data: Buffer.from(JSON.stringify({ ...original, name: 'app' })) },
+        ], { failAfterPublish: 1 }))).toThrow('simulated crash')
+        fs.writeFileSync(path.join(f.root, target), external)
+        f.cache.setRecoveryHandler(() => observeWrites(save, () => f.repository.recoverPendingTransactions()))
+        expect(() => f.store.kvListWithSizes()).toThrow(expect.objectContaining({ code: 'CANONICAL_FILES_CHANGED' }))
+        expect(fs.readFileSync(path.join(f.root, target), 'utf8')).toBe(external)
+        expect(fs.readdirSync(path.join(f.root, '.journal')).filter(name => name.endsWith('.json'))).toHaveLength(1)
+    })
+
     it('requires a matching shadow baseline and revokes eligibility after a mismatch', () => {
         const f = fixture()
         expect(f.cache.canDefer()).toBe(true)

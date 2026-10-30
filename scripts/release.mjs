@@ -8,7 +8,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 
-const RELEASE_ACCOUNT = 'rpaddict'
+const RELEASE_ACCOUNT = 'minchopie'
 const dryRun = process.argv.includes('--dry-run')
 
 function fail(message) {

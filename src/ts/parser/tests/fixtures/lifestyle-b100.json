@@ -1,0 +1,29 @@
+{
+  "type": "risuModule",
+  "module": {
+    "name": "마물소녀도감 생활 B — 옷과 도구의 생활 (공용) v1.0.0",
+    "description": "MGE 공용. 실제 현재 몸과 소지품에 따른 맞춤·수선·손질·협업 장면 재료. 아이템·손상·노출·결과를 자동 확정하지 않습니다. 카드와 Life는 별도로 유지하세요.",
+    "id": "a57098a3-f269-48bd-b389-ec28d50d9faa",
+    "namespace": "mge_life_pack_b",
+    "lowLevelAccess": false,
+    "lorebook": [
+      {
+        "id": "a57098a3-f269-48bd-b389-ec28d50d9faa-lore",
+        "key": "",
+        "secondkey": "",
+        "insertorder": 1400,
+        "comment": "Authored: MGE life pack B v1.0.0 — 옷과 도구의 생활 (공용)",
+        "content": "[Authored play extension: practical clothes and tools — shared]\nWhen the current scene concerns clothing or equipment, develop the handling and upkeep of what the persona explicitly owns or play has actually established. Clothes, a home or tools exist where the persona or play has established them; other possessions remain unknown rather than automatically present or absent. Use the current body and existing knowledge; this material adds no anatomy, skill, damage or event on its own.\n\nFit and comfort: an already relevant seam, cuff, belt, fastening, grip or shoulder strap can be checked through how it sits and moves. A changed fit follows a change that actually happened; it need not happen on every visit. A worker can suggest an adjustment, compare cuts or materials, mark a seam, or arrange another fitting. Measurements, undressing, purchases and the player's deliberate movements or replies are not completed merely because an NPC requests them.\nMending and care: where wear, dirt or damage exists, show the work through thread, patches, drying, cleaning, oil, a whetstone or a rewrapped handle, as the item and available tools allow. Looking after an intact item can be a quiet scene too. Supplies, prices, waiting times and access to a shop follow the card's lore where specified and the location and story, not a guaranteed kit, service or new cost table. Existing weapon properties and training remain as the card, persona and actual events establish them.\nCooperation: holding material, discussing a practical trade-off, comparing the previous repair or returning for finished work can let an artisan's own habits and priorities emerge. Introduce a new worker individually where appropriate; retain an existing worker's identity, knowledge and promises.\nWhere wings, a tail or other structures already exist, accommodate their actual fit and concealment only as the scene establishes. NPCs can ask, observe and learn through ordinary disclosure and experience; preserve facts they previously learned. Clothes are not transparent, and hidden marks, their cause, GM state, stage totals and a provisional species are not knowledge gained by handling a garment.\n\nOffer concrete details relevant to the present scene, not a mandatory maintenance cycle. Success, failure, exposure, newly revealed traits, payment and player agreement follow what actually happens. Preserve NPC initiative and the player's response, and use the existing time, exposure, inventory and memory protocols.",
+        "mode": "constant",
+        "alwaysActive": true,
+        "selective": false,
+        "enabled": true,
+        "useRegex": false,
+        "bookVersion": 2
+      }
+    ],
+    "trigger": [],
+    "regex": [],
+    "assets": []
+  }
+}

@@ -1,11 +1,22 @@
 import { createRequire } from 'node:module'
-import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { resolveMemoryWorkspace } from './risubard-memory-workspace'
 import { resolveNarrativeGraphWorkspace } from './risubard-graph-workspace'
 import { resolveMarkdownWikiWorkspace } from './risubard-markdown-wiki'
+
+const fixtureRoots: string[] = []
+afterEach(async () => {
+    await Promise.all(fixtureRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+})
+
+async function fixtureDirectory(prefix: string) {
+    const root = await mkdtemp(prefix)
+    fixtureRoots.push(root)
+    return root
+}
 
 const require = createRequire(import.meta.url)
 
@@ -14,7 +25,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-save-slot-')
         )
         const summary = {
@@ -104,7 +115,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-fork-queue-')
         )
         let releaseFork!: () => void
@@ -168,7 +179,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-fork-complete-')
         )
         const completeForkWorkspace = vi.fn(async (input) => ({
@@ -194,7 +205,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-snapshot-')
         )
         const service = createRuntimeMemoryService(userDataDirectory)
@@ -225,7 +236,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-reveal-')
         )
         const revealFile = vi.fn()
@@ -260,7 +271,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-empty-')
         )
         const service = createRuntimeMemoryService(userDataDirectory)
@@ -296,7 +307,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-')
         )
         const service = createRuntimeMemoryService(userDataDirectory)
@@ -359,7 +370,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-graph-')
         )
         const service = createRuntimeMemoryService(userDataDirectory)
@@ -460,7 +471,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-reconcile-')
         )
         const service = createRuntimeMemoryService(userDataDirectory)
@@ -527,7 +538,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-writer-')
         )
         const service = createRuntimeMemoryService(userDataDirectory)
@@ -630,7 +641,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-writer-stale-')
         )
         const service = createRuntimeMemoryService(userDataDirectory)
@@ -662,7 +673,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
-        const userDataDirectory = await mkdtemp(
+        const userDataDirectory = await fixtureDirectory(
             join(tmpdir(), 'risubard-runtime-lanes-')
         )
         let releaseSave!: () => void

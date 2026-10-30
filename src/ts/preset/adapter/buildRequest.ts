@@ -90,7 +90,7 @@ function isSchemaValueValid(
     return true
 }
 
-function resolveEndpointUrl(
+export function resolveEndpointUrl(
     snapshot: ResolvedModelProfileSnapshot,
     userValues: Record<string, unknown>,
     serviceAccountJson?: string,

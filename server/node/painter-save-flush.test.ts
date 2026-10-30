@@ -96,9 +96,29 @@ test('canonical painter flush persists edits before acknowledgement without rebu
         await flush(false)
         const bytes = createFileKv({ dataRoot: root }).kvGet('database/database.bin')
         expect((await decodeRisuSave(bytes)).bardPainterFragments).toEqual(updated)
-    } finally {
+        const latestRead = await fetch(`${base}/api/read`, { headers })
+        const latest = await decodeRisuSave(Buffer.from(await latestRead.arrayBuffer()))
+        const settings = {
+            language: 'ko',
+            botPresets: [{ id: 'internal-preset', name: '합성 프리셋', mainPrompt: '설정 저장 검사' }],
+            modules: [{ id: 'internal-module', name: '합성 모듈', description: '설정 저장 검사' }],
+        }
+        const settingsPatch = await fetch(`${base}/api/patch`, { method: 'POST', headers, body: JSON.stringify({
+            expectedHash: calculateHash(latest).toString(16),
+            patch: Object.entries(settings).map(([key, value]) => ({ op: 'replace', path: '/' + key, value })),
+        }) })
+        expect(settingsPatch.ok, await settingsPatch.clone().text()).toBe(true)
+        await flush(true)
         child.kill()
-        if (child.exitCode === null) await new Promise(resolve => child.once('exit', resolve))
+        if (child.exitCode === null && child.signalCode === null) await new Promise(resolve => child.once('exit', resolve))
+        const durable = createUserDataRepository({ dataRoot: root }).exportLegacyDatabase()
+        expect(durable).toMatchObject(settings)
+        expect(durable.characters[0].chats[0]).toEqual(chat)
+    } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+            child.kill()
+            await new Promise(resolve => child.once('exit', resolve))
+        }
         if (path.dirname(path.resolve(root)) !== path.resolve(os.tmpdir())) throw new Error('Unexpected test root')
         fs.rmSync(root, { recursive: true, force: true })
     }

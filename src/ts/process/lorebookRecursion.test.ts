@@ -60,6 +60,25 @@ function lore(comment: string, key: string, content: string) {
 }
 
 describe('Grimoire live prompt retrieval', () => {
+    it.each([
+        { key: 'needle', useRegex: false, messages: ['needle', 'middle', 'last'], depth: 4 },
+        { key: '/needle/i', useRegex: true, messages: ['unrelated', 'NEEDLE'], depth: 2 },
+        { key: '/needle/', useRegex: true, messages: ['unrelated', 'needle'], depth: 2 },
+        { key: '/a\\/b/u', useRegex: true, messages: ['unrelated', 'a/b'], depth: 2 },
+    ])('preserves USB search behavior: $key, depth $depth', async ({ key, useRegex, messages, depth }) => {
+        mockModuleSources.length = 0
+        const entry = { ...lore('portable search', key, 'MATCHED FACT'), useRegex }
+        const character = { chaId: 'search', name: 'Search', chatPage: 0, globalLore: [entry],
+            chats: [{ id: 'chat', localLore: [], message: messages.map(data => ({ role: 'user', data })) }] }
+        mockDBState.db = { username: 'user', loreBookDepth: depth, loreBookToken: 8000, characters: [character] }
+        const result = await loadLoreBookV3Prompt()
+        expect(result.actives.map(value => value.prompt)).toContain('MATCHED FACT')
+        expect(entry.key).toBe(key)
+        const repeated = await loadLoreBookV3Prompt()
+        expect(repeated.actives.map(value => value.prompt)).toContain('MATCHED FACT')
+        expect(entry.key).toBe(key)
+    })
+
     it('keeps A history and local lore while B is selected during prompt retrieval', async () => {
         mockModuleSources.length = 0
         const a = { id: 'a', localLore: [lore('A lore', 'A keyword', 'A FACT')], message: [{ role: 'user', data: 'A keyword' }] }

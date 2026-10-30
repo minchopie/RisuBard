@@ -34,6 +34,39 @@ afterEach(() => {
     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
+describe('Windows atomic replacement contention', () => {
+    it.runIf(process.platform === 'win32')('retries transient sharing failures for data, backup and checksum', () => {
+        const root = tempRoot()
+        atomicWriteJson(root, 'state.json', { nextId: 1 })
+        const rename = fs.renameSync
+        const attempts = new Map<string, number>()
+        vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+            const key = String(to)
+            const count = attempts.get(key) ?? 0
+            attempts.set(key, count + 1)
+            if (count < 2) throw Object.assign(new Error('sharing violation'), { code: count ? 'EACCES' : 'EPERM' })
+            return rename(from, to)
+        })
+        atomicWriteJson(root, 'state.json', { nextId: 2 })
+        expect(readVerifiedJson(root, 'state.json')).toEqual({ nextId: 2 })
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'state.json.bak'), 'utf8'))).toEqual({ nextId: 1 })
+        expect([...attempts.values()]).toEqual([3, 3, 3])
+    })
+
+    it('preserves the destination and reports a permanent replacement error', () => {
+        const root = tempRoot()
+        atomicWriteFile(root, 'system.jsonl', 'original\n')
+        const rename = fs.renameSync
+        vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+            if (String(to) === path.join(root, 'system.jsonl')) throw Object.assign(new Error('permanent denial'), { code: 'EPERM' })
+            return rename(from, to)
+        })
+        expect(() => atomicWriteFile(root, 'system.jsonl', 'replacement\n')).toThrow('permanent denial')
+        expect(fs.readFileSync(path.join(root, 'system.jsonl'), 'utf8')).toBe('original\n')
+        expect(fs.readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([])
+    })
+})
+
 describe('resolveDataRoot', () => {
     it('uses an explicit absolute user-data root independently from the app directory', () => {
         const root = path.resolve(tempRoot(), 'user-data')
@@ -50,6 +83,88 @@ describe('resolveDataRoot', () => {
 })
 
 describe('crash-safe canonical writes', () => {
+    it('refuses a later transaction until the previous prepared journal is recovered', () => {
+        const root = tempRoot()
+        atomicWriteFile(root, 'x.json', Buffer.from('v0'))
+        expect(() => commitTransaction(root, [
+            { path: 'a.json', data: Buffer.from('a1') },
+            { path: 'x.json', data: Buffer.from('x1') },
+        ], { failAfterPublish: 1 })).toThrow('simulated crash')
+        expect(() => commitTransaction(root, [{ path: 'x.json', data: Buffer.from('x2') }])).toThrow(/pending transaction/i)
+        expect(fs.readFileSync(path.join(root, 'x.json'), 'utf8')).toBe('v0')
+        expect(fs.readdirSync(path.join(root, '.journal')).filter(name => name.endsWith('.json'))).toHaveLength(1)
+        recoverTransactions(root)
+        commitTransaction(root, [{ path: 'x.json', data: Buffer.from('x2') }])
+        recoverTransactions(root)
+        expect(fs.readFileSync(path.join(root, 'x.json'), 'utf8')).toBe('x2')
+    })
+
+    it('recovers legacy overlapping journals by creation time instead of UUID order', () => {
+        const root = tempRoot()
+        const journalDir = path.join(root, '.journal')
+        const held = path.join(root, 'held-first-journal.json')
+        const create = (value: string, stamp: number, name: string) => {
+            expect(() => commitTransaction(root, [
+                {path:'marker-'+value, data:Buffer.from(value)}, {path:'x.json',data:Buffer.from(value)},
+            ], {failAfterPublish:1})).toThrow('simulated crash')
+            const current=fs.readdirSync(journalDir).find(file=>file.endsWith('.json'))!
+            const journal=JSON.parse(fs.readFileSync(path.join(journalDir,current),'utf8'))
+            journal.createdAt=stamp
+            fs.writeFileSync(path.join(journalDir,current),JSON.stringify(journal))
+            fs.renameSync(path.join(journalDir,current),path.join(journalDir,name))
+        }
+        create('older',1,'z.json')
+        fs.renameSync(path.join(journalDir,'z.json'),held)
+        create('newer',2,'a.json')
+        fs.renameSync(held,path.join(journalDir,'z.json'))
+        expect(recoverTransactions(root)).toEqual({recovered:2})
+        expect(fs.readFileSync(path.join(root,'x.json'),'utf8')).toBe('newer')
+        expect(fs.readdirSync(journalDir)).toEqual([])
+    })
+
+    it('keeps an external revision durably when startup finishes a prepared transaction', () => {
+        const root = tempRoot()
+        atomicWriteFile(root, 'a.json', Buffer.from('before-a'))
+        atomicWriteFile(root, 'b.json', Buffer.from('before-b'))
+        expect(() => commitTransaction(root, [
+            { path: 'a.json', data: Buffer.from('app-a') },
+            { path: 'b.json', data: Buffer.from('app-b') },
+        ], { failAfterPublish: 1 })).toThrow('simulated crash')
+        fs.writeFileSync(path.join(root, 'b.json'), 'external-b')
+        recoverTransactions(root)
+        expect(fs.readFileSync(path.join(root, 'b.json'), 'utf8')).toBe('app-b')
+        atomicWriteFile(root, 'b.json', Buffer.from('later-app-b'))
+        const recovery = path.join(root, 'trash/transaction-recovery')
+        const mappings = fs.readdirSync(recovery, { recursive: true }).map(String).filter(name => name.endsWith('mapping.json'))
+        expect(mappings).toHaveLength(1)
+        const mapping = JSON.parse(fs.readFileSync(path.join(recovery, mappings[0]), 'utf8'))
+        expect(mapping.source).toBe('b.json')
+        expect(fs.readFileSync(path.join(root, mapping.destination), 'utf8')).toBe('external-b')
+        recoverTransactions(root)
+        expect(fs.readdirSync(recovery, { recursive: true }).map(String).filter(name => name.endsWith('mapping.json'))).toEqual(mappings)
+    })
+
+    it('leaves the target and journal intact if its recovery copy cannot be saved', () => {
+        const root = tempRoot()
+        atomicWriteFile(root, 'b.json', Buffer.from('before-b'))
+        expect(() => commitTransaction(root, [
+            { path: 'a.json', data: Buffer.from('app-a') },
+            { path: 'b.json', data: Buffer.from('app-b') },
+        ], { failAfterPublish: 1 })).toThrow('simulated crash')
+        fs.writeFileSync(path.join(root, 'b.json'), 'external-b')
+        const copy = fs.copyFileSync
+        vi.spyOn(fs, 'copyFileSync').mockImplementation((source, target, flags) => {
+            if (String(target).includes('transaction-recovery')) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+            return copy(source, target, flags)
+        })
+        expect(() => recoverTransactions(root)).toThrow('disk full')
+        expect(fs.readFileSync(path.join(root, 'b.json'), 'utf8')).toBe('external-b')
+        expect(fs.readdirSync(path.join(root, '.journal')).filter(name => name.endsWith('.json'))).toHaveLength(1)
+        vi.restoreAllMocks()
+        recoverTransactions(root)
+        expect(fs.readFileSync(path.join(root, 'b.json'), 'utf8')).toBe('app-b')
+    })
+
     it('recovers chunked writes after interrupted publication and skips unchanged bytes', () => {
         const root = tempRoot()
         const chunks = function* () { yield Buffer.from('한글'); yield Buffer.from('😀\n'); }

@@ -18,7 +18,7 @@ describe('GitHub release update information', () => {
             {
                 tag_name: 'v0.1.1',
                 name: 'RisuBard 0.1.1',
-                html_url: 'https://github.com/rpaddict/RisuBard/releases/tag/v0.1.1',
+                html_url: 'https://github.com/minchopie/RisuBard/releases/tag/v0.1.1',
                 published_at: '2026-08-19T00:00:00Z',
             },
             '0.1.0'
@@ -29,7 +29,7 @@ describe('GitHub release update information', () => {
             latestVersion: '0.1.1',
             hasUpdate: true,
             severity: 'optional',
-            releaseUrl: 'https://github.com/rpaddict/RisuBard/releases/tag/v0.1.1',
+            releaseUrl: 'https://github.com/minchopie/RisuBard/releases/tag/v0.1.1',
             releaseName: 'RisuBard 0.1.1',
             publishedAt: '2026-08-19T00:00:00Z',
             manualOnly: false,

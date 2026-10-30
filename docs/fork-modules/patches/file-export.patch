@@ -1,0 +1,116 @@
+diff --git a/src/lib/Setting/Pages/PluginSettings.svelte b/src/lib/Setting/Pages/PluginSettings.svelte
+index 67539b5..212a729 100644
+--- a/src/lib/Setting/Pages/PluginSettings.svelte
++++ b/src/lib/Setting/Pages/PluginSettings.svelte
+@@ -2,7 +2,7 @@
+     import { PlusIcon, TrashIcon, LinkIcon, CodeXmlIcon, PowerIcon, PowerOffIcon, ShieldIcon, RefreshCwIcon, DownloadIcon, SaveIcon } from "@lucide/svelte";
+     import { language } from "src/lang";
+     import SettingPage from "src/lib/UI/GUI/SettingPage.svelte";
+-    import { alertConfirm, alertMd, alertSelect, notifyError, notifySuccess } from "src/ts/alert";
++    import { alertError, alertConfirm, alertMd, alertSelect, notifyError, notifySuccess } from "src/ts/alert";
+     import { TriangleAlert } from '@lucide/svelte';
+ 
+     import { DBState, hotReloading } from "src/ts/stores.svelte";
+@@ -197,12 +197,17 @@
+                 ]))
+                 if (v === 0) await importPluginsToSelectedFolder(hotReloadPluginFiles)
+                 if (v === 1) {
+-                    const a = document.createElement('a')
+-                    a.href = '/plugin_start.7z'
+-                    a.download = 'plugin_starter.7z'
+-                    document.body.appendChild(a)
+-                    a.click()
+-                    a.remove()
++                    if (!(globalThis as any).RisuPlay) {
++                        const a = document.createElement('a')
++                        a.href = '/plugin_start.7z'; a.download = 'plugin_starter.7z'
++                        document.body.appendChild(a); a.click(); a.remove()
++                        return
++                    }
++                    try {
++                        const response = await fetch('/plugin_start.7z')
++                        if (!response.ok) throw new Error(`파일 다운로드 실패 (${response.status})`)
++                        await downloadFile('plugin_starter.7z', await response.arrayBuffer()).catch(error => { if (!(globalThis as any).RisuPlay) throw error })
++                    } catch (error) { alertError(String(error)) }
+                 }
+             }}><CodeXmlIcon /></ShButton>
+         </div>
+diff --git a/src/lib/SideBars/Scripts/TriggerV2List.svelte b/src/lib/SideBars/Scripts/TriggerV2List.svelte
+index 6163d3d..29e0971 100644
+--- a/src/lib/SideBars/Scripts/TriggerV2List.svelte
++++ b/src/lib/SideBars/Scripts/TriggerV2List.svelte
+@@ -1,4 +1,6 @@
+ <script lang="ts">
++    import { alertError } from "src/ts/alert";
++    import { downloadFile } from "src/ts/globalApi.svelte";
+     import { PlusIcon, ArrowLeftIcon, DownloadIcon, UploadIcon } from "@lucide/svelte";
+     import { language } from "src/lang";
+     import Button from "src/lib/UI/GUI/Button.svelte";
+@@ -2606,17 +2608,7 @@
+                             const triggersToExport = value.slice(1);
+                             const jsonData = JSON.stringify(triggersToExport, null, 2);
+                             
+-                            const blob = new Blob([jsonData], { type: 'application/json' });
+-                            const url = URL.createObjectURL(blob);
+-                            
+-                            const a = document.createElement('a');
+-                            a.href = url;
+-                            a.download = `triggers-${new Date().getTime()}.json`;
+-                            document.body.appendChild(a);
+-                            a.click();
+-                            document.body.removeChild(a);
+-                            
+-                            URL.revokeObjectURL(url);
++                            void downloadFile(`triggers-${new Date().getTime()}.json`, jsonData).catch(error => { if (!(globalThis as any).RisuPlay) alertError(String(error)) });
+                         }}>
+                             <DownloadIcon />
+                         </button>
+diff --git a/src/ts/bardPainter/runtime.svelte.ts b/src/ts/bardPainter/runtime.svelte.ts
+index 3505cc6..5cc3c21 100644
+--- a/src/ts/bardPainter/runtime.svelte.ts
++++ b/src/ts/bardPainter/runtime.svelte.ts
+@@ -1,7 +1,7 @@
+ import { v4 } from 'uuid'
+ import { unzip } from 'fflate'
+ import { DBState, ReloadChatPointer } from '../stores.svelte'
+-import { forageStorage, globalFetch, requestImmediateSave } from '../globalApi.svelte'
++import { downloadFile, forageStorage, globalFetch, requestImmediateSave } from '../globalApi.svelte'
+ import { requestChatData } from '../process/request/request'
+ import { collectLoreBuilderSources, matchLoreBuilderCharacterLorebook } from '../loreBuilder'
+ import { loadNarrativeMemoryWiki } from '../risubard/memoryWiki'
+@@ -820,9 +820,7 @@ export class PainterSession {
+             const stored = !pending && result ? await getInlayAssetBlob(result.assetId) : null
+             const blob = pending ? new Blob([new Uint8Array(pending.png)], { type: 'image/png' }) : stored?.data
+             if (!blob) throw new Error('내려받을 생성 원본이 없습니다.')
+-            const url = URL.createObjectURL(blob)
+-            const link = document.createElement('a'); link.href = url; link.download = 'bard-painter-original.png'; link.click()
+-            setTimeout(() => URL.revokeObjectURL(url), 1000)
++            await downloadFile('bard-painter-original.png', await blob.arrayBuffer())
+         })
+     }
+ 
+diff --git a/src/ts/observer.svelte.ts b/src/ts/observer.svelte.ts
+index ec90977..ccae78d 100644
+--- a/src/ts/observer.svelte.ts
++++ b/src/ts/observer.svelte.ts
+@@ -1,4 +1,4 @@
+-import { globalFetch } from "./globalApi.svelte";
++import { downloadFile, globalFetch } from "./globalApi.svelte";
+ 
+ let bgmElement:HTMLAudioElement|null = null;
+ let domObserver: MutationObserver | null = null;
+@@ -35,11 +35,9 @@ function nodeObserve(node:HTMLElement){
+             const downloadOption = document.createElement('div');
+             downloadOption.textContent = 'Download';
+             downloadOption.setAttribute('class', 'px-4 py-2 text-sm text-textcolor hover:bg-darkbutton cursor-pointer')
+-            downloadOption.addEventListener('click', ()=>{
+-                const a = document.createElement('a')
+-                a.href = URL.createObjectURL(new Blob([node.textContent ?? ''], {type: 'text/plain'}))
+-                a.download = 'code.' + hlLang
+-                a.click()
++            downloadOption.addEventListener('click', async ()=>{
++                try { await downloadFile('code.' + hlLang, node.textContent ?? '') }
++                catch (error) { if (!(globalThis as any).RisuPlay) (await import('./alert')).alertError(String(error)) }
+                 menu.remove()
+             })
+ 

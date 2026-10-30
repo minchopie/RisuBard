@@ -20,7 +20,7 @@ it('keeps the captured send target when selection changes during synchronization
     const character = {chaId:'character', chatPage:0, chats:[{id:'first'}, {id:'second'}]}
     const errors: string[] = []
     const dependencies = {
-        DBState: {db:{characters:[character]}}, get:()=>0, selectedCharID:{},
+        DBState: {db:{characters:[character]}}, get:()=>0, selectedCharID:{}, transferBusy:{}, syncSaveHold:{}, // the NAS sync hold gate reads these stores through `get`
         refreshLiveFiles:()=>sync, waitForSendSync, captureGenerationTarget, createGenerationScope,
         language:{chatSendSelectionChanged:'selection changed'}, notifyError:(error:string)=>errors.push(error),
     }

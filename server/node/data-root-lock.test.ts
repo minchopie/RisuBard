@@ -38,6 +38,26 @@ afterEach(() => {
 })
 
 describe('data-root process lock', () => {
+    test.each(['0', '1'])('handles a stale PID reused by another UID in embedded mode %s', (embedded) => {
+        const root = tempRoot()
+        const result = spawnSync(process.execPath, ['-e', `
+            const assert = require('node:assert/strict')
+            const fs = require('node:fs')
+            const path = require('node:path')
+            const lockPath = path.join(process.env.DATA_ROOT, '.risubard-server.lock')
+            fs.mkdirSync(lockPath)
+            fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({ pid: process.pid + 1 }))
+            process.kill = () => { throw Object.assign(new Error('other UID'), { code: 'EPERM' }) }
+            const { acquireDataRootLock } = require(process.env.LOCK_MODULE)
+            if (process.env.RISUBARD_EMBEDDED_ANDROID === '1') acquireDataRootLock(process.env.DATA_ROOT).release()
+            else assert.throws(() => acquireDataRootLock(process.env.DATA_ROOT), { code: 'DATA_ROOT_IN_USE' })
+        `], {
+            env: { ...process.env, LOCK_MODULE: lockModule, DATA_ROOT: root, RISUBARD_EMBEDDED_ANDROID: embedded },
+            encoding: 'utf8', timeout: 3000,
+        })
+        expect(result.status, result.stderr).toBe(0)
+    })
+
     test.each(['SIGINT', 'SIGTERM'])('releases the lock on %s without a shutdown handler', (signal) => {
         const root = tempRoot()
         const result = spawnSync(process.execPath, ['-e', `

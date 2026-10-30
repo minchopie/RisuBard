@@ -1,0 +1,44 @@
+[
+  {
+    "file": "tilt-prism-vietnamese.woff2",
+    "source": "https://fonts.gstatic.com/s/tiltprism/v16/5h11iZgyPHoZ3YikNzWGfWey2dCAZXT-bH9V4VGn-FJ7tLI25oc_rIbAqT6qr84.woff2",
+    "sha256": "d5ca27f2800d5c99f975bc54be698931846405c184a16530e3c67575bce8f6e2",
+    "bytes": 8960
+  },
+  {
+    "file": "tilt-prism-latin-ext.woff2",
+    "source": "https://fonts.gstatic.com/s/tiltprism/v16/5h11iZgyPHoZ3YikNzWGfWey2dCAZXT-bH9V4VGn-FJ7tLI25oc_rIbAqD6qr84.woff2",
+    "sha256": "d8f746a5e3427ce5e1f94d8bcd64b0c7cafd47a184f78512bb2c3200029a5507",
+    "bytes": 33632
+  },
+  {
+    "file": "tilt-prism-latin.woff2",
+    "source": "https://fonts.gstatic.com/s/tiltprism/v16/5h11iZgyPHoZ3YikNzWGfWey2dCAZXT-bH9V4VGn-FJ7tLI25oc_rIbApj6q.woff2",
+    "sha256": "1bdafc615e36d0fe9003d48cda2d8a09ec555171623febf2a8599d8edd8f0136",
+    "bytes": 39360
+  },
+  {
+    "file": "yellowtail-latin-ext.woff2",
+    "source": "https://fonts.gstatic.com/s/yellowtail/v25/OZpGg_pnoDtINPfRIlLohlXHwXD-.woff2",
+    "sha256": "39218cd1b5f245d702c4984332c87fd0eae4ec2ba973a83d7ceec7d879b953e0",
+    "bytes": 11104
+  },
+  {
+    "file": "yellowtail-latin.woff2",
+    "source": "https://fonts.gstatic.com/s/yellowtail/v25/OZpGg_pnoDtINPfRIlLohlvHwQ.woff2",
+    "sha256": "78f5413a0d04f3331122d49f10507a6c290afe4d441fc49a968c7779331aedb4",
+    "bytes": 18308
+  },
+  {
+    "file": "Tilt-Prism-OFL.txt",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/tiltprism/OFL.txt",
+    "sha256": "97941703cd5fb1d5e86a062c9463ed12a613dbfbab9961c333699bdb2d277321",
+    "bytes": 4387
+  },
+  {
+    "file": "Yellowtail-LICENSE.txt",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/apache/yellowtail/LICENSE.txt",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "bytes": 11358
+  }
+]

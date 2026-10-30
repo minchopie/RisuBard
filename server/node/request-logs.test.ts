@@ -78,6 +78,18 @@ describe('truncation', () => {
 })
 
 describe('insert and query', () => {
+    it('masks opaque and encoded query credentials before persistence and detail display', () => {
+        const url = 'https://example.invalid/generate?model=keep&%6bey=url-secret&access_token=opaque-token&view=full'
+        logs.addRequestLogBatch([entry({ url, requestHeaders: '{"Authorization":"Bearer header-secret","x-api-key":"header-key"}', errorMessage: `Failed ${url}` })])
+        const row = logs.getRequestLog(logs.queryRequestLogs({})[0].id)
+        expect(row.url).toBe('https://example.invalid/generate?model=keep&%6bey=[REDACTED]&access_token=[REDACTED]&view=full')
+        const disk = fs.readFileSync(path.join(tmpDir, 'request-logs', 'requests.jsonl'), 'utf8')
+        for (const secret of ['url-secret', 'opaque-token', 'header-secret', 'header-key']) {
+            expect(JSON.stringify(row)).not.toContain(secret)
+            expect(disk).not.toContain(secret)
+        }
+    })
+
     it('writes a request row and a matching usage row', () => {
         expect(logs.addRequestLogBatch([entry()])).toBe(1)
 
@@ -558,8 +570,20 @@ describe('routes', () => {
         return false
     }
 
+    // fetch rejects some OS-assigned ports client-side ("bad port") before any request is sent; node:http has no such list,
+    // so the fixture tests HTTP status/body rather than browser port policy (same pattern as play-transfer-http.test.ts).
+    const httpFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array } = {}) => new Promise<Response>((resolve, reject) => {
+        const req = http.request(url, { method: init.method, headers: init.headers }, response => {
+            const chunks: Buffer[] = []
+            response.on('data', chunk => chunks.push(chunk))
+            response.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode })))
+            response.on('error', reject)
+        })
+        req.on('error', reject); req.end(init.body)
+    })
+
     function get(path: string) {
-        return fetch(`${base}${path}`, { headers: { 'risu-auth': AUTH_TOKEN } })
+        return httpFetch(`${base}${path}`, { headers: { 'risu-auth': AUTH_TOKEN } })
     }
 
     beforeEach(async () => {
@@ -582,7 +606,7 @@ describe('routes', () => {
     })
 
     async function post(body: unknown) {
-        return fetch(`${base}/api/request-logs`, {
+        return httpFetch(`${base}/api/request-logs`, {
             method: 'POST',
             headers: { 'content-type': 'application/json', 'risu-auth': AUTH_TOKEN },
             body: JSON.stringify(body),
@@ -590,7 +614,7 @@ describe('routes', () => {
     }
 
     it('rejects unauthenticated reads', async () => {
-        const res = await fetch(`${base}/api/request-logs`)
+        const res = await httpFetch(`${base}/api/request-logs`)
         expect(res.status).toBe(400)
     })
 
@@ -673,11 +697,11 @@ describe('routes', () => {
 
     it('clears logs but keeps usage unless asked', async () => {
         await post(entry())
-        await fetch(`${base}/api/request-logs`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
+        await httpFetch(`${base}/api/request-logs`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
         expect((await (await get('/api/request-logs')).json()).total).toBe(0)
         expect((await (await get('/api/request-logs/usage')).json()).total.requests).toBe(1)
 
-        await fetch(`${base}/api/request-logs?usage=1`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
+        await httpFetch(`${base}/api/request-logs?usage=1`, { method: 'DELETE', headers: { 'risu-auth': AUTH_TOKEN } })
         expect((await (await get('/api/request-logs/usage')).json()).total.requests).toBe(0)
     })
 })

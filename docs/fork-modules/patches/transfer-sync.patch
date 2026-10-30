@@ -1,0 +1,39 @@
+diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
+index d8b1110..0929329 100644
+--- a/src/ts/process/index.svelte.ts
++++ b/src/ts/process/index.svelte.ts
+@@ -1840,9 +1840,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+                         performance.now() - inquiryStartedAt
+                 }
+             }
+-            // Cache-friendly mode keeps the slow-changing baseline in the
+-            // description slot and moves per-turn sources next to the latest
+-            // user message, after the stable prompt prefix.
++            // Cache-friendly mode keeps original character/lore text; its
++            // baseline is a lossy summary of the same text, not extra memory.
+             const currentPrompt = narrativeContext.sourceChanged
+                 ? null
+                 : createNarrativeSourcesPrompt(
+@@ -1851,10 +1850,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+                     undefined,
+                     requiredWikiSources.length ? '' : responseWikiPromptGuide
+                 )
+-            const baselinePrompt = cacheFriendlyContext
+-                && !narrativeContext.sourceChanged
+-                ? createNarrativeSourcesPrompt([], narrativeContext.baseline ?? '')
+-                : null
++            const baselinePrompt = null
+             if (currentPrompt || baselinePrompt) {
+                 narrativeContextObservation.mode = 'current'
+                 narrativeContextObservation.reason =
+@@ -1906,9 +1902,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+                     cacheFriendlyNarrativeMessage = currentContextMessage
+                 }
+                 const staticContextMessage: OpenAIChat | null = cacheFriendlyContext
+-                    ? baselinePrompt
+-                        ? { role: 'system', content: baselinePrompt, requestStatusSources: baselineStatusSources }
+-                        : null
++                    ? null
+                     : currentContextMessage
+                 if (staticContextMessage) {
+                 const mergedContext = mergeNarrativeContextWithStaticPrompt({

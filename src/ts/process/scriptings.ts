@@ -1208,7 +1208,8 @@ export async function runScripted(code:string, arg:{
 }
 
 async function makeLuaFactory(){
-    const _luaFactory = new LuaFactory()
+    // Wasmoon's environment bootstrap aborts when the host entrypoint contains Korean characters.
+    const _luaFactory = new LuaFactory(undefined, { _: './risubard' })
     async function mountFile(name:string){
         let code = ''
         for(let i = 0; i < 3; i++){

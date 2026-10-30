@@ -1,0 +1,16 @@
+{
+  "version": "24.21.0",
+  "source": "https://github.com/Delusions6515/node-android-build",
+  "architectures": {
+    "arm64-v8a": {
+      "archiveArch": "arm64",
+      "sha256": "abce532d539fdd8a8da8ab79f3445fa63e04a7bf08df864a7943e67dba89a322",
+      "buildProvenance": "node-build-provenance.json"
+    },
+    "x86_64": {
+      "archiveArch": "x64",
+      "sha256": "670a0ecc9989cf4640fe218b4d0bccee07a26930d21463513d3e10b622d93833",
+      "buildProvenance": "node-build-provenance.json"
+    }
+  }
+}

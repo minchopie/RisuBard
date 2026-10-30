@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AdbToolsPath Condition="'$(AdbToolsPath)' == ''">$(MSBuildThisFileDirectory)..\..\..\.tooling\android-sdk\platform-tools</AdbToolsPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <EmbeddedResource Include="$(AdbToolsPath)\adb.exe" LogicalName="BundledAdb.adb.exe" />
+    <EmbeddedResource Include="$(AdbToolsPath)\AdbWinApi.dll" LogicalName="BundledAdb.AdbWinApi.dll" />
+    <EmbeddedResource Include="$(AdbToolsPath)\AdbWinUsbApi.dll" LogicalName="BundledAdb.AdbWinUsbApi.dll" />
+    <EmbeddedResource Include="$(AdbToolsPath)\NOTICE.txt" LogicalName="BundledAdb.NOTICE.txt" />
+    <PackageReference Include="Makaretu.Dns.Multicast" Version="0.27.0" />
+  </ItemGroup>
+</Project>
