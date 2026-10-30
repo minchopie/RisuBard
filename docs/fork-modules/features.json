@@ -416,7 +416,8 @@
         "patchnote/0.9.100.md",
         "patchnote/0.9.101.md",
         "patchnote/0.9.102.md",
-        "patchnote/0.9.103.md"
+        "patchnote/0.9.103.md",
+        "patchnote/0.9.104.md"
       ]
     },
     {
@@ -654,7 +655,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "e90f0f1b5436b484cbb3af938c21aac07cb2ddb775d97011c1d71d7ffcd4b3c5"
+          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2"
         },
         {
           "module": "host-bridges",
@@ -733,7 +734,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "e90f0f1b5436b484cbb3af938c21aac07cb2ddb775d97011c1d71d7ffcd4b3c5"
+          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2"
         },
         {
           "module": "lore-lua",
@@ -876,7 +877,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "e90f0f1b5436b484cbb3af938c21aac07cb2ddb775d97011c1d71d7ffcd4b3c5"
+          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2"
         },
         {
           "module": "lore-lua",

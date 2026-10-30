@@ -202,6 +202,38 @@ test('remote admission: validated whole, out-of-order waits, duplicates identica
     expect(b.waitingEntries()).toEqual([expect.objectContaining({ sequence: 8, commitId: o8.commitId, blobs: [], object: null })])
 })
 
+test('waiting retry: commits waiting on each other across peers all enter in one retry; a still-blocked record is not rewritten', async t => {
+    let writes = 0
+    const counted = { writeJson: (...args: any[]) => { if (args[1] === 'state.json' || String(args[1]).startsWith('incoming/')) writes++; return atomicWriteJson(...args) } }
+    const a = open(await temp(t)), c = open(await temp(t, 'bard-sync-c-')), b = open(await temp(t, 'bard-sync-b-'), counted)
+    for (const s of [a, b, c]) s.setWorkspace('ws')
+    const addr = (s: any, e: any) => ({ device: s.identity().deviceId, incarnation: s.identity().incarnationId, sequence: e.sequence, commitId: e.commitId })
+    // One chat edited alternately on two devices: every revision's parent is the other device's previous revision.
+    const sent: any[] = []; let parents: string[] = [], last = ''
+    for (let i = 0; i < 6; i++) {
+        const [from, to] = i % 2 ? [c, a] : [a, c]
+        const rev = chat('c1', { n: i }, parents), entry = from.commit([rev])
+        expect(to.admitRemote(deliver(from, to, entry), addr(from, entry)).state).toBe('admitted')
+        sent.push([deliver(from, b, entry), addr(from, entry)]); parents = [rev.id]; last = rev.id
+    }
+    // Newest first: each record waits for a parent that sits later in the queue, alternating between the two peers.
+    const first = [...sent].reverse().map(([object, address]) => b.admitRemote(object, address).state)
+    expect(first).toEqual(['waiting', 'waiting', 'waiting', 'waiting', 'waiting', 'admitted'])
+    const retried = await b.retryWaitingAsync()
+    expect(retried.map((r: any) => r.state)).toEqual(['admitted', 'admitted', 'admitted', 'admitted', 'admitted'])
+    expect(new Set(retried.map((r: any) => r.commitId)).size).toBe(5)
+    expect(b.graph.heads(key('c1'))).toEqual([last]); expect(b.waitingEntries()).toEqual([])
+    expect(b.pendingApply()).toHaveLength(6)
+    // A record whose parent never arrived: retrying it again and again writes nothing (same reason, same durable copy).
+    const r1 = chat('c2', { n: 1 }), r2 = chat('c2', { n: 2 }, [r1.id]); a.commit([r1]); const e2 = a.commit([r2])
+    expect(b.admitRemote(deliver(a, b, e2), addr(a, e2))).toMatchObject({ state: 'waiting', reason: 'Missing parent revision: ' + r1.id })
+    writes = 0
+    expect(b.retryWaiting()).toEqual([expect.objectContaining({ sequence: e2.sequence, state: 'waiting', reason: 'Missing parent revision: ' + r1.id })])
+    expect(await b.retryWaitingAsync()).toEqual([expect.objectContaining({ sequence: e2.sequence, state: 'waiting' })])
+    expect(writes).toBe(0)
+    expect(open(b.root.replace(/[\\/]nas-sync$/, '')).waitingEntries()).toEqual([expect.objectContaining({ sequence: e2.sequence, commitId: e2.commitId })])
+})
+
 test('cloned incarnation: both commits preserved, later records held until explicit resolution, survives restart', async t => {
     const rootA = await temp(t), rootA2 = await temp(t, 'bard-sync-clone-'), rootB = await temp(t, 'bard-sync-b-')
     const a = open(rootA); a.setWorkspace('ws'); a.commit([chat('seed', { n: 0 })])

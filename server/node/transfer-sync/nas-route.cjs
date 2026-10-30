@@ -95,8 +95,9 @@ function createNasRoute({ secrets, probe = probeUrl, detect = null, now = Date.n
     async function run(fn) {
         const outer = context.getStore();
         if (outer) return fn();
-        const decision = await resolve();
-        return context.run({ decision }, fn);
+        // The saved NAS settings are read once per run too: each read decrypts the secrets file (a process per call on Windows).
+        const config = await secrets.get('nas'), decision = await resolve(config);
+        return context.run({ decision, config }, fn);
     }
     async function status() { const d = context.getStore()?.decision ?? await resolve(); return { route: d.route, reason: d.reason, pinned: !!context.getStore(), network: d.network }; }
     /** Register the current Wi-Fi as home: only a known SSID on Wi-Fi (the client reports the underlying Wi-Fi under a VPN). */
@@ -113,6 +114,6 @@ function createNasRoute({ secrets, probe = probeUrl, detect = null, now = Date.n
         await secrets.set('nas', { ...saved, homeSsids });
         return { count: homeSsids.length };
     }
-    return { decide, report, network, resolve, urlFor, endpointFor, run, status, registerCurrent, forget, invalidate: () => { probeCache = null; detected = null; } };
+    return { decide, report, network, resolve, urlFor, endpointFor, run, status, pinnedConfig: () => context.getStore()?.config ?? null, registerCurrent, forget, invalidate: () => { probeCache = null; detected = null; } };
 }
 module.exports = { createNasRoute, decide, parseNetsh, classifyAdapters, probeUrl, detectWindows };

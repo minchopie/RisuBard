@@ -83,7 +83,9 @@ function createStoredGraph(headers, loadRevision) {
     if (typeof loadRevision !== 'function') throw new Error('Stored revision reader is required');
     return graphRuntime(headers, loadRevision);
 }
-function graphRuntime(revisions = [], loadRevision = null) {
+// `trusted` is only for copies of a stored graph: its headers were verified (storedHeader) and frozen when they entered it,
+// so a fork or trial copy reuses them instead of re-hashing every header for every incoming commit.
+function graphRuntime(revisions = [], loadRevision = null, trusted = false) {
     const byId = new Map(), roots = new Map(), children = new Map();
     const get = id => {
         const revision = byId.get(id);
@@ -119,10 +121,12 @@ function graphRuntime(revisions = [], loadRevision = null) {
     }
     /** All-or-nothing: a trial copy validates the whole batch before this graph changes. */
     function addAll(list) {
-        const trial = loadRevision ? createStoredGraph([...byId.values()], loadRevision) : createGraph();
+        const trial = loadRevision ? graphRuntime([...byId.values()], loadRevision, true) : createGraph();
         if (!loadRevision) for (const rev of byId.values()) trial.add(rev);
         addOrdered(list, trial);
-        return addOrdered(list, { add });
+        // The trial has just checked every hash of these same objects in this call; the real pass only links them (the content
+        // is not hashed a second time — that doubled the cost of admitting large chats).
+        return addOrdered(list, { add: rev => { if (!loadRevision) return addVerified(rev); const { content, ...header } = rev; return addVerified(storedHeader(header)); } });
     }
     const heads = key => [...(roots.get(key) ?? [])].filter(id => !children.has(id)).sort(compare);
     function isAncestor(ancestor, id) {
@@ -229,10 +233,10 @@ function graphRuntime(revisions = [], loadRevision = null) {
     function fromBackup({ domain, type, root, content, dependencies, base }) {
         return makeRevision({ domain, type, root, parents: base && byId.has(base) ? [base] : [], content, dependencies });
     }
-    addOrdered(revisions, { add: loadRevision ? raw => addVerified(storedHeader(raw)) : add });
+    addOrdered(revisions, { add: loadRevision ? raw => addVerified(trusted ? raw : storedHeader(raw)) : add });
     return { add, addAll, get, heads, isAncestor, classify, containerState, branchSegments, edit, resolve, tombstones, restore, bootstrapResolution, fromBackup,
         revisions: () => loadRevision ? [...byId.keys()].map(get) : [...byId.values()], rootKeys: () => [...roots.keys()],
-        ...(loadRevision ? { fork: () => createStoredGraph([...byId.values()], loadRevision) } : {}) };
+        ...(loadRevision ? { fork: () => graphRuntime([...byId.values()], loadRevision, true) } : {}) };
 
 }
 /** Ancestry does not imply runtime compatibility: every pinned dependency must be present. */

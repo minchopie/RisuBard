@@ -283,7 +283,7 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
      *  write that admits, parks or quarantines the record. */
     function admitRemote(object, { device, incarnation, sequence, commitId } = object ?? {}, { release = false } = {}) {
         if (device === state.deviceId && incarnation === state.incarnationId) throw new Error('Own commits are not admitted as remote');
-        const p = clone(peerOf(clone(state), device, incarnation)), key = pair(sequence, commitId);
+        const p = clone(state.peers[peerKey(device, incarnation)] ?? peerOf({ peers: {} }, device, incarnation)), key = pair(sequence, commitId);
         if (p.admitted[sequence] === commitId || p.accepted[key]) return { state: 'identical' };
         if (p.quarantined[sequence]?.includes(commitId)) return { state: 'quarantined', reason: 'previously quarantined' };
         // Header-level validity (address, workspace, content-derived commit id) comes first: a malformed or foreign object
@@ -303,12 +303,25 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
             if (p.ambiguous && sequence > p.ambiguous.sequence) return hold('incarnation ambiguous since sequence ' + p.ambiguous.sequence);
         }
         const wait = (reason, blobs = []) => {
+            // Already parked for the same reason: the durable copy and the manifest say this already. Rewriting both on every
+            // retry pass made a large join (hundreds of commits waiting on each other) block the event loop for minutes.
+            const w = p.waiting[key];
+            if (w && !p.held[key] && !w.error && w.reason === reason && !!w.accepted === acceptedVariant && p.lastSeen >= sequence
+                && JSON.stringify(w.blobs ?? []) === JSON.stringify(blobs) && fs.existsSync(file(incomingPath(device, incarnation, sequence, commitId)))) return { state: 'waiting', reason };
             writeJson(root, incomingPath(device, incarnation, sequence, commitId), object);
             transact(s => { const q = peerOf(s, device, incarnation); q.waiting[key] = { at: now(), reason, blobs, ...(acceptedVariant ? { accepted: true } : {}) }; delete q.held[key]; q.lastSeen = Math.max(q.lastSeen, sequence); });
             return { state: 'waiting', reason };
         };
         const blobs = missingCommitBlobs(object);
         if (blobs.length) return wait('missing blobs: ' + blobs.join(','), blobs);
+        // Parent precheck from the headers alone: a parent that is neither in the graph nor in this batch cannot be added, so the
+        // record waits without reading and hashing its content or copying the graph (same reason the full check would give).
+        // Malformed parent lists skip this and reach the full check, which quarantines them.
+        if (object.revisions.every(h => Array.isArray(h.parents) && h.parents.every(id => typeof id === 'string' && DIGEST.test(id)))) {
+            const inBatch = new Set(object.revisions.map(h => h.id));
+            const orphan = object.revisions.find(h => h.parents.some(id => !inBatch.has(id) && !graph.get(id)));
+            if (orphan) return wait('Missing parent revision: ' + orphan.parents.join(','));
+        }
         let revisions, results;
         try { revisions = materialize(object); results = graph.fork().addAll(revisions); }
         catch (error) {
@@ -341,21 +354,34 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
         }
         return out;
     }
-    /** Waiting commits retry in sequence order. Unreadable files stay queued with the error recorded; nothing is dropped. */
-    function retryWaiting() {
-        const results = [];
-        for (const [k, p] of Object.entries(state.peers)) {
-            const [device, incarnation] = k.split('/');
-            for (const name of Object.keys(p.waiting).sort(bySequence)) {
-                const [sequence, commitId] = name.split('_'), address = { device, incarnation, sequence: Number(sequence), commitId };
-                let object;
-                try { object = readIncoming(device, incarnation, Number(sequence), commitId); }
-                catch (error) { transact(s => { peerOf(s, device, incarnation).waiting[name].error = String(error.message).slice(0, 300); }); results.push({ ...address, state: 'waiting', reason: 'unreadable: ' + error.message }); continue; }
-                results.push({ ...address, ...admitRemote(object, address, { release: !!p.waiting[name].accepted }) });
+    /** Waiting commits retry in sequence order, pass after pass until a pass admits nothing: a commit can wait on another
+     *  peer's commit that sits later in the queue. Unreadable files stay queued with the error recorded; nothing is dropped.
+     *  One result per record (its last outcome). The generator yields after every record so a caller can keep the event
+     *  loop responsive between them. */
+    function* retryWaitingSteps() {
+        const results = new Map(), unreadable = new Set();
+        for (let progress = true; progress;) {
+            progress = false;
+            for (const [k, p] of Object.entries(state.peers)) {
+                const [device, incarnation] = k.split('/');
+                for (const name of Object.keys(p.waiting).sort(bySequence)) {
+                    const id = k + '/' + name, current = state.peers[k]?.waiting[name];
+                    if (!current || unreadable.has(id)) continue;
+                    const [sequence, commitId] = name.split('_'), address = { device, incarnation, sequence: Number(sequence), commitId };
+                    let object;
+                    try { object = readIncoming(device, incarnation, Number(sequence), commitId); }
+                    catch (error) { unreadable.add(id); transact(s => { peerOf(s, device, incarnation).waiting[name].error = String(error.message).slice(0, 300); }); results.set(id, { ...address, state: 'waiting', reason: 'unreadable: ' + error.message }); yield; continue; }
+                    const result = admitRemote(object, address, { release: !!current.accepted });
+                    results.set(id, { ...address, ...result });
+                    if (result.state === 'admitted') progress = true;
+                    yield;
+                }
             }
         }
-        return results;
+        return [...results.values()];
     }
+    function retryWaiting() { const steps = retryWaitingSteps(); for (;;) { const step = steps.next(); if (step.done) return step.value; } }
+    async function retryWaitingAsync() { const steps = retryWaitingSteps(); for (;;) { const step = steps.next(); if (step.done) return step.value; await new Promise(resolve => setImmediate(resolve)); } }
     /** Explicit resolution of a cloned incarnation. The decision is recorded durably first and then carried out; each held
      *  record leaves the manifest only in the write that admits, parks or quarantines it, so a crash anywhere resumes on
      *  reopen without losing or resurrecting anything. `acceptHeld` admits the second commit's revisions too (both variants
@@ -429,7 +455,7 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
     for (const [name, read] of Object.entries(publicGraph)) publicGraph[name] = (...args) => { assertHealthy(); return read(...args); };
     return { root, graph: publicGraph, resumed,
         setWorkspace, setProfile, commit, commitObject, dueCommits, publishedCommits, unpublishedBlobs, markBlobPublished, markPublished, noteNasTimes, markPublishFailed, rotateIncarnation, needsCheckpoint, checkpointObject, recordCheckpoint, recordBase,
-        validateCommitObject, missingCommitBlobs, admitRemote, waitingEntries, retryWaiting, resolveAmbiguity, resumeResolutions, pendingApply, markApplied, ackObject, ackChanged, markAckPublished, knownRemote, isWaiting, rotateBuckets, peer, trash, status,
+        validateCommitObject, missingCommitBlobs, admitRemote, waitingEntries, retryWaiting, retryWaitingAsync, resolveAmbiguity, resumeResolutions, pendingApply, markApplied, ackObject, ackChanged, markAckPublished, knownRemote, isWaiting, rotateBuckets, peer, trash, status,
         hasBlob, blobFile, blobPath, storeBlobFromFile: importBlob, envelopePhysical, missingBlobs, identity: () => ({ deviceId: state.deviceId, incarnationId: state.incarnationId, workspaceId: state.workspaceId }), state: () => clone(state) };
 }
 module.exports = { createSyncStore, commitIdOf, RETRY_SECONDS, CHECKPOINT_EVERY, TRASH_DAYS, TRASH_KEEP, PHYSICAL_PURGE, deviceProfile, readRevision, READER_THREAD: 'nas-sync-revision-reader' };

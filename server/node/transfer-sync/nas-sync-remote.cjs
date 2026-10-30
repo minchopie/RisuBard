@@ -49,7 +49,7 @@ async function hashStream(stream, limit) {
 
 function createSyncRemote({ secrets, fetch = request, route = null }) {
     async function base() {
-        const c = await secrets.get('nas'); // home/external: same account, same namespace; URL + TLS name come from ONE pinned decision (route.run)
+        const c = route?.pinnedConfig?.() ?? await secrets.get('nas'); // home/external: same account, same namespace; URL + TLS name come from ONE pinned decision (route.run)
         const { url, servername } = route ? await route.endpointFor(c) : { url: folder(c.url), servername: nasServername(c, folder(c.url)) };
         if (!c.username || !c.password) throw new Error('연결 설정에서 NAS 주소와 계정을 먼저 저장해 주세요.');
         return { url, auth: 'Basic ' + Buffer.from(`${c.username}:${c.password}`).toString('base64'), servername }; // IP URL: TLS validates against the saved certificate name of that side
@@ -127,7 +127,7 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
     const listObjects = async segments => (await remote.list(segments)).filter(e => !e.collection && OBJECT.test(e.name)).map(e => ({ name: e.name, modifiedAt: e.modifiedAt, sequence: Number(OBJECT.exec(e.name)[1]), commitId: OBJECT.exec(e.name)[2] })).sort((a, b) => a.sequence - b.sequence);
     async function publish({ at = now() } = {}) {
         const report = { stored: [], blobs: 0, failed: [], rotated: null, checkpoint: null, ack: null };
-        const listed = new Map();
+        const listed = new Map(), onNas = new Set(); // blobs this run already verified or uploaded: commits sharing a blob check it once
         for (const entry of store.dueCommits(at)) {
             const { deviceId, incarnationId } = store.identity();
             if (entry.incarnationId !== incarnationId) continue;
@@ -141,11 +141,11 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                 // Dependency closure is verified on the NAS itself before the commit may reference it: a restored or damaged
                 // remote never ends up with a committed reference to absent content. Local publication records are hints only.
                 for (const hash of entry.blobs) {
-                    const present = await remote.verify(blobSegments(hash), hash);
-                    if (present === 'ok') { if (!store.unpublishedBlobs(entry).includes(hash)) continue; store.markBlobPublished(hash); continue; }
+                    const present = onNas.has(hash) ? 'ok' : await remote.verify(blobSegments(hash), hash);
+                    if (present === 'ok') { onNas.add(hash); if (!store.unpublishedBlobs(entry).includes(hash)) continue; store.markBlobPublished(hash); continue; }
                     const result = await remote.putFile(blobSegments(hash), store.blobFile(hash), hash, { overwrite: present === 'damaged' });
                     if (result.state === 'conflict') throw new Error('Remote blob differs from local content: ' + hash);
-                    store.markBlobPublished(hash); report.blobs++;
+                    store.markBlobPublished(hash); report.blobs++; onNas.add(hash);
                 }
                 const result = await remote.putImmutable([...commitsDir, bucket, objectName(entry.sequence, entry.commitId)], Buffer.from(canonical(store.commitObject(entry))));
                 if (result.state === 'conflict') { report.rotated = store.rotateIncarnation(`sequence ${entry.sequence} object differs`); return report; }
@@ -217,7 +217,7 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
         }
         // Waiting commits: re-download blobs that were missing or damaged on an earlier pull, then retry admission.
         for (const entry of store.waitingEntries()) if (entry.object && entry.blobs.length) { try { await fetchBlobs(entry.object); } catch (error) { report.waiting.push({ ...entry, object: undefined, reason: 'blob fetch: ' + error.message }); } }
-        for (const retry of store.retryWaiting()) if (retry.state !== 'waiting') report[retry.state].push(retry);
+        for (const retry of await store.retryWaitingAsync()) if (retry.state !== 'waiting') report[retry.state].push(retry);
         // Repair: a blob pinned by an already ADMITTED revision that is no longer in the local store (consumed or cleaned up) is
         // re-fetched by its hash, so later plans stop reporting it as missing material. Only admitted revisions qualify — held,
         // quarantined and waiting records keep their own paths above. Every download is hash-verified by getToFile; a failure is

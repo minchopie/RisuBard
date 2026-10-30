@@ -382,6 +382,29 @@ test('every ignored WebDAV success response is read to its end, never destroyed 
     expect(dav.paths().filter(p => p.includes('.part-'))).toEqual([])
 })
 
+test('one publish run checks a blob shared by several commits on the NAS once, and a routed run reads the saved NAS settings once', async t => {
+    const asset = Buffer.from('shared-wiki-bytes')
+    async function publishSharing(count: number) {
+        const dav = fixtureDav(), root = await temp(t), a = device(t, dav, root), file = join(root, 'asset.bin'); await writeFile(file, asset)
+        let parents: string[] = []
+        for (let i = 0; i < count; i++) { const rev = chat('shared', { n: i }, parents, { wiki: sha(asset) }); a.store.commit([rev], { blobs: { [sha(asset)]: file } }); parents = [rev.id] }
+        let gets = 0; dav.hooks.push(async (req: any) => { if (req.method === 'GET' && req.path.includes(sha(asset))) gets++; return null })
+        const report = await a.transport.publish()
+        expect(report.failed).toEqual([]); expect(report.stored).toHaveLength(count); expect(report.blobs).toBe(count + 1) // each commit's own content + the shared asset once
+        expect(dav.files.get(`.risubard-sync/v1/ws-fixture/blobs/${sha(asset).slice(0, 2)}/${sha(asset)}`)).toEqual(asset)
+        return gets
+    }
+    expect(await publishSharing(3)).toBe(await publishSharing(1))
+    const dav = fixtureDav(); let reads = 0
+    const secrets = { get: async () => { reads++; return { url: dav.base, homeUrl: dav.base, homeSsids: ['Fixture Home'], username: 'fixture', password: 'fixture-password' } } }
+    const { createNasRoute } = require('./nas-route.cjs')
+    const route = createNasRoute({ secrets, probe: async () => true }); route.report({ transport: 'wifi', ssid: 'Fixture Home' })
+    const remote = createSyncRemote({ secrets, fetch: dav.fetch, route })
+    await route.run(async () => { await remote.list([]); await remote.list([]); await remote.list([]) })
+    expect(reads).toBe(1)
+    reads = 0; await remote.list([]); expect(reads).toBeGreaterThanOrEqual(1) // outside a run every request still reads the current settings
+})
+
 test('route-aware remote: one operation stays on one endpoint even when the network flips mid-run; the next run moves; credentials and namespace are identical on both routes', async t => {
     const home = fixtureDav('https://nas-home.invalid:5006/home/RisuAI/'), external = fixtureDav('https://nas.invalid/home/RisuAI/')
     const auth = new Set<string>(); const hosts: string[] = []

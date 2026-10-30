@@ -105,7 +105,9 @@
     }
     onMount(() => {
         void refreshSync().catch(error => transferStatus.set(String(error)))
-        const timer = setInterval(() => { if (sync?.enabled && !document.hidden && !working) void refreshSync().catch(() => {}) }, 10_000)
+        // A poll still waiting on a busy server is not stacked with another one every 10 s.
+        let polling = false
+        const timer = setInterval(() => { if (sync?.enabled && !document.hidden && !working && !polling) { polling = true; void refreshSync().catch(() => {}).finally(() => { polling = false }) } }, 10_000)
         return () => clearInterval(timer)
     })
     const syncRows = $derived(syncStateRows(sync, $coordinatorState))
