@@ -232,6 +232,12 @@ test('waiting retry: commits waiting on each other across peers all enter in one
     expect(await b.retryWaitingAsync()).toEqual([expect.objectContaining({ sequence: e2.sequence, state: 'waiting' })])
     expect(writes).toBe(0)
     expect(open(b.root.replace(/[\\/]nas-sync$/, '')).waitingEntries()).toEqual([expect.objectContaining({ sequence: e2.sequence, commitId: e2.commitId })])
+    // A first arrival is always checked whole: a damaged header is quarantined even when its parent is also missing (Codex review).
+    for (const [i, damage] of [(h: any) => { h.root = '' }, (h: any) => { h.dependencyHash = 'e'.repeat(64) }].entries()) {
+        const p1 = chat('c4-' + i, { n: 1 }), p2 = chat('c4-' + i, { n: 2 }, [p1.id]); a.commit([p1]); const e = a.commit([p2])
+        const object = JSON.parse(JSON.stringify(deliver(a, b, e))); damage(object.revisions[0])
+        expect(b.admitRemote(object, addr(a, e))).toMatchObject({ state: 'quarantined' })
+    }
 })
 
 test('cloned incarnation: both commits preserved, later records held until explicit resolution, survives restart', async t => {

@@ -314,10 +314,13 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
         };
         const blobs = missingCommitBlobs(object);
         if (blobs.length) return wait('missing blobs: ' + blobs.join(','), blobs);
-        // Parent precheck from the headers alone: a parent that is neither in the graph nor in this batch cannot be added, so the
-        // record waits without reading and hashing its content or copying the graph (same reason the full check would give).
-        // Malformed parent lists skip this and reach the full check, which quarantines them.
-        if (object.revisions.every(h => Array.isArray(h.parents) && h.parents.every(id => typeof id === 'string' && DIGEST.test(id)))) {
+        // Parent precheck from the headers alone, only for a record that already passed the full content and header check and
+        // is parked for a missing parent (a first arrival always takes the full check, so a malformed record is quarantined
+        // whatever its parents). A parent that is neither in the graph nor in this batch still cannot be added: the record keeps
+        // waiting without hashing its content again or copying the graph.
+        const parked = p.waiting[key];
+        if (parked && !parked.error && typeof parked.reason === 'string' && parked.reason.startsWith('Missing parent revision')
+            && object.revisions.every(h => Array.isArray(h.parents) && h.parents.every(id => typeof id === 'string' && DIGEST.test(id)))) {
             const inBatch = new Set(object.revisions.map(h => h.id));
             const orphan = object.revisions.find(h => h.parents.some(id => !inBatch.has(id) && !graph.get(id)));
             if (orphan) return wait('Missing parent revision: ' + orphan.parents.join(','));
