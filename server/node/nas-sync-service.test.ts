@@ -219,7 +219,7 @@ test('real snapshot → publish → pull → plan → canonical save → arm →
     const plan = await phone.service.plan()
     expect(plan.empty).toBeUndefined(); expect(plan.pending).toEqual([])
     expect(plan.settings.openAIKey).toBe(S('openai')); expect(plan.settings.proxyKey).toBe(S('proxy')); expect(plan.settings).not.toHaveProperty('textAreaSize'); expect(plan.settings).not.toHaveProperty('account')
-    expect(plan.newCharacters[0].oaiTTSConfig.apiKey).toBe(S('tts')); expect(plan.plugins[0].realArg.api_key).toBe(S('plugin')); expect(plan.plugins[0].enabled).toBe(false); expect(plan.pluginEnabled).toEqual({ plug: true })
+    expect(plan.newCharacters[0].oaiTTSConfig.apiKey).toBe(S('tts')); expect(plan.plugins[0].realArg.api_key).toBe(S('plugin')); expect(plan.plugins[0].enabled).toBe(true); expect(plan.pluginEnabled).toEqual({ plug: true }) // the record carries the flag its activation leaves
     expect(plan.chats[0].chat.message[0].data).toBe('본문 {{inlay::draw1}}'); expect(plan.chats[0].chat.message[0].promptInfo?.promptText).toBeUndefined()
     await assertNoSentinel(phone.dataRoot) // plan journal + recovery copy + blobs: sealed
     const journal = JSON.parse(await readFile(join(phone.dataRoot, 'nas-sync', 'apply', `${plan.transaction}.json`), 'utf8'))
@@ -1929,4 +1929,17 @@ test('slot retirement and character-scoped recovery work beyond the Windows MAX_
     expect(await readFile(join(recovered, 'chat.bin'))).toEqual(original)
     expect(existsSync(slotDir)).toBe(false)
     expect((await receiver.service.snapshot()).committed).toBeNull()
+})
+
+test('a plugin the same plan enables: the arm echo the client sends before applying still proves the save (finish applied, not retained)', async t => {
+    const dav = fixtureDav(); await seedTablet(t, dav)
+    const phone = await device(t, dav, 'plugin-echo', EMPTY_DB())
+    phone.service.enable({ workspaceId: 'ws-fixture' }); await phone.service.pull()
+    const plan = await phone.service.plan()
+    expect(plan.pluginEnabled).toEqual({ plug: true }); expect(plan.plugins.map((p: any) => [p.name, p.enabled])).toEqual([['plug', true]])
+    // Real client order (nasSync.ts): the echo carries the plan objects as received, the database is mutated afterwards on its own copies.
+    const sent = structuredClone(plan), db = applyPlanToDb(phone.db(), structuredClone(plan))
+    await phone.service.arm(plan.transaction, echoOf(sent, db)); phone.save(db)
+    expect((await phone.service.finish(plan.transaction, true)).state).toBe('applied')
+    expect(phone.db().plugins.find((p: any) => p.name === 'plug').enabled).toBe(true)
 })

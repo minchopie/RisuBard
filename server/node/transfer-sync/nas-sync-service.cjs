@@ -879,6 +879,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 result.pending.push({ root: activationKey, reason: 'plugin-pending', pending: absent });
             }
         }
+        // The activation group owns the enabled flag; a plugin record in this plan carries the value the client will leave on it, so the
+        // plan, the arm echo (sent before the client applies) and the saved plugin hash alike and finish can prove the save.
+        if (result.pluginEnabled) for (const p of result.plugins) if (Object.hasOwn(result.pluginEnabled, p.name)) p.enabled = result.pluginEnabled[p.name];
         // Chats: linear continuation updates the local chat; other variants become stable sibling branches with relinked Bard material.
         const chatOwner = new Map();
         for (const character of db.characters ?? []) for (const ch of character.chats ?? []) chatOwner.set(ch.id, character.chaId);
