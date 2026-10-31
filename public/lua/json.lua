@@ -216,37 +216,42 @@ end
 
 
 local function parse_string(str, i)
-  local res = ""
+  -- Same result and errors as the byte loop it replaces; jumps to the next quote, backslash or
+  -- control character and joins the pieces once instead of re-concatenating on every escape.
+  local parts, n = {}, 0
   local j = i + 1
   local k = j
 
-  while j <= #str do
-    local x = str:byte(j)
+  while true do
+    local p = str:find("[\0-\31\"\\]", j)
+    if not p then break end
+    local x = str:byte(p)
+    j = p
 
     if x < 32 then
       decode_error(str, j, "control character in string")
 
     elseif x == 92 then -- `\`: Escape
-      res = res .. str:sub(k, j - 1)
+      n = n + 1; parts[n] = str:sub(k, j - 1)
       j = j + 1
       local c = str:sub(j, j)
       if c == "u" then
         local hex = str:match("^[dD][89aAbB]%x%x\\u%x%x%x%x", j + 1)
                  or str:match("^%x%x%x%x", j + 1)
                  or decode_error(str, j - 1, "invalid unicode escape in string")
-        res = res .. parse_unicode_escape(hex)
+        n = n + 1; parts[n] = parse_unicode_escape(hex)
         j = j + #hex
       else
         if not escape_chars[c] then
           decode_error(str, j - 1, "invalid escape char '" .. c .. "' in string")
         end
-        res = res .. escape_char_map_inv[c]
+        n = n + 1; parts[n] = escape_char_map_inv[c]
       end
       k = j + 1
 
-    elseif x == 34 then -- `"`: End of string
-      res = res .. str:sub(k, j - 1)
-      return res, j + 1
+    else -- x == 34, `"`: End of string
+      n = n + 1; parts[n] = str:sub(k, j - 1)
+      return table.concat(parts, "", 1, n), j + 1
     end
 
     j = j + 1

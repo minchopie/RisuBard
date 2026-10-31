@@ -1,3 +1,59 @@
+diff --git a/public/lua/json.lua b/public/lua/json.lua
+index 54d4448..0a05db2 100644
+--- a/public/lua/json.lua
++++ b/public/lua/json.lua
+@@ -216,37 +216,42 @@ end
+ 
+ 
+ local function parse_string(str, i)
+-  local res = ""
++  -- Same result and errors as the byte loop it replaces; jumps to the next quote, backslash or
++  -- control character and joins the pieces once instead of re-concatenating on every escape.
++  local parts, n = {}, 0
+   local j = i + 1
+   local k = j
+ 
+-  while j <= #str do
+-    local x = str:byte(j)
++  while true do
++    local p = str:find("[\0-\31\"\\]", j)
++    if not p then break end
++    local x = str:byte(p)
++    j = p
+ 
+     if x < 32 then
+       decode_error(str, j, "control character in string")
+ 
+     elseif x == 92 then -- `\`: Escape
+-      res = res .. str:sub(k, j - 1)
++      n = n + 1; parts[n] = str:sub(k, j - 1)
+       j = j + 1
+       local c = str:sub(j, j)
+       if c == "u" then
+         local hex = str:match("^[dD][89aAbB]%x%x\\u%x%x%x%x", j + 1)
+                  or str:match("^%x%x%x%x", j + 1)
+                  or decode_error(str, j - 1, "invalid unicode escape in string")
+-        res = res .. parse_unicode_escape(hex)
++        n = n + 1; parts[n] = parse_unicode_escape(hex)
+         j = j + #hex
+       else
+         if not escape_chars[c] then
+           decode_error(str, j - 1, "invalid escape char '" .. c .. "' in string")
+         end
+-        res = res .. escape_char_map_inv[c]
++        n = n + 1; parts[n] = escape_char_map_inv[c]
+       end
+       k = j + 1
+ 
+-    elseif x == 34 then -- `"`: End of string
+-      res = res .. str:sub(k, j - 1)
+-      return res, j + 1
++    else -- x == 34, `"`: End of string
++      n = n + 1; parts[n] = str:sub(k, j - 1)
++      return table.concat(parts, "", 1, n), j + 1
+     end
+ 
+     j = j + 1
 diff --git a/src/ts/parser/hiddenInlay.test.ts b/src/ts/parser/hiddenInlay.test.ts
 index 58c48aa..4c350ab 100644
 --- a/src/ts/parser/hiddenInlay.test.ts
@@ -58,10 +114,18 @@ index 628cd6a..3209e9e 100644
  
  // LRU cache for DOMPurify + decodeStyle results.
 diff --git a/src/ts/process/lorebook.svelte.ts b/src/ts/process/lorebook.svelte.ts
-index 1e2df04..bf074fd 100644
+index 1e2df04..22bca3f 100644
 --- a/src/ts/process/lorebook.svelte.ts
 +++ b/src/ts/process/lorebook.svelte.ts
-@@ -221,7 +221,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+@@ -15,6 +15,7 @@ import { v4 } from "uuid";
+ import { canRunLorebookSweep, isLorebookEntryEnabled } from './lorebookActivation';
+ import { ensureStableLorebookOwnerId } from '../lorebook/ownerIdentity';
+ import {
++    getLorebookKeyRegex,
+     matchesLorebookKey,
+     resolveLorebookMatchingMode,
+     type LorebookMatchingMode,
+@@ -221,7 +222,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
          dontSearchWhenRecursive: boolean
          recursivePrompts: typeof recursivePrompt
      }) => {
@@ -70,7 +134,7 @@ index 1e2df04..bf074fd 100644
          const newKeys = []
          for (const key of arg.keys) {
              const trimmed = key.trim()
-@@ -229,7 +229,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+@@ -229,7 +230,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
                  newKeys.push(trimmed)
              }
          }
@@ -79,7 +143,7 @@ index 1e2df04..bf074fd 100644
          let mList:{
              source:string
              prompt:string
-@@ -264,11 +264,12 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+@@ -264,11 +265,15 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
                      if(!regexString.startsWith('/')){
                          return false
                      }
@@ -92,10 +156,131 @@ index 1e2df04..bf074fd 100644
 +                        const regexSource = regexString.slice(1, delimiter)
                          try {
 -                            const regex = new RegExp(arg.keys[0],regexFlag)
-+                            const regex = new RegExp(regexSource,regexFlag)
++                            const regex = getLorebookKeyRegex(regexSource,regexFlag)
++                            if(!regex){
++                                return false
++                            }
                              const d = regex.test(mText.data)
                              if(d){
                                  matchLog.push({
+diff --git a/src/ts/process/lorebookMatching.test.ts b/src/ts/process/lorebookMatching.test.ts
+index 922db27..ae89922 100644
+--- a/src/ts/process/lorebookMatching.test.ts
++++ b/src/ts/process/lorebookMatching.test.ts
+@@ -1,5 +1,7 @@
+ import { describe, expect, it } from 'vitest'
+ import {
++    dropNeverMatchingRegexEdges,
++    getLorebookKeyRegex,
+     matchesLorebookKey,
+     resolveLorebookMatchingMode,
+ } from './lorebookMatching'
+@@ -49,3 +51,43 @@ describe('resolveLorebookMatchingMode', () => {
+         expect(resolveLorebookMatchingMode('invalid' as any, true)).toBe('whitespace')
+     })
+ })
++
++describe('getLorebookKeyRegex', () => {
++    const fresh = (source: string, flags: string) => {
++        try { return new RegExp(source, flags) } catch { return null }
++    }
++    const texts = ['', 'Wilmarina가 왔다', 'wilmarina', '윌마리나를', 'xWilmarina', 'Wil\nmarina', 'a|b', '(?!)', 'MGE '.repeat(50) + '윌마리나']
++
++    it('drops only never-matching edge alternatives', () => {
++        expect(dropNeverMatchingRegexEdges('(?!)|abc|(?!)')).toBe('abc')
++        expect(dropNeverMatchingRegexEdges('(?!)|')).toBe('')
++        expect(dropNeverMatchingRegexEdges('a\\|(?!)')).toBe('a\\|(?!)')
++        expect(dropNeverMatchingRegexEdges('a\\\\|(?!)')).toBe('a\\\\')
++        expect(dropNeverMatchingRegexEdges('(a|(?!))')).toBe('(a|(?!))')
++        expect(dropNeverMatchingRegexEdges('abc')).toBe('abc')
++    })
++
++    it('matches exactly like a freshly compiled pattern, including invalid and stateful flags', () => {
++        const keys: [string, string][] = [
++            ['(?!)|(?<![A-Za-z가-힣])(?:Wilmarina|윌마리나)(?=(?:를|가)?(?:$|[^A-Za-z가-힣]))|(?!)', 'iu'],
++            ['(?!)|wil|(?!)', 'g'],
++            ['(?!)|wil|(?!)', 'gy'],
++            ['(?!)|', 'i'],
++            ['a\\|(?!)', 'u'],
++            ['(?!)|(', 'u'],
++            ['marina', 'gi'],
++        ]
++        for (const [source, flags] of keys) {
++            for (const text of texts) {
++                for (let repeat = 0; repeat < 3; repeat++) {
++                    const expected = fresh(source, flags)
++                    const actual = getLorebookKeyRegex(source, flags)
++                    expect(actual === null).toBe(expected === null)
++                    if (expected && actual) {
++                        expect(actual.test(text)).toBe(expected.test(text))
++                    }
++                }
++            }
++        }
++    })
++})
+diff --git a/src/ts/process/lorebookMatching.ts b/src/ts/process/lorebookMatching.ts
+index f30a089..959547b 100644
+--- a/src/ts/process/lorebookMatching.ts
++++ b/src/ts/process/lorebookMatching.ts
+@@ -76,3 +76,57 @@ export function matchesLorebookKey(
+ 
+     return false
+ }
++
++// Regex lorebook keys are compiled once per source and flags instead of once per entry, message and sweep.
++// A leading `(?!)|` or trailing `|(?!)` alternative can never match, so dropping it gives the same matches;
++// some card key styles wrap every key that way, and the wrapper alone makes V8 scan several times slower.
++const NEVER_HEAD = '(?!)|'
++const NEVER_TAIL = '|(?!)'
++const LOREBOOK_REGEX_CACHE_LIMIT = 4096
++const lorebookRegexCache = new Map<string, RegExp | null>()
++
++export function dropNeverMatchingRegexEdges(source: string): string {
++    let result = source
++    if(result.startsWith(NEVER_HEAD)){
++        result = result.slice(NEVER_HEAD.length)
++    }
++    if(result.endsWith(NEVER_TAIL)){
++        let backslashes = 0
++        for(let i = result.length - NEVER_TAIL.length - 1; i >= 0 && result[i] === '\\'; i--){
++            backslashes++
++        }
++        if(backslashes % 2 === 0){
++            result = result.slice(0, -NEVER_TAIL.length)
++        }
++    }
++    return result
++}
++
++/** Same result as `new RegExp(source, flags)` (null where that throws), reused across calls; lastIndex is reset. */
++export function getLorebookKeyRegex(source: string, flags: string): RegExp | null {
++    const cacheKey = flags + '\u0000' + source
++    let regex = lorebookRegexCache.get(cacheKey)
++    if(regex === undefined){
++        try {
++            regex = new RegExp(source, flags)
++        } catch {
++            regex = null
++        }
++        const trimmed = dropNeverMatchingRegexEdges(source)
++        if(regex && trimmed !== source){
++            try {
++                regex = new RegExp(trimmed, flags)
++            } catch {
++                // keep the original pattern
++            }
++        }
++        if(lorebookRegexCache.size >= LOREBOOK_REGEX_CACHE_LIMIT){
++            lorebookRegexCache.clear()
++        }
++        lorebookRegexCache.set(cacheKey, regex)
++    }
++    if(regex){
++        regex.lastIndex = 0
++    }
++    return regex
++}
 diff --git a/src/ts/process/lorebookRecursion.test.ts b/src/ts/process/lorebookRecursion.test.ts
 index 73995f0..c9743e2 100644
 --- a/src/ts/process/lorebookRecursion.test.ts

@@ -15,6 +15,7 @@ import { v4 } from "uuid";
 import { canRunLorebookSweep, isLorebookEntryEnabled } from './lorebookActivation';
 import { ensureStableLorebookOwnerId } from '../lorebook/ownerIdentity';
 import {
+    getLorebookKeyRegex,
     matchesLorebookKey,
     resolveLorebookMatchingMode,
     type LorebookMatchingMode,
@@ -269,7 +270,10 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
                         const regexFlag = regexString.slice(delimiter + 1)
                         const regexSource = regexString.slice(1, delimiter)
                         try {
-                            const regex = new RegExp(regexSource,regexFlag)
+                            const regex = getLorebookKeyRegex(regexSource,regexFlag)
+                            if(!regex){
+                                return false
+                            }
                             const d = regex.test(mText.data)
                             if(d){
                                 matchLog.push({

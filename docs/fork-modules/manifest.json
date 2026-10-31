@@ -2128,6 +2128,14 @@
       "bytes": 7066
     },
     {
+      "path": "public/lua/json.lua",
+      "module": "lore-lua",
+      "kind": "hosts",
+      "sha256": "117cddefa036355dfc4e8e67eebda8bb28f0c30cca782054ab28421baf3f1c6d",
+      "contentSha256": "117cddefa036355dfc4e8e67eebda8bb28f0c30cca782054ab28421baf3f1c6d",
+      "bytes": 9966
+    },
+    {
       "path": "src/ts/parser/hiddenInlay.test.ts",
       "module": "lore-lua",
       "kind": "hosts",
@@ -2147,9 +2155,25 @@
       "path": "src/ts/process/lorebook.svelte.ts",
       "module": "lore-lua",
       "kind": "hosts",
-      "sha256": "768147c53020c93dc934ad28a5498f553b6818d9f5a7edbb9e8be0f15bc26b52",
-      "contentSha256": "d79648236360145902bcf9a1dfad6b9d9eafc841ab10fd23ea6bab1a9f912d46",
-      "bytes": 38551
+      "sha256": "b5c91463d22dad698dda58597aff437edd1178d4f2a7ad669dcf12c83edeb316",
+      "contentSha256": "e445f47215d13147b899d1a049f9ad3b0b3e12414fa17c493467edbdfd134873",
+      "bytes": 38704
+    },
+    {
+      "path": "src/ts/process/lorebookMatching.test.ts",
+      "module": "lore-lua",
+      "kind": "hosts",
+      "sha256": "780d706a0759e933ca216ddda54510d0a9730b2ac8666648611ed3006b9a9628",
+      "contentSha256": "780d706a0759e933ca216ddda54510d0a9730b2ac8666648611ed3006b9a9628",
+      "bytes": 4591
+    },
+    {
+      "path": "src/ts/process/lorebookMatching.ts",
+      "module": "lore-lua",
+      "kind": "hosts",
+      "sha256": "083a14744ef5abbd2fc6d68449ab0998b571871f6233f3f80c8f01a242df28a8",
+      "contentSha256": "083a14744ef5abbd2fc6d68449ab0998b571871f6233f3f80c8f01a242df28a8",
+      "bytes": 4902
     },
     {
       "path": "src/ts/process/lorebookRecursion.test.ts",
@@ -2731,8 +2755,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "6ee08e71a72b0ba31c819a05f5161096e18e7b5b510680289c221c450c2bf39e",
-      "contentSha256": "e8b38162355f87d51a4c424ba4262d796d7a8209b1009651b013e33af3f77ce6",
+      "sha256": "916f22123c320dd9bcb0cb9a50ad7a8e15cc8fae0d3f936818b0b3197e855c57",
+      "contentSha256": "68d962f7fb3c905caa84c9c5e62c9aa473013ba4194cae602fae7a25739729cc",
       "bytes": 6615
     },
     {
@@ -2886,6 +2910,14 @@
       "sha256": "46d8fb12c04587b56e2057e8c7fc117997efdcc11b86253e4f60d0ff1535c9f3",
       "contentSha256": "46d8fb12c04587b56e2057e8c7fc117997efdcc11b86253e4f60d0ff1535c9f3",
       "bytes": 1444
+    },
+    {
+      "path": "patchnote/0.9.105.md",
+      "module": "distribution",
+      "kind": "files",
+      "sha256": "728d52ee90a65a698a50bf030471ec3fcbbcb0524ef636c5ab1508a7aca2da18",
+      "contentSha256": "728d52ee90a65a698a50bf030471ec3fcbbcb0524ef636c5ab1508a7aca2da18",
+      "bytes": 967
     },
     {
       "path": "server/node/server.cjs",
@@ -4450,9 +4482,12 @@
       "id": "lore-lua",
       "name": "로어·Lua·파서 호환",
       "hosts": [
+        "public/lua/json.lua",
         "src/ts/parser/hiddenInlay.test.ts",
         "src/ts/parser/parser.svelte.ts",
         "src/ts/process/lorebook.svelte.ts",
+        "src/ts/process/lorebookMatching.test.ts",
+        "src/ts/process/lorebookMatching.ts",
         "src/ts/process/lorebookRecursion.test.ts",
         "src/ts/process/scriptings.ts"
       ],
@@ -4468,7 +4503,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/lore-lua.patch",
-        "sha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742"
+        "sha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681"
       }
     },
     {
@@ -4582,11 +4617,12 @@
         "patchnote/0.9.101.md",
         "patchnote/0.9.102.md",
         "patchnote/0.9.103.md",
-        "patchnote/0.9.104.md"
+        "patchnote/0.9.104.md",
+        "patchnote/0.9.105.md"
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2"
+        "sha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03"
       }
     },
     {
@@ -4816,7 +4852,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "c45224669e27c86efc2a298176191f59448f626a14d8f9ec2b137d97c264675c"
+      "sha256": "fbe577e8d18d0571abe80cc67988cd46fe576e47948d5fd9bbd9a2ad3f459fd6"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -4859,8 +4895,8 @@
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.81/lore-lua.patch",
-          "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742",
-          "sha256": "710891d087ca30da59cf53fe703f75311a94db84383cb56a24f9863398f44be8"
+          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681",
+          "sha256": "99c715734518d5e1a082a5152a92dccfde76c774cdc23fd8247a67865fef552b"
         },
         {
           "module": "storage-recovery",
@@ -4871,8 +4907,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2",
-          "sha256": "e9b0c9699d200f8617284e3a3eecf5b4996407ac71d826682c231300fad344e1"
+          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03",
+          "sha256": "45fabf8088266447fc777a5231c4f88400ba9efae809a0f8c2585d87f981bdcc"
         },
         {
           "module": "host-bridges",
@@ -4955,14 +4991,14 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2",
-          "sha256": "6994b816b854df77e7819063633f44e520d35aec95b2907fa4bc4787dfdee0d4"
+          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03",
+          "sha256": "cde23c6bb807e2404d998051b485890edb4cb8e674fc300a3800e20be192798e"
         },
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
-          "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742",
-          "sha256": "710891d087ca30da59cf53fe703f75311a94db84383cb56a24f9863398f44be8"
+          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681",
+          "sha256": "99c715734518d5e1a082a5152a92dccfde76c774cdc23fd8247a67865fef552b"
         },
         {
           "module": "host-bridges",
@@ -5107,14 +5143,14 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2",
-          "sha256": "84999316c401be2846e6a4d430b9c0d07277af848198248b05d2df8e2c748f6a"
+          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03",
+          "sha256": "d2774fcfafac87708ef37ca28e476750a97ff3870974aa3fd8bdb666c9366207"
         },
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
-          "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742",
-          "sha256": "710891d087ca30da59cf53fe703f75311a94db84383cb56a24f9863398f44be8"
+          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681",
+          "sha256": "99c715734518d5e1a082a5152a92dccfde76c774cdc23fd8247a67865fef552b"
         },
         {
           "module": "host-bridges",

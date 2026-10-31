@@ -297,9 +297,12 @@
       "id": "lore-lua",
       "name": "로어·Lua·파서 호환",
       "hosts": [
+        "public/lua/json.lua",
         "src/ts/parser/hiddenInlay.test.ts",
         "src/ts/parser/parser.svelte.ts",
         "src/ts/process/lorebook.svelte.ts",
+        "src/ts/process/lorebookMatching.test.ts",
+        "src/ts/process/lorebookMatching.ts",
         "src/ts/process/lorebookRecursion.test.ts",
         "src/ts/process/scriptings.ts"
       ],
@@ -417,7 +420,8 @@
         "patchnote/0.9.101.md",
         "patchnote/0.9.102.md",
         "patchnote/0.9.103.md",
-        "patchnote/0.9.104.md"
+        "patchnote/0.9.104.md",
+        "patchnote/0.9.105.md"
       ]
     },
     {
@@ -645,7 +649,7 @@
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.81/lore-lua.patch",
-          "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742"
+          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681"
         },
         {
           "module": "storage-recovery",
@@ -655,7 +659,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2"
+          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03"
         },
         {
           "module": "host-bridges",
@@ -734,12 +738,12 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2"
+          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03"
         },
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
-          "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742"
+          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681"
         },
         {
           "module": "host-bridges",
@@ -877,12 +881,12 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "d7657e1f3f7bf5eb778afa7a82043d40f54e4a6c9b90d809117c2fd5065c60a2"
+          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03"
         },
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
-          "sourceSha256": "3aa6b8c250092401f0acb8bd469efdd5c4e175608d042ef76c51c78be646d742"
+          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681"
         },
         {
           "module": "host-bridges",

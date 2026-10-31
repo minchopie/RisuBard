@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+    dropNeverMatchingRegexEdges,
+    getLorebookKeyRegex,
     matchesLorebookKey,
     resolveLorebookMatchingMode,
 } from './lorebookMatching'
@@ -47,5 +49,45 @@ describe('resolveLorebookMatchingMode', () => {
         expect(resolveLorebookMatchingMode(undefined, false)).toBe('partial')
         expect(resolveLorebookMatchingMode('word-boundary', true)).toBe('word-boundary')
         expect(resolveLorebookMatchingMode('invalid' as any, true)).toBe('whitespace')
+    })
+})
+
+describe('getLorebookKeyRegex', () => {
+    const fresh = (source: string, flags: string) => {
+        try { return new RegExp(source, flags) } catch { return null }
+    }
+    const texts = ['', 'Wilmarina가 왔다', 'wilmarina', '윌마리나를', 'xWilmarina', 'Wil\nmarina', 'a|b', '(?!)', 'MGE '.repeat(50) + '윌마리나']
+
+    it('drops only never-matching edge alternatives', () => {
+        expect(dropNeverMatchingRegexEdges('(?!)|abc|(?!)')).toBe('abc')
+        expect(dropNeverMatchingRegexEdges('(?!)|')).toBe('')
+        expect(dropNeverMatchingRegexEdges('a\\|(?!)')).toBe('a\\|(?!)')
+        expect(dropNeverMatchingRegexEdges('a\\\\|(?!)')).toBe('a\\\\')
+        expect(dropNeverMatchingRegexEdges('(a|(?!))')).toBe('(a|(?!))')
+        expect(dropNeverMatchingRegexEdges('abc')).toBe('abc')
+    })
+
+    it('matches exactly like a freshly compiled pattern, including invalid and stateful flags', () => {
+        const keys: [string, string][] = [
+            ['(?!)|(?<![A-Za-z가-힣])(?:Wilmarina|윌마리나)(?=(?:를|가)?(?:$|[^A-Za-z가-힣]))|(?!)', 'iu'],
+            ['(?!)|wil|(?!)', 'g'],
+            ['(?!)|wil|(?!)', 'gy'],
+            ['(?!)|', 'i'],
+            ['a\\|(?!)', 'u'],
+            ['(?!)|(', 'u'],
+            ['marina', 'gi'],
+        ]
+        for (const [source, flags] of keys) {
+            for (const text of texts) {
+                for (let repeat = 0; repeat < 3; repeat++) {
+                    const expected = fresh(source, flags)
+                    const actual = getLorebookKeyRegex(source, flags)
+                    expect(actual === null).toBe(expected === null)
+                    if (expected && actual) {
+                        expect(actual.test(text)).toBe(expected.test(text))
+                    }
+                }
+            }
+        }
     })
 })
