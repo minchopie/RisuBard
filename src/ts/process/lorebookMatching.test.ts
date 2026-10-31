@@ -67,6 +67,13 @@ describe('getLorebookKeyRegex', () => {
         expect(dropNeverMatchingRegexEdges('abc')).toBe('abc')
     })
 
+    it('keeps flags and source apart in the cache', () => {
+        expect(getLorebookKeyRegex('z', 'i\u0000x')).toBeNull()
+        const regex = getLorebookKeyRegex('x\u0000z', 'i')
+        expect(regex).not.toBeNull()
+        expect(regex?.test('x\u0000z')).toBe(true)
+    })
+
     it('matches exactly like a freshly compiled pattern, including invalid and stateful flags', () => {
         const keys: [string, string][] = [
             ['(?!)|(?<![A-Za-z가-힣])(?:Wilmarina|윌마리나)(?=(?:를|가)?(?:$|[^A-Za-z가-힣]))|(?!)', 'iu'],

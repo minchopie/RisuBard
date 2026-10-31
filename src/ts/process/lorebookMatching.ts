@@ -104,7 +104,7 @@ export function dropNeverMatchingRegexEdges(source: string): string {
 
 /** Same result as `new RegExp(source, flags)` (null where that throws), reused across calls; lastIndex is reset. */
 export function getLorebookKeyRegex(source: string, flags: string): RegExp | null {
-    const cacheKey = flags + '\u0000' + source
+    const cacheKey = JSON.stringify([flags, source])
     let regex = lorebookRegexCache.get(cacheKey)
     if(regex === undefined){
         try {

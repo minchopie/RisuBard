@@ -649,7 +649,7 @@
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.81/lore-lua.patch",
-          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681"
+          "sourceSha256": "8423e5e31c94ba691f52d34f46cd7b0ef1b64955af858bcafe659d4f6a24817d"
         },
         {
           "module": "storage-recovery",
@@ -743,7 +743,7 @@
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
-          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681"
+          "sourceSha256": "8423e5e31c94ba691f52d34f46cd7b0ef1b64955af858bcafe659d4f6a24817d"
         },
         {
           "module": "host-bridges",
@@ -886,7 +886,7 @@
         {
           "module": "lore-lua",
           "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
-          "sourceSha256": "8fa6641b9069a538967aa580e80d027d3f312485135453ba1b1c21543d44b681"
+          "sourceSha256": "8423e5e31c94ba691f52d34f46cd7b0ef1b64955af858bcafe659d4f6a24817d"
         },
         {
           "module": "host-bridges",

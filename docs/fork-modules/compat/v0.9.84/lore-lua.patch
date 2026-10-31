@@ -156,7 +156,7 @@ index 95c3b07..9ef0505 100644
              for(const mText of mList){
                  for(const {regex, source} of regexes){
 diff --git a/src/ts/process/lorebookMatching.test.ts b/src/ts/process/lorebookMatching.test.ts
-index 922db27..ae89922 100644
+index 922db27..bde27db 100644
 --- a/src/ts/process/lorebookMatching.test.ts
 +++ b/src/ts/process/lorebookMatching.test.ts
 @@ -1,5 +1,7 @@
@@ -167,7 +167,7 @@ index 922db27..ae89922 100644
      matchesLorebookKey,
      resolveLorebookMatchingMode,
  } from './lorebookMatching'
-@@ -49,3 +51,43 @@ describe('resolveLorebookMatchingMode', () => {
+@@ -49,3 +51,50 @@ describe('resolveLorebookMatchingMode', () => {
          expect(resolveLorebookMatchingMode('invalid' as any, true)).toBe('whitespace')
      })
  })
@@ -185,6 +185,13 @@ index 922db27..ae89922 100644
 +        expect(dropNeverMatchingRegexEdges('a\\\\|(?!)')).toBe('a\\\\')
 +        expect(dropNeverMatchingRegexEdges('(a|(?!))')).toBe('(a|(?!))')
 +        expect(dropNeverMatchingRegexEdges('abc')).toBe('abc')
++    })
++
++    it('keeps flags and source apart in the cache', () => {
++        expect(getLorebookKeyRegex('z', 'i\u0000x')).toBeNull()
++        const regex = getLorebookKeyRegex('x\u0000z', 'i')
++        expect(regex).not.toBeNull()
++        expect(regex?.test('x\u0000z')).toBe(true)
 +    })
 +
 +    it('matches exactly like a freshly compiled pattern, including invalid and stateful flags', () => {
@@ -212,7 +219,7 @@ index 922db27..ae89922 100644
 +    })
 +})
 diff --git a/src/ts/process/lorebookMatching.ts b/src/ts/process/lorebookMatching.ts
-index f30a089..959547b 100644
+index f30a089..91e0fc1 100644
 --- a/src/ts/process/lorebookMatching.ts
 +++ b/src/ts/process/lorebookMatching.ts
 @@ -76,3 +76,57 @@ export function matchesLorebookKey(
@@ -247,7 +254,7 @@ index f30a089..959547b 100644
 +
 +/** Same result as `new RegExp(source, flags)` (null where that throws), reused across calls; lastIndex is reset. */
 +export function getLorebookKeyRegex(source: string, flags: string): RegExp | null {
-+    const cacheKey = flags + '\u0000' + source
++    const cacheKey = JSON.stringify([flags, source])
 +    let regex = lorebookRegexCache.get(cacheKey)
 +    if(regex === undefined){
 +        try {
