@@ -763,7 +763,7 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1"
+          "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
         }
       ],
       "payloadTargets": {
@@ -906,7 +906,7 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1"
+          "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
         }
       ],
       "payloadTargets": {

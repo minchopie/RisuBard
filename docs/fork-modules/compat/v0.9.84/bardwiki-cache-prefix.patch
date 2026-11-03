@@ -1,5 +1,5 @@
 diff --git a/src/ts/process/request/structuredOutputFallback.test.ts b/src/ts/process/request/structuredOutputFallback.test.ts
-index 5e283c1..5016fb0 100644
+index 5e283c1..05d3b2a 100644
 --- a/src/ts/process/request/structuredOutputFallback.test.ts
 +++ b/src/ts/process/request/structuredOutputFallback.test.ts
 @@ -54,6 +54,66 @@ describe('structured output compatibility fallback', () => {
@@ -69,7 +69,7 @@ index 5e283c1..5016fb0 100644
      })
  
      test('retries an ambiguous 400 invalid argument when native schema was active', async () => {
-@@ -139,4 +199,93 @@ describe('structured output compatibility fallback', () => {
+@@ -139,4 +199,116 @@ describe('structured output compatibility fallback', () => {
              "reasoningEffort: arg.schema ? 'minimal' : undefined"
          )
      })
@@ -155,6 +155,29 @@ index 5e283c1..5016fb0 100644
 +        }
 +    })
 +
++    test('remembers only after the prompt-schema request succeeds and forgets after a failed direct request', async () => {
++        const module = await loadFallbackModule()
++        expect(module).not.toBeNull()
++        if (!module) return
++        module.clearStructuredOutputSchemaRejections()
++        const ambiguous = () => new ModelPresetAdapterError('invalid-request', 'Request contains an invalid argument.', { status: 400 })
++        const bothFail = vi.fn().mockRejectedValueOnce(ambiguous()).mockRejectedValueOnce(ambiguous())
++        await expect(module.sendWithStructuredOutputFallback(baseOptions(), bothFail, undefined, 'target-a')).rejects.toThrow()
++        const native = vi.fn().mockResolvedValueOnce('native')
++        await module.sendWithStructuredOutputFallback(baseOptions(), native, undefined, 'target-a')
++        expect(native.mock.calls[0][0].responseSchema).toBeDefined()
++
++        const remembered = vi.fn().mockRejectedValueOnce(ambiguous()).mockResolvedValueOnce('ok')
++        await module.sendWithStructuredOutputFallback(baseOptions(), remembered, undefined, 'target-a')
++        const offline = new ModelPresetAdapterError('network', 'offline')
++        const directFails = vi.fn().mockRejectedValueOnce(offline)
++        await expect(module.sendWithStructuredOutputFallback(baseOptions(), directFails, undefined, 'target-a')).rejects.toBe(offline)
++        expect(directFails.mock.calls[0][0].responseSchema).toBeUndefined()
++        const nativeAgain = vi.fn().mockResolvedValueOnce('native')
++        await module.sendWithStructuredOutputFallback(baseOptions(), nativeAgain, undefined, 'target-a')
++        expect(nativeAgain.mock.calls[0][0].responseSchema).toBeDefined()
++    })
++
 +    test('passes the request target so remembered rejections stay per preset', () => {
 +        const source = readFileSync(
 +            resolve(process.cwd(), 'src/ts/process/request/request.ts'),
@@ -164,7 +187,7 @@ index 5e283c1..5016fb0 100644
 +    })
  })
 diff --git a/src/ts/process/request/structuredOutputFallback.ts b/src/ts/process/request/structuredOutputFallback.ts
-index f7d0997..4c5ae2c 100644
+index f7d0997..cd36745 100644
 --- a/src/ts/process/request/structuredOutputFallback.ts
 +++ b/src/ts/process/request/structuredOutputFallback.ts
 @@ -33,6 +33,29 @@ export function createStructuredOutputFallbackMessage(
@@ -197,7 +220,7 @@ index f7d0997..4c5ae2c 100644
  export function isStructuredOutputSchemaRejection(error: unknown): boolean {
      if (!(error instanceof ModelPresetAdapterError)
          || error.kind !== 'invalid-request') {
-@@ -43,11 +66,91 @@ export function isStructuredOutputSchemaRejection(error: unknown): boolean {
+@@ -43,11 +66,100 @@ export function isStructuredOutputSchemaRejection(error: unknown): boolean {
          || (error.status === 400 && AMBIGUOUS_INVALID_ARGUMENT.test(message))
  }
  
@@ -285,23 +308,34 @@ index f7d0997..4c5ae2c 100644
 +        const fallbackMessage = createStructuredOutputFallbackMessage(
 +            options.responseSchema
 +        )
-+        if (fallbackMessage) return send(promptSchemaRequest(options, fallbackMessage))
++        if (fallbackMessage) {
++            try {
++                return await send(promptSchemaRequest(options, fallbackMessage))
++            }
++            catch (error) {
++                // Next time starts from the native request again.
++                if (rejectionKey) rejectedNativeSchemas.delete(rejectionKey)
++                throw error
++            }
++        }
 +    }
      try {
          return await send(options)
      }
-@@ -60,11 +163,8 @@ export async function sendWithStructuredOutputFallback<T>(
-             options.responseSchema
+@@ -61,10 +173,10 @@ export async function sendWithStructuredOutputFallback<T>(
          )
          if (!fallbackMessage) throw error
-+        rememberSchemaRejection(rejectionKey, Date.now())
          onFallback?.(error as ModelPresetAdapterError)
 -        return send({
 -            ...options,
 -            responseSchema: undefined,
 -            messages: [fallbackMessage, ...options.messages],
 -        })
-+        return send(promptSchemaRequest(options, fallbackMessage))
++        const result = await send(promptSchemaRequest(options, fallbackMessage))
++        // Remembered only once the prompt-schema request went through, so an
++        // ambiguous 400 that was not about the schema is never remembered.
++        rememberSchemaRejection(rejectionKey, Date.now())
++        return result
      }
  }
 diff --git a/src/ts/risubard/memoryAnalysisClient.test.ts b/src/ts/risubard/memoryAnalysisClient.test.ts

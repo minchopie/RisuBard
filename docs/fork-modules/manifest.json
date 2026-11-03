@@ -115,9 +115,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetController.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "f02c2c8a469be0d304339606f829bd0fdaa821e9c6696823bfb78afe20677b7c",
-      "contentSha256": "f02c2c8a469be0d304339606f829bd0fdaa821e9c6696823bfb78afe20677b7c",
-      "bytes": 26335
+      "sha256": "766488250c12a006f57bf0e0c6cdd52a9f1ddd0b183e15e492709fb224660326",
+      "contentSha256": "766488250c12a006f57bf0e0c6cdd52a9f1ddd0b183e15e492709fb224660326",
+      "bytes": 26382
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetNetwork.kt",
@@ -1747,9 +1747,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/NativeNotify.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "841cf2cca30f89ed34c23ce1f288f7cfc96a1f5a5bcf4e0388b76416f49ba729",
-      "contentSha256": "841cf2cca30f89ed34c23ce1f288f7cfc96a1f5a5bcf4e0388b76416f49ba729",
-      "bytes": 7618
+      "sha256": "cbb518f9047cb4b0efadbd69242dc2b9d729e00f48486ea7cdbb04f8c8a6166a",
+      "contentSha256": "cbb518f9047cb4b0efadbd69242dc2b9d729e00f48486ea7cdbb04f8c8a6166a",
+      "bytes": 8469
     },
     {
       "path": "android-app/app/src/main/res/drawable/ic_notify.xml",
@@ -1763,17 +1763,17 @@
       "path": "src/ts/transfer-sync/androidNotification.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "835d605052f6eb0fc1fa15d5bd9e35a0925dac6820f759d13054f6cd86e644db",
-      "contentSha256": "835d605052f6eb0fc1fa15d5bd9e35a0925dac6820f759d13054f6cd86e644db",
-      "bytes": 3938
+      "sha256": "8bb82be884ef5d1d611da97991d7b57c07920e168547d9cffe2f48cdf83ae55a",
+      "contentSha256": "8bb82be884ef5d1d611da97991d7b57c07920e168547d9cffe2f48cdf83ae55a",
+      "bytes": 5153
     },
     {
       "path": "src/ts/transfer-sync/androidNotification.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "a6564bcbf4b1fe47cb1135ebef8528ef5b3e1f6847c7ed2942d25f94a7fe5cb7",
-      "contentSha256": "a6564bcbf4b1fe47cb1135ebef8528ef5b3e1f6847c7ed2942d25f94a7fe5cb7",
-      "bytes": 4771
+      "sha256": "fee2ed85940429027c96878ef99de0572e860b3293d6e3148ae7735b0240cf06",
+      "contentSha256": "fee2ed85940429027c96878ef99de0572e860b3293d6e3148ae7735b0240cf06",
+      "bytes": 7134
     },
     {
       "path": "index.html",
@@ -4187,17 +4187,17 @@
       "path": "src/ts/process/request/structuredOutputFallback.test.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
-      "sha256": "8618b735dbc515a3153922c86477119c7c1e01fcc61b3d45f54260d61e17ce3c",
-      "contentSha256": "8618b735dbc515a3153922c86477119c7c1e01fcc61b3d45f54260d61e17ce3c",
-      "bytes": 12701
+      "sha256": "28e6940b19422540aab6ae3335481b214b39052fd7890305bf8c527ea91b8086",
+      "contentSha256": "28e6940b19422540aab6ae3335481b214b39052fd7890305bf8c527ea91b8086",
+      "bytes": 14406
     },
     {
       "path": "src/ts/process/request/structuredOutputFallback.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
-      "sha256": "1d4ec9126e3aecd401c583be4839d276ce88a80dbc9ea872635e903be1bb5a7a",
-      "contentSha256": "1d4ec9126e3aecd401c583be4839d276ce88a80dbc9ea872635e903be1bb5a7a",
-      "bytes": 5982
+      "sha256": "003e58f5385fa4f12a5a18be222d66564123b97da147c0f0cec4ab298a0c0d29",
+      "contentSha256": "003e58f5385fa4f12a5a18be222d66564123b97da147c0f0cec4ab298a0c0d29",
+      "bytes": 6452
     },
     {
       "path": "src/ts/risubard/memoryAnalysisClient.test.ts",
@@ -4874,7 +4874,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/bardwiki-cache-prefix.patch",
-        "sha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1"
+        "sha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
       }
     }
   ],
@@ -4897,7 +4897,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "cefd532b88ad12426eb58e11bedf08afde7f946bd56d24441eac92a22f82e0b1"
+      "sha256": "af73c86291b8e4a88c0da53735f23873fe83d1c680e38dcc87b9ca8b0ec81cb0"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5060,8 +5060,8 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1",
-          "sha256": "6efb94b25d35edee5d10330ddc0247c09ff87b8c2e45739dafba11be6cbc8370"
+          "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c",
+          "sha256": "82055b9b14a1958de6a87658518dd1e645bb41fc2d6ed7e8bee9ba93b822fc78"
         }
       ],
       "payloadTargets": {
@@ -5212,8 +5212,8 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1",
-          "sha256": "6efb94b25d35edee5d10330ddc0247c09ff87b8c2e45739dafba11be6cbc8370"
+          "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c",
+          "sha256": "82055b9b14a1958de6a87658518dd1e645bb41fc2d6ed7e8bee9ba93b822fc78"
         }
       ],
       "payloadTargets": {
