@@ -226,7 +226,11 @@
         "src/ts/transferSyncPanel.test.ts",
         "src/ts/transferSyncShims.test.ts",
         "shared/play-set/characterOrder.ts",
-        "server/node/file-kv-export.test.ts"
+        "server/node/file-kv-export.test.ts",
+        "android-app/app/src/main/java/app/risubard/personal/NativeNotify.kt",
+        "android-app/app/src/main/res/drawable/ic_notify.xml",
+        "src/ts/transfer-sync/androidNotification.ts",
+        "src/ts/transfer-sync/androidNotification.test.ts"
       ]
     },
     {
@@ -421,7 +425,8 @@
         "patchnote/0.9.102.md",
         "patchnote/0.9.103.md",
         "patchnote/0.9.104.md",
-        "patchnote/0.9.105.md"
+        "patchnote/0.9.105.md",
+        "patchnote/0.9.106.md"
       ]
     },
     {

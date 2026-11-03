@@ -24,6 +24,8 @@ class PlaySetController(private val activity: Activity, private val webView: and
     private val networkExecutor = Executors.newFixedThreadPool(2)
     private val networkControlExecutor = Executors.newFixedThreadPool(2)
     private val controlExecutor = Executors.newFixedThreadPool(2)
+    private val notifyExecutor = Executors.newSingleThreadExecutor() // the permission dialog waits for the user
+    @Volatile var notifier: NativeNotify? = null
     @Volatile private var foreground = true
     private val root = File(activity.filesDir, "play-sets").apply { mkdirs() }
     private val archives = PlaySetArchive(File(root, "archives"))
@@ -202,6 +204,7 @@ class PlaySetController(private val activity: Activity, private val webView: and
                 }
                 try {
                     if (operation in setOf("network.pair", "network.status")) networkControlExecutor.execute(work)
+                    else if (operation.startsWith("notify.")) notifyExecutor.execute(work)
                     else if (operation in setOf("network.progress", "usb.progress")) work.run() else executor.execute(work)
                 } catch (_: java.util.concurrent.RejectedExecutionException) { main.removeCallbacks(heartbeat) }
             } } catch (_: java.util.concurrent.RejectedExecutionException) { /* Activity teardown already owns the pending requests. */ }
@@ -257,6 +260,10 @@ class PlaySetController(private val activity: Activity, private val webView: and
         "network.start" -> { ensureReceivers(false); if (nativeNetwork.granted()) nativeNetwork.start(); null }
         "wifi.ssid" -> nativeNetwork.info()
         "wifi.permission" -> nativeNetwork.requestPermission()
+        "notify.status" -> notifier?.status() ?: "denied"
+        "notify.permission" -> notifier?.request() ?: "denied"
+        "notify.show" -> { notifier?.show(a.optString("title", "RisuBard"), a.optString("body", "")); null }
+        "notify.generating" -> { notifier?.setGenerating(a.optBoolean("active", false)); null }
         "network.devices" -> activeNetwork().devices()
         "network.registration" -> { val result = activeNetwork().transport.registration(); JSONObject().put("session", result[0]).put("code", result[1]).put("expiresAt", System.currentTimeMillis() + 300_000) }
         "network.forget" -> { network().forget(a.getString("device")); null }
@@ -361,7 +368,7 @@ class PlaySetController(private val activity: Activity, private val webView: and
         }
     }
     fun permissionResult(requestCode: Int) { if (requestCode == NativeNetwork.REQUEST) nativeNetwork.onPermissionResult() }
-    fun destroy() { destroyed = true; setForeground(false); nativeNetwork.stop(); controlExecutor.shutdownNow(); networkControlExecutor.shutdownNow(); networkExecutor.shutdownNow(); executor.execute { archives.close() }; executor.shutdown() }
+    fun destroy() { destroyed = true; setForeground(false); nativeNetwork.stop(); notifyExecutor.shutdownNow(); controlExecutor.shutdownNow(); networkControlExecutor.shutdownNow(); networkExecutor.shutdownNow(); executor.execute { archives.close() }; executor.shutdown() }
     companion object {
         const val OPEN_FILE = 7341
         const val SAVE_FILE = 7342

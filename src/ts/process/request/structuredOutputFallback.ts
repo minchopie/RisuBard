@@ -66,11 +66,91 @@ export function isStructuredOutputSchemaRejection(error: unknown): boolean {
         || (error.status === 400 && AMBIGUOUS_INVALID_ARGUMENT.test(message))
 }
 
+// A provider that rejects a native schema keeps rejecting that same schema for the
+// same target and request options (request log: every repeated schema had one
+// outcome), and each rejection costs a full round trip before the prompt-schema
+// retry. When the caller names its target, a rejection is remembered for a while
+// and the next identical request goes straight to the prompt-schema request the
+// retry would have sent. Without a target key the behavior is unchanged.
+const SCHEMA_REJECTION_TTL_MS = 60 * 60 * 1000
+const SCHEMA_REJECTION_LIMIT = 64
+const rejectedNativeSchemas = new Map<string, number>()
+
+function schemaRejectionKey(
+    target: string | undefined,
+    options: AdapterChatOptions
+): string | null {
+    if (!target || !options.responseSchema) return null
+    try {
+        return JSON.stringify([
+            target,
+            options.responseSchema,
+            options.tools ?? null,
+            options.temperature ?? null,
+            options.maxOutputTokens ?? null,
+            options.reasoningEffort ?? null,
+            options.collectStreamUsage ?? null,
+            options.anthropicCache1h ?? null,
+            options.sessionId ?? null,
+            options.cache ? 'cache' : null,
+        ])
+    }
+    catch {
+        return null
+    }
+}
+
+function rememberedSchemaRejection(key: string | null, now: number): boolean {
+    if (!key) return false
+    const expiresAt = rejectedNativeSchemas.get(key)
+    if (expiresAt === undefined) return false
+    if (expiresAt > now) return true
+    rejectedNativeSchemas.delete(key)
+    return false
+}
+
+function rememberSchemaRejection(key: string | null, now: number) {
+    if (!key) return
+    rejectedNativeSchemas.delete(key)
+    while (rejectedNativeSchemas.size >= SCHEMA_REJECTION_LIMIT) {
+        const oldest = rejectedNativeSchemas.keys().next().value
+        if (oldest === undefined) break
+        rejectedNativeSchemas.delete(oldest)
+    }
+    rejectedNativeSchemas.set(key, now + SCHEMA_REJECTION_TTL_MS)
+}
+
+export function clearStructuredOutputSchemaRejections() {
+    rejectedNativeSchemas.clear()
+}
+
+function promptSchemaRequest(
+    options: AdapterChatOptions,
+    fallbackMessage: AdapterChatOptions['messages'][number]
+): AdapterChatOptions {
+    return {
+        ...options,
+        responseSchema: undefined,
+        messages: appendToSharedEvidenceRequest(
+            options.messages,
+            fallbackMessage.content
+        ) ?? [fallbackMessage, ...options.messages],
+    }
+}
+
 export async function sendWithStructuredOutputFallback<T>(
     options: AdapterChatOptions,
     send: (request: AdapterChatOptions) => Promise<T>,
-    onFallback?: (error: ModelPresetAdapterError) => void
+    onFallback?: (error: ModelPresetAdapterError) => void,
+    target?: string
 ): Promise<T> {
+    const rejectionKey = schemaRejectionKey(target, options)
+    if (rememberedSchemaRejection(rejectionKey, Date.now())) {
+        const fallbackMessage = createStructuredOutputFallbackMessage(
+            options.responseSchema
+        )
+        if (fallbackMessage) return send(promptSchemaRequest(options, fallbackMessage))
+    }
     try {
         return await send(options)
     }
@@ -83,14 +163,8 @@ export async function sendWithStructuredOutputFallback<T>(
             options.responseSchema
         )
         if (!fallbackMessage) throw error
+        rememberSchemaRejection(rejectionKey, Date.now())
         onFallback?.(error as ModelPresetAdapterError)
-        return send({
-            ...options,
-            responseSchema: undefined,
-            messages: appendToSharedEvidenceRequest(
-                options.messages,
-                fallbackMessage.content
-            ) ?? [fallbackMessage, ...options.messages],
-        })
+        return send(promptSchemaRequest(options, fallbackMessage))
     }
 }

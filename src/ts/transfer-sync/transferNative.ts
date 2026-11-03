@@ -5,6 +5,9 @@ const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Err
 let attached: Bridge | undefined;
 let windows = false;
 export async function initializeNativeTransfers() {
+  if (androidTransferAvailable()) {
+    try { (await import('./androidNotification')).installAndroidNotifications(); } catch { /* notifications stay unavailable */ }
+  }
   const { transferRequest } = await import('./playTransfer');
   windows = (await (await transferRequest('/native-capabilities')).json()).windows === true;
 }

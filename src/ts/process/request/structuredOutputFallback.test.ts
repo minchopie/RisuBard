@@ -199,4 +199,93 @@ describe('structured output compatibility fallback', () => {
             "reasoningEffort: arg.schema ? 'minimal' : undefined"
         )
     })
+
+    test('remembers a schema rejection per target and sends the same prompt-schema request directly', async () => {
+        const module = await loadFallbackModule()
+        expect(module).not.toBeNull()
+        if (!module) return
+        module.clearStructuredOutputSchemaRejections()
+        const rejection = () => new ModelPresetAdapterError('invalid-request', 'Request contains an invalid argument.', { status: 400 })
+        const first = vi.fn()
+            .mockRejectedValueOnce(rejection())
+            .mockResolvedValueOnce('first')
+        await expect(module.sendWithStructuredOutputFallback(baseOptions(), first, undefined, 'target-a')).resolves.toBe('first')
+        expect(first).toHaveBeenCalledTimes(2)
+
+        const second = vi.fn().mockResolvedValueOnce('second')
+        const onFallback = vi.fn()
+        await expect(module.sendWithStructuredOutputFallback(baseOptions(), second, onFallback, 'target-a')).resolves.toBe('second')
+        expect(second).toHaveBeenCalledTimes(1)
+        expect(onFallback).not.toHaveBeenCalled()
+        expect(JSON.stringify(second.mock.calls[0][0])).toBe(JSON.stringify(first.mock.calls[1][0]))
+
+        const otherTarget = vi.fn().mockResolvedValueOnce('native')
+        await expect(module.sendWithStructuredOutputFallback(baseOptions(), otherTarget, undefined, 'target-b')).resolves.toBe('native')
+        expect(otherTarget.mock.calls[0][0].responseSchema).toEqual(baseOptions().responseSchema)
+
+        const otherSchema = vi.fn().mockResolvedValueOnce('native')
+        await expect(module.sendWithStructuredOutputFallback({
+            ...baseOptions(),
+            responseSchema: { type: 'object', properties: { other: { type: 'string' } } },
+        }, otherSchema, undefined, 'target-a')).resolves.toBe('native')
+        expect(otherSchema.mock.calls[0][0].responseSchema).toBeDefined()
+
+        const otherOptions = vi.fn().mockResolvedValueOnce('native')
+        await expect(module.sendWithStructuredOutputFallback({ ...baseOptions(), temperature: 0.2 }, otherOptions, undefined, 'target-a')).resolves.toBe('native')
+        expect(otherOptions.mock.calls[0][0].responseSchema).toBeDefined()
+    })
+
+    test('keeps trying native output every time without a target', async () => {
+        const module = await loadFallbackModule()
+        expect(module).not.toBeNull()
+        if (!module) return
+        module.clearStructuredOutputSchemaRejections()
+        for (let i = 0; i < 2; i++) {
+            const send = vi.fn()
+                .mockRejectedValueOnce(new ModelPresetAdapterError('invalid-request', 'Invalid generation_config.response_schema'))
+                .mockResolvedValueOnce('ok')
+            await expect(module.sendWithStructuredOutputFallback(baseOptions(), send)).resolves.toBe('ok')
+            expect(send).toHaveBeenCalledTimes(2)
+        }
+    })
+
+    test('does not remember other errors and forgets a rejection after an hour', async () => {
+        const module = await loadFallbackModule()
+        expect(module).not.toBeNull()
+        if (!module) return
+        module.clearStructuredOutputSchemaRejections()
+        const overload = new ModelPresetAdapterError('server', 'overloaded')
+        const failing = vi.fn().mockRejectedValueOnce(overload)
+        await expect(module.sendWithStructuredOutputFallback(baseOptions(), failing, undefined, 'target-a')).rejects.toBe(overload)
+        const native = vi.fn().mockResolvedValueOnce('native')
+        await module.sendWithStructuredOutputFallback(baseOptions(), native, undefined, 'target-a')
+        expect(native.mock.calls[0][0].responseSchema).toBeDefined()
+
+        vi.useFakeTimers()
+        try {
+            vi.setSystemTime(new Date('2026-11-03T00:00:00Z'))
+            const rejected = vi.fn()
+                .mockRejectedValueOnce(new ModelPresetAdapterError('invalid-request', 'Invalid generation_config.response_schema'))
+                .mockResolvedValueOnce('ok')
+            await module.sendWithStructuredOutputFallback(baseOptions(), rejected, undefined, 'target-a')
+            vi.setSystemTime(new Date('2026-11-03T00:59:00Z'))
+            const direct = vi.fn().mockResolvedValueOnce('ok')
+            await module.sendWithStructuredOutputFallback(baseOptions(), direct, undefined, 'target-a')
+            expect(direct.mock.calls[0][0].responseSchema).toBeUndefined()
+            vi.setSystemTime(new Date('2026-11-03T01:00:01Z'))
+            const retried = vi.fn().mockResolvedValueOnce('native')
+            await module.sendWithStructuredOutputFallback(baseOptions(), retried, undefined, 'target-a')
+            expect(retried.mock.calls[0][0].responseSchema).toBeDefined()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    test('passes the request target so remembered rejections stay per preset', () => {
+        const source = readFileSync(
+            resolve(process.cwd(), 'src/ts/process/request/request.ts'),
+            'utf8'
+        )
+        expect(source).toContain('structuredOutputTarget(kind, provenance.wireModelId, preset)')
+    })
 })

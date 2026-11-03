@@ -41,6 +41,7 @@ class MainActivity : Activity() {
     private lateinit var stagedDownloads: NativeDownload.Staging
     private var chooser: ValueCallback<Array<Uri>>? = null
     private var transfers: PlaySetController? = null
+    private lateinit var notifier: NativeNotify
     private var receivedIntent: Intent? = null
     @Volatile private var transferPageLocal = false
     private val worker = Executors.newSingleThreadExecutor()
@@ -65,6 +66,7 @@ class MainActivity : Activity() {
         webView = WebView(this)
         layout.addView(webView, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(layout)
+        notifier = NativeNotify(this)
         if (Build.VERSION.SDK_INT >= 30) {
             window.setDecorFitsSystemWindows(false)
             layout.setOnApplyWindowInsetsListener { view, insets ->
@@ -146,7 +148,7 @@ class MainActivity : Activity() {
                     origin = session.origin
                     transfers?.removeBridge(); transfers?.destroy()
                     transferPageLocal = false
-                    transfers = PlaySetController(this, webView, session.origin, { transferPageLocal }, stagedDownloads, ::requestDownload).also { it.configure() }
+                    transfers = PlaySetController(this, webView, session.origin, { transferPageLocal }, stagedDownloads, ::requestDownload).also { it.notifier = notifier; it.configure() }
                     refreshRecovery()
                     CookieManager.getInstance().setCookie(session.origin, session.cookie) { accepted ->
                         if (isDestroyed) return@setCookie
@@ -274,13 +276,15 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         transfers?.permissionResult(requestCode)
+        notifier.onPermissionResult(requestCode)
     }
     override fun onPause() {
         // Android WebView can stay document-visible when the activity goes to the background.
         if (!rendererGone && origin != null) webView.evaluateJavascript("window.dispatchEvent(new Event('risubard-native-background'))", null)
+        notifier.setVisible(false)
         super.onPause()
     }
-    override fun onResume() { super.onResume(); transfers?.setForeground(true) }
+    override fun onResume() { super.onResume(); notifier.setVisible(true); transfers?.setForeground(true) }
     override fun onStop() { transfers?.setForeground(false); super.onStop() }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -300,6 +304,7 @@ class MainActivity : Activity() {
         super.onSaveInstanceState(outState)
     }
     override fun onDestroy() {
+        notifier.destroy()
         transfers?.destroy(); transfers = null
         chooser?.onReceiveValue(null); chooser = null
         if (!rendererGone) { (webView.parent as? ViewGroup)?.removeView(webView); webView.destroy() }

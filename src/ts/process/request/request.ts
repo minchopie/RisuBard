@@ -796,6 +796,16 @@ function toAdapterToolDef(tool: MCPTool): AdapterToolDef {
 // byte) — see preset/adapter/reasoning.ts.
 const formatPresetReasoning = formatReasoningParts
 
+// Identifies where a structured request goes (adapter, wire model, full preset
+// configuration) so a remembered native-schema rejection never crosses targets.
+function structuredOutputTarget(kind: string, wireModelId: string, preset: ModelPreset): string | undefined {
+    try {
+        return JSON.stringify([kind, wireModelId, preset])
+    } catch {
+        return undefined
+    }
+}
+
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
     const credential = buildModelPresetCredential(preset)
     const kind = preset.profileSnapshot.adapterKind
@@ -1168,7 +1178,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             (error) => console.warn(
                 '[ModelPreset] native structured output rejected; retrying with prompt schema',
                 describeModelPresetError(error)
-            )
+            ),
+            structuredOutputTarget(kind, provenance.wireModelId, preset)
         )
         logScope.setUsage(toLogUsage(response.usage))
         void logScope.close()
