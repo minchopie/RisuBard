@@ -664,7 +664,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03"
+          "sourceSha256": "4923aad7447807accdfb10a6acb253a37f759bc9be341fa350e8d00c5e20f21e"
         },
         {
           "module": "host-bridges",
@@ -743,7 +743,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03"
+          "sourceSha256": "4923aad7447807accdfb10a6acb253a37f759bc9be341fa350e8d00c5e20f21e"
         },
         {
           "module": "lore-lua",
@@ -763,7 +763,7 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "76619cabf56c0b01e6761d5236dddc92f8df650b628c71274f1d8e370d938b9e"
+          "sourceSha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1"
         }
       ],
       "payloadTargets": {
@@ -862,7 +862,7 @@
         {
           "module": "model-compat",
           "path": "docs/fork-modules/compat/v0.9.86/model-compat.patch",
-          "sourceSha256": "ffa0eda275b22be12eed0c4f6b733187dc36a1fcd7b0000ad937ceaa9c8698b8"
+          "sourceSha256": "e38a61c6ca507ea78a5f27ab257f7fb59bd0c7e13fdc700b8ab48cc55be9a5da"
         },
         {
           "module": "storage-recovery",
@@ -886,7 +886,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03"
+          "sourceSha256": "4923aad7447807accdfb10a6acb253a37f759bc9be341fa350e8d00c5e20f21e"
         },
         {
           "module": "lore-lua",
@@ -906,7 +906,7 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "76619cabf56c0b01e6761d5236dddc92f8df650b628c71274f1d8e370d938b9e"
+          "sourceSha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1"
         }
       ],
       "payloadTargets": {

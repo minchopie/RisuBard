@@ -1,5 +1,5 @@
 diff --git a/src/ts/process/request/structuredOutputFallback.test.ts b/src/ts/process/request/structuredOutputFallback.test.ts
-index 5e283c1..4184b96 100644
+index 5e283c1..5016fb0 100644
 --- a/src/ts/process/request/structuredOutputFallback.test.ts
 +++ b/src/ts/process/request/structuredOutputFallback.test.ts
 @@ -54,6 +54,66 @@ describe('structured output compatibility fallback', () => {
@@ -69,8 +69,102 @@ index 5e283c1..4184b96 100644
      })
  
      test('retries an ambiguous 400 invalid argument when native schema was active', async () => {
+@@ -139,4 +199,93 @@ describe('structured output compatibility fallback', () => {
+             "reasoningEffort: arg.schema ? 'minimal' : undefined"
+         )
+     })
++
++    test('remembers a schema rejection per target and sends the same prompt-schema request directly', async () => {
++        const module = await loadFallbackModule()
++        expect(module).not.toBeNull()
++        if (!module) return
++        module.clearStructuredOutputSchemaRejections()
++        const rejection = () => new ModelPresetAdapterError('invalid-request', 'Request contains an invalid argument.', { status: 400 })
++        const first = vi.fn()
++            .mockRejectedValueOnce(rejection())
++            .mockResolvedValueOnce('first')
++        await expect(module.sendWithStructuredOutputFallback(baseOptions(), first, undefined, 'target-a')).resolves.toBe('first')
++        expect(first).toHaveBeenCalledTimes(2)
++
++        const second = vi.fn().mockResolvedValueOnce('second')
++        const onFallback = vi.fn()
++        await expect(module.sendWithStructuredOutputFallback(baseOptions(), second, onFallback, 'target-a')).resolves.toBe('second')
++        expect(second).toHaveBeenCalledTimes(1)
++        expect(onFallback).not.toHaveBeenCalled()
++        expect(JSON.stringify(second.mock.calls[0][0])).toBe(JSON.stringify(first.mock.calls[1][0]))
++
++        const otherTarget = vi.fn().mockResolvedValueOnce('native')
++        await expect(module.sendWithStructuredOutputFallback(baseOptions(), otherTarget, undefined, 'target-b')).resolves.toBe('native')
++        expect(otherTarget.mock.calls[0][0].responseSchema).toEqual(baseOptions().responseSchema)
++
++        const otherSchema = vi.fn().mockResolvedValueOnce('native')
++        await expect(module.sendWithStructuredOutputFallback({
++            ...baseOptions(),
++            responseSchema: { type: 'object', properties: { other: { type: 'string' } } },
++        }, otherSchema, undefined, 'target-a')).resolves.toBe('native')
++        expect(otherSchema.mock.calls[0][0].responseSchema).toBeDefined()
++
++        const otherOptions = vi.fn().mockResolvedValueOnce('native')
++        await expect(module.sendWithStructuredOutputFallback({ ...baseOptions(), temperature: 0.2 }, otherOptions, undefined, 'target-a')).resolves.toBe('native')
++        expect(otherOptions.mock.calls[0][0].responseSchema).toBeDefined()
++    })
++
++    test('keeps trying native output every time without a target', async () => {
++        const module = await loadFallbackModule()
++        expect(module).not.toBeNull()
++        if (!module) return
++        module.clearStructuredOutputSchemaRejections()
++        for (let i = 0; i < 2; i++) {
++            const send = vi.fn()
++                .mockRejectedValueOnce(new ModelPresetAdapterError('invalid-request', 'Invalid generation_config.response_schema'))
++                .mockResolvedValueOnce('ok')
++            await expect(module.sendWithStructuredOutputFallback(baseOptions(), send)).resolves.toBe('ok')
++            expect(send).toHaveBeenCalledTimes(2)
++        }
++    })
++
++    test('does not remember other errors and forgets a rejection after an hour', async () => {
++        const module = await loadFallbackModule()
++        expect(module).not.toBeNull()
++        if (!module) return
++        module.clearStructuredOutputSchemaRejections()
++        const overload = new ModelPresetAdapterError('server', 'overloaded')
++        const failing = vi.fn().mockRejectedValueOnce(overload)
++        await expect(module.sendWithStructuredOutputFallback(baseOptions(), failing, undefined, 'target-a')).rejects.toBe(overload)
++        const native = vi.fn().mockResolvedValueOnce('native')
++        await module.sendWithStructuredOutputFallback(baseOptions(), native, undefined, 'target-a')
++        expect(native.mock.calls[0][0].responseSchema).toBeDefined()
++
++        vi.useFakeTimers()
++        try {
++            vi.setSystemTime(new Date('2026-11-03T00:00:00Z'))
++            const rejected = vi.fn()
++                .mockRejectedValueOnce(new ModelPresetAdapterError('invalid-request', 'Invalid generation_config.response_schema'))
++                .mockResolvedValueOnce('ok')
++            await module.sendWithStructuredOutputFallback(baseOptions(), rejected, undefined, 'target-a')
++            vi.setSystemTime(new Date('2026-11-03T00:59:00Z'))
++            const direct = vi.fn().mockResolvedValueOnce('ok')
++            await module.sendWithStructuredOutputFallback(baseOptions(), direct, undefined, 'target-a')
++            expect(direct.mock.calls[0][0].responseSchema).toBeUndefined()
++            vi.setSystemTime(new Date('2026-11-03T01:00:01Z'))
++            const retried = vi.fn().mockResolvedValueOnce('native')
++            await module.sendWithStructuredOutputFallback(baseOptions(), retried, undefined, 'target-a')
++            expect(retried.mock.calls[0][0].responseSchema).toBeDefined()
++        } finally {
++            vi.useRealTimers()
++        }
++    })
++
++    test('passes the request target so remembered rejections stay per preset', () => {
++        const source = readFileSync(
++            resolve(process.cwd(), 'src/ts/process/request/request.ts'),
++            'utf8'
++        )
++        expect(source).toContain('structuredOutputTarget(kind, provenance.wireModelId, preset)')
++    })
+ })
 diff --git a/src/ts/process/request/structuredOutputFallback.ts b/src/ts/process/request/structuredOutputFallback.ts
-index f7d0997..90095df 100644
+index f7d0997..4c5ae2c 100644
 --- a/src/ts/process/request/structuredOutputFallback.ts
 +++ b/src/ts/process/request/structuredOutputFallback.ts
 @@ -33,6 +33,29 @@ export function createStructuredOutputFallbackMessage(
@@ -103,16 +197,111 @@ index f7d0997..90095df 100644
  export function isStructuredOutputSchemaRejection(error: unknown): boolean {
      if (!(error instanceof ModelPresetAdapterError)
          || error.kind !== 'invalid-request') {
-@@ -64,7 +87,10 @@ export async function sendWithStructuredOutputFallback<T>(
-         return send({
-             ...options,
-             responseSchema: undefined,
+@@ -43,11 +66,91 @@ export function isStructuredOutputSchemaRejection(error: unknown): boolean {
+         || (error.status === 400 && AMBIGUOUS_INVALID_ARGUMENT.test(message))
+ }
+ 
++// A provider that rejects a native schema keeps rejecting that same schema for the
++// same target and request options (request log: every repeated schema had one
++// outcome), and each rejection costs a full round trip before the prompt-schema
++// retry. When the caller names its target, a rejection is remembered for a while
++// and the next identical request goes straight to the prompt-schema request the
++// retry would have sent. Without a target key the behavior is unchanged.
++const SCHEMA_REJECTION_TTL_MS = 60 * 60 * 1000
++const SCHEMA_REJECTION_LIMIT = 64
++const rejectedNativeSchemas = new Map<string, number>()
++
++function schemaRejectionKey(
++    target: string | undefined,
++    options: AdapterChatOptions
++): string | null {
++    if (!target || !options.responseSchema) return null
++    try {
++        return JSON.stringify([
++            target,
++            options.responseSchema,
++            options.tools ?? null,
++            options.temperature ?? null,
++            options.maxOutputTokens ?? null,
++            options.reasoningEffort ?? null,
++            options.collectStreamUsage ?? null,
++            options.anthropicCache1h ?? null,
++            options.sessionId ?? null,
++            options.cache ? 'cache' : null,
++        ])
++    }
++    catch {
++        return null
++    }
++}
++
++function rememberedSchemaRejection(key: string | null, now: number): boolean {
++    if (!key) return false
++    const expiresAt = rejectedNativeSchemas.get(key)
++    if (expiresAt === undefined) return false
++    if (expiresAt > now) return true
++    rejectedNativeSchemas.delete(key)
++    return false
++}
++
++function rememberSchemaRejection(key: string | null, now: number) {
++    if (!key) return
++    rejectedNativeSchemas.delete(key)
++    while (rejectedNativeSchemas.size >= SCHEMA_REJECTION_LIMIT) {
++        const oldest = rejectedNativeSchemas.keys().next().value
++        if (oldest === undefined) break
++        rejectedNativeSchemas.delete(oldest)
++    }
++    rejectedNativeSchemas.set(key, now + SCHEMA_REJECTION_TTL_MS)
++}
++
++export function clearStructuredOutputSchemaRejections() {
++    rejectedNativeSchemas.clear()
++}
++
++function promptSchemaRequest(
++    options: AdapterChatOptions,
++    fallbackMessage: AdapterChatOptions['messages'][number]
++): AdapterChatOptions {
++    return {
++        ...options,
++        responseSchema: undefined,
++        messages: appendToSharedEvidenceRequest(
++            options.messages,
++            fallbackMessage.content
++        ) ?? [fallbackMessage, ...options.messages],
++    }
++}
++
+ export async function sendWithStructuredOutputFallback<T>(
+     options: AdapterChatOptions,
+     send: (request: AdapterChatOptions) => Promise<T>,
+-    onFallback?: (error: ModelPresetAdapterError) => void
++    onFallback?: (error: ModelPresetAdapterError) => void,
++    target?: string
+ ): Promise<T> {
++    const rejectionKey = schemaRejectionKey(target, options)
++    if (rememberedSchemaRejection(rejectionKey, Date.now())) {
++        const fallbackMessage = createStructuredOutputFallbackMessage(
++            options.responseSchema
++        )
++        if (fallbackMessage) return send(promptSchemaRequest(options, fallbackMessage))
++    }
+     try {
+         return await send(options)
+     }
+@@ -60,11 +163,8 @@ export async function sendWithStructuredOutputFallback<T>(
+             options.responseSchema
+         )
+         if (!fallbackMessage) throw error
++        rememberSchemaRejection(rejectionKey, Date.now())
+         onFallback?.(error as ModelPresetAdapterError)
+-        return send({
+-            ...options,
+-            responseSchema: undefined,
 -            messages: [fallbackMessage, ...options.messages],
-+            messages: appendToSharedEvidenceRequest(
-+                options.messages,
-+                fallbackMessage.content
-+            ) ?? [fallbackMessage, ...options.messages],
-         })
+-        })
++        return send(promptSchemaRequest(options, fallbackMessage))
      }
  }
 diff --git a/src/ts/risubard/memoryAnalysisClient.test.ts b/src/ts/risubard/memoryAnalysisClient.test.ts

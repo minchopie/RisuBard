@@ -59,9 +59,9 @@
       "path": "android-app/app/src/main/AndroidManifest.xml",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "c7877a14d2ee26ed2585f241a09b660be4391322d310bc6efbe6d684ccea2941",
-      "contentSha256": "c7877a14d2ee26ed2585f241a09b660be4391322d310bc6efbe6d684ccea2941",
-      "bytes": 2284
+      "sha256": "97e47744658d01305902da7940520d0e7d81b50566c0c474b84785e9c9ae2291",
+      "contentSha256": "97e47744658d01305902da7940520d0e7d81b50566c0c474b84785e9c9ae2291",
+      "bytes": 2847
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/EmbeddedServer.kt",
@@ -83,9 +83,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/MainActivity.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "e562332280a37d4d770da8b2728af5fa5e89664729a32a451782689f25b2599b",
-      "contentSha256": "e562332280a37d4d770da8b2728af5fa5e89664729a32a451782689f25b2599b",
-      "bytes": 18519
+      "sha256": "402742ad32f1d6bf286129a9101c9287e33c5d953f71586b5bae767f1dd5dba4",
+      "contentSha256": "402742ad32f1d6bf286129a9101c9287e33c5d953f71586b5bae767f1dd5dba4",
+      "bytes": 18772
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/NativeDownload.kt",
@@ -115,9 +115,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetController.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "aa7dddcf4254b7ad1ef1e383e6e95feb439587b2f697dfaf202b3a54c3a51b16",
-      "contentSha256": "aa7dddcf4254b7ad1ef1e383e6e95feb439587b2f697dfaf202b3a54c3a51b16",
-      "bytes": 25719
+      "sha256": "f02c2c8a469be0d304339606f829bd0fdaa821e9c6696823bfb78afe20677b7c",
+      "contentSha256": "f02c2c8a469be0d304339606f829bd0fdaa821e9c6696823bfb78afe20677b7c",
+      "bytes": 26335
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetNetwork.kt",
@@ -707,9 +707,9 @@
       "path": "docs/transfer-sync/manifest.json",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "1e3777947aa61fd23df16147f4f0aadab049aec6760cd0949d577c03547b48e2",
-      "contentSha256": "1e3777947aa61fd23df16147f4f0aadab049aec6760cd0949d577c03547b48e2",
-      "bytes": 18418
+      "sha256": "782d0133253749fdbc527ccc957b808a7b869d377359b788c747facec129f56c",
+      "contentSha256": "782d0133253749fdbc527ccc957b808a7b869d377359b788c747facec129f56c",
+      "bytes": 17976
     },
     {
       "path": "scripts/android/Dockerfile.node",
@@ -1651,9 +1651,9 @@
       "path": "src/ts/transfer-sync/transferNative.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "e91b6d3e1a3816d460d20a5762f4708481097770a18786f2d6d380317ee2c21e",
-      "contentSha256": "e91b6d3e1a3816d460d20a5762f4708481097770a18786f2d6d380317ee2c21e",
-      "bytes": 5212
+      "sha256": "4370d929bc56d83408ff90c157089d704cc9d57518feff71e520a0eb44d73483",
+      "contentSha256": "4370d929bc56d83408ff90c157089d704cc9d57518feff71e520a0eb44d73483",
+      "bytes": 5382
     },
     {
       "path": "src/ts/transfer-sync/transferState.ts",
@@ -1742,6 +1742,38 @@
       "sha256": "0fecf85e989dc7a40ead4ab39ac07f34c9e860c2bc805d1884b8f485cb4d3aae",
       "contentSha256": "0fecf85e989dc7a40ead4ab39ac07f34c9e860c2bc805d1884b8f485cb4d3aae",
       "bytes": 8690
+    },
+    {
+      "path": "android-app/app/src/main/java/app/risubard/personal/NativeNotify.kt",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "841cf2cca30f89ed34c23ce1f288f7cfc96a1f5a5bcf4e0388b76416f49ba729",
+      "contentSha256": "841cf2cca30f89ed34c23ce1f288f7cfc96a1f5a5bcf4e0388b76416f49ba729",
+      "bytes": 7618
+    },
+    {
+      "path": "android-app/app/src/main/res/drawable/ic_notify.xml",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "6ddaf1f8f8c142051f8845c9dda30a2b60f711e999c5e78ca5049d887d4b5c2f",
+      "contentSha256": "6ddaf1f8f8c142051f8845c9dda30a2b60f711e999c5e78ca5049d887d4b5c2f",
+      "bytes": 461
+    },
+    {
+      "path": "src/ts/transfer-sync/androidNotification.ts",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "835d605052f6eb0fc1fa15d5bd9e35a0925dac6820f759d13054f6cd86e644db",
+      "contentSha256": "835d605052f6eb0fc1fa15d5bd9e35a0925dac6820f759d13054f6cd86e644db",
+      "bytes": 3938
+    },
+    {
+      "path": "src/ts/transfer-sync/androidNotification.test.ts",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "a6564bcbf4b1fe47cb1135ebef8528ef5b3e1f6847c7ed2942d25f94a7fe5cb7",
+      "contentSha256": "a6564bcbf4b1fe47cb1135ebef8528ef5b3e1f6847c7ed2942d25f94a7fe5cb7",
+      "bytes": 4771
     },
     {
       "path": "index.html",
@@ -1955,9 +1987,9 @@
       "path": "src/ts/process/request/request.ts",
       "module": "model-compat",
       "kind": "hosts",
-      "sha256": "9d7a5c5f91872cd53b35decf001eb27e5e39d2607e09b264812fef36fa326f86",
-      "contentSha256": "0d3df96b4252171ef6f3ec38d6e9d84b60da0dab0f0b2c58b6ebc340ef2489cf",
-      "bytes": 105746
+      "sha256": "e66f575b02b9aa754a8c93366b0042025d50bccaccc1ceb6c9d272f4eece2f50",
+      "contentSha256": "286da65d516beeb55ef8f9a969dff2a151aae6849cc0f4fe32a2880650b8ec6e",
+      "bytes": 106219
     },
     {
       "path": "src/ts/tokenizer.ts",
@@ -2755,9 +2787,9 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "916f22123c320dd9bcb0cb9a50ad7a8e15cc8fae0d3f936818b0b3197e855c57",
-      "contentSha256": "68d962f7fb3c905caa84c9c5e62c9aa473013ba4194cae602fae7a25739729cc",
-      "bytes": 6615
+      "sha256": "cf8b551eba01ffac13ecdbfeff1c6282aa57729952abf8269d40326f0717ac9a",
+      "contentSha256": "cf8b551eba01ffac13ecdbfeff1c6282aa57729952abf8269d40326f0717ac9a",
+      "bytes": 6472
     },
     {
       "path": "pnpm-lock.yaml",
@@ -2918,6 +2950,14 @@
       "sha256": "728d52ee90a65a698a50bf030471ec3fcbbcb0524ef636c5ab1508a7aca2da18",
       "contentSha256": "728d52ee90a65a698a50bf030471ec3fcbbcb0524ef636c5ab1508a7aca2da18",
       "bytes": 967
+    },
+    {
+      "path": "patchnote/0.9.106.md",
+      "module": "distribution",
+      "kind": "files",
+      "sha256": "faae7ad3cb8d6fac2f17b6d0cadae37c3193c775275a4d2b40920df46abe6873",
+      "contentSha256": "faae7ad3cb8d6fac2f17b6d0cadae37c3193c775275a4d2b40920df46abe6873",
+      "bytes": 1570
     },
     {
       "path": "server/node/server.cjs",
@@ -4147,17 +4187,17 @@
       "path": "src/ts/process/request/structuredOutputFallback.test.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
-      "sha256": "1fcc9fca0c06b3dbb304d4b4b19f6989976fdc5d9f83b4e0d3377d98eeebca0d",
-      "contentSha256": "1fcc9fca0c06b3dbb304d4b4b19f6989976fdc5d9f83b4e0d3377d98eeebca0d",
-      "bytes": 7642
+      "sha256": "8618b735dbc515a3153922c86477119c7c1e01fcc61b3d45f54260d61e17ce3c",
+      "contentSha256": "8618b735dbc515a3153922c86477119c7c1e01fcc61b3d45f54260d61e17ce3c",
+      "bytes": 12701
     },
     {
       "path": "src/ts/process/request/structuredOutputFallback.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
-      "sha256": "9a9d1cd61e6fa1ab0f529f1e7b4d32c22db649a7a0a776bfbe1cad7f770ffb91",
-      "contentSha256": "9a9d1cd61e6fa1ab0f529f1e7b4d32c22db649a7a0a776bfbe1cad7f770ffb91",
-      "bytes": 3290
+      "sha256": "1d4ec9126e3aecd401c583be4839d276ce88a80dbc9ea872635e903be1bb5a7a",
+      "contentSha256": "1d4ec9126e3aecd401c583be4839d276ce88a80dbc9ea872635e903be1bb5a7a",
+      "bytes": 5982
     },
     {
       "path": "src/ts/risubard/memoryAnalysisClient.test.ts",
@@ -4399,7 +4439,11 @@
         "src/ts/transferSyncPanel.test.ts",
         "src/ts/transferSyncShims.test.ts",
         "shared/play-set/characterOrder.ts",
-        "server/node/file-kv-export.test.ts"
+        "server/node/file-kv-export.test.ts",
+        "android-app/app/src/main/java/app/risubard/personal/NativeNotify.kt",
+        "android-app/app/src/main/res/drawable/ic_notify.xml",
+        "src/ts/transfer-sync/androidNotification.ts",
+        "src/ts/transfer-sync/androidNotification.test.ts"
       ],
       "patch": {
         "path": "docs/fork-modules/patches/transfer-sync.patch",
@@ -4475,7 +4519,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/model-compat.patch",
-        "sha256": "ffa0eda275b22be12eed0c4f6b733187dc36a1fcd7b0000ad937ceaa9c8698b8"
+        "sha256": "e38a61c6ca507ea78a5f27ab257f7fb59bd0c7e13fdc700b8ab48cc55be9a5da"
       }
     },
     {
@@ -4618,11 +4662,12 @@
         "patchnote/0.9.102.md",
         "patchnote/0.9.103.md",
         "patchnote/0.9.104.md",
-        "patchnote/0.9.105.md"
+        "patchnote/0.9.105.md",
+        "patchnote/0.9.106.md"
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03"
+        "sha256": "4923aad7447807accdfb10a6acb253a37f759bc9be341fa350e8d00c5e20f21e"
       }
     },
     {
@@ -4829,7 +4874,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/bardwiki-cache-prefix.patch",
-        "sha256": "76619cabf56c0b01e6761d5236dddc92f8df650b628c71274f1d8e370d938b9e"
+        "sha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1"
       }
     }
   ],
@@ -4852,7 +4897,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "5ad95ab5e6dc97308681ad098bf167c16c6b94e70637830ffdd3cb940cdf9620"
+      "sha256": "cefd532b88ad12426eb58e11bedf08afde7f946bd56d24441eac92a22f82e0b1"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -4907,8 +4952,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03",
-          "sha256": "45fabf8088266447fc777a5231c4f88400ba9efae809a0f8c2585d87f981bdcc"
+          "sourceSha256": "4923aad7447807accdfb10a6acb253a37f759bc9be341fa350e8d00c5e20f21e",
+          "sha256": "539d60ac79bbca4e18411a3fda11c807e741ba105794abfb45b9315556901f5b"
         },
         {
           "module": "host-bridges",
@@ -4991,8 +5036,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03",
-          "sha256": "cde23c6bb807e2404d998051b485890edb4cb8e674fc300a3800e20be192798e"
+          "sourceSha256": "4923aad7447807accdfb10a6acb253a37f759bc9be341fa350e8d00c5e20f21e",
+          "sha256": "654c4adc7f0e1b59cad771b93bd71ea84c9e15a2d825212e08aca118ab39b989"
         },
         {
           "module": "lore-lua",
@@ -5015,8 +5060,8 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "76619cabf56c0b01e6761d5236dddc92f8df650b628c71274f1d8e370d938b9e",
-          "sha256": "469d40af854285d8b34574ef3572cfbd26658d156bf9fc838438a88da1632dcc"
+          "sourceSha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1",
+          "sha256": "6efb94b25d35edee5d10330ddc0247c09ff87b8c2e45739dafba11be6cbc8370"
         }
       ],
       "payloadTargets": {
@@ -5117,8 +5162,8 @@
         {
           "module": "model-compat",
           "path": "docs/fork-modules/compat/v0.9.86/model-compat.patch",
-          "sourceSha256": "ffa0eda275b22be12eed0c4f6b733187dc36a1fcd7b0000ad937ceaa9c8698b8",
-          "sha256": "9215cc5dd757921500d3fc3f6b65e399c36eb2370c1b57c362746224a7079ac7"
+          "sourceSha256": "e38a61c6ca507ea78a5f27ab257f7fb59bd0c7e13fdc700b8ab48cc55be9a5da",
+          "sha256": "9a7c3be14c33b2658bd6324e4637160f11345cdb76d5a398320fdea86a6ba0b7"
         },
         {
           "module": "storage-recovery",
@@ -5143,8 +5188,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "f7efd1025b2be5f64777be2f353026690e27309facd472967398bf9c75e8cc03",
-          "sha256": "d2774fcfafac87708ef37ca28e476750a97ff3870974aa3fd8bdb666c9366207"
+          "sourceSha256": "4923aad7447807accdfb10a6acb253a37f759bc9be341fa350e8d00c5e20f21e",
+          "sha256": "acd980cd14ffe7400c1bbe977b9da5d0037a2f3c48be294dd54e6ba2f445d9a2"
         },
         {
           "module": "lore-lua",
@@ -5167,8 +5212,8 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "76619cabf56c0b01e6761d5236dddc92f8df650b628c71274f1d8e370d938b9e",
-          "sha256": "469d40af854285d8b34574ef3572cfbd26658d156bf9fc838438a88da1632dcc"
+          "sourceSha256": "06f028d98f5bf5e26ce01e65fc3b4ef15527d4d29aae0e1a3073861fa582efa1",
+          "sha256": "6efb94b25d35edee5d10330ddc0247c09ff87b8c2e45739dafba11be6cbc8370"
         }
       ],
       "payloadTargets": {

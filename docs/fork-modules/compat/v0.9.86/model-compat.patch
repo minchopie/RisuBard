@@ -535,7 +535,7 @@ index feb961e..1587d71 100644
      const lock = db.nodeOnlyModelModeLock ?? 'none'
  
 diff --git a/src/ts/process/request/request.ts b/src/ts/process/request/request.ts
-index ca36f2f..57f2311 100644
+index ca36f2f..69094d8 100644
 --- a/src/ts/process/request/request.ts
 +++ b/src/ts/process/request/request.ts
 @@ -1,4 +1,6 @@
@@ -572,7 +572,24 @@ index ca36f2f..57f2311 100644
      // P4 dual-regime dispatch (plan v6 §7). Resolve the per-chat ModelPreset
      // binding BEFORE any classic model selection so a binding chat never touches
      // db.aiModel / db.seperateModels. Skipped when a staticModel (fallback retry)
-@@ -802,6 +812,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+@@ -786,6 +796,16 @@ function toAdapterToolDef(tool: MCPTool): AdapterToolDef {
+ // byte) — see preset/adapter/reasoning.ts.
+ const formatPresetReasoning = formatReasoningParts
+ 
++// Identifies where a structured request goes (adapter, wire model, full preset
++// configuration) so a remembered native-schema rejection never crosses targets.
++function structuredOutputTarget(kind: string, wireModelId: string, preset: ModelPreset): string | undefined {
++    try {
++        return JSON.stringify([kind, wireModelId, preset])
++    } catch {
++        return undefined
++    }
++}
++
+ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
+     const credential = buildModelPresetCredential(preset)
+     const kind = preset.profileSnapshot.adapterKind
+@@ -802,6 +822,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
      const reportStatus = statusEnabled(arg.realChatId) && !!genId
      const logSource = arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode))
      const logPurpose = arg.logPurpose ?? defaultRequestPurpose(logSource)
@@ -583,7 +600,7 @@ index ca36f2f..57f2311 100644
  
      // Request logging wraps the transport, so the direct path and the
      // server-side job path are recorded identically — the job path had no
-@@ -820,7 +834,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+@@ -820,7 +844,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
          provider: preset.profileSnapshot.providerBaseId,
          streaming: resolvePresetStreaming(preset, arg),
      })
@@ -593,7 +610,7 @@ index ca36f2f..57f2311 100644
  
      // Tool gating. Three guards:
      //  1) Per-preset opt-in (preset.toolUse, default OFF) — the hard regression
-@@ -860,7 +875,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+@@ -860,7 +885,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
      // (chat already generating) surfaces as an error instead, since falling
      // back would double-generate. All defaults off → proxiedFetch →
      // byte-identical to the previous behavior.
@@ -602,7 +619,7 @@ index ca36f2f..57f2311 100644
          && !tools && !arg.previewBody
      const transportFetch = useServerJob
          ? makeJobFetch({
-@@ -1011,7 +1026,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+@@ -1011,7 +1036,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
              // Mirror the real request's options so the preview shows the body that
              // would actually be sent (cache breakpoints included).
              const prepared = await previewModelPreset(kind, preset, {
@@ -611,7 +628,7 @@ index ca36f2f..57f2311 100644
                  anthropicCache1h: getDatabase().claude1HourCaching === true,
              }, credential)
              return {
-@@ -1033,7 +1048,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+@@ -1033,7 +1058,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
          // streaming tool_call assembly is a later stage. Status is NOT reported
          // for the tool path in v1 (it bypasses the pump); see the toast infra note.
          if (tools) {
@@ -620,7 +637,7 @@ index ca36f2f..57f2311 100644
              // The tool loop issues one request per turn; each is its own log
              // entry and all of them flush together here.
              void logScope.close()
-@@ -1042,7 +1057,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+@@ -1042,7 +1067,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
  
          const useStreaming = resolvePresetStreaming(preset, arg)
          const options: AdapterChatOptions = {
@@ -629,7 +646,17 @@ index ca36f2f..57f2311 100644
              ...presetGenerationOverrides(arg),
              responseSchema: arg.schema
                  ? convertInterfaceToSchema(arg.schema)
-@@ -1249,6 +1264,7 @@ async function runModelPresetToolLoop(
+@@ -1153,7 +1178,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
+             (error) => console.warn(
+                 '[ModelPreset] native structured output rejected; retrying with prompt schema',
+                 describeModelPresetError(error)
+-            )
++            ),
++            structuredOutputTarget(kind, provenance.wireModelId, preset)
+         )
+         logScope.setUsage(toLogUsage(response.usage))
+         void logScope.close()
+@@ -1249,6 +1275,7 @@ async function runModelPresetToolLoop(
      messages: AdapterChatMessage[],
      tools: AdapterToolDef[],
      abortSignal: AbortSignal | null,
@@ -637,7 +664,7 @@ index ca36f2f..57f2311 100644
  ): Promise<{ result: string; toolsExecuted: boolean }> {
      // Tracks whether any tool actually ran, so the caller can block outer
      // success-path retries that would otherwise re-execute side-effecting tools.
-@@ -1260,7 +1276,7 @@ async function runModelPresetToolLoop(
+@@ -1260,7 +1287,7 @@ async function runModelPresetToolLoop(
          send: (convo) => sendModelPreset(
              kind, preset,
              {
