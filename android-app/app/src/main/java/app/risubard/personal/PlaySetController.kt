@@ -263,7 +263,7 @@ class PlaySetController(private val activity: Activity, private val webView: and
         "notify.status" -> notifier?.status() ?: "denied"
         "notify.permission" -> notifier?.request() ?: "denied"
         "notify.show" -> { notifier?.show(a.optString("title", "RisuBard"), a.optString("body", "")); null }
-        "notify.generating" -> { notifier?.setGenerating(a.optBoolean("active", false)); null }
+        "notify.generating" -> { notifier?.setGenerating(a.optBoolean("active", false), a.optLong("seq", 0L), a.optString("page", "")); null }
         "network.devices" -> activeNetwork().devices()
         "network.registration" -> { val result = activeNetwork().transport.registration(); JSONObject().put("session", result[0]).put("code", result[1]).put("expiresAt", System.currentTimeMillis() + 300_000) }
         "network.forget" -> { network().forget(a.getString("device")); null }

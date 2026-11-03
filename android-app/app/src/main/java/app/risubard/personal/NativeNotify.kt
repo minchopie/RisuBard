@@ -34,6 +34,10 @@ class NativeNotify(private val activity: Activity) {
     @Volatile private var generating = false
     @Volatile private var visible = true
     @Volatile private var keepingAlive = false
+    @Volatile private var destroyed = false
+    private var page = ""
+    private var lastSeq = 0L
+    private val retiredPages = ArrayDeque<String>()
 
     fun status(): String {
         if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return "default"
@@ -72,9 +76,24 @@ class NativeNotify(private val activity: Activity) {
         manager.notify(RESPONSE_ID_BASE + Math.floorMod(ids.getAndIncrement(), RESPONSE_ID_SLOTS), notification)
     }
 
-    fun setGenerating(active: Boolean) { generating = active; update() }
+    /**
+     * Bridge requests can reach this out of order (the RPC dispatcher is multi-threaded), so each page numbers
+     * its updates and late ones are dropped. A new page replaces the old one; late updates from a replaced page
+     * are ignored.
+     */
+    @Synchronized fun setGenerating(active: Boolean, seq: Long, page: String) {
+        if (destroyed) return
+        if (page != this.page) {
+            if (page in retiredPages) return
+            if (this.page.isNotEmpty()) { retiredPages.addLast(this.page); if (retiredPages.size > 8) retiredPages.removeAt(0) }
+            this.page = page
+        } else if (seq <= lastSeq) return
+        lastSeq = seq
+        generating = active
+        update()
+    }
     fun setVisible(value: Boolean) { visible = value; update() }
-    fun destroy() { generating = false; update() }
+    @Synchronized fun destroy() { destroyed = true; generating = false; update() }
 
     @Synchronized private fun update() {
         val want = generating && !visible

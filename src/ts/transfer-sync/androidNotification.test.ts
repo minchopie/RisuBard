@@ -85,11 +85,57 @@ test('reports generation to the app only while the notification setting is on an
     startGeneration('chat-a', 'gen-1')
     endGeneration('chat-a')
     await flush()
-    expect(calls.filter((c) => c.op === 'notify.generating').map((c) => c.args.active)).toEqual([true, false])
+    const updates = calls.filter((c) => c.op === 'notify.generating').map((c) => c.args)
+    // First update on load clears whatever an earlier page left in the app.
+    expect(updates.map((u) => u.active)).toEqual([false, true, false])
+    expect(updates.map((u) => u.seq)).toEqual([1, 2, 3])
+    expect(new Set(updates.map((u) => u.page)).size).toBe(1)
 
     db.notification = false
     startGeneration('chat-a', 'gen-2')
     endGeneration('chat-a')
     await flush()
-    expect(calls.filter((c) => c.op === 'notify.generating')).toHaveLength(2)
+    expect(calls.filter((c) => c.op === 'notify.generating')).toHaveLength(3)
+})
+
+test('follows the setting and the permission while a reply is generating', async () => {
+    const { installAndroidNotifications, startGeneration, endGeneration } = await load()
+    const { RisuPlay, calls } = bridge({ 'notify.status': 'default', 'notify.permission': 'granted' })
+    vi.useFakeTimers()
+    try {
+        db.notification = false
+        const env: any = androidEnv(RisuPlay)
+        installAndroidNotifications(env)
+        await vi.advanceTimersByTimeAsync(0)
+        startGeneration('chat-a', 'gen-1')
+        await vi.advanceTimersByTimeAsync(0)
+        db.notification = true
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(calls.filter((c) => c.op === 'notify.generating').map((c) => c.args.active)).toEqual([false])
+        await env.Notification.requestPermission()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls.filter((c) => c.op === 'notify.generating').map((c) => c.args.active)).toEqual([false, true])
+        db.notification = false
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(calls.filter((c) => c.op === 'notify.generating').map((c) => c.args.active)).toEqual([false, true, false])
+        endGeneration('chat-a')
+        await vi.advanceTimersByTimeAsync(5000)
+        expect(calls.filter((c) => c.op === 'notify.generating')).toHaveLength(3)
+    } finally {
+        vi.useRealTimers()
+    }
+})
+
+test('a failed bridge answers the permission request as denied', async () => {
+    const { installAndroidNotifications } = await load()
+    let listener: (event: { data: string }) => void = () => {}
+    const RisuPlay = {
+        addEventListener: (_: string, callback: typeof listener) => { listener = callback },
+        postMessage: (input: string) => { const { id } = JSON.parse(input); queueMicrotask(() => listener({ data: JSON.stringify({ id, error: 'bridge closed' }) })) },
+    }
+    vi.stubGlobal('RisuPlay', RisuPlay)
+    const env: any = androidEnv(RisuPlay)
+    installAndroidNotifications(env)
+    expect(await env.Notification.requestPermission()).toBe('denied')
+    expect(env.Notification.permission).toBe('denied')
 })

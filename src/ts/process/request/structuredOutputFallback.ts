@@ -149,7 +149,16 @@ export async function sendWithStructuredOutputFallback<T>(
         const fallbackMessage = createStructuredOutputFallbackMessage(
             options.responseSchema
         )
-        if (fallbackMessage) return send(promptSchemaRequest(options, fallbackMessage))
+        if (fallbackMessage) {
+            try {
+                return await send(promptSchemaRequest(options, fallbackMessage))
+            }
+            catch (error) {
+                // Next time starts from the native request again.
+                if (rejectionKey) rejectedNativeSchemas.delete(rejectionKey)
+                throw error
+            }
+        }
     }
     try {
         return await send(options)
@@ -163,8 +172,11 @@ export async function sendWithStructuredOutputFallback<T>(
             options.responseSchema
         )
         if (!fallbackMessage) throw error
-        rememberSchemaRejection(rejectionKey, Date.now())
         onFallback?.(error as ModelPresetAdapterError)
-        return send(promptSchemaRequest(options, fallbackMessage))
+        const result = await send(promptSchemaRequest(options, fallbackMessage))
+        // Remembered only once the prompt-schema request went through, so an
+        // ambiguous 400 that was not about the schema is never remembered.
+        rememberSchemaRejection(rejectionKey, Date.now())
+        return result
     }
 }

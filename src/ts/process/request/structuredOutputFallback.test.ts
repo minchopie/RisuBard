@@ -281,6 +281,29 @@ describe('structured output compatibility fallback', () => {
         }
     })
 
+    test('remembers only after the prompt-schema request succeeds and forgets after a failed direct request', async () => {
+        const module = await loadFallbackModule()
+        expect(module).not.toBeNull()
+        if (!module) return
+        module.clearStructuredOutputSchemaRejections()
+        const ambiguous = () => new ModelPresetAdapterError('invalid-request', 'Request contains an invalid argument.', { status: 400 })
+        const bothFail = vi.fn().mockRejectedValueOnce(ambiguous()).mockRejectedValueOnce(ambiguous())
+        await expect(module.sendWithStructuredOutputFallback(baseOptions(), bothFail, undefined, 'target-a')).rejects.toThrow()
+        const native = vi.fn().mockResolvedValueOnce('native')
+        await module.sendWithStructuredOutputFallback(baseOptions(), native, undefined, 'target-a')
+        expect(native.mock.calls[0][0].responseSchema).toBeDefined()
+
+        const remembered = vi.fn().mockRejectedValueOnce(ambiguous()).mockResolvedValueOnce('ok')
+        await module.sendWithStructuredOutputFallback(baseOptions(), remembered, undefined, 'target-a')
+        const offline = new ModelPresetAdapterError('network', 'offline')
+        const directFails = vi.fn().mockRejectedValueOnce(offline)
+        await expect(module.sendWithStructuredOutputFallback(baseOptions(), directFails, undefined, 'target-a')).rejects.toBe(offline)
+        expect(directFails.mock.calls[0][0].responseSchema).toBeUndefined()
+        const nativeAgain = vi.fn().mockResolvedValueOnce('native')
+        await module.sendWithStructuredOutputFallback(baseOptions(), nativeAgain, undefined, 'target-a')
+        expect(nativeAgain.mock.calls[0][0].responseSchema).toBeDefined()
+    })
+
     test('passes the request target so remembered rejections stay per preset', () => {
         const source = readFileSync(
             resolve(process.cwd(), 'src/ts/process/request/request.ts'),
