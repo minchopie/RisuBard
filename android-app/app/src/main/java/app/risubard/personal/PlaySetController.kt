@@ -176,7 +176,11 @@ class PlaySetController(private val activity: Activity, private val webView: and
             if (!local() || !mainFrame || origin.toString() != allowedOrigin || message.type != WebMessageCompat.TYPE_STRING) return@addWebMessageListener
             val input = message.data ?: return@addWebMessageListener
             if (input.length > 12 * 1024 * 1024) return@addWebMessageListener
-            try { controlExecutor.execute {
+            // Notification updates must keep the page's order: they skip the two-thread control pool and queue
+            // here, on the listener (main) thread, onto the single notification thread.
+            val notify = input.length < 64 * 1024 && input.contains("\"notify.") &&
+                (try { JSONObject(input).optString("op").startsWith("notify.") } catch (_: Exception) { false })
+            try { (if (notify) notifyExecutor else controlExecutor).execute {
                 val request = try { JSONObject(input) } catch (_: Exception) { return@execute }
                 val operation = request.optString("op")
                 val requestId = request.optString("id")
@@ -204,7 +208,7 @@ class PlaySetController(private val activity: Activity, private val webView: and
                 }
                 try {
                     if (operation in setOf("network.pair", "network.status")) networkControlExecutor.execute(work)
-                    else if (operation.startsWith("notify.")) notifyExecutor.execute(work)
+                    else if (notify) work.run()
                     else if (operation in setOf("network.progress", "usb.progress")) work.run() else executor.execute(work)
                 } catch (_: java.util.concurrent.RejectedExecutionException) { main.removeCallbacks(heartbeat) }
             } } catch (_: java.util.concurrent.RejectedExecutionException) { /* Activity teardown already owns the pending requests. */ }

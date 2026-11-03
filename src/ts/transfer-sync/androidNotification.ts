@@ -39,7 +39,10 @@ export function installAndroidNotifications(env: any = globalThis): boolean {
         try { want = generating && getDatabase().notification === true && permission === 'granted' } catch { want = false }
         if (want === sent) return
         sent = want
-        void playNative('notify.generating', { active: want, seq: ++seq, page }).catch(() => {})
+        void playNative('notify.generating', { active: want, seq: ++seq, page }).catch(() => {
+            // Not delivered: let the next check send the current state again.
+            if (sent === want) sent = null
+        })
     }
 
     class AndroidNotification {

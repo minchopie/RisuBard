@@ -139,3 +139,44 @@ test('a failed bridge answers the permission request as denied', async () => {
     expect(await env.Notification.requestPermission()).toBe('denied')
     expect(env.Notification.permission).toBe('denied')
 })
+
+test('resends after an undelivered update and re-reads the permission on return to the app', async () => {
+    const { installAndroidNotifications, startGeneration, endGeneration } = await load()
+    let listener: (event: { data: string }) => void = () => {}
+    let status = 'granted', failNext = true
+    const calls: { op: string, args: any }[] = []
+    const RisuPlay = {
+        addEventListener: (_: string, callback: typeof listener) => { listener = callback },
+        postMessage: (input: string) => {
+            const { id, op, args } = JSON.parse(input)
+            calls.push({ op, args })
+            const fail = op === 'notify.generating' && failNext
+            if (fail) failNext = false
+            queueMicrotask(() => listener({ data: JSON.stringify(fail ? { id, error: 'bridge busy' } : { id, value: op === 'notify.status' ? status : null }) }))
+        },
+    }
+    vi.stubGlobal('RisuPlay', RisuPlay)
+    const events: Record<string, () => void> = {}
+    const env: any = { ...androidEnv(RisuPlay), addEventListener: (name: string, fn: () => void) => { events[name] = fn } }
+    vi.useFakeTimers()
+    try {
+        installAndroidNotifications(env)
+        await vi.advanceTimersByTimeAsync(0)
+        startGeneration('chat-a', 'gen-1')
+        await vi.advanceTimersByTimeAsync(0)
+        // The first update (on load) failed and is sent again at the next check, before the generating one.
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(calls.filter((c) => c.op === 'notify.generating').map((c) => c.args.active)).toEqual([false, false, true])
+        status = 'default'
+        events.focus()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(env.Notification.permission).toBe('default')
+        expect(calls.filter((c) => c.op === 'notify.generating').map((c) => c.args.active)).toEqual([false, false, true, false])
+        endGeneration('chat-a')
+        await vi.advanceTimersByTimeAsync(0)
+        // The re-check timer is gone once nothing generates (playNative timers were cleared by the replies).
+        expect(vi.getTimerCount()).toBe(0)
+    } finally {
+        vi.useRealTimers()
+    }
+})
