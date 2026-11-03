@@ -115,9 +115,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetController.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "766488250c12a006f57bf0e0c6cdd52a9f1ddd0b183e15e492709fb224660326",
-      "contentSha256": "766488250c12a006f57bf0e0c6cdd52a9f1ddd0b183e15e492709fb224660326",
-      "bytes": 26382
+      "sha256": "a8c38811ce28f7786b4969d6e56f57e66e7773830c820d635833293217d0b10f",
+      "contentSha256": "a8c38811ce28f7786b4969d6e56f57e66e7773830c820d635833293217d0b10f",
+      "bytes": 26775
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetNetwork.kt",
@@ -1763,17 +1763,17 @@
       "path": "src/ts/transfer-sync/androidNotification.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "8bb82be884ef5d1d611da97991d7b57c07920e168547d9cffe2f48cdf83ae55a",
-      "contentSha256": "8bb82be884ef5d1d611da97991d7b57c07920e168547d9cffe2f48cdf83ae55a",
-      "bytes": 5153
+      "sha256": "e90435eff1400908ffd0775948a3eea4e6224a73a2ca52311c24690705e5dfc2",
+      "contentSha256": "e90435eff1400908ffd0775948a3eea4e6224a73a2ca52311c24690705e5dfc2",
+      "bytes": 5284
     },
     {
       "path": "src/ts/transfer-sync/androidNotification.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "fee2ed85940429027c96878ef99de0572e860b3293d6e3148ae7735b0240cf06",
-      "contentSha256": "fee2ed85940429027c96878ef99de0572e860b3293d6e3148ae7735b0240cf06",
-      "bytes": 7134
+      "sha256": "ef01827a56968976fd5a46e15c1f940a0b1884c7f66b4122a861f6bd6bcd4a76",
+      "contentSha256": "ef01827a56968976fd5a46e15c1f940a0b1884c7f66b4122a861f6bd6bcd4a76",
+      "bytes": 9286
     },
     {
       "path": "index.html",
