@@ -2571,9 +2571,9 @@
       "path": "server/node/pending-flush-retry.test.ts",
       "module": "storage-recovery",
       "kind": "files",
-      "sha256": "671a6b64f05aaa169587763d206dd628d627fdc7990d51b33357eb82a6a25914",
-      "contentSha256": "671a6b64f05aaa169587763d206dd628d627fdc7990d51b33357eb82a6a25914",
-      "bytes": 3607
+      "sha256": "fa3515add025cf1ee4267fa5d4e96366d59d31d4d6c804f327f03856f186267e",
+      "contentSha256": "fa3515add025cf1ee4267fa5d4e96366d59d31d4d6c804f327f03856f186267e",
+      "bytes": 3807
     },
     {
       "path": "server/node/response-drain.test.ts",
@@ -4294,6 +4294,14 @@
       "sha256": "de1e945fce67ddd34f893864a7ec49181431a3e3fe6d35f5f596ee37f0c570a3",
       "contentSha256": "de1e945fce67ddd34f893864a7ec49181431a3e3fe6d35f5f596ee37f0c570a3",
       "bytes": 7085
+    },
+    {
+      "path": "docs/content-updates/README.md",
+      "module": "content-updates",
+      "kind": "files",
+      "sha256": "512652a557e70949e8d4634f57784abb80646506b0e9f9bcdf248d0d3c513274",
+      "contentSha256": "512652a557e70949e8d4634f57784abb80646506b0e9f9bcdf248d0d3c513274",
+      "bytes": 4234
     }
   ],
   "modules": [
@@ -4971,7 +4979,8 @@
         "server/node/content-updates/content-updates.test.ts",
         "src/ts/content-updates/contentUpdates.ts",
         "src/ts/content-updates/contentUpdates.test.ts",
-        "src/lib/Setting/Pages/ContentUpdatesPanel.svelte"
+        "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
+        "docs/content-updates/README.md"
       ],
       "patch": null
     }
@@ -4995,7 +5004,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "4fac1256740fab8f4254c971589b26fb52e60474f81daa8ce2ff7cd2773b4956"
+      "sha256": "12866b4f60360d66b1caff3ffe04e9c1dc864f0a18c079f487d7832c608cd190"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",

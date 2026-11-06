@@ -1,0 +1,33 @@
+# 캐릭터·페르소나 배포 알림 (content-updates 모듈)
+
+0.9.90-ver1에서 추가. 한 기기에서 캐릭터 카드나 페르소나 PNG를 NAS에 한 번 올리면, 같은 NAS 설정을 쓰는 다른 기기가 앱을 열거나 다시 돌아올 때 「새 캐릭터 카드가 올라왔어요. 지금 가져올까요? [네, 가져오기] [아니오]」를 묻는다.
+
+## 동작
+
+- **올리기**: 설정 > 캐릭터·대화 옮기기 > 캐릭터·페르소나 배포 (NAS). charx·json·png를 고르면 이름·버전을 읽고(charx는 card.json, png는 persona/ccv3/chara 텍스트 청크), 배포 이름(기본: 캐릭터는 이름에서 버전과 끝의 "ver"를 뺀 것, 페르소나는 이름 그대로)을 정해 올린다. 같은 배포 이름으로 다시 올리면 그 항목이 새 판으로 바뀐다. 올린 기기는 그 판을 「올림」으로 기록해 묻지 않는다.
+- **묻기**: Node/임베디드 런타임(PC 앱·Android 앱)에서 시작 8초 뒤 한 번, 앱이 다시 보일 때 10분 간격으로 확인한다. 화면 준비 전, 전송·동기화 적용 중, 응답 생성 중, 다른 창이 떠 있을 때는 묻지 않는다.
+- **네**: 파일을 받아 크기·SHA-256을 확인한 뒤 앱의 원래 가져오기로 들여온다.
+  - 캐릭터: 원작 `importCharacterProcess` → 원작 0.9.90의 「설치된 봇 업데이트」 대화상자(후보 선택·변경 검토). 같은 캐릭터를 고르면 대화·채팅 폴더는 그대로 두고 카드 내용만 합치며, 바꾸기 전 카드는 휴지통에 3일 보관된다. 「새로 설치」·「취소」도 원작 그대로다. 취소하면 「아니오」로 기록한다.
+  - 페르소나: 같은 이름이 있으면 첫 번째 것의 설명·메모·그림만 바꾼다(id 유지 → 대화·봇 연결 유지). 없으면 새로 추가한다.
+- **아니오**: 이 기기에서 그 판(SHA-256)을 다시 묻지 않는다. 같은 배포 이름으로 새 판이 올라오면 다시 묻는다. 설정의 「다시 받기」로 기록을 지울 수 있다.
+
+## 저장 위치와 형식
+
+- NAS: 기존 NAS 연결 설정(전송·동기화와 같은 주소·계정)의 `.risubard-content-updates/` 폴더.
+  - `<sha256>.<charx|png|json>`: 파일 이름이 내용의 SHA-256이라 같은 파일은 한 번만 저장된다.
+  - `latest.json`: `{ schema: 1, items: [{ key, kind, title, version, file, fileName, sha256, bytes, publishedAt, publishedBy }] }`. key는 `character:<배포 이름>` 또는 `persona:<배포 이름>`, 최대 200개.
+  - 올리기는 임시 이름 PUT → MOVE(덮어쓰기 안 함, 이미 있으면 같은 내용) → latest.json 임시 PUT → MOVE(덮어쓰기) → 다시 읽어 확인. 두 기기가 같은 순간에 올리면 늦게 쓴 목록이 남고, 확인 단계에서 실패를 알린다.
+- 기기: `<데이터>/content-updates/state.json` — 배포 이름별 이 기기의 결정(applied/declined/published, sha256, 시각). 임시 파일은 `content-updates/tmp/`에 두고 끝나면 지운다.
+- 서버 경로: `/api/play-transfer/content-updates/{overview,decide,fetch,publish}` (기존 전송 인증·활성 세션 검사). 올리기 본문은 `application/x-risubard-content`로 보내 express.raw가 메모리에 담지 않고 파일로 흘려 쓴다.
+
+## 모듈 구성
+
+- 소유 파일(`features.json` content-updates): `server/node/content-updates/content-updates.cjs`(+test), `src/ts/content-updates/contentUpdates.ts`(+test), `src/lib/Setting/Pages/ContentUpdatesPanel.svelte`, 이 문서.
+- 연결(host-bridges): `server/node/server.cjs`에 경로 등록 1곳, `src/ts/bootstrap.ts`에 시작 1줄. 설정 화면 연결은 transfer-sync의 `TransferPanel.svelte` 2줄.
+- 앱 데이터 형식·NAS 동기화 작업공간·기존 전송 프로토콜은 바꾸지 않는다. 캐릭터 적용은 원작 가져오기·업데이트 흐름만 쓴다.
+
+## 한계
+
+- 프리셋·모듈(.risum)·플러그인은 대상이 아니다(원작 업데이트 흐름은 모듈도 지원하므로 나중에 kind를 늘릴 수 있다).
+- NAS에 접속할 수 없으면 조용히 건너뛰고 다음 확인 때 다시 시도한다.
+- 실제 NAS·실기기에서의 동작은 빌드 뒤 별도로 확인한다.

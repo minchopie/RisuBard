@@ -12,6 +12,8 @@ test('a failed flush remains retryable after its timer has been consumed', async
         const DB_HEX_KEY = 'db', saveTimers = { db: 1 }, dbCache = { db: {} }, fullChatStore = new Map();
         let liveFilesPendingWrites = true;
         const reportImportProgress=()=>{}, externalChangesAwaitingReview=()=>false, adoptSettledExternalProjection=async()=>false;
+        // upstream 0.9.90: the flush takes one review check (checkExternalChangesAwaitingReview) and hands its revision on.
+        const checkExternalChangesAwaitingReview=()=>({ pending: false });
         const directWriteTracker={ take:()=>null }, maybeCollectUnreferencedObjects=()=>{}, compatibilityCache={materialize:()=>{}};
         const persistDbCacheWithChats=async(...args)=>{await persist(...args);liveFilesPendingWrites=false};
         ${body}

@@ -636,7 +636,8 @@
         "server/node/content-updates/content-updates.test.ts",
         "src/ts/content-updates/contentUpdates.ts",
         "src/ts/content-updates/contentUpdates.test.ts",
-        "src/lib/Setting/Pages/ContentUpdatesPanel.svelte"
+        "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
+        "docs/content-updates/README.md"
       ]
     }
   ],
