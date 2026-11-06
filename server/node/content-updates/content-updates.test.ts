@@ -125,7 +125,8 @@ describe('content updates', () => {
         for (let i = 0; ; i++) {
             const h = createHash('sha256').update(String(i)).digest('hex')
             const item = { key: `character:${i}-${'나'.repeat(100)}`, kind: 'character', title: long, version: '', file: `${h}.charx`, fileName: `${long}.charx`, sha256: h, bytes: 1, publishedAt: new Date().toISOString(), publishedBy: '' }
-            if (Buffer.byteLength(JSON.stringify(validPointer({ schema: 1, items: [...items, item] }), null, 2)) > 255_000) break
+            // Fill the list to just under the 256 KiB read limit (still readable), so one more long item goes over it.
+            if (Buffer.byteLength(JSON.stringify(validPointer({ schema: 1, items: [...items, item] }), null, 2)) > 256 * 1024 - 300) break
             items.push(item)
         }
         dav.dirs.add(NAMESPACE.replace(/\/$/, ''))

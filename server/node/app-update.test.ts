@@ -70,7 +70,7 @@ describe('NAS app code patches', () => {
         expect(core.newer('0.9.91-ver1', '0.9.90-ver9')).toBe(true)
         expect(core.newer('0.9.90-ver1', '0.9.90-ver1')).toBe(false)
         for (const healthy of [false, true]) {
-            const dir = root(); installed(dir)
+            const dir = root(); installed(dir); put(dir, '.portable', '')
             const stale = path.join(core.stateRoot(dir), 'previous-0.9.90-ver1-00000000-0000-4000-8000-000000000000')
             fs.mkdirSync(stale, { recursive: true })
             const { file, release } = await archive(dir, { 'dist/new.js': 'new asset' }, '0.9.90-ver2')

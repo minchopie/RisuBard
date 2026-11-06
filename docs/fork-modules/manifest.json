@@ -4123,9 +4123,9 @@
       "path": "server/node/app-update.test.ts",
       "module": "app-update",
       "kind": "files",
-      "sha256": "54dd1474690a85cf76af75923e731f10ece567234d9edcce8b3aea256645be47",
-      "contentSha256": "54dd1474690a85cf76af75923e731f10ece567234d9edcce8b3aea256645be47",
-      "bytes": 19693
+      "sha256": "d90fadbc2918e5ef4d20354c9915e8db53946a6037e9dbd025be13fe1e959e6a",
+      "contentSha256": "d90fadbc2918e5ef4d20354c9915e8db53946a6037e9dbd025be13fe1e959e6a",
+      "bytes": 19720
     },
     {
       "path": "scripts/app-update.mjs",
@@ -4267,9 +4267,9 @@
       "path": "server/node/content-updates/content-updates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "9660f1c18e85682daafdad59196f435772a3f157f81e4503a4cf94b86083a6f6",
-      "contentSha256": "9660f1c18e85682daafdad59196f435772a3f157f81e4503a4cf94b86083a6f6",
-      "bytes": 9860
+      "sha256": "afefa354edc9c2cb062b07115abae6c76df39923a83fb5d042ff43535eb467b9",
+      "contentSha256": "afefa354edc9c2cb062b07115abae6c76df39923a83fb5d042ff43535eb467b9",
+      "bytes": 9989
     },
     {
       "path": "src/ts/content-updates/contentUpdates.ts",
