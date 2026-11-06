@@ -580,7 +580,8 @@
         "patchnote/0.9.90.md",
         "patchnote/0.9.91.md",
         "patchnote/0.9.92.md",
-        "docs/fork-modules/WEEKLY-20261104.md"
+        "docs/fork-modules/WEEKLY-20261104.md",
+        "patchnote/0.9.90-ver1.md"
       ]
     },
     {
@@ -625,6 +626,18 @@
         "src/ts/risubard/memoryAnalysisClient.ts"
       ],
       "files": []
+    },
+    {
+      "id": "content-updates",
+      "name": "캐릭터·페르소나 배포 알림 (NAS)",
+      "hosts": [],
+      "files": [
+        "server/node/content-updates/content-updates.cjs",
+        "server/node/content-updates/content-updates.test.ts",
+        "src/ts/content-updates/contentUpdates.ts",
+        "src/ts/content-updates/contentUpdates.test.ts",
+        "src/lib/Setting/Pages/ContentUpdatesPanel.svelte"
+      ]
     }
   ],
   "tooling": [
@@ -670,12 +683,12 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "5aed88a5e2e25c84e5e8c89884ac9614138e816b95613a88cdd17f626d9139c8"
+          "sourceSha256": "36afbeca7c5101253cb514615b3a14cfee2b7e26bb077cbdc200d5503302f628"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "3554cb58e5953c0b2a2f0d9a4cf6459574ec5c61f1ff60a8a3fdb7e6e249f04e"
+          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0"
         }
       ],
       "payloadTargets": {
@@ -749,7 +762,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "5aed88a5e2e25c84e5e8c89884ac9614138e816b95613a88cdd17f626d9139c8"
+          "sourceSha256": "36afbeca7c5101253cb514615b3a14cfee2b7e26bb077cbdc200d5503302f628"
         },
         {
           "module": "lore-lua",
@@ -759,7 +772,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.84/host-bridges.patch",
-          "sourceSha256": "3554cb58e5953c0b2a2f0d9a4cf6459574ec5c61f1ff60a8a3fdb7e6e249f04e"
+          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0"
         },
         {
           "module": "file-export",
@@ -892,7 +905,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "5aed88a5e2e25c84e5e8c89884ac9614138e816b95613a88cdd17f626d9139c8"
+          "sourceSha256": "36afbeca7c5101253cb514615b3a14cfee2b7e26bb077cbdc200d5503302f628"
         },
         {
           "module": "lore-lua",
@@ -902,7 +915,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.86/host-bridges.patch",
-          "sourceSha256": "3554cb58e5953c0b2a2f0d9a4cf6459574ec5c61f1ff60a8a3fdb7e6e249f04e"
+          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0"
         },
         {
           "module": "file-export",
@@ -1052,7 +1065,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.89/distribution.patch",
-          "sourceSha256": "5aed88a5e2e25c84e5e8c89884ac9614138e816b95613a88cdd17f626d9139c8"
+          "sourceSha256": "36afbeca7c5101253cb514615b3a14cfee2b7e26bb077cbdc200d5503302f628"
         },
         {
           "module": "lore-lua",
@@ -1062,7 +1075,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.89/host-bridges.patch",
-          "sourceSha256": "3554cb58e5953c0b2a2f0d9a4cf6459574ec5c61f1ff60a8a3fdb7e6e249f04e"
+          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0"
         },
         {
           "module": "file-export",
@@ -1226,7 +1239,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.90/distribution.patch",
-          "sourceSha256": "5aed88a5e2e25c84e5e8c89884ac9614138e816b95613a88cdd17f626d9139c8"
+          "sourceSha256": "36afbeca7c5101253cb514615b3a14cfee2b7e26bb077cbdc200d5503302f628"
         },
         {
           "module": "lore-lua",
@@ -1236,7 +1249,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "3554cb58e5953c0b2a2f0d9a4cf6459574ec5c61f1ff60a8a3fdb7e6e249f04e"
+          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0"
         },
         {
           "module": "file-export",

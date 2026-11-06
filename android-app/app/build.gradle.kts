@@ -4,10 +4,15 @@ plugins {
 }
 val offline = providers.gradleProperty("offline").orNull == "true"
 // One version for web, server and app: the root package.json. versionCode is derived from it and must only grow for app.risubard.personal.
-val (webMajor, webMinor, webPatch) = Regex("\"version\":\\s*\"(\\d+)\\.(\\d+)\\.(\\d+)\"").find(rootProject.file("../package.json").readText())?.destructured
-    ?: error("package.json version must be X.Y.Z")
-val webVersionName = "$webMajor.$webMinor.$webPatch"
-val webVersionCode = webMajor.toInt() * 1_000_000 + webMinor.toInt() * 10_000 + webPatch.toInt()
+// Personal builds are named after the upstream release they are built on: X.Y.Z-verN (0.9.90-ver1). Their versionCode is
+// X·100,000,000 + Y·1,000,000 + Z·1,000 + N, above every earlier plain X.Y.Z code (X·1,000,000 + Y·10,000 + Z; last 0.9.106 = 90106).
+val (webMajor, webMinor, webPatch, webBuild) = Regex("\"version\":\\s*\"(\\d+)\\.(\\d+)\\.(\\d+)(?:-ver(\\d+))?\"").find(rootProject.file("../package.json").readText())?.destructured
+    ?: error("package.json version must be X.Y.Z or X.Y.Z-verN")
+val webVersionName = "$webMajor.$webMinor.$webPatch" + (if (webBuild.isEmpty()) "" else "-ver$webBuild")
+val webVersionCode = if (webBuild.isEmpty()) webMajor.toInt() * 1_000_000 + webMinor.toInt() * 10_000 + webPatch.toInt() else {
+    check(webPatch.toInt() < 1000 && webBuild.toInt() in 1..999) { "X.Y.Z-verN needs Z < 1000 and N in 1..999" }
+    webMajor.toInt() * 100_000_000 + webMinor.toInt() * 1_000_000 + webPatch.toInt() * 1_000 + webBuild.toInt()
+}
 // Production signing comes only from the environment that scripts/android/release-build.mjs sets from protected storage.
 // No keystore in the repository, nothing on the command line, and never the debug key.
 val releaseKeystore = System.getenv("RISUBARD_RELEASE_KEYSTORE")

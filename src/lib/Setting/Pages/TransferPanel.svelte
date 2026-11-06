@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
+    import ContentUpdatesPanel from './ContentUpdatesPanel.svelte'
     import { DBState, selectedCharID } from 'src/ts/stores.svelte'
     import { parseNasListing } from 'src/ts/transferNas'
     import { downloadFile } from 'src/ts/globalApi.svelte'
@@ -126,6 +127,7 @@
 <section class="transfer-panel" aria-label="캐릭터·대화 전송">
     <h3>캐릭터·대화 옮기기</h3>
     <p>같은 캐릭터가 있으면 대화만 추가해요. 기존 대화와 현재 화면은 유지돼요.</p>
+    {#if syncSupported}<ContentUpdatesPanel />{/if}
     {#if syncSupported}
     <fieldset disabled={working} aria-label="NAS 자동 동기화">
         <legend>내 기기 자동 동기화</legend>

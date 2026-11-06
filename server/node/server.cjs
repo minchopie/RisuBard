@@ -1922,6 +1922,12 @@ async function fetchLatestRelease() {
         if (res.status === 404) return null;
         if (!res.ok) return null;
         const data = releaseToUpdateInfo(await res.json(), currentVersion);
+        // Personal builds are X.Y.Z-verN; the earlier plain personal releases (0.9.91 … 0.9.106) are older than them.
+        // Same order as the NAS app patches (app-update/core.cjs newer).
+        if (data && /-ver\d+$/.test(String(currentVersion))) {
+            data.hasUpdate = require('./app-update/core.cjs').newer(data.latestVersion, String(currentVersion));
+            data.severity = data.hasUpdate ? 'optional' : 'none';
+        }
         if (data?.hasUpdate) {
             console.log(`[Update] New version available: v${data.latestVersion} (current: v${currentVersion}, ${data.severity})`);
         }
@@ -4618,6 +4624,11 @@ app.post('/api/play-transfer/remote/:kind/:operation', async (req, res) => {
     try { res.json(await remoteTransfers.dispatch(req.params.kind, req.params.operation, req.body)); }
     catch (error) { res.status(400).json({ error: error.message }); }
 });
+// Content updates (content-updates module): character/persona cards published once on the NAS; each device asks before importing.
+require('./content-updates/content-updates.cjs').createContentUpdates({
+    dataRoot: savePath, secrets: transferSecrets, route: nasRoute, fetch: require('./transfer-remote.cjs').request,
+    deviceName: () => require('node:os').hostname(),
+}).registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
 registerRisuBardMemoryRoutes(app, {
     auth: checkAuth,
     service: narrativeMemoryService,

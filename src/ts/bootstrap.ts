@@ -188,6 +188,8 @@ export async function loadData() {
             startTransferInbox()
             // NAS sync foreground coordinator: Node/embedded runtime only, and it does nothing until sync was enabled on the server.
             void startSyncCoordinator().catch(error => console.warn('[NAS sync] coordinator did not start:', String(error?.message ?? error)))
+            // Content updates: asks about character/persona cards published on the NAS (Node/embedded runtime only).
+            void import('./content-updates/contentUpdates').then(m => m.startContentUpdates()).catch(error => console.warn('[ContentUpdates] did not start:', String(error?.message ?? error)))
             saveDb()
             moduleUpdate()
             // cleanChunks는 화면 진입 후 유휴 시간에 실행 (부트 블로킹 제거)

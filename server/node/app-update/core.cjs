@@ -7,7 +7,7 @@ const yauzl = require('yauzl');
 
 const CODE_ROOTS = ['dist/', 'server/node/', 'shared/play-set/', 'src/ts/risubard/', 'src/ts/preset/adapter/', 'packages/risubard-core/'];
 const CONTROL = 'server/node/app-update/';
-const VERSION = /^\d+\.\d+\.\d+$/;
+const VERSION = /^\d+\.\d+\.\d+(?:-ver\d+)?$/;
 const HASH = /^[a-f0-9]{64}$/;
 function codePath(name) {
     if (typeof name !== 'string' || !name || /[\\:\x00-\x1f]/.test(name) || name.split('/').some(p => !p || p === '.' || p === '..')) throw new Error('Invalid app patch path');
@@ -23,11 +23,15 @@ function targetPath(root, name) {
     }
     return target;
 }
+// Personal builds are X.Y.Z-verN (named after the upstream release they are built on). The earlier plain personal
+// numbers (0.9.91 … 0.9.106) came before every -verN build of the same X.Y, so a -verN build is newer than them.
 function newer(a, b) {
     if (!VERSION.test(a) || !VERSION.test(b)) return false;
-    const left = a.split('.').map(Number), right = b.split('.').map(Number);
-    for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i] > right[i];
-    return false;
+    const parts = value => { const [base, build] = value.split('-ver'); return { numbers: base.split('.').map(Number), build: build === undefined ? null : Number(build) }; };
+    const left = parts(a), right = parts(b);
+    if (left.numbers[0] === right.numbers[0] && left.numbers[1] === right.numbers[1] && (left.build === null) !== (right.build === null)) return left.build !== null;
+    for (let i = 0; i < 3; i++) if (left.numbers[i] !== right.numbers[i]) return left.numbers[i] > right.numbers[i];
+    return (left.build ?? 0) > (right.build ?? 0);
 }
 async function hashFile(file) {
     const hash = createHash('sha256');
