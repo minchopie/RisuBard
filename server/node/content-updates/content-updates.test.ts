@@ -5,7 +5,7 @@ import os from 'node:os'
 import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { fixtureDav } from '../nas-sync-dav-fixture'
-const { createContentUpdates, validPointer, NAMESPACE } = require('./content-updates.cjs')
+const { createContentUpdates, validItem, recordName, recordNames, NAMESPACE, MAX_ITEMS } = require('./content-updates.cjs')
 
 const roots: string[] = []
 function root() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'risubard-content-updates-')); roots.push(dir); return dir }
@@ -25,12 +25,12 @@ describe('content updates', () => {
         await expect(updates.publish(Readable.from([card]), meta)).rejects.toThrow(/NAS/)
     })
 
-    test('publishing stores the file under its SHA-256 and the pointer; the publisher is not asked, another device is', async () => {
+    test('publishing stores the file under its SHA-256 and one record for the name; the publisher is not asked, another device is', async () => {
         const dav = fixtureDav()
         const pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
         const item = await pc.updates.publish(Readable.from([card]), meta)
         expect(item).toMatchObject({ key: meta.key, sha256: sha(card), bytes: card.length, file: `${sha(card)}.charx`, publishedBy: 'pc' })
-        expect(dav.paths()).toEqual([`${NAMESPACE}${sha(card)}.charx`, `${NAMESPACE}latest.json`].sort())
+        expect(dav.paths()).toEqual([`${NAMESPACE}${sha(card)}.charx`, `${NAMESPACE}items/${recordName(meta.key)}`].sort())
         expect((await pc.updates.overview()).pending).toEqual([])
         const other = await tablet.updates.overview()
         expect(other.pending.map((x: any) => x.key)).toEqual([meta.key])
@@ -69,21 +69,24 @@ describe('content updates', () => {
         expect(fs.readdirSync(path.join(roots[1], 'content-updates', 'tmp'))).toEqual([])
     })
 
-    test('rejects bad keys, kinds, file types and pointer contents', async () => {
+    test('rejects bad keys, kinds, file types and record contents', async () => {
         const { updates } = device()
         await expect(updates.publish(Readable.from([card]), { ...meta, key: 'persona:x' })).rejects.toThrow(/배포 이름/)
         await expect(updates.publish(Readable.from([card]), { ...meta, key: 'character:' })).rejects.toThrow(/배포 이름/)
         await expect(updates.publish(Readable.from([card]), { ...meta, fileName: 'card.exe' })).rejects.toThrow(/형식/)
         await expect(updates.publish(Readable.from([card]), { ...meta, kind: 'persona', key: 'persona:x', fileName: 'x.charx' })).rejects.toThrow(/형식/)
+        await expect(updates.download('../x', 'a'.repeat(64))).rejects.toThrow(/배포 이름/)
         expect(() => updates.decide('character:x', 'nothex', 'applied')).toThrow()
         expect(() => updates.decide('character:x', 'a'.repeat(64), 'whatever')).toThrow()
         const good = { key: 'character:a', kind: 'character', title: 'a', version: '', file: `${'a'.repeat(64)}.charx`, fileName: 'a.charx', sha256: 'a'.repeat(64), bytes: 3, publishedAt: new Date().toISOString() }
-        expect(validPointer({ schema: 1, items: [good] }).items).toHaveLength(1)
-        expect(() => validPointer({ schema: 1, items: [good, good] })).toThrow(/Duplicate/)
-        expect(() => validPointer({ schema: 1, items: [{ ...good, file: '../x.charx' }] })).toThrow()
-        expect(() => validPointer({ schema: 1, items: [{ ...good, fileName: '../a.charx' }] })).toThrow()
-        expect(() => validPointer({ schema: 1, items: [{ ...good, kind: 'persona' }] })).toThrow()
-        expect(() => validPointer({ schema: 2, items: [] })).toThrow()
+        expect(validItem(good)).toMatchObject({ key: 'character:a' })
+        expect(() => validItem({ ...good, file: '../x.charx' })).toThrow()
+        expect(() => validItem({ ...good, fileName: '../a.charx' })).toThrow()
+        expect(() => validItem({ ...good, kind: 'persona' })).toThrow()
+        expect(recordName('character:a')).toMatch(/^[a-f0-9]{64}\.json$/)
+        const h = 'b'.repeat(64)
+        expect(recordNames(`<d:multistatus><d:response><d:href>/x/items/</d:href></d:response><d:response><d:href>/x/items/${h}.json</d:href></d:response><d:response><d:href>/x/items/${h}.json.part-1</d:href></d:response><D:response><D:href>https://nas/x/items/../${'c'.repeat(64)}.json</D:href></D:response></d:multistatus>`))
+            .toEqual([h + '.json', 'c'.repeat(64) + '.json'])
     })
 
     test('state survives a restart and an unreadable state file starts empty', async () => {
@@ -96,7 +99,7 @@ describe('content updates', () => {
         expect((await make().overview()).pending).toHaveLength(1)
     })
 
-    test('two devices publishing at the same time both stay listed (NAS lock), and the lock is released', async () => {
+    test('devices publishing different names at the same time both stay listed, with no temporary files left', async () => {
         const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet'), phone = device(dav, 'phone')
         const a = Buffer.from('card A'), b = Buffer.from('persona B png')
         await Promise.all([
@@ -104,36 +107,43 @@ describe('content updates', () => {
             tablet.updates.publish(Readable.from([b]), { key: 'persona:B', kind: 'persona', title: 'B', version: '', fileName: 'b.png' }),
         ])
         expect((await phone.updates.overview()).items.map((x: any) => x.key).sort()).toEqual(['character:마물소녀도감', 'persona:B'])
-        expect(dav.paths().some(p => p.endsWith('latest.lock'))).toBe(false)
-        expect(dav.paths().filter(p => /latest-.*\.json$/.test(p))).toEqual([])
+        expect(dav.paths().filter(p => /\.part/.test(p))).toEqual([])
     })
 
-    test('a stale lock left by a stopped device is taken over and released', async () => {
+    test('the same name published by two devices at once: the stored record is one of them, a replaced one says so', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
+        const a = Buffer.from('card from pc'), b = Buffer.from('card from tablet')
+        const results = await Promise.allSettled([pc.updates.publish(Readable.from([a]), meta), tablet.updates.publish(Readable.from([b]), meta)])
+        const stored = (await device(dav, 'phone').updates.overview()).items
+        expect(stored).toHaveLength(1)
+        const fulfilled = results.filter(r => r.status === 'fulfilled').map(r => (r as any).value.sha256)
+        expect(fulfilled).toContain(stored[0].sha256)
+        for (const r of results) if (r.status === 'rejected') expect(String(r.reason)).toMatch(/확인에 실패/)
+    })
+
+    test(`a new name beyond ${200} records is refused; replacing an existing name still works`, async () => {
         const dav = fixtureDav(), pc = device(dav, 'pc')
         await pc.updates.publish(Readable.from([card]), meta)
-        dav.files.set(`${NAMESPACE}latest.lock`, Buffer.from(JSON.stringify({ at: Date.now() - 10 * 60_000, by: 'gone' })))
+        for (let i = 1; i < MAX_ITEMS; i++) {
+            const h = createHash('sha256').update(String(i)).digest('hex'), key = `character:filler-${i}`
+            const item = { key, kind: 'character', title: key, version: '', file: `${h}.charx`, fileName: 'f.charx', sha256: h, bytes: 1, publishedAt: new Date(Date.now() - i).toISOString(), publishedBy: '' }
+            dav.files.set(`${NAMESPACE}items/${recordName(key)}`, Buffer.from(JSON.stringify(item)))
+        }
+        await expect(pc.updates.publish(Readable.from([Buffer.from('another')]), { ...meta, key: 'character:new one' })).rejects.toThrow(/너무 많아요/)
         const next = Buffer.from('card v2')
-        await pc.updates.publish(Readable.from([next]), { ...meta, version: 'v2' })
-        expect((await pc.updates.overview()).items[0].sha256).toBe(sha(next))
-        expect(dav.paths().some(p => p.endsWith('latest.lock'))).toBe(false)
+        expect((await pc.updates.publish(Readable.from([next]), { ...meta, version: 'v2' })).sha256).toBe(sha(next))
+        expect((await pc.updates.overview()).items).toHaveLength(MAX_ITEMS)
     })
 
-    test('a publish that would make the list unreadably large is refused and leaves the list as it was', async () => {
-        const dav = fixtureDav(), pc = device(dav, 'pc')
-        const items: any[] = []
-        const long = '가'.repeat(190)
-        for (let i = 0; ; i++) {
-            const h = createHash('sha256').update(String(i)).digest('hex')
-            const item = { key: `character:${i}-${'나'.repeat(100)}`, kind: 'character', title: long, version: '', file: `${h}.charx`, fileName: `${long}.charx`, sha256: h, bytes: 1, publishedAt: new Date().toISOString(), publishedBy: '' }
-            // Fill the list to just under the 256 KiB read limit (still readable), so one more long item goes over it.
-            if (Buffer.byteLength(JSON.stringify(validPointer({ schema: 1, items: [...items, item] }), null, 2)) > 256 * 1024 - 300) break
-            items.push(item)
-        }
-        dav.dirs.add(NAMESPACE.replace(/\/$/, ''))
-        const before = Buffer.from(JSON.stringify({ schema: 1, items }, null, 2))
-        dav.files.set(`${NAMESPACE}latest.json`, before)
-        await expect(pc.updates.publish(Readable.from([card]), { ...meta, title: long, fileName: `${long}.charx` })).rejects.toThrow(/너무 커요/)
-        expect(dav.files.get(`${NAMESPACE}latest.json`)).toEqual(before)
-        expect(dav.paths().some(p => p.endsWith('latest.lock'))).toBe(false)
+    test('a damaged or misplaced record is skipped; a NAS read error fails the whole check (asked again later)', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
+        await pc.updates.publish(Readable.from([card]), meta)
+        dav.files.set(`${NAMESPACE}items/${'d'.repeat(64)}.json`, Buffer.from('{broken'))
+        const other = { ...(await pc.updates.overview()).items[0], key: 'character:other' }
+        dav.files.set(`${NAMESPACE}items/${'e'.repeat(64)}.json`, Buffer.from(JSON.stringify(other)))
+        dav.files.set(`${NAMESPACE}items/${'f'.repeat(64)}.json`, Buffer.alloc(20 * 1024, 32))
+        expect((await tablet.updates.overview()).items.map((x: any) => x.key)).toEqual([meta.key])
+        dav.hooks.push(({ method, path }) => method === 'GET' && path.includes('/items/') ? Object.assign(Readable.from([Buffer.from('')]), { statusCode: 500, headers: {} }) : undefined)
+        await expect(tablet.updates.overview()).rejects.toThrow(/HTTP 500/)
     })
 })

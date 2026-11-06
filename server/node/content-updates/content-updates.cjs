@@ -2,7 +2,8 @@
 // Content updates: one NAS folder where a character card or persona card is published once; every device
 // that uses the same NAS asks "a new one was published — import it? yes/no" and imports it through the
 // app's own import (a character goes through the upstream "update an installed bot" flow, chats kept).
-// Only the files and a small pointer (latest.json) live on the NAS; what each device decided lives in
+// On the NAS: the files (named by their SHA-256) and one small record per published name (items/<sha256(name)>.json),
+// so devices publishing different names never write the same file and need no lock. What each device decided lives in
 // <data>/content-updates/state.json. Nothing here touches characters, chats or the NAS sync workspace.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,14 +12,13 @@ const { pipeline } = require('node:stream/promises');
 const { createHash, randomUUID } = require('node:crypto');
 
 const NAMESPACE = '.risubard-content-updates/';
-const POINTER = 'latest.json';
-const LOCK = 'latest.lock';
-const LOCK_STALE_MS = 2 * 60_000;
-const LOCK_WAIT_MS = 30_000;
-const LOCK_RETRY_MS = 500;
-const POINTER_LIMIT = 256 * 1024;
+const RECORDS = 'items';
+const RECORD = /^[a-f0-9]{64}\.json$/;
+const RECORD_LIMIT = 16 * 1024;
+const LIST_LIMIT = 2 * 1024 * 1024;
 const FILE_LIMIT = 512 * 1024 * 1024;
 const MAX_ITEMS = 200;
+const READ_CONCURRENCY = 8;
 const KINDS = new Set(['character', 'persona']);
 const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']) };
 const DECISIONS = new Set(['applied', 'declined', 'published']);
@@ -46,11 +46,18 @@ function validItem(value) {
         publishedBy: text(value.publishedBy, 80) || '',
     };
 }
-function validPointer(value) {
-    if (value?.schema !== 1 || !Array.isArray(value.items) || value.items.length > MAX_ITEMS) throw new Error('Invalid content update list');
-    const items = value.items.map(validItem), keys = new Set();
-    for (const item of items) { if (keys.has(item.key)) throw new Error('Duplicate content update key'); keys.add(item.key); }
-    return { schema: 1, items };
+/** The record file of a published name: SHA-256 of the key, so any name maps to a fixed, filename-safe record. */
+const recordName = key => createHash('sha256').update(key, 'utf8').digest('hex') + '.json';
+/** Record file names in a Depth:1 PROPFIND multistatus (the collection's own href never matches). */
+function recordNames(xml) {
+    const names = new Set();
+    for (const match of xml.matchAll(/<(?:[A-Za-z0-9_]+:)?href\b[^>]*>\s*([^<]+?)\s*</gi)) {
+        const href = match[1].replace(/&amp;/g, '&').replace(/\/+$/, '');
+        let name;
+        try { name = decodeURIComponent(href.slice(href.lastIndexOf('/') + 1)); } catch { continue; }
+        if (RECORD.test(name)) names.add(name);
+    }
+    return [...names].sort();
 }
 
 function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = () => '' }) {
@@ -93,7 +100,7 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         const base = endpoint.url + NAMESPACE;
         const auth = 'Basic ' + Buffer.from(`${config.username}:${config.password}`).toString('base64');
         const call = (name, method = 'GET', body, headers = {}) => {
-            if (!/^[a-zA-Z0-9._-]*$/.test(name)) throw new Error('Invalid content update filename');
+            if (!/^(?:items\/)?[a-zA-Z0-9._-]*$/.test(name)) throw new Error('Invalid content update filename');
             return fetch(base + name, { method, body, servername: endpoint.servername, headers: { Authorization: auth, ...headers } });
         };
         return { base, call };
@@ -107,52 +114,52 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         const chunks = []; let size = 0;
         for await (const chunk of response) {
             size += chunk.length;
-            if (size > limit) { response.destroy(); throw new Error('Content update list is too large'); }
+            if (size > limit) { response.destroy(); throw Object.assign(new Error('Content update data is too large'), { code: 'TOO_LARGE' }); }
             chunks.push(chunk);
         }
         return Buffer.concat(chunks);
     }
-    async function pointer(remote) {
-        const response = await remote.call(POINTER);
-        if (response.statusCode === 404) { await drainQuietly(response); return { schema: 1, items: [] }; }
+    /** One published item, or null when its record is missing or not a valid record (a damaged record is skipped, not fatal). */
+    async function readRecord(remote, name) {
+        const response = await remote.call(`${RECORDS}/${name}`);
+        if (response.statusCode === 404) { await drainQuietly(response); return null; }
         await checked(response);
-        return validPointer(JSON.parse((await body(response, POINTER_LIMIT)).toString('utf8')));
-    }
-
-    // NAS lock for replacing latest.json: a lock file created only if absent (If-None-Match: *, as the NAS sync uses).
-    // A lock older than LOCK_STALE_MS (a device that stopped mid-publish) is removed and taken over.
-    async function withLock(remote, work) {
-        const deadline = Date.now() + LOCK_WAIT_MS;
-        for (;;) {
-            const payload = Buffer.from(JSON.stringify({ at: Date.now(), by: deviceName() || '' }));
-            const response = await remote.call(LOCK, 'PUT', Readable.from([payload]), { 'Content-Length': String(payload.length), 'If-None-Match': '*' });
-            if ([200, 201, 204].includes(response.statusCode)) { await drainQuietly(response); break; }
-            if (response.statusCode !== 412) { await checked(response, []); }
-            await drainQuietly(response);
-            let held = null;
-            try {
-                const current = await remote.call(LOCK);
-                if (current.statusCode === 200) held = JSON.parse((await body(current, 4096)).toString('utf8'));
-                else await drainQuietly(current);
-            } catch { /* unreadable lock: treated as stale below */ }
-            if (!Number.isFinite(held?.at) || Date.now() - held.at > LOCK_STALE_MS) {
-                await drainQuietly(await remote.call(LOCK, 'DELETE'));
-                continue;
-            }
-            if (Date.now() > deadline) throw new Error('다른 기기가 배포 목록을 고치는 중이에요. 잠시 뒤 다시 올려 주세요.');
-            await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_MS));
+        let data;
+        try { data = await body(response, RECORD_LIMIT); } catch (error) {
+            if (error.code !== 'TOO_LARGE') throw error;
+            console.warn('[ContentUpdates] skipped an oversized record:', name); return null;
         }
-        try { return await work(); }
-        finally { try { await drainQuietly(await remote.call(LOCK, 'DELETE')); } catch { /* the stale-lock rule frees it */ } }
+        try {
+            const item = validItem(JSON.parse(data.toString('utf8')));
+            if (recordName(item.key) !== name) throw new Error('record name does not match its key');
+            return item;
+        } catch (error) { console.warn('[ContentUpdates] skipped an invalid record:', name, error.message); return null; }
+    }
+    async function listRecordNames(remote) {
+        const xml = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>';
+        const response = await remote.call(`${RECORDS}/`, 'PROPFIND', Readable.from([xml]), { Depth: '1', 'Content-Type': 'application/xml', 'Content-Length': String(Buffer.byteLength(xml)) });
+        if (response.statusCode === 404) { await drainQuietly(response); return []; }
+        await checked(response, [207]);
+        return recordNames((await body(response, LIST_LIMIT)).toString('utf8'));
+    }
+    /** All published items, oldest first. Network errors fail the whole read (asked again later); a bad record is skipped. */
+    async function listItems(remote) {
+        const names = await listRecordNames(remote);
+        if (names.length > MAX_ITEMS) console.warn('[ContentUpdates] more records than the limit; reading the first', MAX_ITEMS);
+        const queue = names.slice(0, MAX_ITEMS), items = [];
+        await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, queue.length) }, async () => {
+            while (queue.length) { const item = await readRecord(remote, queue.shift()); if (item) items.push(item); }
+        }));
+        return items.sort((a, b) => a.publishedAt < b.publishedAt ? -1 : a.publishedAt > b.publishedAt ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
     }
 
     /** Every published item, with this device's decision; `pending` are the ones to ask about. */
     async function overview() {
         const remote = await nas();
         if (!remote) return { configured: false, items: [], pending: [] };
-        const list = await pointer(remote);
+        const list = await listItems(remote);
         const decisions = readState().decisions;
-        const items = list.items.map(item => {
+        const items = list.map(item => {
             const local = decisions[item.key];
             return { ...item, decision: local?.sha256 === item.sha256 ? local.decision : '' };
         });
@@ -179,9 +186,10 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
 
     /** Downloads a published file to a temporary file after checking its size and SHA-256. The caller removes it. */
     async function download(key, sha256) {
+        if (!validKey(key)) throw new Error('배포 이름이 올바르지 않아요.');
         const remote = await nas();
         if (!remote) throw new Error('NAS가 설정되지 않았어요.');
-        const item = (await pointer(remote)).items.find(entry => entry.key === key);
+        const item = await readRecord(remote, recordName(key));
         if (!item || item.sha256 !== sha256) throw new Error('NAS의 배포본이 바뀌었어요. 다시 확인해 주세요.');
         const target = tempFile(item.file.split('.').pop());
         try {
@@ -193,7 +201,7 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         } catch (error) { fs.rmSync(target, { force: true }); throw error; }
     }
 
-    /** Stores an incoming upload (stream) and publishes it under `meta.key`, replacing that key's previous file in the list. */
+    /** Stores an incoming upload (stream) and publishes it under `meta.key`, replacing that key's previous record. */
     async function publish(stream, meta) {
         if (!meta || !validKey(meta.key) || !KINDS.has(meta.kind) || !meta.key.startsWith(meta.kind + ':')) throw new Error('배포 이름이 올바르지 않아요.');
         const ext = String(meta.fileName ?? '').toLowerCase().split('.').pop();
@@ -218,24 +226,23 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
             } finally {
                 try { await drainQuietly(await checked(await remote.call(part, 'DELETE'), [200, 204, 404])); } catch { /* an interrupted upload part is not published */ }
             }
-            // The list is read, merged and replaced under a NAS lock, so two devices publishing at once both stay listed.
-            await withLock(remote, async () => {
-                const list = await pointer(remote);
-                const next = validPointer({ schema: 1, items: [...list.items.filter(entry => entry.key !== item.key), item] });
-                const data = Buffer.from(JSON.stringify(next, null, 2));
-                if (data.length > POINTER_LIMIT) throw new Error('NAS 배포 목록이 너무 커요. 오래된 배포를 정리한 뒤 다시 올려 주세요.');
-                const temp = `latest-${randomUUID()}.json`;
-                try {
-                    await drainQuietly(await checked(await remote.call(temp, 'PUT', Readable.from([data]), { 'Content-Length': String(data.length), 'Content-Type': 'application/json' }), [200, 201, 204]));
-                    await drainQuietly(await checked(await remote.call(temp, 'MOVE', undefined, { Destination: remote.base + POINTER, Overwrite: 'T' }), [201, 204]));
-                } finally {
-                    try { await drainQuietly(await remote.call(temp, 'DELETE')); } catch { /* moved away already, or unreachable */ }
-                }
-                const saved = await pointer(remote);
-                for (const entry of next.items) {
-                    if (saved.items.find(x => x.key === entry.key)?.sha256 !== entry.sha256) throw new Error('NAS 배포 목록 확인에 실패했어요. 잠시 뒤 다시 올려 주세요.');
-                }
-            });
+            // The record of this name only: other names are other files, so devices publishing at the same time do not collide.
+            await drainQuietly(await checked(await remote.call(`${RECORDS}/`, 'MKCOL'), [201, 405]));
+            const name = recordName(item.key);
+            if (!await readRecord(remote, name) && (await listRecordNames(remote)).length >= MAX_ITEMS) {
+                throw new Error(`NAS 배포가 너무 많아요(최대 ${MAX_ITEMS}개). 쓰지 않는 배포 기록을 정리한 뒤 다시 올려 주세요.`);
+            }
+            const data = Buffer.from(JSON.stringify(item, null, 2));
+            const temp = `${RECORDS}/${name}.part-${randomUUID()}`;
+            try {
+                await drainQuietly(await checked(await remote.call(temp, 'PUT', Readable.from([data]), { 'If-None-Match': '*', 'Content-Length': String(data.length), 'Content-Type': 'application/json' }), [200, 201, 204]));
+                await drainQuietly(await checked(await remote.call(temp, 'MOVE', undefined, { Destination: `${remote.base}${RECORDS}/${name}`, Overwrite: 'T' }), [201, 204]));
+            } finally {
+                try { await drainQuietly(await remote.call(temp, 'DELETE')); } catch { /* moved away already, or unreachable */ }
+            }
+            const saved = await readRecord(remote, name);
+            // Another device publishing the same name at the same moment: the later record stands, and this one says so.
+            if (saved?.sha256 !== item.sha256 || saved.publishedAt !== item.publishedAt) throw new Error('NAS 배포 기록 확인에 실패했어요. 다른 기기가 같은 배포 이름으로 방금 올렸을 수 있어요. 목록을 확인해 주세요.');
             decide(item.key, item.sha256, 'published');
             return item;
         } finally { fs.rmSync(staged, { force: true }); }
@@ -267,4 +274,4 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
     return { overview, decide, download, publish, registerRoutes, readState };
 }
 
-module.exports = { createContentUpdates, validPointer, validItem, validKey, NAMESPACE };
+module.exports = { createContentUpdates, validItem, validKey, recordName, recordNames, NAMESPACE, MAX_ITEMS };

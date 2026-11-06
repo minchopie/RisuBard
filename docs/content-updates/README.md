@@ -4,7 +4,7 @@
 
 ## 동작
 
-- **올리기**: 설정 > 캐릭터·대화 옮기기 > 캐릭터·페르소나 배포 (NAS). charx·json·png를 고르면 이름·버전을 읽고(charx는 card.json, png는 persona/ccv3/chara 텍스트 청크), 배포 이름(기본: 캐릭터는 이름에서 버전과 끝의 "ver"를 뺀 것, 페르소나는 이름 그대로)을 정해 올린다. 같은 배포 이름으로 다시 올리면 그 항목이 새 판으로 바뀐다. 올린 기기는 그 판을 「올림」으로 기록해 묻지 않는다.
+- **올리기**: 설정 > 시스템 > 백업 > 캐릭터·페르소나 배포 (NAS) (NAS 동기화 칸 아래). charx·json·png를 고르면 이름·버전을 읽고(charx는 card.json, png는 persona/ccv3/chara 텍스트 청크), 배포 이름(기본: 캐릭터는 이름에서 버전과 끝의 "ver"를 뺀 것, 페르소나는 이름 그대로)을 정해 올린다. 같은 배포 이름으로 다시 올리면 그 항목이 새 판으로 바뀐다. 올린 기기는 그 판을 「올림」으로 기록해 묻지 않는다.
 - **묻기**: Node/임베디드 런타임(PC 앱·Android 앱)에서 시작 8초 뒤 한 번, 앱이 다시 보일 때 10분 간격으로 확인한다. 화면 준비 전, 전송·동기화 적용 중, 응답 생성 중, 가져오기 진행·복구 대기 중, 다른 창이 떠 있을 때는 묻지 않는다. 묻는 창을 답 없이 닫으면 다음 확인 때 다시 묻는다.
 - **네**: 파일을 받아 크기·SHA-256을 확인한 뒤 앱의 원래 가져오기로 들여온다.
   - 캐릭터: 원작 `importCharacterProcess` → 원작 0.9.90의 「설치된 봇 업데이트」 대화상자(후보 선택·변경 검토). 같은 캐릭터를 고르면 대화·채팅 폴더는 그대로 두고 카드 내용만 합치며, 바꾸기 전 카드는 휴지통에 3일 보관된다. 「새로 설치」·「취소」도 원작 그대로다. 취소하면 「아니오」로 기록한다.
@@ -16,9 +16,9 @@
 
 - NAS: 기존 NAS 연결 설정(전송·동기화와 같은 주소·계정)의 `.risubard-content-updates/` 폴더.
   - `<sha256>.<charx|png|json>`: 파일 이름이 내용의 SHA-256이라 같은 파일은 한 번만 저장된다.
-  - `latest.json`: `{ schema: 1, items: [{ key, kind, title, version, file, fileName, sha256, bytes, publishedAt, publishedBy }] }`. key는 `character:<배포 이름>` 또는 `persona:<배포 이름>`, 최대 200개.
-  - 올리기는 임시 이름 PUT → MOVE(덮어쓰기 안 함, 이미 있으면 같은 내용) → **잠금 파일 `latest.lock`**(If-None-Match: *로 없을 때만 만듦, NAS 동기화와 같은 방식) → latest.json 다시 읽어 합침 → 임시 PUT → MOVE(덮어쓰기) → 다시 읽어 모든 항목 확인 → 잠금 해제. 두 기기가 동시에 올려도 둘 다 목록에 남는다. 2분 넘은 잠금(올리다 멈춘 기기)은 넘겨받고, 다른 기기가 잡고 있으면 30초까지 기다린다.
-  - 합친 목록이 256 KiB를 넘으면 올리지 않는다(모든 기기가 읽을 수 있는 크기 유지).
+  - `items/<sha256(배포 이름 key)>.json`: 배포 이름 하나당 기록 파일 하나 `{ key, kind, title, version, file, fileName, sha256, bytes, publishedAt, publishedBy }`. key는 `character:<배포 이름>` 또는 `persona:<배포 이름>`. 목록은 `items/`를 PROPFIND(Depth 1, NAS 동기화와 같은 방식)로 읽고 기록을 하나씩 받는다.
+  - 올리기는 파일 임시 이름 PUT → MOVE(덮어쓰기 안 함, 이미 있으면 같은 내용) → 그 이름의 기록만 임시 PUT → MOVE(덮어쓰기) → 다시 읽어 확인. **이름이 다른 배포는 서로 다른 파일**이라 여러 기기가 동시에 올려도 잠금 없이 둘 다 남는다. 같은 이름을 두 기기가 동시에 올리면 나중 것이 남고, 밀린 쪽은 「확인에 실패」로 알린다.
+  - 배포 이름은 최대 200개(새 이름만 막고, 있는 이름의 새 판은 언제나 올릴 수 있다). 기록 하나는 16 KiB까지. 깨졌거나 이름이 맞지 않는 기록은 건너뛰고, NAS 읽기 오류는 그 확인 전체를 다음으로 미룬다.
 - 기기: `<데이터>/content-updates/state.json` — 배포 이름별 이 기기의 결정(applied/declined/published, sha256, 시각). 임시 파일은 `content-updates/tmp/`에 두고 끝나면 지운다.
 - 서버 경로: `/api/play-transfer/content-updates/{overview,decide,fetch,publish}` (기존 전송 인증·활성 세션 검사). 올리기 본문은 `application/x-risubard-content`로 보내 express.raw가 메모리에 담지 않고 파일로 흘려 쓴다.
 
