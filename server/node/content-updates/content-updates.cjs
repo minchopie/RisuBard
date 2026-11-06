@@ -17,7 +17,8 @@ const RECORD = /^[a-f0-9]{64}\.json$/;
 const RECORD_LIMIT = 16 * 1024;
 const LIST_LIMIT = 2 * 1024 * 1024;
 const FILE_LIMIT = 512 * 1024 * 1024;
-const MAX_ITEMS = 200;
+const MAX_ITEMS = 200; // new names are refused at this count
+const READ_ITEMS = 256; // read cap, above MAX_ITEMS so names that passed the count check at the same moment are all still read
 const READ_CONCURRENCY = 8;
 const KINDS = new Set(['character', 'persona']);
 const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']) };
@@ -145,8 +146,8 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
     /** All published items, oldest first. Network errors fail the whole read (asked again later); a bad record is skipped. */
     async function listItems(remote) {
         const names = await listRecordNames(remote);
-        if (names.length > MAX_ITEMS) console.warn('[ContentUpdates] more records than the limit; reading the first', MAX_ITEMS);
-        const queue = names.slice(0, MAX_ITEMS), items = [];
+        if (names.length > READ_ITEMS) console.warn('[ContentUpdates] more records than the read limit; reading the first', READ_ITEMS);
+        const queue = names.slice(0, READ_ITEMS), items = [];
         await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, queue.length) }, async () => {
             while (queue.length) { const item = await readRecord(remote, queue.shift()); if (item) items.push(item); }
         }));
@@ -229,7 +230,9 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
             // The record of this name only: other names are other files, so devices publishing at the same time do not collide.
             await drainQuietly(await checked(await remote.call(`${RECORDS}/`, 'MKCOL'), [201, 405]));
             const name = recordName(item.key);
-            if (!await readRecord(remote, name) && (await listRecordNames(remote)).length >= MAX_ITEMS) {
+            // An existing name (even with a damaged record) can always be republished; only new names count against the limit.
+            const names = await listRecordNames(remote);
+            if (!names.includes(name) && names.length >= MAX_ITEMS) {
                 throw new Error(`NAS 배포가 너무 많아요(최대 ${MAX_ITEMS}개). 쓰지 않는 배포 기록을 정리한 뒤 다시 올려 주세요.`);
             }
             const data = Buffer.from(JSON.stringify(item, null, 2));
@@ -274,4 +277,4 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
     return { overview, decide, download, publish, registerRoutes, readState };
 }
 
-module.exports = { createContentUpdates, validItem, validKey, recordName, recordNames, NAMESPACE, MAX_ITEMS };
+module.exports = { createContentUpdates, validItem, validKey, recordName, recordNames, NAMESPACE, MAX_ITEMS, READ_ITEMS };

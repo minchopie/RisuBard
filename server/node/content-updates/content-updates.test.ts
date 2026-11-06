@@ -121,14 +121,49 @@ describe('content updates', () => {
         for (const r of results) if (r.status === 'rejected') expect(String(r.reason)).toMatch(/확인에 실패/)
     })
 
-    test(`a new name beyond ${200} records is refused; replacing an existing name still works`, async () => {
-        const dav = fixtureDav(), pc = device(dav, 'pc')
-        await pc.updates.publish(Readable.from([card]), meta)
-        for (let i = 1; i < MAX_ITEMS; i++) {
+    const filler = (dav: any, from: number, to: number) => {
+        for (let i = from; i < to; i++) {
             const h = createHash('sha256').update(String(i)).digest('hex'), key = `character:filler-${i}`
             const item = { key, kind: 'character', title: key, version: '', file: `${h}.charx`, fileName: 'f.charx', sha256: h, bytes: 1, publishedAt: new Date(Date.now() - i).toISOString(), publishedBy: '' }
             dav.files.set(`${NAMESPACE}items/${recordName(key)}`, Buffer.from(JSON.stringify(item)))
         }
+    }
+
+    test('two new names published at once at 199 records both pass the count and are both read by every device', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
+        await pc.updates.publish(Readable.from([card]), meta)
+        filler(dav, 1, MAX_ITEMS - 1)
+        // both publishers list the records before either writes: each sees 199 and passes the count
+        let waiting = 0, armed = true, release = () => {}
+        const both = new Promise<void>(resolve => { release = resolve })
+        dav.hooks.push(async ({ method, path }) => {
+            if (armed && method === 'PROPFIND' && path.endsWith('/items')) { if (++waiting >= 2) { armed = false; release() } await both }
+            return undefined
+        })
+        const results = await Promise.all([
+            pc.updates.publish(Readable.from([Buffer.from('x')]), { ...meta, key: 'character:race-x' }),
+            tablet.updates.publish(Readable.from([Buffer.from('y')]), { ...meta, key: 'character:race-y' }),
+        ])
+        const records = dav.paths().filter(p => /\/items\/[a-f0-9]{64}\.json$/.test(p)).length
+        expect(records).toBe(MAX_ITEMS + 1)
+        const keys = (await device(dav, 'phone').updates.overview()).items.map((x: any) => x.key)
+        expect(keys).toHaveLength(records)
+        for (const r of results) expect(keys).toContain(r.key)
+    })
+
+    test('a damaged record of an existing name at the limit can be republished', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc')
+        await pc.updates.publish(Readable.from([card]), meta)
+        filler(dav, 1, MAX_ITEMS)
+        dav.files.set(`${NAMESPACE}items/${recordName(meta.key)}`, Buffer.from('{broken'))
+        const next = Buffer.from('card v3')
+        expect((await pc.updates.publish(Readable.from([next]), meta)).sha256).toBe(sha(next))
+    })
+
+    test(`a new name beyond ${200} records is refused; replacing an existing name still works`, async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc')
+        await pc.updates.publish(Readable.from([card]), meta)
+        filler(dav, 1, MAX_ITEMS)
         await expect(pc.updates.publish(Readable.from([Buffer.from('another')]), { ...meta, key: 'character:new one' })).rejects.toThrow(/너무 많아요/)
         const next = Buffer.from('card v2')
         expect((await pc.updates.publish(Readable.from([next]), { ...meta, version: 'v2' })).sha256).toBe(sha(next))
