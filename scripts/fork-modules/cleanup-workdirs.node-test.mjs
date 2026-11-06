@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, utimesSync, linkSync, chmodSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { cleanupWorkdirs, readKeepNames, finishWorkdir, parseArgs } from './cleanup-workdirs.mjs';
 
@@ -44,7 +44,7 @@ test('dry-run removes nothing; age uses both creation and modification time', t 
 test('keep-list paths and nested report/build-input references protect workdirs', t => {
     const f = fixture(t);
     const keep = f.dir('risubard-stack-verify-keep'), reportWork = f.dir('risubard-stack-verify-report'), inputWork = f.dir('risubard-runtime-input');
-    writeFileSync(f.keepFile, JSON.stringify([keep]));
+    writeFileSync(f.keepFile, JSON.stringify([{ name: basename(keep), reason: 'current input', deleteBy: '2099-01-01' }]));
     mkdirSync(join(f.output, 'nested'));
     writeFileSync(join(f.output, 'nested/report.json'), JSON.stringify({ work: join(reportWork, 'dist') }));
     writeFileSync(join(f.output, 'build-inputs.json'), JSON.stringify({ build: { input: join(inputWork, 'source') } }));
@@ -100,6 +100,21 @@ test('a Windows deny-delete file handle skips the whole directory and processing
     assert.equal(cleanupWorkdirs({ ...f.options, apply: true }).count, 1);
 });
 
+test('default scan covers the work root and the legacy Temp once each; explicit tempRoot stays the only temp root', t => {
+    const f = fixture(t), work = join(f.root, 'work'), legacy = join(f.root, 'Local', 'Temp');
+    mkdirSync(work); mkdirSync(legacy, { recursive: true });
+    const paths = [f.dir('risubard-stack-verify-new', work), f.dir('android-runtime-new', work), f.dir('risubard-graph-old', legacy), f.dir('risubard-stack-verify-explicit')];
+    const scan = env => {
+        const code = `import(${JSON.stringify(new URL('./cleanup-workdirs.mjs', import.meta.url).href)}).then(m => console.log(JSON.stringify(m.cleanupWorkdirs({ sdkPath: null, keepNames: new Map(), now: ${f.options.now} }).results.map(x => x.path))))`;
+        const result = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8', env: { ...process.env, ...env } });
+        assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout).filter(path => path.startsWith(f.root));
+    };
+    assert.deepEqual(scan({ RISUBARD_WORK_ROOT: work, LOCALAPPDATA: join(f.root, 'Local') }).sort(), paths.slice(0, 3).sort());
+    assert.deepEqual(scan({ RISUBARD_WORK_ROOT: legacy, LOCALAPPDATA: join(f.root, 'Local') }), [paths[2]]);
+    assert.deepEqual(cleanupWorkdirs(f.options).results.map(x => x.path), [paths[3]]);
+    for (const path of paths) assert.ok(existsSync(join(path, 'data')));
+});
+
 test('successful workdirs are removed; failure, explicit keep, env and keep-list retain them', t => {
     const f = fixture(t), logs = [], options = { keepNames: new Map(), log: line => logs.push(line) };
     const saved = process.env.RISUBARD_KEEP_WORKDIR;
@@ -128,4 +143,43 @@ test('read-only Git-like files are removed without changing another hardlink or 
         assert.equal(readFileSync(outside, 'utf8'), 'shared immutable bytes');
         assert.equal(statSync(outside).mode, mode);
     } finally { chmodSync(outside, 0o666); }
+});
+
+test('dated keep entries retain arbitrary inputs and expired backups; malformed dates fail closed', t => {
+    const f = fixture(t);
+    writeFileSync(f.keepFile, JSON.stringify([
+        { name: 'author-current', reason: 'current build input', deleteBy: '2099-01-01' },
+        { name: 'backup-only-copy', reason: 'device backup', deleteBy: '2000-01-01' },
+    ]));
+    const names = readKeepNames({ keepFile: f.keepFile, outputRoots: [], now: Date.parse('2026-11-02') });
+    assert.equal(names.get('author-current'), 'keep-list');
+    assert.equal(names.get('backup-only-copy'), 'keep-expired-review');
+    for (const entry of ['undated-legacy-name', { name: 'a' }, { name: '../a', reason: 'input', deleteBy: '2099-01-01' }, { name: 'a', reason: 'input', deleteBy: '2026-02-30' }]) {
+        writeFileSync(f.keepFile, JSON.stringify([entry]));
+        assert.throws(() => readKeepNames({ keepFile: f.keepFile, outputRoots: [] }));
+    }
+});
+
+test('dedicated work root and its tmp cover synthetic families without widening legacy Temp', t => {
+    const f = fixture(t), work = join(f.root, 'work'); mkdirSync(work); mkdirSync(join(work, 'tmp'));
+    const removable = ['risuplay-test-closed', 'risu-compat-closed', 'bard-sync-svc-phone-a-closed', 'transfer-sync-verify-closed'].map(name => f.dir(name, work));
+    removable.push(f.dir('risubard-graph-nested', join(work, 'tmp')));
+    const retained = [f.dir('risuplay-test-legacy'), f.dir('author-current', work), f.dir('backup-only-copy', work), f.dir('risubard-graph-data.private', work)];
+    const options = { ...f.options, workdirRoot: work, keepNames: new Map([['author-current', 'keep-list'], ['backup-only-copy', 'keep-expired-review']]) };
+    assert.equal(cleanupWorkdirs(options).count, 5);
+    const report = cleanupWorkdirs({ ...options, apply: true });
+    assert.equal(report.count, 5); assert.equal(report.removedBytes, 35);
+    for (const path of removable) assert.equal(existsSync(path), false);
+    for (const path of retained) assert.ok(existsSync(path));
+    assert.equal(report.reasons['keep-expired-review'], 1);
+});
+
+test('new work families referenced by reports are protected and a tmp junction is never traversed', t => {
+    const f = fixture(t), work = join(f.root, 'work'), target = join(f.root, 'outside'); mkdirSync(work); mkdirSync(target);
+    const input = f.dir('risuplay-test-input', work), outside = f.dir('risubard-graph-outside', target);
+    symlinkSync(target, join(work, 'tmp'), process.platform === 'win32' ? 'junction' : 'dir');
+    writeFileSync(join(f.output, 'build-inputs.json'), JSON.stringify({ input }));
+    const report = cleanupWorkdirs({ ...f.options, workdirRoot: work, keepNames: readKeepNames({ keepFile: f.keepFile, outputRoots: [f.output] }), apply: true });
+    assert.equal(report.count, 0); assert.equal(report.reasons.reparse, 1);
+    assert.ok(existsSync(input)); assert.ok(existsSync(outside));
 });

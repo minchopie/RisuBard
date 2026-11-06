@@ -1,4 +1,7 @@
 import { defineConfig } from 'vitest/config'
+import { applyProcessTemp } from './scripts/fork-modules/workdir-root.cjs'
+
+applyProcessTemp()
 
 // Server-side (.cjs) unit tests. Node environment — these exercise native
 // Node modules and pure data-layer logic, no DOM. Kept separate

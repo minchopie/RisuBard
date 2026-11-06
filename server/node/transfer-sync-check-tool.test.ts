@@ -501,6 +501,7 @@ function fixtureRepo(specs: Record<string, unknown>) {
     const sha = git(repo, 'rev-parse', 'HEAD').trim()
     for (const [file, f] of Object.entries(fixtures)) write(file, f.current)
     cpSync(toolPath, join(repo, 'scripts/transfer-sync/check-upstream.mjs'))
+    cpSync(join(repoRoot, 'scripts/fork-modules/workdir-root.cjs'), join(repo, 'scripts/fork-modules/workdir-root.cjs')) // the tool's work-root helper (same closure as the standalone kit)
     write('docs/transfer-sync/manifest.json', JSON.stringify({ upstream: { base: { tag: 'fixture', sha } }, integration: { patch: 'docs/transfer-sync/integration.patch', files: specs, context: 2 } }))
     return { repo, sha, restore: () => git(repo, 'checkout', '-q', '--', '.'), read: (file: string) => readFileSync(join(repo, file), 'utf8'), rm: () => rmSync(repo, { recursive: true, force: true }) }
 }

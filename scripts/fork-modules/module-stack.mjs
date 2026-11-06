@@ -4,9 +4,9 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, mkdtempSync, readdirSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve, join, relative, isAbsolute } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { finishWorkdir, readKeepNames } from './cleanup-workdirs.mjs';
+import { workRoot, tempEnv } from './workdir-root.cjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const folder = 'docs/fork-modules';
@@ -140,7 +140,7 @@ export function generate({ keepWorkdir = false } = {}) {
     const transfer = json(join(repo, config.transferManifest));
     if (transfer.upstream.base.sha !== config.base) throw new Error('Transfer and full stack bases differ');
     const keepNames = readKeepNames({ outputRoots: [] });
-    const work = mkdtempSync(join(tmpdir(), 'risubard-stack-generate-'));
+    const work = mkdtempSync(join(workRoot(), 'risubard-stack-generate-'));
     let failed = true;
     try {
         git(repo, 'clone', '-q', '--shared', '--no-checkout', repo, work);
@@ -191,7 +191,7 @@ function checkedSource(manifest, config) {
 }
 function run(work, command, args) {
     // Only fixed checked-in test commands use a Windows .cmd shell; git paths and refs always use execFileSync.
-    return spawnSync(command, args, { cwd: work, encoding: 'utf8', shell: process.platform === 'win32' && command === 'pnpm', maxBuffer: 64 << 20, timeout: 1800_000 });
+    return spawnSync(command, args, { cwd: work, encoding: 'utf8', shell: process.platform === 'win32' && command === 'pnpm', env: tempEnv(), maxBuffer: 64 << 20, timeout: 1800_000 });
 }
 // Compare source paths/bytes before dependencies or build output are created; file modes are not covered.
 export function sourceSnapshot(work) {
@@ -223,7 +223,7 @@ export function reverseAssembly(work, patches, originals) {
 export function verify({ target = 'base', full = false, logs = 'tmp/fork-module-check' } = {}) {
     const config = json(join(repo, configPath)), manifest = json(join(repo, manifestPath));
     const transfer = json(join(repo, config.transferManifest));
-    const work = mkdtempSync(join(tmpdir(), 'risubard-stack-verify-'));
+    const work = mkdtempSync(join(workRoot(), 'risubard-stack-verify-'));
     const evidence = resolve(repo, logs); mkdirSync(evidence, { recursive: true });
     let originalSnapshot;
     const originals = new Map(), copies = new Map();
@@ -321,7 +321,7 @@ export function verify({ target = 'base', full = false, logs = 'tmp/fork-module-
             });
             const commands = [
                 ['install', 'pnpm', ['install', '--frozen-lockfile', '--prefer-offline']],
-                ['module-tool-tests', process.execPath, ['--test', 'scripts/fork-modules/module-stack.node-test.mjs', 'scripts/fork-modules/cleanup-workdirs.node-test.mjs', 'scripts/fork-modules/workdir-lifecycle.node-test.mjs']],
+                ['module-tool-tests', process.execPath, ['--test', 'scripts/fork-modules/module-stack.node-test.mjs', 'scripts/fork-modules/cleanup-workdirs.node-test.mjs', 'scripts/fork-modules/workdir-lifecycle.node-test.mjs', 'scripts/fork-modules/workdir-root.node-test.mjs']],
                 ['node-tests', process.execPath, ['--experimental-strip-types', '--test', ...split(git(work, 'ls-files', '--cached', '--others', '--exclude-standard', '-z')).filter(path => /\.node-test\.(?:ts|mjs|cjs)$/.test(path) && !path.startsWith('scripts/fork-modules/'))]],
                 // Bound competing fsync-heavy files; each test retains its own concurrent writers and timeout.
                 ['server-tests', 'pnpm', ['exec', 'vitest', 'run', '--config', 'vitest.config.server.ts', '--maxWorkers', '4']],

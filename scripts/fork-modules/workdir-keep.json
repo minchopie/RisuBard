@@ -1,5 +1,347 @@
 [
-  "risubard-stack-verify-i4AMfT",
-  "risubard-stack-verify-gu4GiD",
-  "risubard-stack-verify-UJ69qd"
+  {
+    "name": "claude-bardwiki-20261029",
+    "reason": "module-review alternates의 Git objects 및 docker-context-author worktree 공용 저장소",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "claude-risubard-0104-20261030",
+    "reason": "현재 .105 작성 소스·빌드 입력·실자료 복제본이 섞인 작업. author/package.json, prep-builds-105.cmd:9, speed-20261031/chain_test.cjs:6,13; 종료 확정된 내부 scratch만 별도 정리",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "claude-tablet-content-20261029",
+    "reason": "실제 태블릿 자료 2214파일; userdata와 SHA 전체 동일하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "claude-tablet-userdata-20261029",
+    "reason": "실제 태블릿 자료 2063파일; content와 SHA 전체 동일하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "codex-risubard-0102-author-20261030",
+    "reason": ".103 author의 .git gitdir/common 저장소",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "codex-risubard-0103-author-20261030",
+    "reason": "설치 .103의 작성 소스. candidate-0103/review-source-scope-independent.py:11 및 후속 작성 계보 입력",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "codex-risubard-086-author-20261030",
+    "reason": ".102 author의 정확한 local origin; .86 author objects는 module-review를 alternates로 사용",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "codex-risubard-docker-context-author-20261030",
+    "reason": "module-review의 정확한 local origin과 등록 worktree",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "codex-risubard-module-review-086-20261030",
+    "reason": ".86 author가 .git/objects/info/alternates로 읽는 Git objects",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "migration-link-backups",
+    "reason": "실제 링크 이전 복구용 원래 정션 항목. repair 매핑/journal에서 참조; 논리 바이트 0",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "pw",
+    "reason": "브라우저 profile 포함. 단순 합성 fixture·동일 백업임을 입증하지 못함",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risu-index-ordered-5xjtn7ir",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risu-index-ordered-tn6tpp4l",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risu-version101-7_3lfw13",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risu-version101-84639q_5",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risu-version101-fe_7qinj",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-086-first-reject-t49ow9ss",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-086-reject-t6khnij1",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-086-strict-5e_wg1w7",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-buildtools-dbd0af585e32474ba218f4e6967e55dd",
+    "reason": "정션. .104/build-prep-105/build-android-0105.cmd:9,11,13의 정확한 입력",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-clone-plan-selftest-0hi4ljcg.private",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-compat-integration-_is3tayt",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-compat-integration-aiicpp_s",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-context-capture-wnrm2bri",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-detach-roundtrip-02jadqmd",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-detach-roundtrip-2dt4pupd",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-detach-roundtrip-68n2h0m8",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-detach-roundtrip-6n20rdhq",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-detach-roundtrip-6uk2vbea",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-detach-roundtrip-_5jct5vl",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-detach-roundtrip-aeb144yh",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-detach-roundtrip-nikk1n4j",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-full-adapter-2t1gcz1l",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-full-adapter-6ni0dq8b",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-full-adapter-kfsf_f5u",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-integrated-20261026-_nxxbf5b",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-module-sdk-7923ae19eb1d4e5d8c4aab541063f54a",
+    "reason": "정션. 읽기 가능 범위의 참조 0이나 접근거부 53폴더까지 무참조 입증 불가; 대상 .tooling 보호",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-nas-adapters-0utbojix",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-nas-adapters-aqdgb4ch",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-nas-adapters-qmviaojp",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-nas-adapters-yo6fn5o6",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-original-v084-runtime-ika4uosv",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-pc-update-098-tAoCA4",
+    "reason": "save-before 설치 전 사용자 저장 백업; 동일 SHA의 별도 보존본 미증명",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-primary-apply-selfcheck-6jc058o8",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-public-kit-0101-restore-zvtcsso9",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-recovered-oldcode-e2e-uer6m57z.private",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-recovery-apk-098-na4vx1xz",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음; 기존 설치/조립 스크립트·build-inputs.json의 고정 입력",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-sourcekit-restore-20261028-ld6ztsg5",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-startup-20261026-g9rnspm6",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음; 기존 설치/조립 스크립트·build-inputs.json의 고정 입력",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-startup-ab-full-20261026-r_vpkoku",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-startup-ab-lite-dist-20261026-_c1k3dsd",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-startup-clone-gyon4ee7.private",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-startup-clone-l7iycxc4.private",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-startup-compat-ayq46bq_",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-startup-compat-az0s_ith",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-startup-modules-098-x5y0ncl0",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-sync-recovery-20261026-1ftwxnfw",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-sync-recovery-compat-gnhz3aii",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-sync-recovery-compat-jkrhlt2k",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-sync-recovery-e2e-mdsyiebq.private",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-sync-recovery-modules-098-m0q9lojl",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음; 기존 설치/조립 스크립트·build-inputs.json의 고정 입력",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-sync-recovery-modules-098-mr_thkji",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-transfer-tool-author-20261028-1dpqh1e9",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-trash-author-20261028-5502ir52",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-upstream-runtime-081-zfafnve9",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-upstream-runtime-fetched-081-kw4xtvgl",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음; 기존 설치/조립 스크립트·build-inputs.json의 고정 입력",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-weekly-v084-20261028-ynl78xbl",
+    "reason": "WinError 5 접근 거부. 내부 파일·실자료·잠금·SHA를 검증할 수 없어 삭제하지 않음",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "risubard-worker-deps-20261029",
+    "reason": "보존 docker-context-author/node_modules 정션의 실제 대상. 13841링크 nofollow 대조에서 확인",
+    "deleteBy": "2026-11-09"
+  },
+  {
+    "name": "tmp",
+    "reason": "프로세스 tmp 공용 루트와 shutdown IPC token이 남음. fixture 하위 폴더만 별도 정리",
+    "deleteBy": "2026-11-09"
+  }
 ]

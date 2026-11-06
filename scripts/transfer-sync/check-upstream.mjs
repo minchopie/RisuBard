@@ -15,15 +15,15 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync, rmSync, mkdtempSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { workRoot, tempEnv } from '../fork-modules/workdir-root.cjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const manifest = JSON.parse(readFileSync(join(repo, 'docs/transfer-sync/manifest.json'), 'utf8'));
 const args = Object.fromEntries(process.argv.slice(3).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : 'true'] : null).filter(Boolean));
 const git = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'pipe'] });
 // pnpm/npx are .cmd shims on Windows (need a shell); git and node are real executables and get their arguments verbatim (paths with spaces).
-const run = (cwd, cmd, a, opts = {}) => { const shell = process.platform === 'win32' && !/^(git|node)$/.test(cmd) && cmd !== process.execPath; const argv = shell ? a.map(x => /[\s"]/.test(x) ? `"${x.replace(/"/g, '\\"')}"` : x) : a; const r = spawnSync(cmd, argv, { cwd, encoding: 'utf8', shell, maxBuffer: 1 << 28, ...opts }); return { ok: r.status === 0, status: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') + (r.error ? String(r.error) : '') }; };
+const run = (cwd, cmd, a, opts = {}) => { const shell = process.platform === 'win32' && !/^(git|node)$/.test(cmd) && cmd !== process.execPath; const argv = shell ? a.map(x => /[\s"]/.test(x) ? `"${x.replace(/"/g, '\\"')}"` : x) : a; const r = spawnSync(cmd, argv, { cwd, encoding: 'utf8', shell, maxBuffer: 1 << 28, env: tempEnv(), ...opts }); return { ok: r.status === 0, status: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') + (r.error ? String(r.error) : '') }; };
 const log = m => console.error('[transfer-sync] ' + m);
 
 /** Parse `git diff` output into files → hunks (header + lines), keeping text verbatim. */
@@ -109,7 +109,7 @@ function patch() {
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, pieces.join('\n') + '\n');
     // The generated patch must apply cleanly to the base it was generated from (self-consistency), checked in a scratch checkout.
-    const scratch = mkdtempSync(join(tmpdir(), 'transfer-sync-base-'));
+    const scratch = mkdtempSync(join(workRoot(), 'transfer-sync-base-'));
     try {
         git(scratch, 'init', '-q'); git(scratch, 'fetch', '-q', '--depth', '1', repo, manifest.upstream.base.sha); git(scratch, 'checkout', '-q', '--detach', 'FETCH_HEAD');
         const check = run(scratch, 'git', ['apply', '--check', out]); report.appliesToBase = check.ok; if (!check.ok) { report.ok = false; report.baseApplyError = check.out.slice(0, 2000); }
@@ -127,7 +127,7 @@ async function verify() {
     // Every step's FULL output is kept as a file (diagnostics); the JSON report carries a bounded excerpt plus the file name.
     // `raw` is the stage's complete output (written whole to <logs>/<step>.log); `summary` (optional) is the short excerpt for the JSON.
     const step = (name, ok, raw = '', summary = null) => { let file = null; if (logs) { file = join(logs, name.replace(/[^a-z0-9]+/gi, '-') + '.log'); writeFileSync(file, String(raw)); } const brief = String(summary ?? raw); report.steps.push({ name, ok, detail: brief.slice(0, 4000), rawBytes: String(raw).length, log: file }); if (!ok) report.ok = false; log(`${ok ? 'ok  ' : 'FAIL'} ${name}${brief && !ok ? ': ' + brief.split('\n')[0].slice(0, 160) : ''}`); return ok; };
-    const work = mkdtempSync(join(tmpdir(), 'transfer-sync-verify-'));
+    const work = mkdtempSync(join(workRoot(), 'transfer-sync-verify-'));
     try {
         git(work, 'init', '-q'); git(work, 'remote', 'add', 'origin', manifest.upstream.repo);
         let ref = target;

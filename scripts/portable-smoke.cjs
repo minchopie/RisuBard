@@ -2,8 +2,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 const { once } = require('node:events');
+const { workRoot } = require('./fork-modules/workdir-root.cjs');
 
 async function main() {
     const root = path.resolve(process.argv[2]);
@@ -11,7 +11,7 @@ async function main() {
     const { validatePackage, startAndVerify } = require(path.join(root, 'server/node/portable-update.cjs'));
     const version = validatePackage(root);
     if (version !== expected) throw new Error(`Expected ${expected}, got ${version}`);
-    const data = fs.mkdtempSync(path.join(os.tmpdir(), 'risubard-smoke-'));
+    const data = fs.mkdtempSync(path.join(workRoot(), 'risubard-smoke-'));
     try {
         const child = await startAndVerify(root, {
             ...process.env, PORT: '0', RISUBARD_DATA_ROOT: data,

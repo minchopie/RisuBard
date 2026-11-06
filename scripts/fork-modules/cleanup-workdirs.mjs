@@ -4,26 +4,36 @@ import { spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { workRoot } from './workdir-root.cjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '../..');
 const tempFamily = /^risubard-(?:stack-verify|stack-generate|graph|inquiry|runtime|shutdown|apk)-.+$/;
 const runtimeFamily = /^android-runtime-.+$/;
 const sdkFamily = /^risubard-(?:buildtools|module-sdk)-/;
+// Only synthetic fixtures/verification copies; author trees and real backups still need explicit review.
+const workFamily = /^(?:risuplay-test|risu-compat|transfer-sync-verify|bard-sync-svc-(?:phone|tablet)(?:-a)?|bard-sync-http-trash|bard-shutdown-recovery|risubard086-(?:extra-trash|trash-boundary)|primary-source-qa|codex-scratch)-.+$/;
 const privateName = name => name.endsWith('.private');
 export const defaultKeepFile = join(here, 'workdir-keep.json');
 
 // Report paths are retained even when they point inside a workdir, or use Windows separators on another OS.
-export function readKeepNames({ keepFile = defaultKeepFile, outputRoots = [resolve(repo, '../../output'), join(repo, 'output')] } = {}) {
+export function readKeepNames({ keepFile = defaultKeepFile, outputRoots = [resolve(repo, '../../output'), join(repo, 'output')], now = Date.now() } = {}) {
     const names = new Map();
     const add = (value, reason) => {
         for (const part of value.split(/[\\/]/)) {
-            if (tempFamily.test(part) || runtimeFamily.test(part) || sdkFamily.test(part)) names.set(part.toLowerCase(), reason);
+            if (tempFamily.test(part) || runtimeFamily.test(part) || sdkFamily.test(part) || workFamily.test(part) || names.has(part.toLowerCase())) names.set(part.toLowerCase(), reason);
         }
     };
     const keep = JSON.parse(readFileSync(keepFile, 'utf8'));
-    if (!Array.isArray(keep) || keep.some(value => typeof value !== 'string' || !value.trim())) throw new Error('Invalid workdir keep-list');
-    for (const value of keep) add(value, 'keep-list');
+    if (!Array.isArray(keep)) throw new Error('Invalid workdir keep-list');
+    const applyKeep = () => { for (const entry of keep) {
+        if (!entry || typeof entry.name !== 'string' || !entry.name.trim() || /[\\/]/.test(entry.name)
+            || typeof entry.reason !== 'string' || !entry.reason.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(entry.deleteBy)
+            || !Number.isFinite(Date.parse(entry.deleteBy)) || new Date(entry.deleteBy).toISOString().slice(0, 10) !== entry.deleteBy) throw new Error('Invalid workdir keep-list: name, reason and deleteBy required');
+        // Expiry requires a new decision; it never grants permission to delete a backup or live input.
+        names.set(entry.name.toLowerCase(), Date.parse(entry.deleteBy + 'T23:59:59+09:00') < now ? 'keep-expired-review' : 'keep-list');
+    } };
+    applyKeep();
     const values = value => {
         if (typeof value === 'string') add(value, 'report-reference');
         else if (value && typeof value === 'object') for (const child of Object.values(value)) values(child);
@@ -37,7 +47,7 @@ export function readKeepNames({ keepFile = defaultKeepFile, outputRoots = [resol
         }
     };
     for (const root of outputRoots) if (existsSync(root) && !lstatSync(root).isSymbolicLink()) walk(root);
-    for (const value of keep) add(value, 'keep-list');
+    applyKeep();
     return names;
 }
 
@@ -82,25 +92,41 @@ export function finishWorkdir(work, { failed = false, keepWorkdir = false, keepN
     if (result.status !== 'removed') log(`[workdir] kept (${result.reason}): ${work}; ${result.detail ?? ''}`);
 }
 
-export function cleanupWorkdirs({ apply = false, maxAgeHours = 168, now = Date.now(),
-    tempRoot = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Temp') : tmpdir(),
-    runtimeRoot = join(repo, 'tmp'), sdkPath = join(homedir(), '.codex/risubard-sdk'),
-    keepNames = readKeepNames() } = {}) {
+// Default scan: the current work root and the legacy user Temp (older tooling and unmoved workdirs); one root on other OSes.
+// An explicit tempRoot/runtimeRoot scans only that root.
+const uniqueRoots = roots => [...new Map(roots.map(root => [process.platform === 'win32' ? resolve(root).toLowerCase() : resolve(root), root])).values()];
+export function cleanupWorkdirs({ apply = false, maxAgeHours = 168, now = Date.now(), tempRoot, runtimeRoot, workdirRoot,
+    sdkPath = join(homedir(), '.codex/risubard-sdk'), keepNames = readKeepNames() } = {}) {
     if (!Number.isFinite(maxAgeHours) || maxAgeHours < 0) throw new Error('--max-age-hours must be a nonnegative number');
+    const tempRoots = tempRoot ? [tempRoot] : uniqueRoots([workRoot(), process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Temp') : tmpdir()]);
+    const runtimeRoots = runtimeRoot ? [runtimeRoot] : uniqueRoots([workRoot({ fallback: join(repo, 'tmp') }), join(repo, 'tmp')]);
     const results = [];
+    const seen = new Set();
     const inspect = (path, inScope) => {
+        const key = process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+        if (seen.has(key)) return;
+        seen.add(key);
         try {
             const stat = lstatSync(path), name = basename(path);
             const kept = keepNames.get(name.toLowerCase());
-            const reason = stat.isSymbolicLink() ? 'reparse' : !inScope || privateName(name) ? 'out-of-scope' : kept ? kept
+            const reason = stat.isSymbolicLink() ? 'reparse' : kept ? kept : !inScope || privateName(name) ? 'out-of-scope'
                 : !stat.isDirectory() ? 'not-directory' : now - Math.max(stat.birthtimeMs, stat.mtimeMs) < maxAgeHours * 3600_000 ? 'too-young' : null;
             results.push(reason ? { path, status: 'skipped', reason, bytes: 0, removedBytes: 0 } : removeWorkdir(path, { apply }));
         } catch (error) { results.push({ path, status: 'skipped', reason: 'inaccessible', detail: error.message, bytes: 0, removedBytes: 0 }); }
     };
-    for (const [root, family] of [[tempRoot, tempFamily], [runtimeRoot, runtimeFamily]]) {
+    const workRoots = workdirRoot ? [workdirRoot] : tempRoot || runtimeRoot ? [] : [workRoot()];
+    for (const root of workRoots.flatMap(root => [root, join(root, 'tmp')])) {
+        if (!existsSync(root)) continue;
+        if (lstatSync(root).isSymbolicLink()) { inspect(root, false); continue; }
+        for (const name of readdirSync(root).sort()) {
+            if (name === 'tmp' && workRoots.includes(root)) continue;
+            inspect(join(root, name), tempFamily.test(name) || runtimeFamily.test(name) || workFamily.test(name));
+        }
+    }
+    for (const [root, family, sdk] of [...tempRoots.map(root => [root, tempFamily, true]), ...runtimeRoots.map(root => [root, runtimeFamily, false])]) {
         if (!existsSync(root)) continue;
         if (lstatSync(root).isSymbolicLink()) { results.push({ path: root, status: 'skipped', reason: 'reparse', bytes: 0, removedBytes: 0 }); continue; }
-        for (const name of readdirSync(root).sort()) if (family.test(name) || (root === tempRoot && sdkFamily.test(name))) inspect(join(root, name), family.test(name));
+        for (const name of readdirSync(root).sort()) if (family.test(name) || (sdk && sdkFamily.test(name))) inspect(join(root, name), family.test(name));
     }
     if (sdkPath && existsSync(sdkPath)) inspect(sdkPath, false);
     const candidates = results.filter(x => x.status !== 'skipped');

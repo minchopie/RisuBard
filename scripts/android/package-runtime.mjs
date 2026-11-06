@@ -4,9 +4,11 @@ import { dirname, resolve, join, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractNodeBinary, hashFile } from './verify-node.mjs';
 import { writeRuntimeArchive, verifyRuntimeArchive } from './runtime-archive.mjs';
+import { workRoot } from '../fork-modules/workdir-root.cjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const stage = await fs.mkdtemp(join(root, 'tmp/android-runtime-'));
+// Only the stage moves to the work root (repo tmp/ stays the default off Windows); the tmp/android-node archive cache stays in the repo.
+const stage = await fs.mkdtemp(join(workRoot({ fallback: join(root, 'tmp') }), 'android-runtime-'));
 const assets = join(root, 'android-app/app/src/main/assets');
 const require = createRequire(join(root, 'package.json'));
 const prototype = process.argv.includes('--allow-4k-prototype');

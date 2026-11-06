@@ -27,6 +27,7 @@
       "docs/transfer-sync"
     ],
     "files": [
+      "scripts/fork-modules/workdir-root.cjs",
       "server/node/nas-route.cjs",
       "server/node/nas-sync-core.cjs",
       "server/node/nas-sync-manifest.cjs",

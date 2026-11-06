@@ -1,5 +1,8 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte"
 import { defineConfig } from 'vitest/config'
+import { applyProcessTemp } from './scripts/fork-modules/workdir-root.cjs'
+
+applyProcessTemp()
 
 export default defineConfig({
   plugins: [

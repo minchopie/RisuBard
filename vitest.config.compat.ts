@@ -1,4 +1,7 @@
 import { defineConfig } from 'vitest/config'
+import { applyProcessTemp } from './scripts/fork-modules/workdir-root.cjs'
+
+applyProcessTemp()
 
 export default defineConfig({
   test: {

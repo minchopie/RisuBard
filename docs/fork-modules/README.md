@@ -10,7 +10,10 @@ node scripts/fork-modules/module-stack.mjs verify --target base --full --logs tm
 node scripts/fork-modules/module-stack.mjs verify --target v0.9.81 --full --logs tmp/fork-modules-v081
 node scripts/fork-modules/module-stack.mjs verify --target v0.9.84 --full --logs tmp/fork-modules-v084
 node scripts/fork-modules/module-stack.mjs verify --target v0.9.86 --full --logs tmp/fork-modules-v086
+node scripts/fork-modules/module-stack.mjs verify --target v0.9.89 --full --logs tmp/fork-modules-v089
 ```
+
+v0.9.89(`b872b7f5…`) 어댑터는 `compat/v0.9.89/`에 있다. 충돌한 transfer-integration·model-compat·distribution·host-bridges만 새로 두고 나머지는 .86 선택을 그대로 쓴다. 원작이 새로 추가한 `patchnote/0.9.87~0.9.89.md`는 payloadTargets로 포크 판본 문서를 분리 보존한다. 작업본·QA child temp·Vitest config는 `scripts/fork-modules/workdir-root.cjs`(tooling)의 작업 루트 `C:/_risubard_work`(`RISUBARD_WORK_ROOT`로 재지정)를 쓴다. 상세는 [WEEKLY-20261104](WEEKLY-20261104.md).
 
 v0.9.86(`5c25a31f…`) 어댑터는 `compat/v0.9.86/`에 있다. 충돌한 transfer-integration·model-compat·distribution·host-bridges와 storage-recovery만 새로 두고 나머지는 .84 어댑터나 기준 패치를 그대로 쓴다. storage-recovery는 원작 `trash-cleanup.cjs`/`.test.ts`를 targetHosts(원작 SHA)로 소유해 기본 자동삭제를 끄고(`RISUBARD_TRASH_RETENTION_DAYS` 명시 시만 정리) transaction-recovery·shutdown-recovery를 보존한다. model-compat는 기준판에 이미 있는 Wiki 프리셋·문체 7경로를 ordinary host로 소유하며 기준판 내용은 그대로이고 .86 어댑터만 기존 저장 목록·선택·문체 값을 보존한다.
 

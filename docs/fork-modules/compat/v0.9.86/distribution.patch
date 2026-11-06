@@ -76,7 +76,7 @@ index f62d88a..216d141 100644
 +included in the packaged runtime. Model weights are selected by the user and
 +are not included in the APK; their own licenses apply.
 diff --git a/package.json b/package.json
-index 5ba1207..c07e6e0 100644
+index 5ba1207..933a691 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,7 +1,7 @@
@@ -181,10 +181,25 @@ index 0bdc947..9a1cd57 100644
 +
    zimmerframe@1.1.4: {}
 diff --git a/scripts/portable-smoke.cjs b/scripts/portable-smoke.cjs
-index 130433e..f5e7b8a 100644
+index 130433e..660f1a7 100644
 --- a/scripts/portable-smoke.cjs
 +++ b/scripts/portable-smoke.cjs
-@@ -15,7 +15,7 @@ async function main() {
+@@ -2,8 +2,8 @@
+ 
+ const fs = require('node:fs');
+ const path = require('node:path');
+-const os = require('node:os');
+ const { once } = require('node:events');
++const { workRoot } = require('./fork-modules/workdir-root.cjs');
+ 
+ async function main() {
+     const root = path.resolve(process.argv[2]);
+@@ -11,11 +11,11 @@ async function main() {
+     const { validatePackage, startAndVerify } = require(path.join(root, 'server/node/portable-update.cjs'));
+     const version = validatePackage(root);
+     if (version !== expected) throw new Error(`Expected ${expected}, got ${version}`);
+-    const data = fs.mkdtempSync(path.join(os.tmpdir(), 'risubard-smoke-'));
++    const data = fs.mkdtempSync(path.join(workRoot(), 'risubard-smoke-'));
      try {
          const child = await startAndVerify(root, {
              ...process.env, PORT: '0', RISUBARD_DATA_ROOT: data,

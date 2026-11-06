@@ -14,9 +14,10 @@ function fixture(t) {
     mkdirSync(repo, { recursive: true }); mkdirSync(temp);
     const save = (path, text) => { mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), text); };
     const copy = path => save(path, readFileSync(join(source, path)));
+    copy('scripts/fork-modules/workdir-root.cjs');
     const run = (script, args = [], env = {}) => spawnSync(process.execPath, [join(repo, script), ...args], {
         cwd: repo, encoding: 'utf8', windowsHide: true,
-        env: { ...process.env, TMP: temp, TEMP: temp, RISUBARD_KEEP_WORKDIR: '', ...env },
+        env: { ...process.env, TMP: temp, TEMP: temp, RISUBARD_WORK_ROOT: temp, RISUBARD_KEEP_WORKDIR: '', ...env },
     });
     return { root, repo, temp, save, copy, run };
 }
@@ -37,7 +38,7 @@ export function execFileSync(command, args) {
     const success = f.run(script, ['generate']); assert.equal(success.status, 0, success.stderr);
     const result = JSON.parse(success.stdout);
     assert.deepEqual(Object.keys(result).sort(), ['files', 'modules', 'result', 'targetOnlyHosts', 'work']); // target-only hosts are reported separately from inputs
-    assert.equal(result.result, 'PASS'); assert.equal(existsSync(result.work), false);
+    assert.equal(result.result, 'PASS'); assert.equal(dirname(result.work), f.temp); assert.equal(existsSync(result.work), false);
     assert.equal(JSON.parse(readFileSync(join(f.repo, 'docs/fork-modules/manifest.json'))).schema, 1);
     for (const [args, env] of [[['--keep-workdir'], {}], [[], { RISUBARD_KEEP_WORKDIR: '1' }]]) {
         const kept = f.run(script, ['generate', ...args], env); assert.equal(kept.status, 0, kept.stderr);
@@ -48,11 +49,11 @@ export function execFileSync(command, args) {
     const verify = f.run(script, ['verify', '--logs', 'output/check']); assert.equal(verify.status, 0, verify.stderr);
     const report = JSON.parse(readFileSync(join(f.repo, 'output/check/report.json')));
     assert.deepEqual(report, JSON.parse(verify.stdout)); assert.equal(report.result, 'STRUCTURAL_PASS');
-    assert.ok(existsSync(report.work)); assert.match(verify.stderr, /kept \(report-reference\)/);
+    assert.equal(dirname(report.work), f.temp); assert.ok(existsSync(report.work)); assert.match(verify.stderr, /kept \(report-reference\)/);
     f.save('transfer.patch', 'changed');
     const failedVerify = f.run(script, ['verify', '--logs', 'output/failed']); assert.equal(failedVerify.status, 1);
     const failedReport = JSON.parse(failedVerify.stdout); assert.equal(failedReport.result, 'FAIL');
-    assert.ok(existsSync(failedReport.work)); assert.match(failedVerify.stderr, /kept \(failed\)/);
+    assert.equal(dirname(failedReport.work), f.temp); assert.ok(existsSync(failedReport.work)); assert.match(failedVerify.stderr, /kept \(failed\)/);
 });
 
 test('Android packaging removes its stage after ZIP verification and retains a corrupted ZIP stage', t => {
@@ -74,11 +75,12 @@ export async function writeRuntimeArchive(source, destination) { await write(sou
     }
     mkdirSync(join(f.repo, 'tmp'));
     const success = f.run(script); assert.equal(success.status, 0, success.stderr);
-    assert.deepEqual(readdirSync(join(f.repo, 'tmp')), []);
+    assert.deepEqual(readdirSync(join(f.repo, 'tmp')), []); assert.deepEqual(readdirSync(f.temp), []);
     assert.ok(existsSync(join(f.repo, 'android-app/app/src/main/assets/runtime.zip')));
     const failure = f.run(script, [], { CORRUPT_ZIP: '1' });
     assert.equal(failure.status, 1); assert.match(failure.stderr, /kept \(failed\): .*android-runtime-/);
-    assert.equal(readdirSync(join(f.repo, 'tmp')).filter(n => n.startsWith('android-runtime-')).length, 1);
+    assert.equal(readdirSync(f.temp).filter(n => n.startsWith('android-runtime-')).length, 1);
+    assert.deepEqual(readdirSync(join(f.repo, 'tmp')), []);
 });
 
 test('APK verification cleans scratch even when aapt fails before ZIP inspection', t => {

@@ -10,7 +10,6 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32 } from 'node:zlib';
@@ -18,6 +17,7 @@ import { ALIAS, PASS_ENV, certificateSummary, keystorePath, loadStorePassword } 
 import { inspectElf } from './verify-node.mjs';
 import { parseBadging, parseSignerOutput } from './apk-report.mjs';
 import { runTool } from './windows-exec.mjs';
+import { workRoot } from '../fork-modules/workdir-root.cjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const yauzl = createRequire(join(root, 'package.json'))('yauzl');
@@ -60,9 +60,9 @@ if (!verifyOnly) {
 
 // Verification — every check recorded, any failure fails the run.
 const report = { version, apk: `RisuBard-${version}.apk`, sha256: sha256(readFileSync(apk)), checks: {} };
-const scratch = mkdtempSync(join(tmpdir(), 'risubard-apk-'));
+const scratch = mkdtempSync(join(workRoot(), 'risubard-apk-'));
 try {
-    // aapt cannot open a non-ASCII workspace path ("Illegal byte sequence"); it reads an identical copy in the ASCII temp dir.
+    // aapt cannot open a non-ASCII workspace path ("Illegal byte sequence"); it reads an identical copy in the ASCII work root.
     const asciiApk = join(scratch, 'app.apk'); copyFileSync(apk, asciiApk);
     report.checks.asciiCopy = { sha256Equal: sha256(readFileSync(asciiApk)) === report.sha256 };
     if (!report.checks.asciiCopy.sha256Equal) throw new Error('Temporary APK copy differs from the output APK');

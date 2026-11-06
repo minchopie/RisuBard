@@ -632,3 +632,40 @@ index 45965e4..1b788de 100644
      }
  
      /** Persona binding and last message only, for the chat list hover card. */
+diff --git a/vitest.config.compat.ts b/vitest.config.compat.ts
+index 2cc901b..9ad1ff2 100644
+--- a/vitest.config.compat.ts
++++ b/vitest.config.compat.ts
+@@ -1,4 +1,7 @@
+ import { defineConfig } from 'vitest/config'
++import { applyProcessTemp } from './scripts/fork-modules/workdir-root.cjs'
++
++applyProcessTemp()
+ 
+ export default defineConfig({
+   test: {
+diff --git a/vitest.config.server.ts b/vitest.config.server.ts
+index d5b917f..df00f1d 100644
+--- a/vitest.config.server.ts
++++ b/vitest.config.server.ts
+@@ -1,4 +1,7 @@
+ import { defineConfig } from 'vitest/config'
++import { applyProcessTemp } from './scripts/fork-modules/workdir-root.cjs'
++
++applyProcessTemp()
+ 
+ // Server-side (.cjs) unit tests. Node environment — these exercise native
+ // Node modules and pure data-layer logic, no DOM. Kept separate
+diff --git a/vitest.config.ts b/vitest.config.ts
+index eb540fc..d877ccb 100644
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -1,5 +1,8 @@
+ import { svelte } from "@sveltejs/vite-plugin-svelte"
+ import { defineConfig } from 'vitest/config'
++import { applyProcessTemp } from './scripts/fork-modules/workdir-root.cjs'
++
++applyProcessTemp()
+ 
+ export default defineConfig({
+   plugins: [
