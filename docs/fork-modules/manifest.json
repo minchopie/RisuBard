@@ -1491,8 +1491,8 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "19bcf32868d9c87398f2bd8bf469afaacb7027e2c4b1f4f83aa3c9c3f37ce943",
-      "contentSha256": "19bcf32868d9c87398f2bd8bf469afaacb7027e2c4b1f4f83aa3c9c3f37ce943",
+      "sha256": "dc44d46931ece8e6566653b71a31bc4ffa59a614f0c790cde749069ac59f8225",
+      "contentSha256": "dc44d46931ece8e6566653b71a31bc4ffa59a614f0c790cde749069ac59f8225",
       "bytes": 42066
     },
     {
@@ -4211,9 +4211,9 @@
       "path": "src/ts/transfer-sync/downloadRouting.test.ts",
       "module": "file-export",
       "kind": "files",
-      "sha256": "d53712013ba4a543a3d29c54cb6ff6c73397f06d2702d3ad43777569c78aa3c1",
-      "contentSha256": "d53712013ba4a543a3d29c54cb6ff6c73397f06d2702d3ad43777569c78aa3c1",
-      "bytes": 6251
+      "sha256": "66c6992edf8af9187317ef436b0ca8084a2d57f6d5a6c16e64f4bf3e482e4389",
+      "contentSha256": "66c6992edf8af9187317ef436b0ca8084a2d57f6d5a6c16e64f4bf3e482e4389",
+      "bytes": 6521
     },
     {
       "path": "docs/transfer-sync/ANDROID-FILE-EXPORT-20261024.md",
@@ -4275,25 +4275,25 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "ad4a4866a6628b6021e344c4d87b27452a6e22e94eb82c29cf6c985db7feee2e",
-      "contentSha256": "ad4a4866a6628b6021e344c4d87b27452a6e22e94eb82c29cf6c985db7feee2e",
-      "bytes": 12297
+      "sha256": "adf5b583852ca474134d2bfbe377ede8bb82208c6539c9d6ef5ff020d3266f80",
+      "contentSha256": "adf5b583852ca474134d2bfbe377ede8bb82208c6539c9d6ef5ff020d3266f80",
+      "bytes": 12933
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "6e6a92c34be545a8e68097d500e7ae5e4dcca200c3b5388a6cc887f0c38316d9",
-      "contentSha256": "6e6a92c34be545a8e68097d500e7ae5e4dcca200c3b5388a6cc887f0c38316d9",
-      "bytes": 3603
+      "sha256": "acfb9cf700ecfdb3d4407ecfaffc2b8af4b9eb995388d94068804d00f2d9f590",
+      "contentSha256": "acfb9cf700ecfdb3d4407ecfaffc2b8af4b9eb995388d94068804d00f2d9f590",
+      "bytes": 5799
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "de1e945fce67ddd34f893864a7ec49181431a3e3fe6d35f5f596ee37f0c570a3",
-      "contentSha256": "de1e945fce67ddd34f893864a7ec49181431a3e3fe6d35f5f596ee37f0c570a3",
-      "bytes": 7085
+      "sha256": "d5dd8c3057a5bf74a02032e44e10797bfd312922bdce7648d944d539925338ce",
+      "contentSha256": "d5dd8c3057a5bf74a02032e44e10797bfd312922bdce7648d944d539925338ce",
+      "bytes": 7103
     },
     {
       "path": "docs/content-updates/README.md",

@@ -3,20 +3,17 @@
 // bot (upstream "update an installed bot" dialog, chats kept, a backup copy in the trash). A persona with the same name
 // is updated in place (same id, so chats bound to it keep it); otherwise it is added.
 import { get, writable } from 'svelte/store'
-import { v4 } from 'uuid'
 import { unzipSync, strFromU8 } from 'fflate'
-import { getDatabase, saveImage, type RisuPersona } from '../storage/database.svelte'
-import { checkCharOrder } from '../globalApi.svelte'
-import { importCharacterProcess } from '../characterCards'
-import { ImportCancelled } from '../storage/importTransaction'
-import { reencodeImage } from '../process/files/inlays'
-import { PngChunk } from '../pngChunk'
-import { alertConfirmMulti, alertError, notifySuccess } from '../alert'
-import { alertStore, loadedStore } from '../stores.svelte'
-import { isAnyGenerating } from '../process/generationState'
-import { transferBusy } from '../transfer-sync/transferState'
-import { transferRequest } from '../transfer-sync/playTransfer'
+import type { RisuPersona } from '../storage/database.svelte'
+// Same module paths as the settings screen (TransferPanel), so they are one instance there and in its tests.
+import { transferBusy, transferRequest } from '../playTransfer'
 import { isNodeServer } from '../platform'
+// The app's database, import and dialog modules are loaded when first needed, so the settings panel (and its tests)
+// does not pull the whole app into the transfer screen.
+const app = () => Promise.all([
+    import('../storage/database.svelte'), import('../globalApi.svelte'), import('../characterCards'), import('../storage/importTransaction'),
+    import('../process/files/inlays'), import('../alert'), import('../stores.svelte'), import('../process/generationState'), import('uuid'),
+]).then(([database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid]) => ({ database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid }))
 
 export type ContentKind = 'character' | 'persona'
 export interface ContentItem {
@@ -61,6 +58,7 @@ export const itemLabel = (item: Pick<ContentItem, 'title' | 'version'>) =>
 export interface PersonaPayload { name: string; personaPrompt: string; note?: string }
 
 export async function readPngText(bytes: Uint8Array, keys: string[]): Promise<Record<string, string>> {
+    const { PngChunk } = await import('../pngChunk')
     const found: Record<string, string> = {}
     for await (const chunk of PngChunk.readGenerator(bytes)) {
         if (chunk && typeof (chunk as any).key === 'string' && keys.includes((chunk as any).key) && found[(chunk as any).key] === undefined) {
@@ -128,8 +126,9 @@ async function applyPersona(bytes: Uint8Array): Promise<void> {
     const text = await readPngText(bytes, ['persona'])
     if (!text.persona) throw new Error('페르소나 정보가 없는 PNG예요.')
     const data = readPersonaJson(text.persona)
-    const icon = await saveImage(await reencodeImage(bytes))
-    const db = getDatabase()
+    const { database, inlays, uuid } = await app()
+    const icon = await database.saveImage(await inlays.reencodeImage(bytes))
+    const db = database.getDatabase()
     const same = db.personas.filter(persona => persona?.name === data.name)
     if (same.length) {
         // Same id, so chats and bots bound to this persona keep using it.
@@ -139,25 +138,26 @@ async function applyPersona(bytes: Uint8Array): Promise<void> {
             persona.icon = icon
         }
     } else {
-        const added: RisuPersona = { name: data.name, icon, personaPrompt: data.personaPrompt, note: data.note, id: v4() }
+        const added: RisuPersona = { name: data.name, icon, personaPrompt: data.personaPrompt, note: data.note, id: uuid.v4() }
         db.personas.push(added)
     }
 }
 
 /** Imports one published item; resolves to the decision to record (declined when the user cancelled the import). */
 export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<ContentDecision> {
+    const { cards, globalApi, importTransaction, alert } = await app()
     if (item.kind === 'persona') {
         await applyPersona(bytes)
-        notifySuccess(`페르소나 「${item.title}」를 가져왔어요.`)
+        alert.notifySuccess(`페르소나 「${item.title}」를 가져왔어요.`)
         return 'applied'
     }
     try {
-        const result = await importCharacterProcess({ name: item.fileName, data: bytes })
-        checkCharOrder()
+        const result = await cards.importCharacterProcess({ name: item.fileName, data: bytes })
+        globalApi.checkCharOrder()
         // runImport answers null when the user cancelled (in the update dialog or the install choice).
         return result === null ? 'declined' : 'applied'
     } catch (error) {
-        if (error instanceof ImportCancelled) return 'declined'
+        if (error instanceof importTransaction.ImportCancelled) return 'declined'
         throw error
     }
 }
@@ -168,22 +168,24 @@ let running = false
 let lastCheck = 0
 let started = false
 
-function busy(): boolean {
-    return !get(loadedStore) || get(transferBusy) || get(isAnyGenerating) || get(alertStore).type !== 'none'
+async function busy(): Promise<boolean> {
+    const { stores, generation } = await app()
+    return !get(stores.loadedStore) || get(transferBusy) || get(generation.isAnyGenerating) || get(stores.alertStore).type !== 'none'
 }
 
 /** Asks about each published item this device has not answered yet. `force` ignores the interval (the settings button). */
 export async function checkContentUpdates(force = false): Promise<ContentOverview | null> {
     if (running) return null
     if (!force && Date.now() - lastCheck < CHECK_INTERVAL) return null
-    if (busy()) return null
     running = true
+    if (await busy()) { running = false; return null }
     lastCheck = Date.now()
     try {
+        const { alert } = await app()
         const overview = await fetchOverview()
         for (const item of overview.pending) {
-            if (busy()) break
-            const choice = await alertConfirmMulti(
+            if (await busy()) break
+            const choice = await alert.alertConfirmMulti(
                 `새 ${kindLabel(item.kind)}가 올라왔어요. 지금 가져올까요?`,
                 ['네, 가져오기', '아니오'],
                 `${itemLabel(item)}\n${(item.bytes / 1_000_000).toFixed(1)} MB · ${new Date(item.publishedAt).toLocaleString()}${item.publishedBy ? ` · ${item.publishedBy}` : ''}`
@@ -197,7 +199,7 @@ export async function checkContentUpdates(force = false): Promise<ContentOvervie
                 await recordDecision(item, await applyItem(item, bytes))
             } catch (error) {
                 contentUpdateStatus.set('')
-                alertError(`「${itemLabel(item)}」를 가져오지 못했어요. 다음에 다시 물어볼게요.\n${error instanceof Error ? error.message : String(error)}`)
+                alert.alertError(`「${itemLabel(item)}」를 가져오지 못했어요. 다음에 다시 물어볼게요.\n${error instanceof Error ? error.message : String(error)}`)
                 break
             }
         }

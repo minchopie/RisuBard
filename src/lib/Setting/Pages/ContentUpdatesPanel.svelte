@@ -2,7 +2,6 @@
     // Content updates: publish a character card or persona to the NAS once; other devices ask whether to import it.
     import { onMount } from 'svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
-    import { selectSingleFile } from 'src/ts/util'
     import {
         fetchOverview, describeFile, baseName, publishContent, checkContentUpdates, recordDecision, itemLabel, contentUpdateStatus,
         type ContentItem, type ContentKind,
@@ -32,6 +31,7 @@
     }
     function pick() {
         return run(async () => {
+            const { selectSingleFile } = await import('src/ts/util')
             const file = await selectSingleFile(['charx', 'png', 'json'])
             if (!file) return
             const described = await describeFile(file.name, file.data)

@@ -80,6 +80,8 @@ test('chat-menu JSON bytes can be imported into a different character without ch
         normalizeChat: (value: unknown) => value, rebindPainterChatScope: vi.fn(), forkMemoryWiki: fork,
         forageStorage: { createAuth: vi.fn() }, createUniqueDisplayName: (name: string) => name,
         requestImmediateSave: save, completeMemoryWikiFork: vi.fn(),
+        // upstream 0.9.90: importChat sends only the new chats (trackChatForSave) instead of a full write.
+        trackChatForSave: vi.fn(),
     };
     const exports: any = {};
     new Function('exports', ...Object.keys(deps), code)(exports, ...Object.values(deps));
@@ -91,6 +93,7 @@ test('chat-menu JSON bytes can be imported into a different character without ch
     expect(errors).not.toHaveBeenCalled();
     expect(db.characters[0].chats).toEqual([chat]);
     expect(db.characters[1].chats).toEqual([{ ...chat, id: 'new-chat' }]);
-    expect(save).toHaveBeenCalledWith({ forceFullWrite: true, rejectOnFailure: true });
+    // upstream 0.9.89 saves with forceFullWrite; 0.9.90 tracks the new chats and saves without it. Both reject on failure.
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ rejectOnFailure: true }));
     expect(fork).toHaveBeenCalledWith(expect.objectContaining({ characterId: 'source', destinationCharacterId: 'target', sourceChatId: 'old-chat', destinationChatId: 'new-chat' }));
 });
