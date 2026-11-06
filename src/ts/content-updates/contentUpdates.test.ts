@@ -2,18 +2,19 @@ import { describe, expect, test, vi } from 'vitest'
 import { zipSync, strToU8 } from 'fflate'
 import { createHash } from 'node:crypto'
 
-vi.mock('../storage/database.svelte', () => ({ getDatabase: vi.fn(), saveImage: vi.fn() }))
+vi.mock('../storage/database.svelte', () => ({ getDatabase: vi.fn(), saveImage: vi.fn(async () => 'new-icon') }))
 vi.mock('../globalApi.svelte', () => ({ checkCharOrder: vi.fn() }))
 vi.mock('../characterCards', () => ({ importCharacterProcess: vi.fn() }))
-vi.mock('../process/files/inlays', () => ({ reencodeImage: vi.fn() }))
+vi.mock('../process/files/inlays', () => ({ reencodeImage: vi.fn(async (b: Uint8Array) => b) }))
 vi.mock('../alert', () => ({ alertConfirmMulti: vi.fn(), alertError: vi.fn(), notifySuccess: vi.fn() }))
 vi.mock('../playTransfer', async () => { const { writable } = await import('svelte/store'); return { transferRequest: vi.fn(), transferBusy: writable(false) } })
 vi.mock('../platform', () => ({ isNodeServer: false }))
 vi.mock('../stores.svelte', async () => { const { writable } = await import('svelte/store'); return { alertStore: writable({ type: 'none' }), loadedStore: writable(true) } })
 vi.mock('../process/generationState', async () => { const { writable } = await import('svelte/store'); return { isAnyGenerating: writable(false) } })
 vi.mock('../storage/importTransaction', () => ({ ImportCancelled: class ImportCancelled extends Error {} }))
-vi.mock('../pngChunk', () => ({ PngChunk: { readGenerator: async function* () {} } }))
+vi.mock('../pngChunk', () => ({ PngChunk: { readGenerator: vi.fn(async function* () {}) } }))
 vi.mock('uuid', () => ({ v4: () => 'id' }))
+vi.mock('../importSession', async () => { const { writable } = await import('svelte/store'); return { importSession: writable({ phase: 'idle' }) } })
 
 const mod = await import('./contentUpdates')
 
@@ -69,5 +70,56 @@ describe('content updates (client helpers)', () => {
         expect(alertError).toHaveBeenCalledTimes(1)
         // within the interval a non-forced check does nothing
         expect(await mod.checkContentUpdates()).toBeNull()
+    })
+
+    test('a persona with the same name is updated in place; when it is the selected one, the active fields follow', async () => {
+        const { getDatabase } = await import('../storage/database.svelte') as any
+        const { PngChunk } = await import('../pngChunk') as any
+        const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify({ name: '함건희', personaPrompt: 'new prompt', note: 'new note' }))))
+        PngChunk.readGenerator.mockImplementation(async function* () { yield { key: 'persona', value: b64 } })
+        const db: any = { personas: [{ name: '다른 사람', id: 'x', personaPrompt: 'p', icon: 'i' }, { name: '함건희', id: 'keep', personaPrompt: 'old', note: 'old', icon: 'old-icon' }], selectedPersona: 1, personaPrompt: 'old', userNote: 'old', userIcon: 'old-icon', username: '함건희' }
+        getDatabase.mockReturnValue(db)
+        const item: any = { key: 'persona:함건희', kind: 'persona', title: '함건희', version: '', fileName: 'p.png' }
+        expect(await mod.applyItem(item, new Uint8Array([1]))).toBe('applied')
+        expect(db.personas[1]).toEqual({ name: '함건희', id: 'keep', personaPrompt: 'new prompt', note: 'new note', icon: 'new-icon' })
+        expect([db.personaPrompt, db.userNote, db.userIcon, db.username]).toEqual(['new prompt', 'new note', 'new-icon', '함건희'])
+        db.selectedPersona = 0; db.personaPrompt = 'p'
+        await mod.applyItem(item, new Uint8Array([1]))
+        expect(db.personaPrompt).toBe('p')
+        db.personas = []
+        await mod.applyItem(item, new Uint8Array([1]))
+        expect(db.personas).toEqual([{ name: '함건희', icon: 'new-icon', personaPrompt: 'new prompt', note: 'new note', id: 'id' }])
+    })
+
+    test('an import that ended in rollback recovery is an error, not a "no"', async () => {
+        const { importCharacterProcess } = await import('../characterCards') as any
+        const { importSession } = await import('../importSession') as any
+        importCharacterProcess.mockImplementationOnce(async () => { importSession.set({ phase: 'recovery' }); return null })
+        await expect(mod.applyItem({ key: 'character:a', kind: 'character', fileName: 'a.charx' } as any, new Uint8Array([1]))).rejects.toThrow(/복구/)
+        importSession.set({ phase: 'idle' })
+        importCharacterProcess.mockResolvedValueOnce(null)
+        expect(await mod.applyItem({ key: 'character:a', kind: 'character', fileName: 'a.charx' } as any, new Uint8Array([1]))).toBe('declined')
+    })
+
+    test('closing the dialog (-1) or a pending import recovery leaves the item unanswered', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { alertConfirmMulti } = await import('../alert') as any
+        const { importSession } = await import('../importSession') as any
+        const pending = { key: 'character:z', kind: 'character', title: 'z', version: '1', file: 'f', fileName: 'z.charx', sha256: 's', bytes: 1, publishedAt: new Date().toISOString(), publishedBy: '', decision: '' }
+        const calls: string[] = []
+        transferRequest.mockImplementation(async (path: string) => {
+            calls.push(path)
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [], pending: [pending] }))
+            return new Response('{}')
+        })
+        alertConfirmMulti.mockReset()
+        importSession.set({ phase: 'recovery' })
+        expect(await mod.checkContentUpdates(true)).toBeNull()
+        expect(alertConfirmMulti).not.toHaveBeenCalled()
+        importSession.set({ phase: 'idle' })
+        alertConfirmMulti.mockResolvedValueOnce(-1)
+        await mod.checkContentUpdates(true)
+        expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+        expect(calls).toEqual(['/content-updates/overview'])
     })
 })

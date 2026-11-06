@@ -12,6 +12,10 @@ const { createHash, randomUUID } = require('node:crypto');
 
 const NAMESPACE = '.risubard-content-updates/';
 const POINTER = 'latest.json';
+const LOCK = 'latest.lock';
+const LOCK_STALE_MS = 2 * 60_000;
+const LOCK_WAIT_MS = 30_000;
+const LOCK_RETRY_MS = 500;
 const POINTER_LIMIT = 256 * 1024;
 const FILE_LIMIT = 512 * 1024 * 1024;
 const MAX_ITEMS = 200;
@@ -115,6 +119,33 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         return validPointer(JSON.parse((await body(response, POINTER_LIMIT)).toString('utf8')));
     }
 
+    // NAS lock for replacing latest.json: a lock file created only if absent (If-None-Match: *, as the NAS sync uses).
+    // A lock older than LOCK_STALE_MS (a device that stopped mid-publish) is removed and taken over.
+    async function withLock(remote, work) {
+        const deadline = Date.now() + LOCK_WAIT_MS;
+        for (;;) {
+            const payload = Buffer.from(JSON.stringify({ at: Date.now(), by: deviceName() || '' }));
+            const response = await remote.call(LOCK, 'PUT', Readable.from([payload]), { 'Content-Length': String(payload.length), 'If-None-Match': '*' });
+            if ([200, 201, 204].includes(response.statusCode)) { await drainQuietly(response); break; }
+            if (response.statusCode !== 412) { await checked(response, []); }
+            await drainQuietly(response);
+            let held = null;
+            try {
+                const current = await remote.call(LOCK);
+                if (current.statusCode === 200) held = JSON.parse((await body(current, 4096)).toString('utf8'));
+                else await drainQuietly(current);
+            } catch { /* unreadable lock: treated as stale below */ }
+            if (!Number.isFinite(held?.at) || Date.now() - held.at > LOCK_STALE_MS) {
+                await drainQuietly(await remote.call(LOCK, 'DELETE'));
+                continue;
+            }
+            if (Date.now() > deadline) throw new Error('다른 기기가 배포 목록을 고치는 중이에요. 잠시 뒤 다시 올려 주세요.');
+            await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_MS));
+        }
+        try { return await work(); }
+        finally { try { await drainQuietly(await remote.call(LOCK, 'DELETE')); } catch { /* the stale-lock rule frees it */ } }
+    }
+
     /** Every published item, with this device's decision; `pending` are the ones to ask about. */
     async function overview() {
         const remote = await nas();
@@ -187,14 +218,24 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
             } finally {
                 try { await drainQuietly(await checked(await remote.call(part, 'DELETE'), [200, 204, 404])); } catch { /* an interrupted upload part is not published */ }
             }
-            const list = await pointer(remote);
-            const next = validPointer({ schema: 1, items: [...list.items.filter(entry => entry.key !== item.key), item] });
-            const data = Buffer.from(JSON.stringify(next, null, 2));
-            const temp = `latest-${randomUUID()}.json`;
-            await drainQuietly(await checked(await remote.call(temp, 'PUT', Readable.from([data]), { 'Content-Length': String(data.length), 'Content-Type': 'application/json' }), [200, 201, 204]));
-            await drainQuietly(await checked(await remote.call(temp, 'MOVE', undefined, { Destination: remote.base + POINTER, Overwrite: 'T' }), [201, 204]));
-            const saved = (await pointer(remote)).items.find(entry => entry.key === item.key);
-            if (saved?.sha256 !== item.sha256) throw new Error('NAS 배포 목록 확인에 실패했어요. 다른 기기가 동시에 올렸는지 확인해 주세요.');
+            // The list is read, merged and replaced under a NAS lock, so two devices publishing at once both stay listed.
+            await withLock(remote, async () => {
+                const list = await pointer(remote);
+                const next = validPointer({ schema: 1, items: [...list.items.filter(entry => entry.key !== item.key), item] });
+                const data = Buffer.from(JSON.stringify(next, null, 2));
+                if (data.length > POINTER_LIMIT) throw new Error('NAS 배포 목록이 너무 커요. 오래된 배포를 정리한 뒤 다시 올려 주세요.');
+                const temp = `latest-${randomUUID()}.json`;
+                try {
+                    await drainQuietly(await checked(await remote.call(temp, 'PUT', Readable.from([data]), { 'Content-Length': String(data.length), 'Content-Type': 'application/json' }), [200, 201, 204]));
+                    await drainQuietly(await checked(await remote.call(temp, 'MOVE', undefined, { Destination: remote.base + POINTER, Overwrite: 'T' }), [201, 204]));
+                } finally {
+                    try { await drainQuietly(await remote.call(temp, 'DELETE')); } catch { /* moved away already, or unreachable */ }
+                }
+                const saved = await pointer(remote);
+                for (const entry of next.items) {
+                    if (saved.items.find(x => x.key === entry.key)?.sha256 !== entry.sha256) throw new Error('NAS 배포 목록 확인에 실패했어요. 잠시 뒤 다시 올려 주세요.');
+                }
+            });
             decide(item.key, item.sha256, 'published');
             return item;
         } finally { fs.rmSync(staged, { force: true }); }

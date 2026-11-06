@@ -13,6 +13,21 @@ index 4b15f7a..619929e 100644
 +!.github/workflows/release.yml
  .claude
  dist
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 8d8a41c..dc2508e 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -40,8 +40,8 @@ jobs:
+             echo "Releases must run from main, got $GITHUB_REF" >&2
+             exit 1
+           fi
+-          if [[ ! "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+-            echo "Version must use X.Y.Z format: $REQUESTED_VERSION" >&2
++          if [[ ! "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-ver[0-9]+)?$ ]]; then
++            echo "Version must use X.Y.Z or X.Y.Z-verN format: $REQUESTED_VERSION" >&2
+             exit 1
+           fi
+           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
 diff --git a/.gitignore b/.gitignore
 index 88962f0..56752d6 100644
 --- a/.gitignore
@@ -76,7 +91,7 @@ index f62d88a..216d141 100644
 +included in the packaged runtime. Model weights are selected by the user and
 +are not included in the APK; their own licenses apply.
 diff --git a/package.json b/package.json
-index 046115a..933a691 100644
+index 046115a..9b064bb 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,7 +1,7 @@
@@ -209,7 +224,7 @@ index 130433e..660f1a7 100644
          const exited = once(child, 'close');
          child.kill();
 diff --git a/scripts/release.mjs b/scripts/release.mjs
-index 785b57d..8192959 100644
+index 785b57d..31c0160 100644
 --- a/scripts/release.mjs
 +++ b/scripts/release.mjs
 @@ -8,7 +8,7 @@
@@ -221,6 +236,15 @@ index 785b57d..8192959 100644
  const dryRun = process.argv.includes('--dry-run')
  
  function fail(message) {
+@@ -28,7 +28,7 @@ function run(label, command, args, env = process.env) {
+ 
+ // 1. Release metadata, mirroring release.yml's "Validate release metadata".
+ const version = JSON.parse(readFileSync('package.json', 'utf8')).version
+-if (!/^\d+\.\d+\.\d+$/.test(version)) fail(`package.json version must be X.Y.Z, got ${version}`)
++if (!/^\d+\.\d+\.\d+(?:-ver\d+)?$/.test(version)) fail(`package.json version must be X.Y.Z or X.Y.Z-verN, got ${version}`)
+ const notesPath = `patchnote/${version}.md`
+ let notes = ''
+ try { notes = readFileSync(notesPath, 'utf8') } catch { fail(`Missing release notes: ${notesPath}`) }
 diff --git a/scripts/updater.cjs b/scripts/updater.cjs
 index a9e9751..9d0eca7 100644
 --- a/scripts/updater.cjs

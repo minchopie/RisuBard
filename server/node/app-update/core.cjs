@@ -90,7 +90,7 @@ function status(root, value) {
     saveState(root, 'status.json', { failedHash: previous.failedHash, attempts: previous.attempts, ...value, at: new Date().toISOString() });
 }
 function confinedDirectory(root, name) {
-    if (typeof name !== 'string' || !/^previous-\d+\.\d+\.\d+-[a-f0-9-]{36}$/.test(name)) throw new Error('Invalid app update directory');
+    if (typeof name !== 'string' || !/^previous-\d+\.\d+\.\d+(?:-ver\d+)?-[a-f0-9-]{36}$/.test(name)) throw new Error('Invalid app update directory');
     const directory = path.join(stateRoot(root), name);
     if (fs.lstatSync(directory).isSymbolicLink()) throw new Error('Invalid app update directory');
     return directory;
@@ -198,7 +198,7 @@ function markHealthy(root) {
             try { fs.rmSync(path.join(stateRoot(root), entry.name)); } catch { /* retry after the next successful patch */ }
         }
         if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name === pending.backup) continue;
-        if (/^stage-[a-zA-Z0-9]+$/.test(entry.name) || /^previous-\d+\.\d+\.\d+-[a-f0-9-]{36}$/.test(entry.name)) {
+        if (/^stage-[a-zA-Z0-9]+$/.test(entry.name) || /^previous-\d+\.\d+\.\d+(?:-ver\d+)?-[a-f0-9-]{36}$/.test(entry.name)) {
             try { fs.rmSync(path.join(stateRoot(root), entry.name), { recursive: true }); } catch { /* harmless code cache; retry after the next successful patch */ }
         }
     }

@@ -28,7 +28,7 @@ function run(label, command, args, env = process.env) {
 
 // 1. Release metadata, mirroring release.yml's "Validate release metadata".
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version
-if (!/^\d+\.\d+\.\d+$/.test(version)) fail(`package.json version must be X.Y.Z, got ${version}`)
+if (!/^\d+\.\d+\.\d+(?:-ver\d+)?$/.test(version)) fail(`package.json version must be X.Y.Z or X.Y.Z-verN, got ${version}`)
 const notesPath = `patchnote/${version}.md`
 let notes = ''
 try { notes = readFileSync(notesPath, 'utf8') } catch { fail(`Missing release notes: ${notesPath}`) }

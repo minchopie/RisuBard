@@ -13,7 +13,8 @@ import { isNodeServer } from '../platform'
 const app = () => Promise.all([
     import('../storage/database.svelte'), import('../globalApi.svelte'), import('../characterCards'), import('../storage/importTransaction'),
     import('../process/files/inlays'), import('../alert'), import('../stores.svelte'), import('../process/generationState'), import('uuid'),
-]).then(([database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid]) => ({ database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid }))
+    import('../importSession'),
+]).then(([database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session]) => ({ database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session }))
 
 export type ContentKind = 'character' | 'persona'
 export interface ContentItem {
@@ -129,13 +130,19 @@ async function applyPersona(bytes: Uint8Array): Promise<void> {
     const { database, inlays, uuid } = await app()
     const icon = await database.saveImage(await inlays.reencodeImage(bytes))
     const db = database.getDatabase()
-    const same = db.personas.filter(persona => persona?.name === data.name)
-    if (same.length) {
+    const index = db.personas.findIndex(persona => persona?.name === data.name)
+    if (index >= 0) {
         // Same id, so chats and bots bound to this persona keep using it.
-        for (const persona of same.slice(0, 1)) {
-            persona.personaPrompt = data.personaPrompt
-            persona.note = data.note
-            persona.icon = icon
+        const persona = db.personas[index]
+        persona.personaPrompt = data.personaPrompt
+        persona.note = data.note
+        persona.icon = icon
+        // The selected persona is also held in the active fields (persona.ts changeUserPersona/saveUserPersona);
+        // update them too, or the next saveUserPersona would write the old values back over the row.
+        if (db.selectedPersona === index) {
+            db.personaPrompt = persona.personaPrompt
+            db.userNote = persona.note
+            db.userIcon = persona.icon
         }
     } else {
         const added: RisuPersona = { name: data.name, icon, personaPrompt: data.personaPrompt, note: data.note, id: uuid.v4() }
@@ -145,7 +152,7 @@ async function applyPersona(bytes: Uint8Array): Promise<void> {
 
 /** Imports one published item; resolves to the decision to record (declined when the user cancelled the import). */
 export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<ContentDecision> {
-    const { cards, globalApi, importTransaction, alert } = await app()
+    const { cards, globalApi, importTransaction, alert, session } = await app()
     if (item.kind === 'persona') {
         await applyPersona(bytes)
         alert.notifySuccess(`페르소나 「${item.title}」를 가져왔어요.`)
@@ -154,7 +161,9 @@ export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<C
     try {
         const result = await cards.importCharacterProcess({ name: item.fileName, data: bytes })
         globalApi.checkCharOrder()
-        // runImport answers null when the user cancelled (in the update dialog or the install choice).
+        // runImport answers null when the user cancelled (in the update dialog or the install choice), and also when the
+        // import failed and its rollback is waiting in recovery: that one is an error, not an answer, so it is asked again later.
+        if (result === null && get(session.importSession).phase === 'recovery') throw new Error('가져오기를 되돌리는 중 문제가 생겼어요. 가져오기 복구를 먼저 끝내 주세요.')
         return result === null ? 'declined' : 'applied'
     } catch (error) {
         if (error instanceof importTransaction.ImportCancelled) return 'declined'
@@ -169,8 +178,10 @@ let lastCheck = 0
 let started = false
 
 async function busy(): Promise<boolean> {
-    const { stores, generation } = await app()
+    const { stores, generation, session } = await app()
+    // An import in progress or waiting in rollback recovery has its own dialog: finish that first.
     return !get(stores.loadedStore) || get(transferBusy) || get(generation.isAnyGenerating) || get(stores.alertStore).type !== 'none'
+        || get(session.importSession).phase !== 'idle'
 }
 
 /** Asks about each published item this device has not answered yet. `force` ignores the interval (the settings button). */
@@ -191,11 +202,15 @@ export async function checkContentUpdates(force = false): Promise<ContentOvervie
                 `${itemLabel(item)}\n${(item.bytes / 1_000_000).toFixed(1)} MB · ${new Date(item.publishedAt).toLocaleString()}${item.publishedBy ? ` · ${item.publishedBy}` : ''}`
                 + (item.kind === 'character' ? '\n\n이미 있는 같은 캐릭터를 고르면 대화는 그대로 두고 카드만 새 판으로 바꿔요.' : '\n\n같은 이름의 페르소나가 있으면 그 페르소나를 새 내용으로 바꿔요.'),
             )
+            // -1 is the dialog's own cancel/close: no answer yet, so it is asked again at the next check.
+            if (choice === -1) break
             if (choice !== 0) { await recordDecision(item, 'declined'); continue }
             try {
                 contentUpdateStatus.set(`${itemLabel(item)} 받는 중…`)
                 const bytes = await fetchContent(item)
                 contentUpdateStatus.set('')
+                // A transfer, sync apply or reply may have started while the file was coming: leave it for the next check.
+                if (await busy()) break
                 await recordDecision(item, await applyItem(item, bytes))
             } catch (error) {
                 contentUpdateStatus.set('')

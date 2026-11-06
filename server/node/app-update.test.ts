@@ -63,6 +63,29 @@ describe('NAS app code patches', () => {
             expect(core.rollback(dir)).toBe(false)
         }
     })
+    test('personal X.Y.Z-verN releases: order, rollback from the -verN backup and cleanup after a healthy start', async () => {
+        expect(core.newer('0.9.90-ver1', '0.9.106')).toBe(true)
+        expect(core.newer('0.9.106', '0.9.90-ver1')).toBe(false)
+        expect(core.newer('0.9.90-ver2', '0.9.90-ver1')).toBe(true)
+        expect(core.newer('0.9.91-ver1', '0.9.90-ver9')).toBe(true)
+        expect(core.newer('0.9.90-ver1', '0.9.90-ver1')).toBe(false)
+        for (const healthy of [false, true]) {
+            const dir = root(); installed(dir)
+            const stale = path.join(core.stateRoot(dir), 'previous-0.9.90-ver1-00000000-0000-4000-8000-000000000000')
+            fs.mkdirSync(stale, { recursive: true })
+            const { file, release } = await archive(dir, { 'dist/new.js': 'new asset' }, '0.9.90-ver2')
+            core.apply(dir, await core.stage(dir, file, release))
+            if (!healthy) {
+                expect(core.rollback(dir)).toBe(true)
+                expect(fs.readFileSync(path.join(dir, 'server/node/server.cjs'), 'utf8')).toBe('old server')
+                expect(fs.existsSync(path.join(dir, 'dist/new.js'))).toBe(false)
+            } else {
+                core.markHealthy(dir)
+                expect(fs.readFileSync(path.join(dir, '.installed-version'), 'utf8')).toBe('v0.9.90-ver2')
+                expect(fs.existsSync(stale)).toBe(false)
+            }
+        }
+    })
     test('rejects damaged and non-code bundles before changing installed files', async () => {
         const dir = root(); installed(dir)
         const { file, release } = await archive(dir)

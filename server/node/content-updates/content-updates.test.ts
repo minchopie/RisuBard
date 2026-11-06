@@ -95,4 +95,44 @@ describe('content updates', () => {
         fs.writeFileSync(path.join(dir, 'content-updates', 'state.json'), '{broken')
         expect((await make().overview()).pending).toHaveLength(1)
     })
+
+    test('two devices publishing at the same time both stay listed (NAS lock), and the lock is released', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet'), phone = device(dav, 'phone')
+        const a = Buffer.from('card A'), b = Buffer.from('persona B png')
+        await Promise.all([
+            pc.updates.publish(Readable.from([a]), meta),
+            tablet.updates.publish(Readable.from([b]), { key: 'persona:B', kind: 'persona', title: 'B', version: '', fileName: 'b.png' }),
+        ])
+        expect((await phone.updates.overview()).items.map((x: any) => x.key).sort()).toEqual(['character:마물소녀도감', 'persona:B'])
+        expect(dav.paths().some(p => p.endsWith('latest.lock'))).toBe(false)
+        expect(dav.paths().filter(p => /latest-.*\.json$/.test(p))).toEqual([])
+    })
+
+    test('a stale lock left by a stopped device is taken over and released', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc')
+        await pc.updates.publish(Readable.from([card]), meta)
+        dav.files.set(`${NAMESPACE}latest.lock`, Buffer.from(JSON.stringify({ at: Date.now() - 10 * 60_000, by: 'gone' })))
+        const next = Buffer.from('card v2')
+        await pc.updates.publish(Readable.from([next]), { ...meta, version: 'v2' })
+        expect((await pc.updates.overview()).items[0].sha256).toBe(sha(next))
+        expect(dav.paths().some(p => p.endsWith('latest.lock'))).toBe(false)
+    })
+
+    test('a publish that would make the list unreadably large is refused and leaves the list as it was', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc')
+        const items: any[] = []
+        const long = '가'.repeat(190)
+        for (let i = 0; ; i++) {
+            const h = createHash('sha256').update(String(i)).digest('hex')
+            const item = { key: `character:${i}-${'나'.repeat(100)}`, kind: 'character', title: long, version: '', file: `${h}.charx`, fileName: `${long}.charx`, sha256: h, bytes: 1, publishedAt: new Date().toISOString(), publishedBy: '' }
+            if (Buffer.byteLength(JSON.stringify(validPointer({ schema: 1, items: [...items, item] }), null, 2)) > 255_000) break
+            items.push(item)
+        }
+        dav.dirs.add(NAMESPACE.replace(/\/$/, ''))
+        const before = Buffer.from(JSON.stringify({ schema: 1, items }, null, 2))
+        dav.files.set(`${NAMESPACE}latest.json`, before)
+        await expect(pc.updates.publish(Readable.from([card]), { ...meta, title: long, fileName: `${long}.charx` })).rejects.toThrow(/너무 커요/)
+        expect(dav.files.get(`${NAMESPACE}latest.json`)).toEqual(before)
+        expect(dav.paths().some(p => p.endsWith('latest.lock'))).toBe(false)
+    })
 })
