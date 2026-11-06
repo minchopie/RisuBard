@@ -4933,7 +4933,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "415f402cc01a3473c55ababb1167fbd61d365174a1c182155deda070ff59643c"
+      "sha256": "ea36a68948c4ee078547b1d6fda8b3a0cb6c42431f606112ff0b846fb3315031"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5536,6 +5536,195 @@
         "src/ts/risubard/risuBardSettings.ts": [
           "const RISUBARD_FACT_DENSE_STYLE",
           "risuBardSourceRerank: value('risuBardSourceRerank') === true"
+        ]
+      }
+    },
+    {
+      "tag": "v0.9.90",
+      "targetSha": "a8e83f867ae8158438c78592c9dfa2025fec26c2",
+      "patches": [
+        {
+          "module": "transfer-integration",
+          "path": "docs/fork-modules/compat/v0.9.90/transfer-integration.patch",
+          "sourceSha256": "f629bd265e9e60abacd8ca8fe9902036e3d45eef9f0fb6a1d195f930663566df",
+          "sha256": "5a38e5ab2a6be109a517b9d74480fd734ea5f6e3a04648b45bf4c2001ba07425"
+        },
+        {
+          "module": "mobile-ui",
+          "path": "docs/fork-modules/compat/v0.9.84/mobile-ui.patch",
+          "sourceSha256": "80772f2e16f9c65627df8db974ea53a70047976732def7a36217d22bd03257cc",
+          "sha256": "115b9eadc68e9f8fbb7ae46aae6c41fa930ee4c34c326d0d98c0cd709eab67a9"
+        },
+        {
+          "module": "model-compat",
+          "path": "docs/fork-modules/compat/v0.9.89/model-compat.patch",
+          "sourceSha256": "e38a61c6ca507ea78a5f27ab257f7fb59bd0c7e13fdc700b8ab48cc55be9a5da",
+          "sha256": "98df5ec9711c92107c95f905896c85c2c4015e237234a92a3cc67d9f64c3eae8"
+        },
+        {
+          "module": "storage-recovery",
+          "path": "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
+          "sourceSha256": "ba8da34b6ba00080782b1800285fe96f4b5fff84ab6900836082d7a5fe567d1e",
+          "targetHosts": [
+            {
+              "path": "server/node/risubard-story-order.test.ts",
+              "sha256": "76395b6770051a5801bcb8314fb619086c025ec93237915955e2cabed3f894e5"
+            },
+            {
+              "path": "server/node/trash-cleanup.cjs",
+              "sha256": "c469ae78092d24e1629f2b85c1eb1e3e4a091c6818b1d5d99e48fdcf6c96246e"
+            },
+            {
+              "path": "server/node/trash-cleanup.test.ts",
+              "sha256": "5ec486474cca47299b2749076ad99aba2e09d98c128868d6bb87a9f5955f2cf1"
+            }
+          ],
+          "sha256": "49326d79fe00cd53fbb49f5764aa729792c4d9d8905f03bcfc46597ec0aed350"
+        },
+        {
+          "module": "distribution",
+          "path": "docs/fork-modules/compat/v0.9.90/distribution.patch",
+          "sourceSha256": "5aed88a5e2e25c84e5e8c89884ac9614138e816b95613a88cdd17f626d9139c8",
+          "sha256": "7f187426dbbeee6ccfea04fbe182ff1e8d07c66930108f9018b3dd02c538a2be"
+        },
+        {
+          "module": "lore-lua",
+          "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
+          "sourceSha256": "8423e5e31c94ba691f52d34f46cd7b0ef1b64955af858bcafe659d4f6a24817d",
+          "sha256": "5bec241edcb64786e512ca53c376d3f65bde8b3f380587fb3acd472fea66f6de"
+        },
+        {
+          "module": "host-bridges",
+          "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
+          "sourceSha256": "3554cb58e5953c0b2a2f0d9a4cf6459574ec5c61f1ff60a8a3fdb7e6e249f04e",
+          "sha256": "76cf15ca81996896fed928825ec04f332157ed4345d9a662b4a7e29aa133b6cb"
+        },
+        {
+          "module": "file-export",
+          "path": "docs/fork-modules/compat/v0.9.84/file-export.patch",
+          "sourceSha256": "353f0ca7403d9bc5e522753ed3dd9097ef339f9a66c9988717bb16082aa3bc5b",
+          "sha256": "10f5f0e4efccc871851601cbaba09a66f9608dd9db82079c97990775579ac2f3"
+        },
+        {
+          "module": "bardwiki-cache-prefix",
+          "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
+          "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c",
+          "sha256": "82055b9b14a1958de6a87658518dd1e645bb41fc2d6ed7e8bee9ba93b822fc78"
+        }
+      ],
+      "payloadTargets": {
+        "patchnote/0.9.72.md": "docs/fork-modules/history/patchnote/0.9.72.md",
+        "patchnote/0.9.73.md": "docs/fork-modules/history/patchnote/0.9.73.md",
+        "patchnote/0.9.74.md": "docs/fork-modules/history/patchnote/0.9.74.md",
+        "patchnote/0.9.75.md": "docs/fork-modules/history/patchnote/0.9.75.md",
+        "patchnote/0.9.76.md": "docs/fork-modules/history/patchnote/0.9.76.md",
+        "patchnote/0.9.77.md": "docs/fork-modules/history/patchnote/0.9.77.md",
+        "patchnote/0.9.78.md": "docs/fork-modules/history/patchnote/0.9.78.md",
+        "patchnote/0.9.79.md": "docs/fork-modules/history/patchnote/0.9.79.md",
+        "patchnote/0.9.80.md": "docs/fork-modules/history/patchnote/0.9.80.md",
+        "patchnote/0.9.81.md": "docs/fork-modules/history/patchnote/0.9.81.md",
+        "patchnote/0.9.82.md": "docs/fork-modules/history/patchnote/0.9.82.md",
+        "patchnote/0.9.83.md": "docs/fork-modules/history/patchnote/0.9.83.md",
+        "patchnote/0.9.84.md": "docs/fork-modules/history/patchnote/0.9.84.md",
+        "patchnote/0.9.85.md": "docs/fork-modules/history/patchnote/0.9.85.md",
+        "patchnote/0.9.86.md": "docs/fork-modules/history/patchnote/0.9.86.md",
+        "src/ts/viewportHeight.test.ts": "src/ts/viewportHeight.fork.test.ts",
+        "patchnote/0.9.87.md": "docs/fork-modules/history/patchnote/0.9.87.md",
+        "patchnote/0.9.88.md": "docs/fork-modules/history/patchnote/0.9.88.md",
+        "patchnote/0.9.89.md": "docs/fork-modules/history/patchnote/0.9.89.md",
+        "patchnote/0.9.90.md": "docs/fork-modules/history/patchnote/0.9.90.md"
+      },
+      "probes": {
+        "server/node/server.cjs": [
+          "allowDuringAccountImport",
+          "const risuAccountImport =",
+          "keepChatBodiesAheadOfDisk",
+          "liveFilesAdoption.reviewMerge",
+          "err?.type === 'entity.too.large'",
+          "registerAssetStoreRoutes",
+          "removeAssetStoreKeys",
+          "assetStoreDirectory: preparedKv.assetStoreDirectory",
+          "const { cleanupTrash, retentionDays } = require('./trash-cleanup.cjs');",
+          "cleanupTrash(savePath, { days: retentionDays(), logger })"
+        ],
+        "src/ts/globalApi.svelte.ts": [
+          "trackChatForSave",
+          "trackCharacterForSaveImpl",
+          "export function trackCharacterForSave",
+          "if (chat && !chat.id) chat.id = v4()"
+        ],
+        "src/ts/storage/nodeStorage.ts": [
+          "risu-session-deactivated",
+          "assetStoreTransition",
+          "readServerErrorReason"
+        ],
+        "src/lib/ChatScreens/Chat.svelte": [
+          "onsubmitcapture={handleFormTriggerWithin}",
+          "mobileMessageActionsInline"
+        ],
+        "src/ts/viewportHeight.ts": [
+          "'focusout'",
+          "'resize'",
+          "isEditable"
+        ],
+        "src/ts/process/lorebook.svelte.ts": [
+          "regex.lastIndex = 0"
+        ],
+        "src/lib/ChatScreens/DefaultChatScreen.svelte": [
+          "runInputAssistant",
+          "retryNarrativeBacklog",
+          "skipNarrativeBacklogTurn",
+          "prepareCurrentStoryTimeBackfill",
+          "showSaveLoadToolbar",
+          "onPreviousPage={() => selectChatPage(chatBounds.page - 1)}"
+        ],
+        "server/node/file-kv.cjs": [
+          "convertToAssetStore",
+          "revertAssetStore",
+          "assetStore.pathOf"
+        ],
+        "src/ts/storage/database.svelte.ts": [
+          "risubardWikiPending",
+          "updateBase?:string",
+          "mobileMessageActionsInline",
+          "data.risuBardSourceRerank = data.risuBardSourceRerank === true",
+          "risuBardAssistantPrompts?: AssistantPromptOverrides",
+          "${char?.customModuleToggle ?? ''}"
+        ],
+        "src/ts/process/index.svelte.ts": [
+          "selectAnalysisLoreReference",
+          "enqueueNarrativeConfirmation",
+          "inquirySettings.risuBardSourceRerank",
+          "runCurrentStoryTimeBackfill"
+        ],
+        "server/node/risubard-memory-runtime.cjs": [
+          "setWikiDocumentGrade",
+          "setWikiEventStoryTimes"
+        ],
+        "src/App.svelte": [
+          "CharacterUpdateDialog"
+        ],
+        "server/node/risubard-markdown-wiki.ts": [
+          "setDocumentGrade",
+          "workspace.snapshotsDirectory",
+          "async setEventStoryTimes(input: {"
+        ],
+        "src/lang/help.en.ts": [
+          "risuBardSourceRerank:"
+        ],
+        "src/ts/risubard/wikiPromptPreset.ts": [
+          "export const OFFICIAL_WIKI_RELEASE = '2026-11-03'",
+          "function createV9WikiPromptPreset",
+          "function createV10WikiPromptPreset",
+          "export const OFFICIAL_WIKI_V10_BACKUP_ID = 'official-wiki-261029'"
+        ],
+        "src/ts/risubard/risuBardSettings.ts": [
+          "const RISUBARD_FACT_DENSE_STYLE",
+          "risuBardSourceRerank: value('risuBardSourceRerank') === true"
+        ],
+        "server/node/risubard-memory-save.ts": [
+          "Promise.allSettled([",
+          "await Promise.all(entries.map(read))"
         ]
       }
     }
