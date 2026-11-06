@@ -4283,9 +4283,9 @@
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "acfb9cf700ecfdb3d4407ecfaffc2b8af4b9eb995388d94068804d00f2d9f590",
-      "contentSha256": "acfb9cf700ecfdb3d4407ecfaffc2b8af4b9eb995388d94068804d00f2d9f590",
-      "bytes": 5799
+      "sha256": "8643f93794eccc355ed91bda0db664784e8cc8b0b3083884af48a645cd3a920b",
+      "contentSha256": "8643f93794eccc355ed91bda0db664784e8cc8b0b3083884af48a645cd3a920b",
+      "bytes": 5813
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",

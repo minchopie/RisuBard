@@ -56,7 +56,7 @@ describe('content updates (client helpers)', () => {
         transferRequest.mockImplementation(async (path: string, init: any) => {
             const body = init?.body ? JSON.parse(init.body) : {}
             if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [], pending: [item('character:a'), item('character:b'), item('character:c'), item('character:d')] }))
-            if (path === '/content-updates/fetch') return new Response(body.key === 'character:d' ? strToU8('tampered!!') : card)
+            if (path === '/content-updates/fetch') return new Response((body.key === 'character:d' ? strToU8('tampered!!') : card) as BodyInit)
             if (path === '/content-updates/decide') { decisions.push([body.key, body.decision]); return new Response('{}') }
             throw new Error('unexpected ' + path)
         })
