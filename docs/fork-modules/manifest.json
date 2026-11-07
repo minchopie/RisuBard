@@ -1627,9 +1627,9 @@
       "path": "src/ts/transfer-sync/playTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "6ac31edaf78fa81d42a55af93265d291c277a64d5910b36664fa8c6e59076873",
-      "contentSha256": "6ac31edaf78fa81d42a55af93265d291c277a64d5910b36664fa8c6e59076873",
-      "bytes": 21067
+      "sha256": "ccff3707ac4e9e5ed6803c02d0424988a23134f4061b7f7c6f0dcd441577a9b2",
+      "contentSha256": "ccff3707ac4e9e5ed6803c02d0424988a23134f4061b7f7c6f0dcd441577a9b2",
+      "bytes": 20852
     },
     {
       "path": "src/ts/transfer-sync/transferAssets.ts",
@@ -1795,17 +1795,17 @@
       "path": "src/ts/transfer-sync/personaTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "8645cd0d4df8a79113b09c670df6b7d4b26edf03b1ea8985169d77b01d8547a0",
-      "contentSha256": "8645cd0d4df8a79113b09c670df6b7d4b26edf03b1ea8985169d77b01d8547a0",
-      "bytes": 8466
+      "sha256": "83e812b6d02b8a7eab1ec5b0730a205752037c73e90f1a6417dbcfb98a069fed",
+      "contentSha256": "83e812b6d02b8a7eab1ec5b0730a205752037c73e90f1a6417dbcfb98a069fed",
+      "bytes": 7741
     },
     {
       "path": "src/ts/personaTransfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "06792c63dfe781ce274c1c93f28c06f1a836e3d5fa9a6cd45c26421586ef4c1a",
-      "contentSha256": "06792c63dfe781ce274c1c93f28c06f1a836e3d5fa9a6cd45c26421586ef4c1a",
-      "bytes": 12774
+      "sha256": "6630e650fe111f4a5be54018a4e978b45bd3860e85e195b0d6f346e84c07d5e6",
+      "contentSha256": "6630e650fe111f4a5be54018a4e978b45bd3860e85e195b0d6f346e84c07d5e6",
+      "bytes": 13632
     },
     {
       "path": "index.html",
@@ -4131,9 +4131,9 @@
       "path": "patchnote/0.9.91-ver1.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "389c6944baf029c1ecdd68780ad539430d0dce407280d1164bfe55f35066cf42",
-      "contentSha256": "389c6944baf029c1ecdd68780ad539430d0dce407280d1164bfe55f35066cf42",
-      "bytes": 2571
+      "sha256": "e4db2ffce9d27991a2ef77f6f10a1848c0c1160d28808fe46da440b84409cfd5",
+      "contentSha256": "e4db2ffce9d27991a2ef77f6f10a1848c0c1160d28808fe46da440b84409cfd5",
+      "bytes": 2605
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",

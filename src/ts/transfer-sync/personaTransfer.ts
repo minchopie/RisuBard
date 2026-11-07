@@ -49,32 +49,22 @@ export interface PersonaPlan {
 export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<ReceivedPersona, 'name' | 'transferId'>[]): PersonaPlan {
     const received = new Map<string, number>()
     for (const row of rows) received.set(row.name, (received.get(row.name) ?? 0) + 1)
-    const plan: PersonaPlan = { targets: [], updated: [], added: [], ambiguous: [] }
-    for (const row of rows) {
-        // Added from this same file before (its save was not confirmed, or the file is applied again): that persona, by id.
+    const plan: PersonaPlan = { targets: rows.map(() => -1), updated: [], added: [], ambiguous: [] }
+    // First: personas this same file added before (by their stable ids). Those are reserved, so a name match below never
+    // sends a second received row onto the same persona.
+    const reserved = new Set<number>()
+    rows.forEach((row, i) => {
         const again = row.transferId ? db.personas.findIndex(p => p?.id === row.transferId) : -1
-        if (again >= 0) { plan.targets.push(again); plan.updated.push(row.name); continue }
-        const local = db.personas.flatMap((p, i) => (p?.name === row.name ? [i] : []))
-        if (local.length === 1 && received.get(row.name) === 1) { plan.targets.push(local[0]); plan.updated.push(row.name); continue }
-        plan.targets.push(-1); plan.added.push(row.name)
+        if (again >= 0 && !reserved.has(again)) { plan.targets[i] = again; reserved.add(again) }
+    })
+    rows.forEach((row, i) => {
+        if (plan.targets[i] >= 0) { plan.updated.push(row.name); return }
+        const local = db.personas.flatMap((p, k) => (p?.name === row.name && !reserved.has(k) ? [k] : []))
+        if (local.length === 1 && received.get(row.name) === 1) { plan.targets[i] = local[0]; reserved.add(local[0]); plan.updated.push(row.name); return }
+        plan.added.push(row.name)
         if ((local.length || received.get(row.name)! > 1) && !plan.ambiguous.includes(row.name)) plan.ambiguous.push(row.name)
-    }
+    })
     return plan
-}
-
-/** The persona rows and active persona fields, as plain values (restorable when an apply is not confirmed). */
-export function snapshotPersonas(db: PersonaDatabase) {
-    return JSON.parse(JSON.stringify({ personas: db.personas, selectedPersona: db.selectedPersona, username: db.username,
-        personaPrompt: db.personaPrompt, userNote: db.userNote ?? null, userIcon: db.userIcon })) as {
-        personas: RisuPersona[]; selectedPersona: number; username: string; personaPrompt: string; userNote: string | null; userIcon: string }
-}
-export function restorePersonas(db: PersonaDatabase, snapshot: ReturnType<typeof snapshotPersonas>) {
-    db.personas.splice(0, db.personas.length, ...snapshot.personas)
-    db.selectedPersona = snapshot.selectedPersona
-    db.username = snapshot.username
-    db.personaPrompt = snapshot.personaPrompt
-    if (snapshot.userNote === null) delete db.userNote; else db.userNote = snapshot.userNote
-    db.userIcon = snapshot.userIcon
 }
 
 export async function applyReceivedPersonas(db: PersonaDatabase, rows: ReceivedPersona[], blobs: ReceivedBlobs, io: PersonaApplyIo): Promise<PersonaPlan> {

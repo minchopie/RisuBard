@@ -71,6 +71,14 @@ test('applying the same file again updates what it added (stable ids) instead of
     }
 })
 
+test('a persona found by its stable id is reserved: a name match from another row never lands on it', async () => {
+    // The file had A(t0) and B(t1); A was imported, then renamed to B here, and the old B was deleted.
+    const db = { ...baseDb(), personas: [{ id: 't0', name: 'B', personaPrompt: 'was A', icon: '' }] as any[] }
+    const plan = await applyReceivedPersonas(db as any, [{ name: 'A', personaPrompt: 'a', transferId: 't0' }, { name: 'B', personaPrompt: 'b', transferId: 't1' }], {}, io())
+    expect(plan).toEqual({ targets: [0, -1], updated: ['A'], added: ['B'], ambiguous: [] })
+    expect(db.personas.map(p => [p.id, p.name, p.personaPrompt])).toEqual([['t0', 'B', 'a'], ['t1', 'B', 'b']])
+})
+
 test('module files are stored first and the module points at the new keys; a storage failure or a missing blob changes no persona', async () => {
     const db = baseDb(), x = io()
     const module = { id: 'm', name: 'mod', description: '', assets: [['map', '', 'webp'], ['skip', '', 'png']] as [string, string, string][] }
@@ -142,21 +150,21 @@ test('declining reads no pictures and keeps everything; a declined automatic (re
     expect(paths()).not.toContain('/in/apply-request')
 })
 
-test('a save or applied mark that does not confirm puts the personas back (memory and a normal save) and never marks the file applied', async () => {
+test('a save or applied mark that does not confirm keeps the import (the app retries the save) and leaves the file to apply again without duplicates', async () => {
     server([{ name: 'B', personaPrompt: 'from tablet', image: null }, { name: 'New', personaPrompt: 'n', transferId: 't-0' }])
     f.confirm.mockResolvedValue(true); f.save.mockRejectedValue(new Error('canonical save failed'))
-    const before = JSON.parse(JSON.stringify(f.db))
     await receiveTransfer('in')
-    expect(JSON.parse(JSON.stringify(f.db))).toEqual(before)
+    expect(f.db.personas.map((p: any) => [p.id, p.personaPrompt])).toEqual([['a', 'old a'], ['b', 'from tablet'], ['t-0', 'n']])
     expect(paths()).not.toContain('/in/persona-applied'); expect(reload).not.toHaveBeenCalled()
-    expect(f.save).toHaveBeenCalledTimes(2) // the failed one, then the save of the restored values
 
-    // The save worked but the applied mark did not reach the server: also put back (the next save writes the old values).
+    // The save works but the applied mark does not reach the server: nothing is undone; applying again changes nothing more.
     f.save.mockReset(); f.save.mockResolvedValue(undefined)
+    const rows = [{ name: 'B', personaPrompt: 'from tablet', image: null }, { name: 'New', personaPrompt: 'n', transferId: 't-0' }]
     f.request.mockImplementation(async (path: string) => path === '/in/persona-applied' ? new Response('{}', { status: 500 })
-        : reply(path.endsWith('/inspect') ? { kind: 'persona', characters: [], personas: [{ name: 'B' }] } : path.endsWith('/personas') ? { personas: [{ name: 'B', personaPrompt: 'x', image: null }], blobs: {} } : []))
+        : reply(path.endsWith('/inspect') ? { kind: 'persona', characters: [], personas: rows.map(r => ({ name: r.name, transferId: (r as any).transferId })) } : path.endsWith('/personas') ? { personas: rows, blobs: {} } : []))
+    const before = JSON.parse(JSON.stringify(f.db.personas))
     await receiveTransfer('in')
-    expect(JSON.parse(JSON.stringify(f.db))).toEqual(before)
+    expect(JSON.parse(JSON.stringify(f.db.personas))).toEqual(before)
 })
 
 test('exporting writes the active persona back to its row and saves before the server reads the database', async () => {
