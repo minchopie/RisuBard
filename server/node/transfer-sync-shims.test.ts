@@ -7,9 +7,9 @@ import { join } from 'node:path'
 const MODULE = ['nas-route', 'nas-sync-core', 'nas-sync-manifest', 'nas-sync-projection', 'nas-sync-remote', 'nas-sync-service', 'nas-sync-share', 'nas-sync-store', 'nas-sync-vault',
     'play-set-archive', 'play-set-fingerprint', 'play-set-memory', 'play-set-relink', 'play-set-service', 'transfer-remote', 'transfer-secrets', 'transfer-windows']
 
-const IMPLEMENTATIONS = [...MODULE, 'nas-sync-reconcile']
+const IMPLEMENTATIONS = [...MODULE, 'nas-sync-reconcile', 'persona-bundle']
 
-test('every legacy shim shares its implementation; the module folder includes its internal reconcile helper', () => {
+test('every legacy shim shares its implementation; the module folder includes its internal reconcile and persona-bundle helpers', () => {
     for (const name of MODULE) {
         const shim = require(`./${name}.cjs`), impl = require(`./transfer-sync/${name}.cjs`)
         expect(shim).toBe(impl)

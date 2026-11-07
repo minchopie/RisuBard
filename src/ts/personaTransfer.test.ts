@@ -1,12 +1,13 @@
-import { beforeEach, test, expect, vi } from 'vitest'
+import { beforeEach, afterEach, test, expect, vi } from 'vitest'
 import { writable } from 'svelte/store'
 import { applyReceivedPersonas, planPersonas, personaPlanText, type ReceivedPersona } from './transfer-sync/personaTransfer'
 
 const b64 = (text: string) => Buffer.from(text).toString('base64')
+/** Blobs as the server sends them: one entry per distinct file. */
+const blobs = (...texts: string[]) => Object.fromEntries(texts.map(t => [`blobs/${t}`, b64(t)]))
 const io = () => {
     let n = 0
     return {
-        saved: [] as string[],
         saveImage: vi.fn(async (bytes: Uint8Array) => `assets/img-${Buffer.from(bytes).toString()}`),
         reencodeImage: vi.fn(async (bytes: Uint8Array) => bytes),
         saveAsset: vi.fn(async (bytes: Uint8Array, _id: string, name: string) => `assets/${name}-${Buffer.from(bytes).toString()}`),
@@ -14,25 +15,25 @@ const io = () => {
     }
 }
 const baseDb = () => ({
-    selectedPersona: 1, personaPrompt: 'active old', userNote: 'active note', userIcon: 'assets/old-b',
+    selectedPersona: 1, username: 'active name', personaPrompt: 'active old', userNote: 'active note', userIcon: 'assets/old-b',
     personas: [
         { id: 'a', name: 'A', personaPrompt: 'old a', note: 'keep note', icon: 'assets/old-a' },
         { id: 'b', name: 'B', personaPrompt: 'old b', note: 'old note', icon: 'assets/old-b' },
     ] as any[],
 })
 
-test('same name updates in place (id kept, active fields follow the selected one); new names are added with new ids', async () => {
+test('a unique same name updates in place (id kept, all four active fields follow the selected one); new names are added', async () => {
     const db = baseDb(), x = io()
     const rows: ReceivedPersona[] = [
-        { name: 'B', personaPrompt: 'new b', note: 'new note', image: b64('pic-b'), largePortrait: true },
+        { name: 'B', personaPrompt: 'new b', note: 'new note', image: 'blobs/pic-b', largePortrait: true },
         { name: 'A', personaPrompt: 'new a', image: null },
-        { name: 'C', personaPrompt: 'c', image: b64('pic-c') },
+        { name: 'C', personaPrompt: 'c', image: 'blobs/pic-c' },
         { name: 'C', personaPrompt: 'c2', image: null },
     ]
-    const plan = await applyReceivedPersonas(db as any, rows, x)
-    expect(plan).toEqual({ updated: ['B', 'A'], added: ['C', 'C'] })
+    const plan = await applyReceivedPersonas(db as any, rows, blobs('pic-b', 'pic-c'), x)
+    expect(plan).toEqual({ targets: [1, 0, -1, -1], updated: ['B', 'A'], added: ['C', 'C'], ambiguous: [] })
     expect(db.personas[1]).toEqual({ id: 'b', name: 'B', personaPrompt: 'new b', note: 'new note', icon: 'assets/img-pic-b', largePortrait: true })
-    expect(db).toMatchObject({ personaPrompt: 'new b', userNote: 'new note', userIcon: 'assets/img-pic-b' })
+    expect(db).toMatchObject({ username: 'B', personaPrompt: 'new b', userNote: 'new note', userIcon: 'assets/img-pic-b' })
     // No picture and no note in the file: this device's picture and note stay.
     expect(db.personas[0]).toEqual({ id: 'a', name: 'A', personaPrompt: 'new a', note: 'keep note', icon: 'assets/old-a' })
     expect(db.personas.slice(2)).toEqual([
@@ -41,24 +42,38 @@ test('same name updates in place (id kept, active fields follow the selected one
     ])
 })
 
-test('module files are stored first and the module points at the new keys; a storage failure changes no persona', async () => {
+test('names that are not unique never overwrite: two received "A" for one local "A", or one received "X" for two local "X", are added', async () => {
+    const db = baseDb(), x = io()
+    db.personas.push({ id: 'x1', name: 'X', personaPrompt: 'x1', icon: '' }, { id: 'x2', name: 'X', personaPrompt: 'x2', icon: '' })
+    const before = structuredClone(db.personas)
+    const plan = await applyReceivedPersonas(db as any, [
+        { name: 'A', personaPrompt: 'first' }, { name: 'A', personaPrompt: 'second' }, { name: 'X', personaPrompt: 'third' },
+    ], {}, x)
+    expect(plan).toEqual({ targets: [-1, -1, -1], updated: [], added: ['A', 'A', 'X'], ambiguous: ['A', 'X'] })
+    expect(db.personas.slice(0, 4)).toEqual(before)
+    expect(db.personas.slice(4).map(p => p.personaPrompt)).toEqual(['first', 'second', 'third'])
+    expect(personaPlanText(plan)).toBe('페르소나 3개를 가져올까요?\n같은 이름이 여러 개라 덮어쓰지 않고 새로 추가: A, X')
+})
+
+test('module files are stored first and the module points at the new keys; a storage failure or a missing blob changes no persona', async () => {
     const db = baseDb(), x = io()
     const module = { id: 'm', name: 'mod', description: '', assets: [['map', '', 'webp'], ['skip', '', 'png']] as [string, string, string][] }
-    await applyReceivedPersonas(db as any, [{ name: 'D', personaPrompt: 'd', image: null, embeddedModule: module, moduleAssets: [b64('m1'), null], moduleIcon: b64('icon') }], x)
+    await applyReceivedPersonas(db as any, [{ name: 'D', personaPrompt: 'd', image: null, embeddedModule: module, moduleAssets: ['blobs/m1', null], moduleIcon: 'blobs/icon' }], blobs('m1', 'icon'), x)
     expect(db.personas[2].embeddedModule).toEqual({ id: 'm', name: 'mod', description: '', assets: [['map', 'assets/map.webp-m1', 'webp']], icon: 'assets/img-icon' })
     expect(module.assets).toHaveLength(2) // the received object is not changed
 
     const before = structuredClone(db), failing = io()
     failing.saveImage.mockRejectedValueOnce(new Error('disk full'))
-    await expect(applyReceivedPersonas(db as any, [{ name: 'A', personaPrompt: 'x', image: null }, { name: 'E', personaPrompt: 'e', image: b64('p') }], failing)).rejects.toThrow('disk full')
+    await expect(applyReceivedPersonas(db as any, [{ name: 'A', personaPrompt: 'x', image: null }, { name: 'E', personaPrompt: 'e', image: 'blobs/p' }], blobs('p'), failing)).rejects.toThrow('disk full')
+    await expect(applyReceivedPersonas(db as any, [{ name: 'A', personaPrompt: 'x', image: null }, { name: 'E', personaPrompt: 'e', image: 'blobs/gone' }], {}, io())).rejects.toThrow('빠져')
     expect(db).toEqual(before)
 })
 
 test('the confirm text names what is replaced and what is added', () => {
     const plan = planPersonas(baseDb(), [{ name: 'A' }, { name: 'Z' }])
-    expect(plan).toEqual({ updated: ['A'], added: ['Z'] })
+    expect(plan).toEqual({ targets: [0, -1], updated: ['A'], added: ['Z'], ambiguous: [] })
     expect(personaPlanText(plan)).toBe('페르소나 2개를 가져올까요?\n같은 이름이 있어 내용을 바꿈: A\n새로 추가: Z\n바꾸는 페르소나는 그대로 유지돼서, 연결된 대화·봇도 그대로 그 페르소나를 써요.')
-    expect(personaPlanText({ updated: [], added: ['Z'] })).toBe('페르소나 1개를 가져올까요?\n새로 추가: Z')
+    expect(personaPlanText({ targets: [-1], updated: [], added: ['Z'], ambiguous: [] })).toBe('페르소나 1개를 가져올까요?\n새로 추가: Z')
 })
 
 // ── Flow through playTransfer (server answers mocked) ──
@@ -76,36 +91,47 @@ vi.mock('./risubard/memorySaveSlots', () => ({ applyMemorySavePromptSettings: ()
 import { receiveTransfer, exportPersonaTransfer, transferBusy } from './playTransfer'
 
 const reply = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
+const reload = vi.fn()
 beforeEach(() => {
     f.db = { characters: [], ...baseDb() }
     f.request.mockReset(); f.save.mockReset(); f.save.mockResolvedValue(undefined); f.confirm.mockReset(); f.saveUserPersona.mockReset()
-    transferBusy.set(false)
+    transferBusy.set(false); reload.mockReset(); vi.stubGlobal('location', { reload })
 })
-const server = (personas: unknown[]) => f.request.mockImplementation(async (path: string) =>
-    reply(path.endsWith('/inspect') ? { kind: 'persona', characters: [] } : path.endsWith('/personas') ? { personas } : path === '' ? [] : { state: 'applied' }))
+afterEach(() => { vi.unstubAllGlobals() })
+const server = (personas: ReceivedPersona[], files: Record<string, string> = {}) => f.request.mockImplementation(async (path: string) =>
+    reply(path.endsWith('/inspect') ? { kind: 'persona', characters: [], personas: personas.map(p => ({ name: p.name })) }
+        : path.endsWith('/personas') ? { personas, blobs: files } : path === '' ? [] : { state: 'applied' }))
+const paths = () => f.request.mock.calls.map(call => call[0])
 
-test('receiving a persona file asks first, saves, then marks it applied', async () => {
-    server([{ name: 'B', personaPrompt: 'from tablet', image: b64('pic') }])
+test('receiving a persona file asks first (names only), then reads pictures, saves, and marks it applied', async () => {
+    server([{ name: 'B', personaPrompt: 'from tablet', image: 'blobs/pic' }], blobs('pic'))
     f.confirm.mockResolvedValue(true)
     await receiveTransfer('in')
     expect(f.confirm.mock.calls[0][0]).toContain('같은 이름이 있어 내용을 바꿈: B')
+    expect(f.request.mock.invocationCallOrder[paths().indexOf('/in/personas')]).toBeGreaterThan(f.confirm.mock.invocationCallOrder[0])
     expect(f.db.personas[1]).toMatchObject({ id: 'b', personaPrompt: 'from tablet', icon: 'assets/pic' })
-    const paths = f.request.mock.calls.map(call => call[0])
-    expect(paths.indexOf('/in/persona-applied')).toBeGreaterThan(-1)
-    expect(f.save.mock.invocationCallOrder[0]).toBeLessThan(f.request.mock.invocationCallOrder[paths.indexOf('/in/persona-applied')])
-    expect(paths).not.toContain('/in/prepare')
+    expect(f.save.mock.invocationCallOrder[0]).toBeLessThan(f.request.mock.invocationCallOrder[paths().indexOf('/in/persona-applied')])
+    expect(paths()).not.toContain('/in/prepare'); expect(reload).not.toHaveBeenCalled()
 })
 
-test('declining keeps everything; an automatic (requested) apply that was declined is not asked again every poll', async () => {
+test('declining reads no pictures and keeps everything; a declined automatic (requested) apply is not asked again every poll', async () => {
     server([{ name: 'Z', personaPrompt: 'z', image: null }])
     f.confirm.mockResolvedValue(false)
     const before = structuredClone(f.db)
     await receiveTransfer('in', true)
-    expect(f.db).toEqual(before); expect(f.save).not.toHaveBeenCalled()
+    expect(f.db).toEqual(before); expect(f.save).not.toHaveBeenCalled(); expect(paths()).not.toContain('/in/personas')
     expect(f.request).toHaveBeenCalledWith('/in/apply-request', expect.objectContaining({ body: JSON.stringify({ requested: false }) }))
     f.request.mockClear()
     await receiveTransfer('in', false)
-    expect(f.request.mock.calls.map(c => c[0])).not.toContain('/in/apply-request')
+    expect(paths()).not.toContain('/in/apply-request')
+})
+
+test('a save that does not confirm after the personas changed reloads the durable state and never marks the file applied', async () => {
+    server([{ name: 'B', personaPrompt: 'from tablet', image: null }])
+    f.confirm.mockResolvedValue(true); f.save.mockRejectedValue(new Error('canonical save failed'))
+    await receiveTransfer('in')
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(paths()).not.toContain('/in/persona-applied')
 })
 
 test('exporting writes the active persona back to its row and saves before the server reads the database', async () => {

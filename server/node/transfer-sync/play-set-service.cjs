@@ -174,14 +174,16 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         try {
             const readAsset = async assetKey => {
                 const path = join(work, randomUUID());
+                // A picture that cannot be read (absent, damaged, not a stored key) is left out and listed, not a failed export.
                 try { return await storage.kvExportFile(assetKey, path) ? await fs.readFile(path) : null; }
+                catch { return null; }
                 finally { await fs.rm(path, { force: true }); }
             };
             const bundle = await buildPersonaBundle(personas, readAsset);
             await fs.writeFile(join(dir, 'export.risuplay'), bundle.bytes, { mode: 0o600, flag: 'wx' });
             const record = { id: key, direction: 'send', state: 'ready', createdAt: Date.now(), kind: 'persona', name: bundleName(bundle.names),
                 // GitHub keeps one latest file per backup key: the same set of persona names replaces its previous upload.
-                backupKey: sha256('personas\n' + [...bundle.names].sort().join('\n')), bytes: bundle.bytes.length, sha256: sha256(bundle.bytes) };
+                backupKey: sha256(JSON.stringify(['personas', ...[...bundle.names].sort()])), bytes: bundle.bytes.length, sha256: sha256(bundle.bytes) };
             write(record); recorded = true;
             return { ...publicState(record), personas: bundle.names, missing: [], external: [], excluded: bundle.excluded };
         } finally { await fs.rm(recorded ? work : dir, { recursive: true, force: true }); }
@@ -191,13 +193,13 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         if (record.kind !== 'persona' || record.direction !== 'receive') throw new Error('페르소나 전송 항목이 아니에요.');
         return record;
     }
-    /** The received personas for the client to apply (pictures as base64). */
+    /** The received personas for the client to apply. Pictures keep their `blobs/<sha256>` references and each distinct blob is sent
+     *  once (base64), so a picture shared by many personas is not multiplied; the bundle limits bound the total. */
     async function receivedPersonas(key) {
         const record = await personaRecord(key);
         if (!['waiting', 'failed'].includes(record.state)) throw new Error('이미 가져왔거나 취소한 페르소나예요.');
         const bundle = readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')));
-        const file = path => path ? Buffer.from(bundle.files.get(path)).toString('base64') : null;
-        return { ...publicState(record), personas: bundle.personas.map(p => ({ ...p, image: file(p.image), moduleIcon: file(p.moduleIcon), moduleAssets: (p.moduleAssets ?? []).map(file) })) };
+        return { ...publicState(record), personas: bundle.personas, blobs: Object.fromEntries([...bundle.files].map(([path, bytes]) => [path, Buffer.from(bytes).toString('base64')])) };
     }
     async function personaApplied(key) {
         const record = await personaRecord(key);
@@ -219,7 +221,8 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
     }
     async function inspect(key) {
         const record = await read(key);
-        if (record.kind === 'persona') return { ...publicState(record), characters: [] };
+        // Persona file: names only (no pictures), so the receiver can ask before anything large is read.
+        if (record.kind === 'persona') return { ...publicState(record), characters: [], personas: readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay'))).personas.map(p => ({ name: p.name })) };
         const archive = await openPlaySetArchive(join(directory(key), 'incoming.risuplay'), directory(key));
         try {
             const db = await readDatabase();

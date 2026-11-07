@@ -102,12 +102,12 @@ export async function exportPersonaTransfer(personaIds: string[]) {
         return result
     } finally { transferBusy.set(false); await refreshTransfers() }
 }
-/** Applies a received persona file after the user confirms: same name → updated in place (id kept), otherwise added. */
-export async function receivePersonaTransfer(key: string, automatic = false) {
+/** Applies a received persona file after the user confirms: a unique same name → updated in place (id kept), otherwise added.
+ *  Only names are read before asking; pictures come after the answer. */
+export async function receivePersonaTransfer(key: string, automatic = false, inspected?: { personas?: { name: string }[] }) {
     if (transferUnavailable()) { transferStatus.set('기존 작업이 끝나면 가져올 수 있어요. 받은 파일은 보관됩니다.'); return }
-    const received = await (await transferRequest(`/${key}/personas`)).json()
-    const rows = received.personas as ReceivedPersona[]
-    if (!await alertConfirm(personaPlanText(planPersonas(getDatabase(), rows)))) {
+    const names = (inspected ?? await (await transferRequest(`/${key}/inspect`)).json()).personas ?? []
+    if (!await alertConfirm(personaPlanText(planPersonas(getDatabase(), names)))) {
         // An automatic (NAS "앱으로 받기") apply that was declined is not asked again every poll; the entry stays in the list.
         if (automatic) await post(`/${key}/apply-request`, { requested: false })
         transferStatus.set('페르소나 가져오기를 미뤘어요. 수신 목록에서 다시 가져올 수 있어요.')
@@ -116,22 +116,34 @@ export async function receivePersonaTransfer(key: string, automatic = false) {
     }
     if (transferUnavailable()) return
     transferBusy.set(true); transferStatus.set('페르소나를 가져오는 중…')
+    let changed = false
     try {
+        const received = await (await transferRequest(`/${key}/personas`)).json()
         const [database, inlays, globalApi, uuid] = await Promise.all([import('../storage/database.svelte'), import('../process/files/inlays'), import('../globalApi.svelte'), import('uuid')])
-        const plan = await applyReceivedPersonas(getDatabase(), rows, {
-            saveImage: bytes => database.saveImage(bytes), reencodeImage: bytes => inlays.reencodeImage(bytes),
-            saveAsset: (bytes, customId, fileName) => globalApi.saveAsset(bytes, customId, fileName), newId: () => uuid.v4(),
-        })
+        const io = {
+            saveImage: (bytes: Uint8Array) => database.saveImage(bytes), reencodeImage: (bytes: Uint8Array) => inlays.reencodeImage(bytes),
+            saveAsset: (bytes: Uint8Array, customId: string, fileName: string) => globalApi.saveAsset(bytes, customId, fileName), newId: () => uuid.v4(),
+        }
+        const plan = await applyReceivedPersonas(getDatabase(), received.personas as ReceivedPersona[], received.blobs ?? {}, io)
+        changed = true
         await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
         await post(`/${key}/persona-applied`)
         transferStatus.set(`페르소나를 가져왔어요.${plan.updated.length ? ` 바꿈 ${plan.updated.length}개` : ''}${plan.added.length ? ` · 추가 ${plan.added.length}개` : ''}`)
-    } catch (error) { transferStatus.set(String(error)); throw error }
-    finally { transferBusy.set(false); await refreshTransfers() }
+    } catch (error) {
+        transferStatus.set(String(error))
+        if (changed) {
+            // The personas changed in memory but the save did not confirm: reload reads the durable state instead of keeping
+            // (or guessing how to undo) an unsaved change. The received file stays in the list, so it can be applied again.
+            location.reload()
+            return
+        }
+        throw error
+    } finally { transferBusy.set(false); await refreshTransfers() }
 }
 export async function receiveTransfer(key: string, automatic = false) {
     if (transferUnavailable()) { transferStatus.set('기존 작업이 끝나면 가져올 수 있어요. 받은 파일은 보관됩니다.'); return }
     const inspection = await (await transferRequest(`/${key}/inspect`)).json()
-    if (inspection.kind === 'persona') return receivePersonaTransfer(key, automatic)
+    if (inspection.kind === 'persona') return receivePersonaTransfer(key, automatic, inspection)
     const targets: Record<string, string> = {}
     for (const c of inspection.characters) if (c.candidates.length > 1) {
         if (automatic) { await post(`/${key}/apply-request`, { requested: false }); transferStatus.set('같은 이름의 캐릭터가 여러 개예요. 수신 목록에서 대상을 선택해 주세요.'); await refreshTransfers(); return }

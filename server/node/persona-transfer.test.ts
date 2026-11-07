@@ -37,10 +37,12 @@ const senderDb = () => ({
         { id: 'p2', name: '용사 지망', personaPrompt: '설명 2', icon: '',
             embeddedModule: { id: 'm1', name: '모듈', description: '', icon: 'assets/module-icon.png', assets: [['map', 'assets/module.bin', 'webp'], ['gone', 'assets/missing.bin', 'png']] } },
         { id: 'p3', name: '그림 없음', personaPrompt: '설명 3', icon: 'assets/absent.png' },
+        { id: 'p4', name: 'A\nB', personaPrompt: '줄바꿈 이름', icon: '../outside-of-storage' },
+        { id: 'p5', name: 'A', personaPrompt: 'a', icon: '' }, { id: 'p6', name: 'B', personaPrompt: 'b', icon: '' },
     ],
 })
 
-test('persona export makes one send entry every transport carries; the receiver queues it as a persona file, not a play set', async t => {
+test('persona export makes one send entry (same file every transfer method sends); the receiver queues it as a persona file, not a play set', async t => {
     const { create, sender } = await fixture(t, senderDb())
     const sent = await sender.exportPersonas({ personaIds: ['p1', 'p2', 'p3'] })
     expect(sent).toMatchObject({ direction: 'send', state: 'ready', kind: 'persona', name: '페르소나 함건희 외 2개.risuplay', personas: ['함건희', '용사 지망', '그림 없음'] })
@@ -48,24 +50,35 @@ test('persona export makes one send entry every transport carries; the receiver 
     // GitHub keeps one file per backup key: the same set of names gets the same key, whatever the order.
     const record = (await sender.list()).find((r: any) => r.id === sent.id)
     expect(record.backupKey).toMatch(/^[a-f0-9]{64}$/)
+    // Name boundaries are kept: ["A", "B"] and ["A\nB"] are different backups. A picture that cannot be read is left out, not fatal.
+    const pair = await sender.exportPersonas({ personaIds: ['p5', 'p6'] }), joined = await sender.exportPersonas({ personaIds: ['p4'] })
+    const key = (id: string) => sender.list().then((rows: any[]) => rows.find(r => r.id === id).backupKey)
+    expect(await key(pair.id)).not.toBe(await key(joined.id))
+    expect(joined.excluded.map((e: any) => e.path)).toEqual(['페르소나 「A\nB」 그림'])
     const again = await sender.exportPersonas({ personaIds: ['p3', 'p1', 'p2'] })
     expect((await sender.list()).find((r: any) => r.id === again.id).backupKey).toBe(record.backupKey)
 
     const receiver = await create('receiver', { characters: [], personas: [] })
     const entry = await receiver.ingest(createReadStream(await sender.file(sent.id)))
     expect(entry).toMatchObject({ direction: 'receive', state: 'waiting', kind: 'persona', name: '페르소나 함건희 외 2개.risuplay' })
-    expect(await receiver.inspect(entry.id)).toMatchObject({ kind: 'persona', characters: [] })
+    // Asking first needs names only: inspect carries no pictures.
+    const inspected = await receiver.inspect(entry.id)
+    expect(inspected).toMatchObject({ kind: 'persona', characters: [], personas: [{ name: '함건희' }, { name: '용사 지망' }, { name: '그림 없음' }] })
+    expect(JSON.stringify(inspected)).not.toContain('base64')
+    expect(Object.keys(inspected.personas[0])).toEqual(['name'])
     await expect(receiver.prepare(entry.id)).rejects.toThrow('페르소나 가져오기')
 
     const received = await receiver.receivedPersonas(entry.id)
     const [one, two, three] = received.personas
     expect(one).toMatchObject({ name: '함건희', personaPrompt: '설명 1', note: '메모', largePortrait: true, portraitPrompt: { style: 'a' } })
-    expect(Buffer.from(one.image, 'base64')).toEqual(PNG)
+    // Each distinct picture is sent once; personas refer to it by key (the shared PNG is one blob for the face and the module icon).
+    expect(one.image).toBe(`blobs/${sha(PNG)}`); expect(two.moduleIcon).toBe(one.image)
+    expect(Object.keys(received.blobs).sort()).toEqual([`blobs/${sha(PNG)}`, `blobs/${sha(Buffer.from('module-file'))}`].sort())
+    expect(Buffer.from(received.blobs[one.image], 'base64')).toEqual(PNG)
     expect(two.image).toBeNull()
     expect(two.embeddedModule).toMatchObject({ id: 'm1', assets: [['map', '', 'webp']] })
     expect(two.embeddedModule.icon).toBeUndefined()
-    expect(Buffer.from(two.moduleAssets[0], 'base64').toString()).toBe('module-file')
-    expect(Buffer.from(two.moduleIcon, 'base64')).toEqual(PNG)
+    expect(Buffer.from(received.blobs[two.moduleAssets[0]], 'base64').toString()).toBe('module-file')
     expect(three.image).toBeNull()
 
     expect((await receiver.personaApplied(entry.id)).state).toBe('applied')
@@ -111,7 +124,9 @@ test('bundle validation: play sets and other files are not persona files; damage
     expect(() => readPersonaBundle(make({ ...ok, personas: Array.from({ length: 201 }, () => ok.personas[0]) }))).toThrow('1~200')
     expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: ' ', personaPrompt: 'p' }] }))).toThrow('이름')
     expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: 'images/0.bin' }] }))).toThrow('그림')
-    expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: '../x.bin' }] }, { '../x.bin': PNG }))).toThrow('그림')
+    expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: '../x.bin' }] }, { '../x.bin': PNG }))).toThrow('알 수 없는 항목')
+    // An unreferenced member outside the native rule is refused as Android would, not skipped.
+    expect(() => readPersonaBundle(make(ok, { '../unused': PNG }))).toThrow('알 수 없는 항목')
     expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', moduleAssets: [] }] }))).toThrow('모듈')
     expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: `blobs/${sha(PNG)}` }] }, { [`blobs/${sha(PNG)}`]: Buffer.from('other') }))).toThrow('손상')
     expect(readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: `blobs/${sha(PNG)}` }] }, blob(PNG))).files.size).toBe(1)

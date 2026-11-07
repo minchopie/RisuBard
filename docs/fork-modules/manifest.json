@@ -1203,9 +1203,9 @@
       "path": "server/node/transfer-sync-shims.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "268ce4588dcb238b1df4b18372d83e4e367fa0a59e4f0e7783a209889f34fe20",
-      "contentSha256": "268ce4588dcb238b1df4b18372d83e4e367fa0a59e4f0e7783a209889f34fe20",
-      "bytes": 2129
+      "sha256": "b287c1e89c6faca2221d77e697f3b72138255bf9da6296aa0951bc090d67b31c",
+      "contentSha256": "b287c1e89c6faca2221d77e697f3b72138255bf9da6296aa0951bc090d67b31c",
+      "bytes": 2167
     },
     {
       "path": "server/node/transfer-sync/nas-route.cjs",
@@ -1323,9 +1323,9 @@
       "path": "server/node/transfer-sync/play-set-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "0f81c716a378c1459ad935282d73dff918293fd40ec288a3d4a0d541b92095d1",
-      "contentSha256": "0f81c716a378c1459ad935282d73dff918293fd40ec288a3d4a0d541b92095d1",
-      "bytes": 39908
+      "sha256": "9a616e80546e9f81f0f226f234f653617b7edb5b08e62b249681eddf2e0e8cde",
+      "contentSha256": "9a616e80546e9f81f0f226f234f653617b7edb5b08e62b249681eddf2e0e8cde",
+      "bytes": 40385
     },
     {
       "path": "server/node/transfer-sync/transfer-remote.cjs",
@@ -1627,9 +1627,9 @@
       "path": "src/ts/transfer-sync/playTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "05bc877d10f6173d6c3e5d8f5519240a15f61c8ace632df4d7f6afef4a8d6032",
-      "contentSha256": "05bc877d10f6173d6c3e5d8f5519240a15f61c8ace632df4d7f6afef4a8d6032",
-      "bytes": 19796
+      "sha256": "6ee741d37c7ff261cf874243d4f361cc7a3eda7287a4bc0fc51a8a122ff0bbaf",
+      "contentSha256": "6ee741d37c7ff261cf874243d4f361cc7a3eda7287a4bc0fc51a8a122ff0bbaf",
+      "bytes": 20517
     },
     {
       "path": "src/ts/transfer-sync/transferAssets.ts",
@@ -1779,33 +1779,33 @@
       "path": "server/node/transfer-sync/persona-bundle.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "6e9642fd61d7d780b5c19c4d27ccf302674183b3aa75e8a768893b591f8871dc",
-      "contentSha256": "6e9642fd61d7d780b5c19c4d27ccf302674183b3aa75e8a768893b591f8871dc",
-      "bytes": 10352
+      "sha256": "9aed0ecbb6d986ceb3ae60bf83553cee6f66ce51cbbef2f1a1ab6816dd227d3e",
+      "contentSha256": "9aed0ecbb6d986ceb3ae60bf83553cee6f66ce51cbbef2f1a1ab6816dd227d3e",
+      "bytes": 10628
     },
     {
       "path": "server/node/persona-transfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "b90ea75bca64214af76799587808124fde5f3255753928dd4b358b6b6738c88d",
-      "contentSha256": "b90ea75bca64214af76799587808124fde5f3255753928dd4b358b6b6738c88d",
-      "bytes": 11597
+      "sha256": "11ad2ae5b0c5566537c4b829cf33ab4a456c474eff02fabb8066bde68906c656",
+      "contentSha256": "11ad2ae5b0c5566537c4b829cf33ab4a456c474eff02fabb8066bde68906c656",
+      "bytes": 13216
     },
     {
       "path": "src/ts/transfer-sync/personaTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "713d41eab2e9ac94008701cfc9bb6b265ae608d455e5b8a12adfeeda168e9c28",
-      "contentSha256": "713d41eab2e9ac94008701cfc9bb6b265ae608d455e5b8a12adfeeda168e9c28",
-      "bytes": 5343
+      "sha256": "ee9b2e48f14c27ecf456cdc97bd437acdb6a8a91ecd03e9080e4742069f7f7b3",
+      "contentSha256": "ee9b2e48f14c27ecf456cdc97bd437acdb6a8a91ecd03e9080e4742069f7f7b3",
+      "bytes": 6782
     },
     {
       "path": "src/ts/personaTransfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "597e703993df99f57a3e1d8d4c05a5cfb36a3c88fb486b840e9688cacf7d2f7d",
-      "contentSha256": "597e703993df99f57a3e1d8d4c05a5cfb36a3c88fb486b840e9688cacf7d2f7d",
-      "bytes": 8390
+      "sha256": "f3350c4b10437e0c74fa0dfc9403a2e34f75b355a1b3e07ab21e8770ed1d688c",
+      "contentSha256": "f3350c4b10437e0c74fa0dfc9403a2e34f75b355a1b3e07ab21e8770ed1d688c",
+      "bytes": 10812
     },
     {
       "path": "index.html",
@@ -4131,9 +4131,9 @@
       "path": "patchnote/0.9.91-ver1.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "93440a763838abe1f6b788e78776678840b5f8f39b40d6752132b95dce796505",
-      "contentSha256": "93440a763838abe1f6b788e78776678840b5f8f39b40d6752132b95dce796505",
-      "bytes": 1924
+      "sha256": "e7ddcda407f6b0762e62d9315ecbfad329926644036a6c8b9d59482a959eb890",
+      "contentSha256": "e7ddcda407f6b0762e62d9315ecbfad329926644036a6c8b9d59482a959eb890",
+      "bytes": 2483
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",

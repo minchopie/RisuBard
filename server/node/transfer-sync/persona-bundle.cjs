@@ -13,7 +13,7 @@ const TYPE = 'risubard-personas';
 const VERSION = 1;
 const MAX_PERSONAS = 200;
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024; // compressed file
-const MAX_EXPANDED_BYTES = 128 * 1024 * 1024; // all entries after unzip
+const MAX_EXPANDED_BYTES = 64 * 1024 * 1024; // all distinct entries after unzip (the receiver gets each once, base64)
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_NAME = 200;
 const ENTRY = /^blobs\/[a-f0-9]{64}$/;
@@ -61,7 +61,9 @@ function readPersonaBundle(buffer) {
     const files = unzipSync(buffer, { filter: file => {
         expanded += file.originalSize;
         if (expanded > MAX_EXPANDED_BYTES) throw new Error('페르소나 전송 파일이 너무 커요.');
-        return file.name === MANIFEST || ENTRY.test(file.name);
+        // Same member rule as the native archive (Android PlaySetArchive.entryName): anything else is refused, not skipped.
+        if (file.name !== MANIFEST && !ENTRY.test(file.name)) throw new Error('페르소나 전송 파일에 알 수 없는 항목이 있어요.');
+        return true;
     } });
     const raw = files[MANIFEST];
     if (!raw) throw new Error('페르소나 전송 파일이 아니에요.');
@@ -109,7 +111,7 @@ async function buildPersonaBundle(personas, readAsset) {
         if (persona.icon) {
             const bytes = await readAsset(persona.icon);
             if (bytes) row.image = add(bytes);
-            else excluded.push({ path: `페르소나 「${persona.name}」 그림`, reason: '이 기기에서 그림 파일을 찾지 못해 그림 없이 보내요.' });
+            else excluded.push({ path: `페르소나 「${persona.name}」 그림`, reason: '이 기기에서 그림 파일을 읽지 못해 그림 없이 보내요.' });
         }
         if (isObject(persona.embeddedModule)) {
             const module = JSON.parse(JSON.stringify(persona.embeddedModule));
@@ -118,7 +120,7 @@ async function buildPersonaBundle(personas, readAsset) {
                 const kept = [];
                 for (const [j, asset] of module.assets.entries()) {
                     const bytes = Array.isArray(asset) && typeof asset[1] === 'string' && asset[1] ? await readAsset(asset[1]) : null;
-                    if (!bytes) { excluded.push({ path: `페르소나 「${persona.name}」 모듈 에셋 ${asset?.[0] ?? j}`, reason: '이 기기에서 파일을 찾지 못해 빼고 보내요.' }); continue; }
+                    if (!bytes) { excluded.push({ path: `페르소나 「${persona.name}」 모듈 에셋 ${asset?.[0] ?? j}`, reason: '이 기기에서 파일을 읽지 못해 빼고 보내요.' }); continue; }
                     row.moduleAssets.push(add(bytes));
                     kept.push([String(asset[0] ?? ''), '', String(asset[2] ?? '')]);
                 }
@@ -127,7 +129,7 @@ async function buildPersonaBundle(personas, readAsset) {
             if (typeof module.icon === 'string' && module.icon) {
                 const bytes = await readAsset(module.icon);
                 if (bytes) row.moduleIcon = add(bytes);
-                else excluded.push({ path: `페르소나 「${persona.name}」 모듈 아이콘`, reason: '이 기기에서 파일을 찾지 못해 빼고 보내요.' });
+                else excluded.push({ path: `페르소나 「${persona.name}」 모듈 아이콘`, reason: '이 기기에서 파일을 읽지 못해 빼고 보내요.' });
                 delete module.icon;
             }
             row.embeddedModule = module;
