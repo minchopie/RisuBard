@@ -56,6 +56,13 @@ export const pullSync = (signal?: AbortSignal) => post('/pull', {}, signal)
  *  an unconfirmed finish of a prepared plan is a pure rollback — nothing was armed, no data touched. Armed plans are never released this way. */
 export const releaseSyncPlan = (transaction: string, signal?: AbortSignal) => post('/finish', { transaction, confirmed: false }, signal)
 export const bootstrapSync = (authorityDevice: string) => post('/bootstrap', { authorityDevice })
+/** 2026-11-07: resolve every library/settings difference at once — 'authority' keeps the reference device's variant (joining device),
+ *  'current' keeps what this device has applied (the reference device itself). */
+export const resolveAllSync = (prefer: 'authority' | 'current', authorityDevice?: string) => post('/resolve-all', { prefer, authorityDevice })
+/** Join adoption (joining device): started by the user, while adopting this device's values are neither committed nor published; only the
+ *  user ends it (allowed once the reference data was received or applied after it started). */
+export const startAdoptionSync = () => post('/adoption/start', {})
+export const endAdoptionSync = () => post('/adoption/end', {})
 export const syncNetwork = async (signal?: AbortSignal) => (await syncRequest('/network', { signal })).json()
 /** Home/external route input. Android: the native bridge's live Wi-Fi view (foreground location consent; unknown → external) is
  *  reported before every cycle. Windows: the server detects its own adapter, nothing is reported. */

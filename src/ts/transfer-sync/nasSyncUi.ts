@@ -96,12 +96,13 @@ export function syncHeadline(status: any, conflicts: any[] = [], c: CoordinatorS
         : c?.paused ? `잠시 중지됨${problem ? ` · ${problem.replace(/ · 재시도 예정$/, '')}` : recovery ? ' · 이전 적용 결과 확인 대기' : ''}`
         : problem ? problem
         : recovery ? '이전 적용 결과 확인 대기 · 아래 「자세히」에서 확인'
+        : status.role === 'joining' && status.adopting ? '기준 기기 자료로 맞추는 중 · 이 기기 변경은 올리지 않아요 · 끝나면 「합류 마치기」'
         : waitingApply ? `받은 변경 ${waitingApply}건 적용 대기`
         : arriving ? `받은 변경 ${arriving}건 · 나머지 자료 도착 대기`
         : pending ? `NAS에 올릴 변경 ${pending}건 대기`
         : c?.running ? '동기화 중…'
         : '최신 상태예요'
-    const tone = attention || problem || recovery ? 'attention' : c?.paused || waitingApply || arriving || pending || c?.running ? 'waiting' : 'ok'
+    const tone = attention || problem || recovery ? 'attention' : (status.role === 'joining' && status.adopting) || c?.paused || waitingApply || arriving || pending || c?.running ? 'waiting' : 'ok'
     return { tone, title, detail: `${me} · 기준 기기: ${reference} · 마지막 적용: ${last}` }
 }
 export function syncItemTitle(item: any): string {
@@ -153,7 +154,7 @@ export function syncGroupStates(items: any[]): string {
     return [...new Set(items.map(i => SYNC_ITEM_STATE[i?.state] ?? '확인 중'))].join(' · ')
 }
 
-export const OUTCOME_LABEL: Record<string, string> = { uploaded: 'NAS 업로드 완료', 'upload-pending': '아직 업로드할 변경이 남아 있어요', 'review-needed': '받은 변경 확인 필요', empty: '새로 적용할 변경 없음', applied: '이 기기에 적용 완료', 'applied-pending': '일부 적용 완료', deferred: '사용 중이어서 미룸 · 작업을 마친 뒤 다시 시도해 주세요', busy: '다른 작업 중', offline: '연결 안 됨 · 재시도 예정', error: '오류 · 재시도 예정', 'publish-failed': 'NAS 업로드 실패 · 재시도 예정', 'repair-failed': 'NAS 자료 다시 받기 실패 · 재시도 예정', hidden: '화면이 보일 때 재시도', 'deferred-active-chat': '받은 변경 보관 중 · 열어 둔 대화를 다시 열면 적용', 'pulled': '받은 자료 보관 중 · 작업을 마친 뒤 다운로드하거나 대화를 다시 열면 적용', cancelled: '취소됨', disabled: '꺼짐', 'recovery-pending': '이전 적용 결과 확인 대기 · 복구 기록 보관', 'finish-pending': '적용 결과 확인 대기 · 아래에서 다시 확인할 수 있어요', 'save-failed': '저장 실패 · 되돌림', running: '진행 중', idle: '대기' }
+export const OUTCOME_LABEL: Record<string, string> = { uploaded: 'NAS 업로드 완료', adopting: '기준 기기 자료로 맞추는 중이라 이 기기 변경은 올리지 않았어요 · 끝나면 「합류 마치기」', 'upload-pending': '아직 업로드할 변경이 남아 있어요', 'review-needed': '받은 변경 확인 필요', empty: '새로 적용할 변경 없음', applied: '이 기기에 적용 완료', 'applied-pending': '일부 적용 완료', deferred: '사용 중이어서 미룸 · 작업을 마친 뒤 다시 시도해 주세요', busy: '다른 작업 중', offline: '연결 안 됨 · 재시도 예정', error: '오류 · 재시도 예정', 'publish-failed': 'NAS 업로드 실패 · 재시도 예정', 'repair-failed': 'NAS 자료 다시 받기 실패 · 재시도 예정', hidden: '화면이 보일 때 재시도', 'deferred-active-chat': '받은 변경 보관 중 · 열어 둔 대화를 다시 열면 적용', 'pulled': '받은 자료 보관 중 · 작업을 마친 뒤 다운로드하거나 대화를 다시 열면 적용', cancelled: '취소됨', disabled: '꺼짐', 'recovery-pending': '이전 적용 결과 확인 대기 · 복구 기록 보관', 'finish-pending': '적용 결과 확인 대기 · 아래에서 다시 확인할 수 있어요', 'save-failed': '저장 실패 · 되돌림', running: '진행 중', idle: '대기' }
 /** Shared by the operation result and last-cycle row so partial applies retain their pending counts. */
 export function syncOutcomeText(outcome: string, details?: Pick<CoordinatorState, 'pendingReview' | 'keptDeletions'> | null): string {
     const bare = outcome.replace(/^key-pending:/, '')

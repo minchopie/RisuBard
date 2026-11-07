@@ -1,6 +1,6 @@
 // View helpers behind the NAS sync area: authority binding, explicit peer choice, safe conflict labels, state rows, route restriction.
 import { test, expect } from 'vitest'
-import { syncItemTitle, syncDifference, syncRevisionTime, SYNC_ITEM_STATE, bootstrapAuthority, incomingPeers, conflictVariantLabel, syncStateRows, keyRequestNeeded, shareMethodAllowed, hydrateSyncForm, withSavedHomeSsids, routeLabel, detectDeviceKind, syncDeviceName, groupSyncTrash, syncHeadline } from './nasSyncUi'
+import { syncItemTitle, syncDifference, syncRevisionTime, SYNC_ITEM_STATE, bootstrapAuthority, incomingPeers, conflictVariantLabel, syncStateRows, keyRequestNeeded, shareMethodAllowed, hydrateSyncForm, withSavedHomeSsids, routeLabel, detectDeviceKind, syncDeviceName, groupSyncTrash, syncHeadline, syncOutcomeText } from './nasSyncUi'
 
 test('revision dates always show Korea time and old or invalid dates stay unknown', () => {
     expect(syncRevisionTime(Date.parse('2026-10-22T16:05:00Z'))).toBe('2026. 10. 23. 01:05')
@@ -152,4 +152,10 @@ test('the trash shows one named row per deletion, newest first; the headline sum
     expect(syncHeadline({ ...status, sync: { ...status.sync, incoming: { 'tablet-device/i': { waiting: 1, pendingApply: 0, held: 0, quarantined: 0 } } } }, [], { lastOutcome: 'empty', lastError: '', offline: false } as any)).toMatchObject({ tone: 'waiting', title: '받은 변경 1건 · 나머지 자료 도착 대기' })
     expect(syncHeadline(status, [], { paused: true, offline: true, lastOutcome: 'offline', lastError: 'network fetch failed' } as any)).toMatchObject({ tone: 'attention', title: '잠시 중지됨 · 연결 안 됨' })
     expect(syncHeadline({ ...status, plan: { phase: 'saving' } }, [], { paused: true } as any)).toMatchObject({ tone: 'attention', title: '잠시 중지됨 · 이전 적용 결과 확인 대기' })
+})
+
+test('2026-11-07 join adoption: the headline and the outcome text say this device is still adopting (changes withheld), not up to date', () => {
+    const h = syncHeadline({ enabled: true, role: 'joining', adopting: true, vault: { origin: 'shared', sharedFrom: 'tab' }, sync: {} }, [], null)
+    expect(h.title).toContain('합류 마치기'); expect(h.tone).toBe('waiting')
+    expect(syncOutcomeText('adopting')).toContain('합류 마치기')
 })

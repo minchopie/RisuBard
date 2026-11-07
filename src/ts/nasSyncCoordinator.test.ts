@@ -490,3 +490,11 @@ test('recovery completion restarts the automatic timer consumed during a slow ex
     expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview'])
     h.c.stop()
 })
+
+test('2026-11-07 join adoption: an upload the server withheld (adopting joining device) is reported as adoption, never as uploaded', async () => {
+    const adopting = () => ({ enabled: true, role: 'joining', adopting: true, vault: { origin: 'shared', missing: false } })
+    const h = harness({ status: vi.fn(async () => adopting()) }); await h.c.start(); h.calls.length = 0
+    h.io.snapshot.mockImplementation(async () => ({ committed: null, adopting: true })); h.io.publish.mockImplementation(async () => ({ stored: [], failed: [], adopting: true }))
+    expect(await h.c.uploadNow()).toBe('adopting')
+    h.c.stop()
+})

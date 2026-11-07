@@ -142,7 +142,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 }
                 if (direction === 'upload') {
                     const remaining = keyReady ? await o.status(signal) : null; boundary()
-                    state.lastOutcome = !keyReady ? 'key-pending:idle' : attention || remaining?.sync?.outbox?.pending?.length ? 'upload-pending' : 'uploaded'
+                    // 2026-11-07 join adoption: the server withheld this device's changes; that is not an upload.
+                    state.lastOutcome = !keyReady ? 'key-pending:idle' : (remaining ?? status)?.role === 'joining' && (remaining ?? status)?.adopting ? 'adopting' : attention || remaining?.sync?.outbox?.pending?.length ? 'upload-pending' : 'uploaded'
                     state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
                     schedule(o.pollMs)
                     return state.lastOutcome

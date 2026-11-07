@@ -197,7 +197,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     const branchesPreserved = (s, key, c) => key.startsWith('play\nchat\n') && c.state === 'diverged' && !chatDifference(c.liveHeads.map(id => s.graph.get(id))).sameMessages && c.variants.every(ids => ids.some(id => Object.values(service().lineage).includes(id)));
     const conflictCount = s => s.graph.rootKeys().filter(k => { if (k === 'settings\ngroup\nuserNote') return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
     // `workspaceId`/`role` are reported even while disabled so a reopened panel resumes the saved setup instead of defaults.
-    const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], enabled: service().enabled, role: service().role ?? null, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
+    const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], enabled: service().enabled, role: service().role ?? null, adopting: !!service().adopting, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
         vault: { origin: service().vaultOrigin ?? null, sharedFrom: service().vaultSharedFrom ?? null, missing: !fs.existsSync(masterFile()) && (service().vaultOrigin === 'shared' || (service().enabled && (Object.keys(service().lineage).length > 0))), pendingGrant: service().pendingGrant ? { from: service().pendingGrant.from, reason: service().pendingGrant.reason } : null }, shares: (service().shares ?? []).map(({ id, kind, to, via, at }) => ({ id, kind, to, via, at })),
         lastAppliedAt: service().applied.at(-1)?.at ?? null,
         localApply: (service().localApply ?? []).length, ...(service().enabled ? { sync: openTransport().status(), conflicts: conflictCount(openStore()) } : {}) });
@@ -395,6 +395,88 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         await commitWithIntent(s, [rev], [root]);
         return { resolved: rev.id, root };
     }
+    /** 2026-11-07 "기준 기기로 전부 맞추기": every diverged library/settings root resolved in one action through the same core resolve
+     *  (resolution parents every head, kept head's content; the plan then materializes it). Chats are not touched (different chats stay
+     *  branches; a chat whose card/settings now match applies normally). `prefer`:
+     *  - 'current' (the reference device): keep the variant equal to what THIS device has applied (its lineage) — the device's own values win
+     *    over old PC/other-device forks, so the whole workspace converges on it.
+     *  - 'authority' (a joining device): keep the variant published by the reference device (the grant sender unless given).
+     *  A root with no matching variant, or one needing individual review (persona merge), is skipped and reported, never guessed. */
+    function groupByRoot(s, ids) { const out = new Map(); for (const id of ids) { const r = s.graph.get(id); if (!r) continue; const k = `${r.domain}\n${r.type}\n${r.root}`; if (!out.has(k)) out.set(k, []); out.get(k).push(id); } return out; }
+    function adoptionMark(x) { return { lastApplied: (x.applied ?? []).at(-1)?.transaction ?? null, pulled: false }; } // hoisted: the startup grant sweep may run first
+    async function resolveAll({ prefer, authorityDevice } = {}) {
+        if (prefer !== 'current' && prefer !== 'authority') throw new Error("prefer must be 'current' or 'authority'");
+        const s = requireEnabled(); if (service().plan) throw new Error('Finish the pending sync apply first');
+        const authority = prefer === 'authority' ? (authorityDevice || service().vaultSharedFrom || '') : '';
+        if (prefer === 'authority' && !authority) throw new Error('No reference device is known on this device');
+        const lineage = service().lineage, resolved = [], skipped = [];
+        const same = (a, b) => a && b && a.contentHash === b.contentHash && a.dependencyHash === b.dependencyHash;
+        // Publication is judged from the full record, as bootstrap() does: one revision id can be published by several devices (equal
+        // deterministic genesis), so the display helper sourceOf() (one source, own commits first) must not decide it.
+        const state = s.state();
+        const published = new Set(Object.entries(state.peers).filter(([k]) => k.startsWith(authority + '/')).flatMap(([, p]) => Object.values(p.admittedRevisions ?? {}).flat()));
+        let publishedByRoot = null; // root key -> the reference's published revision ids, built on first need
+        for (const key of s.graph.rootKeys()) {
+            if (key === 'settings\ngroup\nuserNote') continue;
+            const [domain, , rootId] = key.split('\n'), c = s.graph.classify(key);
+            if (domain === 'play') continue;
+            if (c.state === 'delete-pending') { skipped.push({ root: key, title: rootId, reason: 'delete-pending' }); continue; } // reported, decided one by one
+            if (c.state !== 'diverged') continue;
+            let keep = null, reason = '';
+            if (prefer === 'current') {
+                const mine = s.graph.get(lineage[key + '#' + rootId]);
+                const match = mine ? c.variants.filter(heads => heads.includes(mine.id) || heads.some(h => same(s.graph.get(h), mine))) : [];
+                if (match.length === 1) keep = match[0].find(h => h === mine.id || same(s.graph.get(h), mine)) ?? match[0][0];
+                else reason = mine ? 'ambiguous-current-variant' : 'no-current-variant';
+            } else {
+                // The reference device's newest published revisions of this root (its frontier among what this device received) must be ONE
+                // value (content + dependencies; a deletion makes it non-uniform); the kept variant is the one whose head is that revision or
+                // carries that exact value (e.g. this device's own earlier resolution that kept it). Anything else is reported, never guessed:
+                // the reference's own 'current' resolve-all settles it.
+                const pubs = (publishedByRoot ??= groupByRoot(s, published)).get(key) ?? [];
+                const frontier = pubs.filter(id => !pubs.some(other => other !== id && s.graph.isAncestor(id, other))).map(id => s.graph.get(id)).filter(Boolean);
+                if (!frontier.length) reason = 'no-reference-variant';
+                else if (!frontier.every(r => same(r, frontier[0]))) reason = 'ambiguous-reference-variant'; // the reference itself still has several values
+                else {
+                    const carries = h => frontier.some(r => r.id === h) || same(s.graph.get(h), frontier[0]);
+                    const match = c.variants.filter(heads => heads.some(carries));
+                    if (match.length === 1) keep = match[0].find(h => frontier.some(r => r.id === h)) ?? match[0].find(carries);
+                    else reason = match.length ? 'ambiguous-reference-variant' : 'no-reference-variant';
+                }
+            }
+            if (!keep) { skipped.push({ root: key, title: rootId, reason }); continue; }
+            try { await resolveConflict({ root: key, keep }); resolved.push(key); }
+            catch (error) { skipped.push({ root: key, title: rootId, reason: error.message }); }
+        }
+        if (prefer === 'authority' && service().adopting) manifest.transact(x => { if (x.adopting) x.adoptionMark = { ...(x.adoptionMark ?? adoptionMark(x)), authority }; });
+        // Adoption is NOT ended here: only the user's endAdoption() ends it.
+        return { resolved: resolved.length, roots: resolved, skipped, adopting: !!service().adopting };
+    }
+    /** 2026-11-07: a joining device starts adopting the reference state only by the user's explicit action (the shared key alone never
+     *  starts it); only the user's endAdoption() ends it. Never on the reference device. */
+    function beginAdoption() {
+        requireEnabled(); if (service().role !== 'joining') throw new Error('Only a joining device adopts the reference state');
+        manifest.transact(x => { x.adopting = true; x.adoptionMark = { ...adoptionMark(x), ...(x.adoptionMark?.authority ? { authority: x.adoptionMark.authority } : {}) }; }); // the followed reference carries over
+        return { adopting: true };
+    }
+    /** The gate is set in a short exclusive step; a publish that passed its gate before is then awaited OUTSIDE the lane (saves keep
+     *  working) and success is reported only once it settled, so nothing of this device reaches the NAS after the user sees it started. */
+    async function startAdoption() {
+        const result = await exclusive(() => beginAdoption());
+        await inFlight.publish?.catch(() => {});
+        return result;
+    }
+    /** The user's explicit end of adoption (what still waits is their call), allowed once the reference data was received in this
+     *  adoption: a pull completed or an apply finished after it started. */
+    function endAdoption() {
+        requireEnabled(); if (!service().adopting) return { adopting: false };
+        if (service().plan) throw new Error('Finish the pending sync apply first');
+        const mark = service().adoptionMark;
+        if (!mark) { manifest.transact(x => { x.adoptionMark = adoptionMark(x); }); throw new Error('Receive the reference data at least once before finishing the join'); }
+        if (!mark.pulled && (service().applied.at(-1)?.transaction ?? null) === (mark.lastApplied ?? null)) throw new Error('Receive the reference data at least once before finishing the join');
+        manifest.transact(x => { x.adopting = false; });
+        return { adopting: false };
+    }
     /** Narrow explicit recovery of a settings group: a PAST revision of that root is re-published as the successor of every current head
      *  (the same parents core resolve() uses) with the past revision's content and dependency/envelope references; its sealed values are
      *  opened once, in memory, only to prove this device's key can (the result is discarded). The plan then materializes it here and every
@@ -463,6 +545,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     /** The open chat kept through a remote deletion: publish its current state first, then un-delete or resolve, and keep its lineage. */
     async function restoreOpenDeletion({ chatId }) {
         const s = requireEnabled(); if (service().plan) throw new Error('Finish the pending sync apply first');
+        // 2026-11-07: restoring commits a full snapshot (every unrecorded edit), which adoption suspends: the user finishes the join first.
+        if (service().role === 'joining' && service().adopting) throw Object.assign(new Error('Finish the join (합류 마치기) before restoring this chat'), { code: 'NAS_SYNC_ADOPTING' });
         await snapshot(); // the kept chat's current state (possibly edited since) becomes its own revision first
         const rootId = service().branches[chatId]?.root ?? chatId, key = `play\nchat\n${rootId}`, lineageKey = `${key}#${chatId}`, c = s.graph.classify(key);
         const own = service().lineage[lineageKey], ownRev = own ? s.graph.get(own) : null; // THIS chat's head (a sibling branch keeps its own)
@@ -1289,11 +1373,21 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     // A rejected run is not sticky; the next snapshot still captures fresh edits and checks enabled state inside its exclusive lane.
     const inFlight = { snapshot: null, publish: null, pull: null };
     const singleFlight = (name, run) => inFlight[name] ??= run().finally(() => { inFlight[name] = null; });
-    const takeSnapshot = async () => { requireEnabled(); return singleFlight('snapshot', () => exclusive(snapshot)); };
+    // 2026-11-07 adoption: this device's values are being replaced; checked inside the lane so a queued snapshot sees a just-started adoption.
+    const takeSnapshot = async () => { requireEnabled(); return singleFlight('snapshot', () => exclusive(() => service().role === 'joining' && service().adopting ? { committed: null, adopting: true } : snapshot())); };
     // The NAS route (home/external) is pinned for the whole run: one publish or pull never mixes endpoints mid PUT/verify/MOVE.
     const pinned = fn => nasRoute ? nasRoute.run(fn) : fn();
-    const publish = () => { requireEnabled(); return singleFlight('publish', () => pinned(() => openTransport().publish())); };
-    const pull = () => { requireEnabled(); return singleFlight('pull', () => pinned(() => openTransport().pull())); };
+    // 2026-11-07: a joining device still adopting the reference device's state publishes nothing (its empty/old values would become
+    // new conflicts on the reference device). Receive, plan and apply continue; only the user's endAdoption() ends it.
+    const publish = () => { requireEnabled(); if (service().role === 'joining' && service().adopting) return Promise.resolve({ stored: [], blobs: 0, failed: [], rotated: null, checkpoint: null, ack: null, adopting: true }); return singleFlight('publish', () => pinned(() => openTransport().publish())); };
+    const pull = () => { requireEnabled(); return singleFlight('pull', () => pinned(async () => {
+        const report = await openTransport().pull();
+        if (service().role === 'joining' && service().adopting) {
+            // Receipt (not completion): nothing of what was listed waits or is held in the persistent queues. Only the user ends adoption.
+            if (!openStore().waitingEntries().length) manifest.transact(x => { if (x.adopting) x.adoptionMark = { ...(x.adoptionMark ?? adoptionMark(x)), pulled: true }; });
+        }
+        return report;
+    })); };
     async function currentPlan() { const s = requireEnabled(), v = await openVault(); return service().plan ? materializePlan(s, v, readPlan(service().plan.transaction)) : { empty: true }; }
     function registerRoutes(app, { auth, activeSession }) {
         const route = (method, path, handler) => app[method]('/api/nas-sync' + path, async (req, res) => {
@@ -1327,6 +1421,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('get', '/conflicts', () => conflicts());
         route('get', '/overview', () => overview());
         route('post', '/resolve', req => exclusive(() => resolveConflict(req.body)));
+        route('post', '/resolve-all', req => exclusive(() => resolveAll(req.body)));
+    route('post', '/adoption/start', () => startAdoption());
+    route('post', '/adoption/end', () => exclusive(() => endAdoption()));
         route('post', '/restore-revision', req => exclusive(() => restoreRevision(req.body)));
         route('get', '/trash', () => trashList());
         // Display-only: the client reports what kind of device this is (PC / tablet / phone) for labels on other devices.
@@ -1336,7 +1433,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/open-deletion/accept', req => exclusive(() => acceptOpenDeletion(req.body)));
     }
     return { assertWrite, status, pendingRoots, enable, disable, setCardOnlyUpload: input => exclusive(() => setCardOnlyUpload(input)), markRestore, clearRestore, shareRequest: () => exclusive(shareRequest), detectShare, consumed, consumedAll, receiveForeign: (...a) => exclusive(() => receiveForeign(...a)), acceptPendingGrant: (...a) => exclusive(() => acceptPendingGrant(...a)), discardShare, sweepShares,
-        conflicts, overview, resolveConflict: (...a) => exclusive(() => resolveConflict(...a)), restoreRevision: (...a) => exclusive(() => restoreRevision(...a)), trashList, restoreTrash: (...a) => exclusive(() => restoreTrash(...a)), restoreOpenDeletion: (...a) => exclusive(() => restoreOpenDeletion(...a)), acceptOpenDeletion, snapshot: takeSnapshot, bootstrap: (...a) => exclusive(() => bootstrap(...a)), plan: () => exclusive(plan), currentPlan: () => exclusive(currentPlan), arm: (...a) => exclusive(() => arm(...a)), finish: (...a) => exclusive(() => finish(...a)), hold: (...a) => exclusive(() => hold(...a)), recovery, publish, pull, registerRoutes,
+        conflicts, overview, resolveConflict: (...a) => exclusive(() => resolveConflict(...a)), resolveAll: (...a) => exclusive(() => resolveAll(...a)), startAdoption: () => startAdoption(), endAdoption: () => exclusive(() => endAdoption()), restoreRevision: (...a) => exclusive(() => restoreRevision(...a)), trashList, restoreTrash: (...a) => exclusive(() => restoreTrash(...a)), restoreOpenDeletion: (...a) => exclusive(() => restoreOpenDeletion(...a)), acceptOpenDeletion, snapshot: takeSnapshot, bootstrap: (...a) => exclusive(() => bootstrap(...a)), plan: () => exclusive(plan), currentPlan: () => exclusive(currentPlan), arm: (...a) => exclusive(() => arm(...a)), finish: (...a) => exclusive(() => finish(...a)), hold: (...a) => exclusive(() => hold(...a)), recovery, publish, pull, registerRoutes,
         store: () => openStore(), transport: () => openTransport(), vault: () => openVault(), state: () => manifest.view() };
 }
 module.exports = { createNasSyncService };

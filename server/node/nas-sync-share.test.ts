@@ -384,3 +384,142 @@ test('disabled status still reports the saved workspace and role so a reopened p
     expect(() => reopened.enable({ workspaceId: 'risubard', role: 'authority' })).toThrow(/Workspace already bound/) // the defaults would not resume this device
     expect(reopened.enable({ workspaceId: 'family-nas', role: 'joining' })).toMatchObject({ enabled: true, role: 'joining', workspaceId: 'family-nas' })
 })
+
+// 2026-11-07 "기준 기기로 전부 맞추기" (join adoption, tier 1): one action resolves every diverged library/settings root to the
+// reference device, on the joining device ('authority') or on the reference device itself ('current'); a joining device that just
+// received the shared key publishes nothing until it adopted the reference state. Chats are never resolved by this action.
+const devId = (dev: any) => dev.service.store().identity().deviceId
+test('join adoption: a joining device resolves a 3-way fork (reference + old device + itself) to the reference device in one action; the reference chat then applies', async t => {
+    const dav = fixtureDav(), tablet = await device(t, dav, 'tablet', TABLET()); tablet.service.enable({ workspaceId: 'ws', role: 'authority' }); await tablet.service.snapshot(); await tablet.service.publish()
+    const pc = await device(t, dav, 'pc', { ...EMPTY(), aiModel: 'pc-model', language: 'fr' }); pc.service.enable({ workspaceId: 'ws', role: 'joining' }); await pc.service.snapshot(); expect((await pc.service.publish()).failed).toEqual([])
+    const phone = await device(t, dav, 'phone', { ...EMPTY(), aiModel: 'phone-model', language: 'ja' }); phone.service.enable({ workspaceId: 'ws', role: 'joining' })
+    await phone.service.snapshot(); await phone.service.pull()
+    const provider = (await phone.service.conflicts()).find((c: any) => c.variants.some((v: any) => v.content.aiModel === 'gpt'))
+    expect(provider.state).toBe('diverged'); expect(provider.variants.length).toBeGreaterThanOrEqual(3)
+    const blocked = await phone.service.plan(); expect(blocked.chats).toEqual([]); expect(blocked.pending).toEqual(expect.arrayContaining([expect.objectContaining({ root: 'play\nchat\nchat', reason: 'dependency' })])); await phone.service.finish(blocked.transaction, false) // the reported symptom: settings forks hold the reference chat back
+    await expect(phone.service.resolveAll({ prefer: 'x' })).rejects.toThrow("prefer must be")
+    await expect(phone.service.resolveAll({ prefer: 'authority' })).rejects.toThrow('No reference device') // no grant sender known, none given
+    const out = await phone.service.resolveAll({ prefer: 'authority', authorityDevice: devId(tablet) })
+    expect(out.roots).toContain(provider.root); expect(out.resolved).toBe(out.roots.length)
+    const plan = await applyAll(phone)
+    expect(plan.settings.aiModel).toBe('gpt'); expect(plan.pending.filter((p: any) => p.reason === 'diverged')).toEqual([])
+    expect(phone.db().aiModel).toBe('gpt'); expect(phone.db().language).toBe('en')
+    expect(phone.db().characters.find((c: any) => c.chaId === 'card').chats.map((c: any) => c.message[0].data)).toEqual(['본문']) // the reference chat arrived
+    expect((await phone.service.conflicts()).filter((c: any) => c.root === provider.root)).toEqual([])
+})
+
+test('join adoption: the reference device keeps its own applied values over every old-device fork in one action; a later device then joins without any difference', async t => {
+    const dav = fixtureDav(), tablet = await device(t, dav, 'tablet', TABLET()); tablet.service.enable({ workspaceId: 'ws', role: 'authority' }); await tablet.service.snapshot(); await tablet.service.publish()
+    for (const [name, aiModel, language] of [['pc', 'pc-model', 'fr'], ['old', 'old-model', 'de']]) {
+        const d = await device(t, dav, name, { ...EMPTY(), aiModel, language }); d.service.enable({ workspaceId: 'ws', role: 'joining' }); await d.service.snapshot(); expect((await d.service.publish()).failed).toEqual([])
+    }
+    await tablet.service.pull()
+    const provider = (await tablet.service.conflicts()).find((c: any) => c.variants.some((v: any) => v.content.aiModel === 'gpt')); expect(provider.variants.length).toBeGreaterThanOrEqual(3)
+    const out = await tablet.service.resolveAll({ prefer: 'current' }); expect(out.roots).toContain(provider.root)
+    await tablet.service.snapshot(); expect(await tablet.service.conflicts()).toEqual([]) // a cycle's snapshot before the apply must not fork the resolution again
+    await applyAll(tablet); expect(tablet.db().aiModel).toBe('gpt'); expect(tablet.db().language).toBe('en')
+    expect(await tablet.service.conflicts()).toEqual([]); expect((await tablet.service.publish()).failed).toEqual([])
+    const fresh = await device(t, dav, 'fresh', EMPTY()); fresh.service.enable({ workspaceId: 'ws', role: 'joining' })
+    const plan = await applyAll(fresh); expect(plan.pending.filter((p: any) => p.reason === 'diverged')).toEqual([])
+    expect(fresh.db().aiModel).toBe('gpt'); expect(fresh.db().characters.find((c: any) => c.chaId === 'card').chats).toHaveLength(1)
+})
+
+test('join adoption: a shared key alone never starts adoption (joining works as before); started explicitly, nothing of this device is committed or published (survives a restart) until the user ends it after receiving', async t => {
+    const dav = fixtureDav(), tablet = await device(t, dav, 'tablet', TABLET()); tablet.service.enable({ workspaceId: 'ws', role: 'authority' }); await tablet.service.snapshot(); await tablet.service.publish()
+    expect(tablet.service.status().adopting).toBe(false)
+    const phone = await device(t, dav, 'phone', { ...EMPTY(), aiModel: 'phone-model', language: 'ja' }, { master: null }); phone.service.enable({ workspaceId: 'ws', role: 'joining' })
+    const req = await phone.service.shareRequest(); await tablet.transfers.importNative((await phone.deliverTo(tablet, req.id, 'registered-phone')).id)
+    const grant = tablet.service.status().shares.find((s: any) => s.kind === 'grant')
+    expect(await phone.transfers.importNative((await tablet.deliverTo(phone, grant.id, 'registered-tablet')).id)).toMatchObject({ state: 'applied', kind: 'grant' })
+    expect(phone.service.status()).toMatchObject({ role: 'joining', adopting: false, vault: { origin: 'shared', sharedFrom: devId(tablet) } })
+    await phone.service.startAdoption(); expect(phone.service.status().adopting).toBe(true)
+    expect(await phone.service.snapshot()).toEqual({ committed: null, adopting: true }) // the phone's own values would fork every root again
+    expect(await phone.service.publish()).toMatchObject({ failed: [], stored: [], adopting: true })
+    await expect(phone.service.endAdoption()).rejects.toThrow('Receive the reference data') // nothing received yet
+    phone.make(); expect(phone.service.status().adopting).toBe(true) // persisted in the manifest
+    await phone.service.pull(); expect(await phone.service.conflicts()).toEqual([])
+    const plan = await applyAll(phone); expect(plan.pending).toEqual([])
+    expect(phone.db().aiModel).toBe('gpt'); expect(phone.db().language).toBe('en'); expect(phone.db().openAIKey).toBe(S('openai'))
+    expect(phone.db().characters.find((c: any) => c.chaId === 'card').chats).toHaveLength(1)
+    expect(phone.service.status().adopting).toBe(true) // never ended automatically
+    expect(await phone.service.endAdoption()).toEqual({ adopting: false })
+    expect((await phone.service.snapshot()).adopting).toBeUndefined(); const report = await phone.service.publish(); expect(report.adopting).toBeUndefined(); expect(report.failed).toEqual([])
+    await tablet.service.pull(); expect(await tablet.service.conflicts()).toEqual([])
+})
+
+test('join adoption: an already-keyed joining device that published its own values (the reported phone) restarts adoption explicitly; an equal genesis it shares with the reference is still recognised as the reference variant', async t => {
+    const dav = fixtureDav(), tablet = await device(t, dav, 'tablet', TABLET()); tablet.service.enable({ workspaceId: 'ws', role: 'authority' }); await tablet.service.snapshot(); await tablet.service.publish()
+    const pc = await device(t, dav, 'pc', { ...EMPTY(), aiModel: 'pc-model', language: 'fr' }); pc.service.enable({ workspaceId: 'ws', role: 'joining' }); await pc.service.snapshot(); await pc.service.publish()
+    // The old behaviour: the phone committed and published its own values (language equals the tablet's: same deterministic genesis).
+    const phone = await device(t, dav, 'phone', { ...EMPTY(), aiModel: 'phone-model', language: 'en' }); phone.service.enable({ workspaceId: 'ws', role: 'joining' })
+    await phone.service.snapshot(); expect((await phone.service.publish()).failed).toEqual([])
+    await expect(tablet.service.startAdoption()).rejects.toThrow('Only a joining device') // never on the reference
+    await phone.service.startAdoption(); expect(phone.service.status().adopting).toBe(true)
+    expect((await phone.service.snapshot()).adopting).toBe(true)
+    await phone.service.pull()
+    const out = await phone.service.resolveAll({ prefer: 'authority', authorityDevice: devId(tablet) })
+    expect(out.skipped).toEqual([]); expect(out.adopting).toBe(true) // resolving alone does not end adoption
+    const plan = await applyAll(phone); expect(plan.pending).toEqual([])
+    expect(phone.db().aiModel).toBe('gpt'); expect(phone.db().language).toBe('en'); expect(phone.db().characters.find((c: any) => c.chaId === 'card').chats).toHaveLength(1)
+    expect(phone.service.status().adopting).toBe(true); expect(await phone.service.endAdoption()).toEqual({ adopting: false })
+    expect((await phone.service.publish()).failed).toEqual([])
+    await tablet.service.pull(); await applyAll(tablet); expect(tablet.db().aiModel).toBe('gpt'); expect(await tablet.service.conflicts()).toEqual([]) // the phone's resolution settled its own and the PC fork on the reference values
+})
+
+test('join adoption: the user may end adoption with items still waiting, but only after the reference data was received in this adoption', async t => {
+    const dav = fixtureDav(), tablet = await device(t, dav, 'tablet', TABLET()); tablet.service.enable({ workspaceId: 'ws', role: 'authority' }); await tablet.service.snapshot(); await tablet.service.publish()
+    const pc = await device(t, dav, 'pc', { ...EMPTY(), aiModel: 'pc-model', language: 'fr' }); pc.service.enable({ workspaceId: 'ws', role: 'joining' }); await pc.service.snapshot(); await pc.service.publish()
+    const phone = await device(t, dav, 'phone', EMPTY()); phone.service.enable({ workspaceId: 'ws', role: 'joining' }); await phone.service.startAdoption()
+    await expect(phone.service.endAdoption()).rejects.toThrow('Receive the reference data')
+    const plan = await applyAll(phone); expect(plan.pending.length).toBeGreaterThan(0) // tablet ↔ PC forks hold items back
+    expect(phone.service.status().adopting).toBe(true)
+    expect(await phone.service.endAdoption()).toEqual({ adopting: false }); expect(phone.service.status().adopting).toBe(false)
+})
+test('join adoption: an unrecorded local edit is never overwritten and keeps its root pending (the user ends adoption, the edit is then recorded); re-adopting settles it on the reference value', async t => {
+    const dav = fixtureDav(), tablet = await device(t, dav, 'tablet', TABLET()); tablet.service.enable({ workspaceId: 'ws', role: 'authority' }); await tablet.service.snapshot(); await tablet.service.publish()
+    const phone = await device(t, dav, 'phone', EMPTY()); phone.service.enable({ workspaceId: 'ws', role: 'joining' })
+    await phone.service.snapshot(); await phone.service.pull() // lineage: the phone's own 'ko'
+    const edited = phone.db(); edited.language = 'ja'; phone.save(edited) // saved, never snapshotted
+    await phone.service.startAdoption(); expect((await phone.service.snapshot()).adopting).toBe(true)
+    expect((await phone.service.resolveAll({ prefer: 'authority', authorityDevice: devId(tablet) })).skipped).toEqual([])
+    const plan = await applyAll(phone); expect(plan.pending).toEqual(expect.arrayContaining([expect.objectContaining({ root: 'settings\ngroup\nlanguage', reason: 'local-edit' })]))
+    expect(phone.db().language).toBe('ja'); expect(phone.service.status().adopting).toBe(true) // the edit is kept, adoption stays open
+    expect(await phone.service.endAdoption()).toEqual({ adopting: false })
+    expect((await phone.service.snapshot()).committed).toBeTruthy() // the kept edit becomes its own revision (a visible difference, not lost)
+    // Re-adopting settles that recorded difference on the reference value (the phone's own earlier resolution carries it: frontier match).
+    await phone.service.startAdoption(); await phone.service.pull()
+    expect((await phone.service.resolveAll({ prefer: 'authority', authorityDevice: devId(tablet) })).skipped).toEqual([]); await applyAll(phone); expect(phone.db().language).toBe('en')
+    expect(phone.service.status().adopting).toBe(true); expect(await phone.service.endAdoption()).toEqual({ adopting: false })
+})
+
+test('join adoption: a chat deletion kept open during adoption keeps adoption open (unacknowledged commit); the user can still end it', async t => {
+    const dav = fixtureDav(), tablet = await device(t, dav, 'tablet', TABLET()); tablet.service.enable({ workspaceId: 'ws', role: 'authority' }); await tablet.service.snapshot(); await tablet.service.publish()
+    const phone = await device(t, dav, 'phone', EMPTY()); phone.service.enable({ workspaceId: 'ws', role: 'joining' }); await applyAll(phone)
+    await phone.service.startAdoption()
+    const tdb = tablet.db(); tdb.characters[0].chats = []; tablet.save(tdb); await tablet.service.snapshot(); await tablet.service.publish()
+    await phone.service.pull(); expect(phone.service.status().adopting).toBe(true) // a deletion waits to be applied
+    const plan = await phone.service.plan(); expect(plan.deletions).toEqual([{ kind: 'chat', characterId: 'card', id: 'chat' }])
+    const kept = [{ kind: 'chat', characterId: 'card', id: 'chat' }], db = phone.db()
+    await phone.service.arm(plan.transaction, echoOf(plan, applyPlanToDb(structuredClone(db), { ...plan, deletions: [] }), kept)); phone.save(db)
+    expect(await phone.service.finish(plan.transaction, true)).toMatchObject({ state: 'applied', keptDeletions: kept })
+    expect(phone.service.status().adopting).toBe(true)
+    await expect(phone.service.restoreOpenDeletion({ chatId: 'chat' })).rejects.toThrow('Finish the join') // its full snapshot would record every unrecorded edit
+    expect(await phone.service.endAdoption()).toEqual({ adopting: false })
+    expect((await phone.service.restoreOpenDeletion({ chatId: 'chat' })).state).toBe('live') // after the join, restoring works as before
+})
+
+test('join adoption: a root the reference device never published is reported, never guessed from the other variants; the reference device settles it with its applied value', async t => {
+    const dav = fixtureDav(), mod = (description: string) => ({ id: 'mod-1', name: '모듈', description, lorebook: [], regex: [] })
+    const tablet = await device(t, dav, 'tablet', TABLET()); tablet.service.enable({ workspaceId: 'ws', role: 'authority' }); await tablet.service.snapshot(); await tablet.service.publish()
+    const phone = await device(t, dav, 'phone', { ...EMPTY(), modules: [mod('phone')] }); phone.service.enable({ workspaceId: 'ws', role: 'joining' }); await phone.service.snapshot(); await phone.service.publish()
+    await applyAll(tablet); expect(tablet.db().modules.map((m: any) => m.description)).toEqual(['phone']) // the reference uses the phone's module
+    const pc = await device(t, dav, 'pc', { ...EMPTY(), modules: [mod('old-pc')] }); pc.service.enable({ workspaceId: 'ws', role: 'joining' }); await pc.service.snapshot(); await pc.service.publish()
+    await phone.service.pull(); await phone.service.startAdoption()
+    const root = (await phone.service.conflicts()).find((c: any) => c.variants.some((v: any) => v.content?.description === 'old-pc'))?.root
+    expect(root).toBeTruthy()
+    const out = await phone.service.resolveAll({ prefer: 'authority', authorityDevice: devId(tablet) })
+    expect(out.roots).not.toContain(root); expect(out.skipped).toEqual(expect.arrayContaining([expect.objectContaining({ root, reason: 'no-reference-variant' })]))
+    await tablet.service.pull(); expect((await tablet.service.resolveAll({ prefer: 'current' })).roots).toContain(root); await applyAll(tablet); await tablet.service.publish()
+    await phone.service.pull(); await applyAll(phone)
+    expect(phone.db().modules.map((m: any) => m.description)).toEqual(['phone']); expect((await phone.service.conflicts()).filter((c: any) => c.root === root)).toEqual([])
+})

@@ -9,7 +9,7 @@
     import { playSetAvailable, androidTransferAvailable, playNative, sendNative, nativeSend } from 'src/ts/transferNative'
     import { transferBusy, transferStatus, transferQueue, refreshTransfers, queueTransferFile, exportTransfer, receiveTransfer, cancelTransfer, requestRemoteTransfer, uploadLegacyChat } from 'src/ts/playTransfer'
     import { isNodeServer } from 'src/ts/platform'
-    import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
+    import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, resolveAllSync, startAdoptionSync, endAdoptionSync, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
     let selected = $state<string[]>([])
@@ -85,6 +85,19 @@
             transferStatus.set(syncActionResult)
             await refreshSync()
         })
+    }
+    /** 2026-11-07 join adoption: the adoption steps first, then ONE awaited sync run that first waits out a cycle already running (its
+     *  'running' answer would drop the request), so the panel stays busy until the reference data was received and applied. */
+    async function adoptThen(direction: 'upload' | 'download', steps: () => Promise<string>) {
+        let message = ''
+        await run(async () => { message = await steps() })
+        if (!message) return
+        working = true
+        try { for (let i = 0; i < 240 && coordinator().state?.running; i++) await new Promise(r => setTimeout(r, 500)) } finally { working = false }
+        // Still running after two minutes: say so instead of a request the coordinator would answer 'running' and drop.
+        if (coordinator().state?.running) { transferStatus.set(`${message} 동기화가 아직 진행 중이에요. 끝나면 「${direction === 'upload' ? 'NAS에 업로드' : '이 기기에 다운로드'}」를 한 번 눌러 주세요.`); return }
+        await runSync(direction)
+        transferStatus.set(`${message} ${syncActionResult}`)
     }
     /** One scoped status poll (10 s, visible only, while enabled) + the coordinator's reactive snapshot; user edits of role/workspace are never overwritten while disabled. */
     async function refreshSync() {
@@ -173,14 +186,25 @@
             {/each}
             {@const choices = syncConflictList.filter(c => c.state === 'diverged')}
             {@const kept = syncConflictList.filter(c => c.state !== 'diverged')}
+            {#if sync.role === 'joining' && sync.adopting}
+                <div class="sync-card"><strong>기준 기기 자료로 맞추는 중</strong><span>지금은 이 기기의 변경을 기록하거나 NAS에 올리지 않아요. 받은 자료를 적용하고 차이를 맞춘 뒤 합류 마치기를 눌러 주세요. 남은 차이가 있어도 끝낼 수 있고, 끝낸 뒤에는 이 기기의 변경도 올라가요.</span>
+                    <ShButton onclick={() => run(async () => { await endAdoptionSync(); await refreshSync(); transferStatus.set('합류를 마쳤어요. 이제 이 기기의 변경도 NAS에 올려요.') })}>합류 마치기</ShButton></div>
+            {:else if sync.role === 'joining' && sync.vault?.origin === 'shared' && !choices.length}
+                <details class="sync-card"><summary>기준 기기 자료로 다시 맞추기</summary><span>이 기기의 카드·모듈·설정을 기준 기기 값으로 다시 맞추고, 합류 마치기를 누를 때까지 이 기기의 변경은 올리지 않아요.</span>
+                    <ShButton onclick={() => adoptThen('download', async () => { await startAdoptionSync(); const all = await resolveAllSync('authority'); await refreshSync(); return `기준 기기 기준으로 ${all.resolved}개를 맞췄어요.${all.skipped?.length ? ` ${all.skipped.length}개는 그대로 두었어요.` : ''}` })}>기준 기기 기준으로 전부 맞추기</ShButton></details>
+            {/if}
             {#if choices.length}
                 <div class="sync-card">
                     <strong>기기 간 차이 {choices.length}건</strong>
                     {#if sync.role === 'joining' && sync.conflicts}
                         {@const authority = bootstrapAuthority(sync)}
-                        <span>처음 합류할 때 겹친 캐릭터 카드·모듈·플러그인과 앱 설정은 {authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')}(기준 기기)` : '고른 기기'}의 값으로 한 번에 맞출 수 있어요. 대화·페르소나와 합류 뒤에 고친 항목은 아래에서 하나씩 골라 주세요. 이 기기의 원래 값은 복구 기록에 보관돼요.</span>
+                        <span>갈라진 캐릭터 카드·모듈·플러그인·페르소나·앱 설정을 {authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')}(기준 기기)` : '고른 기기'}의 값으로 한 번에 맞춰요. 맞추는 동안 이 기기의 변경은 올리지 않고, 대화는 건드리지 않아요. 정할 수 없는 항목은 아래에서 하나씩 골라 주세요. 다른 값은 동기화 이력에 남아요.</span>
                         {#if !authority}<label>기준 기기<select bind:value={syncAuthorityPick}><option value="">선택…</option>{#each incomingPeers(sync) as peer (peer.device + peer.incarnation)}<option value={peer.device}>{syncDeviceName(sync, peer.device)} · {peer.label}</option>{/each}</select></label>{/if}
-                        <ShButton disabled={!authority && !syncAuthorityPick} onclick={() => run(async () => { const device = authority?.device ?? syncAuthorityPick; const r = await bootstrapSync(device); await refreshSync(); transferStatus.set(r.resolved ? `${syncDeviceName(sync, device)} 기준으로 카드·모듈·설정 ${r.resolved}개를 맞췄어요. 원래 값은 복구 기록에 있어요.` : '한 번에 맞출 처음 겹친 항목이 없어요. 남은 항목은 아래에서 하나씩 골라 주세요.') })}>{authority ? `처음 겹친 카드·모듈·설정을 ${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')} 값으로 맞추기` : '처음 겹친 카드·모듈·설정을 고른 기기 값으로 맞추기'}</ShButton>
+                        <ShButton disabled={!authority && !syncAuthorityPick} onclick={() => adoptThen('download', async () => { const device = authority?.device ?? syncAuthorityPick; if (!sync.adopting) await startAdoptionSync(); const all = await resolveAllSync('authority', device); await refreshSync(); const n = all.resolved ?? 0, left = all.skipped?.length ?? 0; return `${syncDeviceName(sync, device)} 기준으로 ${n}개를 맞췄어요.${left ? ` ${left}개는 기준 기기 값을 정할 수 없어 그대로 두었어요(기준 기기에서 「모든 차이를 이 기기 값으로 맞추기」를 먼저 눌러 주세요).` : ''} 다른 값은 동기화 이력에 남아요.` })}>{authority ? `${syncDeviceName(sync, authority.device).replace(/ · 기준$/, '')} 기준으로 전부 맞추기` : '고른 기기 기준으로 전부 맞추기'}</ShButton>
+                    {/if}
+                    {#if sync.role === 'authority'}
+                        <span>이 기기가 기준 기기예요. 다른 기기(옛 PC 판본 등)와 갈라진 카드·모듈·설정을 이 기기에 적용된 값으로 한 번에 정할 수 있어요. 대화는 건드리지 않아요.</span>
+                        <ShButton onclick={() => adoptThen('upload', async () => { const r = await resolveAllSync('current'); await refreshSync(); return `이 기기 값으로 ${r.resolved}개를 정했어요.${r.skipped?.length ? ` ${r.skipped.length}개는 이 기기에 적용된 값을 갈래에서 찾지 못해 그대로 두었어요.` : ''}` })}>모든 차이를 이 기기 값으로 맞추기</ShButton>
                     {/if}
                     <details><summary>하나씩 골라서 맞추기</summary>
                         {#each choices as conflict (conflict.root)}

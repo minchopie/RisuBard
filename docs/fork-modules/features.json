@@ -581,7 +581,8 @@
         "patchnote/0.9.91.md",
         "patchnote/0.9.92.md",
         "docs/fork-modules/WEEKLY-20261104.md",
-        "patchnote/0.9.90-ver1.md"
+        "patchnote/0.9.90-ver1.md",
+        "patchnote/0.9.90-ver2.md"
       ]
     },
     {
@@ -684,7 +685,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "0a525d4ee30945fbfc91ab7ce24585985872535b262096b882efeb3538c23612"
+          "sourceSha256": "64bed329250f6e98c0a2573032cf482c95a62427c1165969f1917509f6b00011"
         },
         {
           "module": "host-bridges",
@@ -763,7 +764,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "0a525d4ee30945fbfc91ab7ce24585985872535b262096b882efeb3538c23612"
+          "sourceSha256": "64bed329250f6e98c0a2573032cf482c95a62427c1165969f1917509f6b00011"
         },
         {
           "module": "lore-lua",
@@ -906,7 +907,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "0a525d4ee30945fbfc91ab7ce24585985872535b262096b882efeb3538c23612"
+          "sourceSha256": "64bed329250f6e98c0a2573032cf482c95a62427c1165969f1917509f6b00011"
         },
         {
           "module": "lore-lua",
@@ -1066,7 +1067,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.89/distribution.patch",
-          "sourceSha256": "0a525d4ee30945fbfc91ab7ce24585985872535b262096b882efeb3538c23612"
+          "sourceSha256": "64bed329250f6e98c0a2573032cf482c95a62427c1165969f1917509f6b00011"
         },
         {
           "module": "lore-lua",
@@ -1240,7 +1241,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.90/distribution.patch",
-          "sourceSha256": "0a525d4ee30945fbfc91ab7ce24585985872535b262096b882efeb3538c23612"
+          "sourceSha256": "64bed329250f6e98c0a2573032cf482c95a62427c1165969f1917509f6b00011"
         },
         {
           "module": "lore-lua",
