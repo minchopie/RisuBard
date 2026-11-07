@@ -31,7 +31,7 @@ test('a unique same name updates in place (id kept, all four active fields follo
         { name: 'C', personaPrompt: 'c2', image: null },
     ]
     const plan = await applyReceivedPersonas(db as any, rows, blobs('pic-b', 'pic-c'), x)
-    expect(plan).toEqual({ targets: [1, 0, -1, -1], updated: ['B', 'A'], added: ['C', 'C'], ambiguous: [] })
+    expect(plan).toEqual({ targets: [1, 0, -1, -1], updated: ['B', 'A'], added: ['C', 'C'], ambiguous: ['C'] })
     expect(db.personas[1]).toEqual({ id: 'b', name: 'B', personaPrompt: 'new b', note: 'new note', icon: 'assets/img-pic-b', largePortrait: true })
     expect(db).toMatchObject({ username: 'B', personaPrompt: 'new b', userNote: 'new note', userIcon: 'assets/img-pic-b' })
     // No picture and no note in the file: this device's picture and note stay.
@@ -52,7 +52,23 @@ test('names that are not unique never overwrite: two received "A" for one local 
     expect(plan).toEqual({ targets: [-1, -1, -1], updated: [], added: ['A', 'A', 'X'], ambiguous: ['A', 'X'] })
     expect(db.personas.slice(0, 4)).toEqual(before)
     expect(db.personas.slice(4).map(p => p.personaPrompt)).toEqual(['first', 'second', 'third'])
-    expect(personaPlanText(plan)).toBe('페르소나 3개를 가져올까요?\n같은 이름이 여러 개라 덮어쓰지 않고 새로 추가: A, X')
+    expect(personaPlanText(plan)).toBe('페르소나 3개를 가져올까요?\n이름이 겹쳐서 덮어쓰지 않고 새로 추가: A, X')
+})
+
+test('applying the same file again updates what it added (stable ids) instead of adding it twice', async () => {
+    for (const [local, rows] of [
+        [[], [{ name: 'N', personaPrompt: 'n', transferId: 't-0' }]],
+        [[], [{ name: 'A', personaPrompt: 'a1', transferId: 't-0' }, { name: 'A', personaPrompt: 'a2', transferId: 't-1' }]],
+        [[{ id: 'x1', name: 'X', personaPrompt: 'x1', icon: '' }, { id: 'x2', name: 'X', personaPrompt: 'x2', icon: '' }], [{ name: 'X', personaPrompt: 'x3', transferId: 't-0' }]],
+    ] as [any[], ReceivedPersona[]][]) {
+        const db = { ...baseDb(), personas: structuredClone(local) }
+        await applyReceivedPersonas(db as any, rows, {}, io())
+        const once = structuredClone(db.personas)
+        expect(once).toHaveLength(local.length + rows.length)
+        expect(once.slice(local.length).map((p: any) => p.id)).toEqual(rows.map(r => r.transferId))
+        const again = await applyReceivedPersonas(db as any, rows, {}, io())
+        expect(again.added).toEqual([]); expect(db.personas).toEqual(once)
+    }
 })
 
 test('module files are stored first and the module points at the new keys; a storage failure or a missing blob changes no persona', async () => {
@@ -126,12 +142,21 @@ test('declining reads no pictures and keeps everything; a declined automatic (re
     expect(paths()).not.toContain('/in/apply-request')
 })
 
-test('a save that does not confirm after the personas changed reloads the durable state and never marks the file applied', async () => {
-    server([{ name: 'B', personaPrompt: 'from tablet', image: null }])
+test('a save or applied mark that does not confirm puts the personas back (memory and a normal save) and never marks the file applied', async () => {
+    server([{ name: 'B', personaPrompt: 'from tablet', image: null }, { name: 'New', personaPrompt: 'n', transferId: 't-0' }])
     f.confirm.mockResolvedValue(true); f.save.mockRejectedValue(new Error('canonical save failed'))
+    const before = JSON.parse(JSON.stringify(f.db))
     await receiveTransfer('in')
-    expect(reload).toHaveBeenCalledTimes(1)
-    expect(paths()).not.toContain('/in/persona-applied')
+    expect(JSON.parse(JSON.stringify(f.db))).toEqual(before)
+    expect(paths()).not.toContain('/in/persona-applied'); expect(reload).not.toHaveBeenCalled()
+    expect(f.save).toHaveBeenCalledTimes(2) // the failed one, then the save of the restored values
+
+    // The save worked but the applied mark did not reach the server: also put back (the next save writes the old values).
+    f.save.mockReset(); f.save.mockResolvedValue(undefined)
+    f.request.mockImplementation(async (path: string) => path === '/in/persona-applied' ? new Response('{}', { status: 500 })
+        : reply(path.endsWith('/inspect') ? { kind: 'persona', characters: [], personas: [{ name: 'B' }] } : path.endsWith('/personas') ? { personas: [{ name: 'B', personaPrompt: 'x', image: null }], blobs: {} } : []))
+    await receiveTransfer('in')
+    expect(JSON.parse(JSON.stringify(f.db))).toEqual(before)
 })
 
 test('exporting writes the active persona back to its row and saves before the server reads the database', async () => {

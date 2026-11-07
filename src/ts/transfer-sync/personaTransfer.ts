@@ -2,12 +2,15 @@
 // Same rule as the NAS persona publish (content-updates): a persona with the same name is updated in place — its id stays,
 // so chats and bots bound to it keep it — and any other persona is added with a new id. Nothing is deleted or merged away:
 // when a name is not unique (it appears more than once in the file, or more than once on this device) the received persona
-// is added as a new one instead of overwriting a guess.
+// is added as a new one instead of overwriting a guess. A persona added from a file gets that file's stable id for it
+// (`transferId`), so applying the same file again (after an unconfirmed save) updates it instead of adding it twice.
 import type { RisuPersona } from '../storage/database.svelte'
 
 /** One persona as the server hands it over; pictures and module files are `blobs/<sha256>` keys into `blobs`. */
 export interface ReceivedPersona {
     name: string
+    /** Stable id the server derives from the received file and the row: the id a persona added from this row gets. */
+    transferId?: string
     personaPrompt: string
     note?: string
     largePortrait?: boolean
@@ -38,22 +41,40 @@ export interface PersonaPlan {
     targets: number[]
     updated: string[]
     added: string[]
-    /** Names added as new because the name was not unique (subset of `added`, once each). */
+    /** Names added as new because the name was not unique here or in the file (subset of `added`, once each). */
     ambiguous: string[]
 }
 
 /** Which received personas replace an existing one and which are added — fixed before anything changes. */
-export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<ReceivedPersona, 'name'>[]): PersonaPlan {
+export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<ReceivedPersona, 'name' | 'transferId'>[]): PersonaPlan {
     const received = new Map<string, number>()
     for (const row of rows) received.set(row.name, (received.get(row.name) ?? 0) + 1)
     const plan: PersonaPlan = { targets: [], updated: [], added: [], ambiguous: [] }
     for (const row of rows) {
+        // Added from this same file before (its save was not confirmed, or the file is applied again): that persona, by id.
+        const again = row.transferId ? db.personas.findIndex(p => p?.id === row.transferId) : -1
+        if (again >= 0) { plan.targets.push(again); plan.updated.push(row.name); continue }
         const local = db.personas.flatMap((p, i) => (p?.name === row.name ? [i] : []))
         if (local.length === 1 && received.get(row.name) === 1) { plan.targets.push(local[0]); plan.updated.push(row.name); continue }
         plan.targets.push(-1); plan.added.push(row.name)
-        if (local.length && !plan.ambiguous.includes(row.name)) plan.ambiguous.push(row.name)
+        if ((local.length || received.get(row.name)! > 1) && !plan.ambiguous.includes(row.name)) plan.ambiguous.push(row.name)
     }
     return plan
+}
+
+/** The persona rows and active persona fields, as plain values (restorable when an apply is not confirmed). */
+export function snapshotPersonas(db: PersonaDatabase) {
+    return JSON.parse(JSON.stringify({ personas: db.personas, selectedPersona: db.selectedPersona, username: db.username,
+        personaPrompt: db.personaPrompt, userNote: db.userNote ?? null, userIcon: db.userIcon })) as {
+        personas: RisuPersona[]; selectedPersona: number; username: string; personaPrompt: string; userNote: string | null; userIcon: string }
+}
+export function restorePersonas(db: PersonaDatabase, snapshot: ReturnType<typeof snapshotPersonas>) {
+    db.personas.splice(0, db.personas.length, ...snapshot.personas)
+    db.selectedPersona = snapshot.selectedPersona
+    db.username = snapshot.username
+    db.personaPrompt = snapshot.personaPrompt
+    if (snapshot.userNote === null) delete db.userNote; else db.userNote = snapshot.userNote
+    db.userIcon = snapshot.userIcon
 }
 
 export async function applyReceivedPersonas(db: PersonaDatabase, rows: ReceivedPersona[], blobs: ReceivedBlobs, io: PersonaApplyIo): Promise<PersonaPlan> {
@@ -105,7 +126,7 @@ export async function applyReceivedPersonas(db: PersonaDatabase, rows: ReceivedP
                 db.userIcon = persona.icon
             }
         } else {
-            db.personas.push({ ...fields, name: row.name, icon: icon ?? '', personaPrompt: row.personaPrompt, id: io.newId() })
+            db.personas.push({ ...fields, name: row.name, icon: icon ?? '', personaPrompt: row.personaPrompt, id: row.transferId ?? io.newId() })
         }
     }
     return plan
@@ -117,7 +138,7 @@ export function personaPlanText(plan: PersonaPlan): string {
     if (plan.updated.length) lines.push(`같은 이름이 있어 내용을 바꿈: ${plan.updated.join(', ')}`)
     const plain = plan.added.filter(name => !plan.ambiguous.includes(name))
     if (plain.length) lines.push(`새로 추가: ${plain.join(', ')}`)
-    if (plan.ambiguous.length) lines.push(`같은 이름이 여러 개라 덮어쓰지 않고 새로 추가: ${plan.ambiguous.join(', ')}`)
+    if (plan.ambiguous.length) lines.push(`이름이 겹쳐서 덮어쓰지 않고 새로 추가: ${plan.ambiguous.join(', ')}`)
     if (plan.updated.length) lines.push('바꾸는 페르소나는 그대로 유지돼서, 연결된 대화·봇도 그대로 그 페르소나를 써요.')
     return lines.join('\n')
 }

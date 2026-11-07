@@ -55,6 +55,7 @@ test('persona export makes one send entry (same file every transfer method sends
     const key = (id: string) => sender.list().then((rows: any[]) => rows.find(r => r.id === id).backupKey)
     expect(await key(pair.id)).not.toBe(await key(joined.id))
     expect(joined.excluded.map((e: any) => e.path)).toEqual(['페르소나 「A\nB」 그림'])
+    expect(joined.excluded[0].reason).toContain('그림 없이 보내요')
     const again = await sender.exportPersonas({ personaIds: ['p3', 'p1', 'p2'] })
     expect((await sender.list()).find((r: any) => r.id === again.id).backupKey).toBe(record.backupKey)
 
@@ -65,11 +66,15 @@ test('persona export makes one send entry (same file every transfer method sends
     const inspected = await receiver.inspect(entry.id)
     expect(inspected).toMatchObject({ kind: 'persona', characters: [], personas: [{ name: '함건희' }, { name: '용사 지망' }, { name: '그림 없음' }] })
     expect(JSON.stringify(inspected)).not.toContain('base64')
-    expect(Object.keys(inspected.personas[0])).toEqual(['name'])
+    expect(Object.keys(inspected.personas[0]).sort()).toEqual(['name', 'transferId'])
+    expect(inspected.personas[0].transferId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(new Set(inspected.personas.map((p: any) => p.transferId)).size).toBe(3)
     await expect(receiver.prepare(entry.id)).rejects.toThrow('페르소나 가져오기')
 
     const received = await receiver.receivedPersonas(entry.id)
     const [one, two, three] = received.personas
+    // The stable ids are the same ones the confirm step saw (a file applied again finds what it added before).
+    expect(received.personas.map((p: any) => p.transferId)).toEqual(inspected.personas.map((p: any) => p.transferId))
     expect(one).toMatchObject({ name: '함건희', personaPrompt: '설명 1', note: '메모', largePortrait: true, portraitPrompt: { style: 'a' } })
     // Each distinct picture is sent once; personas refer to it by key (the shared PNG is one blob for the face and the module icon).
     expect(one.image).toBe(`blobs/${sha(PNG)}`); expect(two.moduleIcon).toBe(one.image)
@@ -110,26 +115,39 @@ test('a declined or cancelled persona file stays listed, can be asked again, and
 
 test('bundle validation: play sets and other files are not persona files; damaged persona files are refused', async () => {
     const { bytes } = await buildPersonaBundle([{ name: 'A', personaPrompt: 'p', icon: 'k' }], async () => PNG)
-    expect(isPersonaBundle(bytes)).toBe(true)
-    expect(readPersonaBundle(bytes).personas[0]).toMatchObject({ name: 'A', image: `blobs/${sha(PNG)}` })
+    expect(await isPersonaBundle(bytes)).toBe(true)
+    expect((await readPersonaBundle(bytes)).personas[0]).toMatchObject({ name: 'A', image: `blobs/${sha(PNG)}` })
     const blob = (b: Uint8Array) => ({ [`blobs/${sha(b)}`]: b })
-    expect(isPersonaBundle(Buffer.from('not a zip'))).toBe(false)
-    expect(isPersonaBundle(Buffer.from(zipSync({ 'manifest.json': strToU8('{}') })))).toBe(false)
+    expect(await isPersonaBundle(Buffer.from('not a zip'))).toBe(false)
+    expect(await isPersonaBundle(Buffer.from(zipSync({ 'manifest.json': strToU8('{}') })))).toBe(false)
     const make = (manifest: any, extra: Record<string, Uint8Array> = {}) => Buffer.from(zipSync({ [MANIFEST]: strToU8(JSON.stringify(manifest)), ...extra }))
     const ok = { type: 'risubard-personas', version: 1, personas: [{ name: 'A', personaPrompt: 'p', image: null }] }
-    expect(readPersonaBundle(make(ok)).personas).toHaveLength(1)
-    expect(() => readPersonaBundle(make({ ...ok, type: 'other' }))).toThrow('페르소나 전송 파일이 아니에요')
-    expect(() => readPersonaBundle(make({ ...ok, version: 2 }))).toThrow('업데이트')
-    expect(() => readPersonaBundle(make({ ...ok, personas: [] }))).toThrow('1~200')
-    expect(() => readPersonaBundle(make({ ...ok, personas: Array.from({ length: 201 }, () => ok.personas[0]) }))).toThrow('1~200')
-    expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: ' ', personaPrompt: 'p' }] }))).toThrow('이름')
-    expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: 'images/0.bin' }] }))).toThrow('그림')
-    expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: '../x.bin' }] }, { '../x.bin': PNG }))).toThrow('알 수 없는 항목')
+    expect((await readPersonaBundle(make(ok))).personas).toHaveLength(1)
+    await expect(readPersonaBundle(make({ ...ok, type: 'other' }))).rejects.toThrow('페르소나 전송 파일이 아니에요')
+    await expect(readPersonaBundle(make({ ...ok, version: 2 }))).rejects.toThrow('업데이트')
+    await expect(readPersonaBundle(make({ ...ok, personas: [] }))).rejects.toThrow('1~200')
+    await expect(readPersonaBundle(make({ ...ok, personas: Array.from({ length: 201 }, () => ok.personas[0]) }))).rejects.toThrow('1~200')
+    await expect(readPersonaBundle(make({ ...ok, personas: [{ name: ' ', personaPrompt: 'p' }] }))).rejects.toThrow('이름')
+    await expect(readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: 'images/0.bin' }] }))).rejects.toThrow('그림')
+    await expect(readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: '../x.bin' }] }, { '../x.bin': PNG }))).rejects.toThrow()
     // An unreferenced member outside the native rule is refused as Android would, not skipped.
-    expect(() => readPersonaBundle(make(ok, { '../unused': PNG }))).toThrow('알 수 없는 항목')
-    expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', moduleAssets: [] }] }))).toThrow('모듈')
-    expect(() => readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: `blobs/${sha(PNG)}` }] }, { [`blobs/${sha(PNG)}`]: Buffer.from('other') }))).toThrow('손상')
-    expect(readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: `blobs/${sha(PNG)}` }] }, blob(PNG))).files.size).toBe(1)
+    await expect(readPersonaBundle(make(ok, { '../unused': PNG }))).rejects.toThrow()
+    await expect(readPersonaBundle(make(ok, { 'records/x.json': PNG }))).rejects.toThrow('알 수 없는 항목')
+    // Every member must be used by a persona.
+    await expect(readPersonaBundle(make(ok, blob(PNG)))).rejects.toThrow('쓰이지 않는')
+    await expect(readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', moduleAssets: [] }] }))).rejects.toThrow('모듈')
+    await expect(readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: `blobs/${sha(PNG)}` }] }, { [`blobs/${sha(PNG)}`]: Buffer.from('other') }))).rejects.toThrow('손상')
+    expect((await readPersonaBundle(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: `blobs/${sha(PNG)}` }] }, blob(PNG)))).files.size).toBe(1)
+    // A member whose real size differs from its declared size is refused (the declared sizes bound the memory used).
+    const lying = Buffer.from(make({ ...ok, personas: [{ name: 'A', personaPrompt: 'p', image: `blobs/${sha(PNG)}` }] }, blob(PNG)))
+    const name = Buffer.from(`blobs/${sha(PNG)}`)
+    for (let at = lying.indexOf(name); at >= 0; at = lying.indexOf(name, at + 1)) {
+        const central = lying.readUInt32LE(at - 46) === 0x02014b50, local = lying.readUInt32LE(at - 30) === 0x04034b50
+        if (central) lying.writeUInt32LE(1, at - 46 + 24)
+        if (local) lying.writeUInt32LE(1, at - 30 + 22)
+    }
+    await expect(readPersonaBundle(lying)).rejects.toThrow()
+    expect(await isPersonaBundle(lying)).toBe(true) // detection reads the manifest only; the full read refuses it
     expect(bundleName(['a/b:c'])).toBe('페르소나 abc.risuplay')
 })
 
@@ -151,7 +169,7 @@ test('a play-set archive is not a persona bundle', async t => {
     const service = createPlaySetService({ dataRoot: root, readDatabase: async () => structuredClone(state), memory: createRuntimeMemoryService(root),
         storage: createFileKv({ dataRoot: root }), readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
     const sent = await service.exportSet({ characterId: 'c', chatIds: ['chat'], primaryChatId: 'chat' })
-    expect(isPersonaBundle(await readFile(await service.file(sent.id)))).toBe(false)
+    expect(await isPersonaBundle(await readFile(await service.file(sent.id)))).toBe(false)
     const back = await service.ingest(createReadStream(await service.file(sent.id)))
     expect(back.kind).toBeUndefined(); expect(back.state).toBe('waiting')
 })

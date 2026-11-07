@@ -35,10 +35,16 @@ async function detectPersonaBundle(path) {
     const stat = await fs.stat(path);
     if (stat.size > MAX_BUNDLE_BYTES) return null;
     const bytes = await fs.readFile(path);
-    if (!isPersonaBundle(bytes)) return null;
-    return { names: readPersonaBundle(bytes).personas.map(p => p.name) };
+    if (!await isPersonaBundle(bytes)) return null;
+    return { names: (await readPersonaBundle(bytes)).personas.map(p => p.name) };
 }
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+/** Stable id for the i-th persona of one received file (UUID-shaped, from the file's SHA-256): a persona that file added keeps
+ *  this id, so applying the same file again finds it instead of adding it twice. */
+const transferPersonaId = (fileSha, index) => {
+    const h = sha256(`risubard-persona-transfer\n${fileSha}\n${index}`);
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${(8 | (parseInt(h[16], 16) & 3)).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+};
 
 function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInlay, installInlay, removeInlay, nativeInbox, foreignArchive = null }) {
     const root = join(dataRoot, 'play-transfer');
@@ -174,9 +180,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         try {
             const readAsset = async assetKey => {
                 const path = join(work, randomUUID());
-                // A picture that cannot be read (absent, damaged, not a stored key) is left out and listed, not a failed export.
                 try { return await storage.kvExportFile(assetKey, path) ? await fs.readFile(path) : null; }
-                catch { return null; }
                 finally { await fs.rm(path, { force: true }); }
             };
             const bundle = await buildPersonaBundle(personas, readAsset);
@@ -198,8 +202,8 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
     async function receivedPersonas(key) {
         const record = await personaRecord(key);
         if (!['waiting', 'failed'].includes(record.state)) throw new Error('이미 가져왔거나 취소한 페르소나예요.');
-        const bundle = readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')));
-        return { ...publicState(record), personas: bundle.personas, blobs: Object.fromEntries([...bundle.files].map(([path, bytes]) => [path, Buffer.from(bytes).toString('base64')])) };
+        const bundle = await readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')));
+        return { ...publicState(record), personas: bundle.personas.map((p, i) => ({ ...p, transferId: transferPersonaId(record.sha256, i) })), blobs: Object.fromEntries([...bundle.files].map(([path, bytes]) => [path, Buffer.from(bytes).toString('base64')])) };
     }
     async function personaApplied(key) {
         const record = await personaRecord(key);
@@ -222,7 +226,10 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
     async function inspect(key) {
         const record = await read(key);
         // Persona file: names only (no pictures), so the receiver can ask before anything large is read.
-        if (record.kind === 'persona') return { ...publicState(record), characters: [], personas: readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay'))).personas.map(p => ({ name: p.name })) };
+        if (record.kind === 'persona') {
+            const bundle = await readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')));
+            return { ...publicState(record), characters: [], personas: bundle.personas.map((p, i) => ({ name: p.name, transferId: transferPersonaId(record.sha256, i) })) };
+        }
         const archive = await openPlaySetArchive(join(directory(key), 'incoming.risuplay'), directory(key));
         try {
             const db = await readDatabase();

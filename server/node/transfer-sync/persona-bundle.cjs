@@ -6,7 +6,8 @@
 // and its manifest says `type: "risubard-personas"`. The receiver applies it on the client (same name -> update in place
 // keeping the id, otherwise add), never through the play-set import.
 const { createHash } = require('node:crypto');
-const { zipSync, unzipSync, strToU8, strFromU8 } = require('fflate');
+const { zipSync, strToU8 } = require('fflate');
+const yauzl = require('yauzl');
 
 const MANIFEST = 'manifest.json';
 const TYPE = 'risubard-personas';
@@ -16,6 +17,7 @@ const MAX_BUNDLE_BYTES = 64 * 1024 * 1024; // compressed file
 const MAX_EXPANDED_BYTES = 64 * 1024 * 1024; // all distinct entries after unzip (the receiver gets each once, base64)
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_NAME = 200;
+const MAX_ENTRIES = 4096;
 const ENTRY = /^blobs\/[a-f0-9]{64}$/;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -50,37 +52,65 @@ function validateManifest(manifest, entries) {
             if (p.moduleIcon !== undefined && p.moduleIcon !== null) ref(p.moduleIcon);
         } else if (p.moduleAssets !== undefined || p.moduleIcon !== undefined) throw new Error('페르소나 모듈 에셋 형식이 달라요.');
     }
+    // Every member is used: nothing travels (or is handed to the app) that no persona refers to.
+    for (const path of entries.keys()) if (!referenced.has(path)) throw new Error('페르소나 전송 파일에 쓰이지 않는 항목이 있어요.');
     return personas;
 }
 
+/**
+ * Reads members with yauzl (as the play-set and sync-share readers do): `validateEntrySizes` makes every member's real size
+ * equal its declared size, so the declared totals checked here bound the memory actually used. `only` reads one member and
+ * skips the limits (detection); otherwise every member must follow the native rule and the totals stay within the limits.
+ */
+async function readMembers(buffer, only) {
+    const zip = await yauzl.fromBufferPromise(Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength), { lazyEntries: true, strictFileNames: true, validateEntrySizes: true });
+    try {
+        const files = new Map();
+        let declared = 0, count = 0;
+        for await (const entry of zip.eachEntry()) {
+            const name = entry.fileName;
+            if (only) { if (name !== only) continue; }
+            else {
+                // Same member rule as the native archive (Android PlaySetArchive.entryName): anything else is refused, not skipped.
+                if (name !== MANIFEST && !ENTRY.test(name)) throw new Error('페르소나 전송 파일에 알 수 없는 항목이 있어요.');
+                if (files.has(name) || ++count > MAX_ENTRIES) throw new Error('페르소나 전송 파일의 항목이 겹치거나 너무 많아요.');
+                declared += entry.uncompressedSize;
+                if (declared > MAX_EXPANDED_BYTES) throw new Error('페르소나 전송 파일이 너무 커요.');
+            }
+            if (name === MANIFEST && entry.uncompressedSize > MAX_MANIFEST_BYTES) throw new Error('페르소나 전송 파일의 목록이 너무 커요.');
+            const chunks = []; let bytes = 0;
+            for await (const chunk of await zip.openReadStreamPromise(entry)) {
+                bytes += chunk.length;
+                if (bytes > entry.uncompressedSize) throw new Error('페르소나 전송 파일의 항목 크기가 달라요.');
+                chunks.push(chunk);
+            }
+            files.set(name, Buffer.concat(chunks, bytes));
+            if (only) break;
+        }
+        return files;
+    } finally { try { zip.close(); } catch { /* buffer-backed: nothing to release */ } }
+}
+
 /** Parses and validates a bundle held in memory. Returns { manifest, personas, files } (files: entry path -> bytes). */
-function readPersonaBundle(buffer) {
+async function readPersonaBundle(buffer) {
     if (!Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) throw new Error('페르소나 전송 파일이 아니에요.');
     if (buffer.length > MAX_BUNDLE_BYTES) throw new Error('페르소나 전송 파일이 너무 커요.');
-    let expanded = 0;
-    const files = unzipSync(buffer, { filter: file => {
-        expanded += file.originalSize;
-        if (expanded > MAX_EXPANDED_BYTES) throw new Error('페르소나 전송 파일이 너무 커요.');
-        // Same member rule as the native archive (Android PlaySetArchive.entryName): anything else is refused, not skipped.
-        if (file.name !== MANIFEST && !ENTRY.test(file.name)) throw new Error('페르소나 전송 파일에 알 수 없는 항목이 있어요.');
-        return true;
-    } });
-    const raw = files[MANIFEST];
+    const files = await readMembers(buffer);
+    const raw = files.get(MANIFEST);
     if (!raw) throw new Error('페르소나 전송 파일이 아니에요.');
-    if (raw.length > MAX_MANIFEST_BYTES) throw new Error('페르소나 전송 파일의 목록이 너무 커요.');
-    const manifest = JSON.parse(strFromU8(raw));
-    const entries = new Map(Object.entries(files).filter(([name]) => name !== MANIFEST));
-    for (const [name, bytes] of entries) if (name !== `blobs/${sha256(bytes)}`) throw new Error('페르소나 전송 파일의 그림이 손상됐어요.');
-    const personas = validateManifest(manifest, entries);
-    return { manifest, personas, files: entries };
+    const manifest = JSON.parse(raw.toString('utf8'));
+    files.delete(MANIFEST);
+    for (const [name, bytes] of files) if (name !== `blobs/${sha256(bytes)}`) throw new Error('페르소나 전송 파일의 그림이 손상됐어요.');
+    const personas = validateManifest(manifest, files);
+    return { manifest, personas, files };
 }
 
 /** True when the file is a ZIP whose manifest says it is a persona bundle (a play set's never does). Never throws for other files. */
-function isPersonaBundle(buffer) {
+async function isPersonaBundle(buffer) {
     if (!buffer || buffer.length < 4 || buffer.length > MAX_BUNDLE_BYTES || buffer[0] !== 0x50 || buffer[1] !== 0x4b) return false;
     try {
-        const raw = unzipSync(buffer, { filter: file => file.name === MANIFEST && file.originalSize <= MAX_MANIFEST_BYTES })[MANIFEST];
-        return !!raw && JSON.parse(strFromU8(raw))?.type === TYPE;
+        const raw = (await readMembers(buffer, MANIFEST)).get(MANIFEST);
+        return !!raw && JSON.parse(raw.toString('utf8'))?.type === TYPE;
     } catch { return false; }
 }
 
@@ -91,6 +121,11 @@ function isPersonaBundle(buffer) {
 async function buildPersonaBundle(personas, readAsset) {
     if (!Array.isArray(personas) || !personas.length || personas.length > MAX_PERSONAS) throw new Error(`페르소나는 1~${MAX_PERSONAS}개까지 보낼 수 있어요.`);
     const files = {}, excluded = [], out = [];
+    // A file that cannot be read is left out and listed with its reason (absent, damaged, not a stored key), not a failed export.
+    const read = async key => {
+        try { const bytes = await readAsset(key); return bytes ? { bytes } : { reason: '이 기기에서 파일을 찾지 못해' }; }
+        catch (error) { return { reason: `이 기기에서 파일을 읽지 못해(${error?.message ?? error})` }; }
+    };
     let expanded = 0;
     // The same picture used twice is stored once (an archive member name may appear only once).
     const add = bytes => {
@@ -109,9 +144,9 @@ async function buildPersonaBundle(personas, readAsset) {
         if (isObject(persona.portraitPrompt)) row.portraitPrompt = JSON.parse(JSON.stringify(persona.portraitPrompt));
         row.image = null;
         if (persona.icon) {
-            const bytes = await readAsset(persona.icon);
-            if (bytes) row.image = add(bytes);
-            else excluded.push({ path: `페르소나 「${persona.name}」 그림`, reason: '이 기기에서 그림 파일을 읽지 못해 그림 없이 보내요.' });
+            const got = await read(persona.icon);
+            if (got.bytes) row.image = add(got.bytes);
+            else excluded.push({ path: `페르소나 「${persona.name}」 그림`, reason: `${got.reason} 그림 없이 보내요.` });
         }
         if (isObject(persona.embeddedModule)) {
             const module = JSON.parse(JSON.stringify(persona.embeddedModule));
@@ -119,17 +154,17 @@ async function buildPersonaBundle(personas, readAsset) {
             if (Array.isArray(module.assets)) {
                 const kept = [];
                 for (const [j, asset] of module.assets.entries()) {
-                    const bytes = Array.isArray(asset) && typeof asset[1] === 'string' && asset[1] ? await readAsset(asset[1]) : null;
-                    if (!bytes) { excluded.push({ path: `페르소나 「${persona.name}」 모듈 에셋 ${asset?.[0] ?? j}`, reason: '이 기기에서 파일을 읽지 못해 빼고 보내요.' }); continue; }
-                    row.moduleAssets.push(add(bytes));
+                    const got = Array.isArray(asset) && typeof asset[1] === 'string' && asset[1] ? await read(asset[1]) : { reason: '파일 정보가 없어' };
+                    if (!got.bytes) { excluded.push({ path: `페르소나 「${persona.name}」 모듈 에셋 ${asset?.[0] ?? j}`, reason: `${got.reason} 빼고 보내요.` }); continue; }
+                    row.moduleAssets.push(add(got.bytes));
                     kept.push([String(asset[0] ?? ''), '', String(asset[2] ?? '')]);
                 }
                 module.assets = kept;
             }
             if (typeof module.icon === 'string' && module.icon) {
-                const bytes = await readAsset(module.icon);
-                if (bytes) row.moduleIcon = add(bytes);
-                else excluded.push({ path: `페르소나 「${persona.name}」 모듈 아이콘`, reason: '이 기기에서 파일을 읽지 못해 빼고 보내요.' });
+                const got = await read(module.icon);
+                if (got.bytes) row.moduleIcon = add(got.bytes);
+                else excluded.push({ path: `페르소나 「${persona.name}」 모듈 아이콘`, reason: `${got.reason} 빼고 보내요.` });
                 delete module.icon;
             }
             row.embeddedModule = module;
@@ -142,7 +177,7 @@ async function buildPersonaBundle(personas, readAsset) {
     for (const [path, bytes] of Object.entries(files)) zip[path] = [bytes, { level: 0 }];
     const bytes = Buffer.from(zipSync(zip));
     if (bytes.length > MAX_BUNDLE_BYTES) throw new Error('보낼 페르소나 그림이 너무 커요. 개수를 나눠서 보내 주세요.');
-    readPersonaBundle(bytes); // the receiver's own check, so a bad bundle never leaves this device
+    await readPersonaBundle(bytes); // the receiver's own check, so a bad bundle never leaves this device
     return { bytes, names: out.map(p => p.name), excluded };
 }
 

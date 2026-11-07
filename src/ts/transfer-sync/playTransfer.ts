@@ -10,7 +10,7 @@ import { applyMemorySavePromptSettings } from '../risubard/memorySaveSlots'
 import { transferBusy, transferStatus, syncSaveHold } from './transferState'
 import { hashLocalJson } from '../../../shared/play-set/protocol'
 import { playNative, playSetAvailable, sendNative } from './transferNative'
-import { applyReceivedPersonas, planPersonas, personaPlanText, type ReceivedPersona } from './personaTransfer'
+import { applyReceivedPersonas, planPersonas, personaPlanText, snapshotPersonas, restorePersonas, type ReceivedPersona } from './personaTransfer'
 export { transferBusy, transferStatus } from './transferState'
 /**
  * One native inbox entry through the server. Play sets are queued as before. A NAS sync key share is answered by the server
@@ -116,7 +116,7 @@ export async function receivePersonaTransfer(key: string, automatic = false, ins
     }
     if (transferUnavailable()) return
     transferBusy.set(true); transferStatus.set('페르소나를 가져오는 중…')
-    let changed = false
+    let snapshot: ReturnType<typeof snapshotPersonas> | undefined
     try {
         const received = await (await transferRequest(`/${key}/personas`)).json()
         const [database, inlays, globalApi, uuid] = await Promise.all([import('../storage/database.svelte'), import('../process/files/inlays'), import('../globalApi.svelte'), import('uuid')])
@@ -124,19 +124,22 @@ export async function receivePersonaTransfer(key: string, automatic = false, ins
             saveImage: (bytes: Uint8Array) => database.saveImage(bytes), reencodeImage: (bytes: Uint8Array) => inlays.reencodeImage(bytes),
             saveAsset: (bytes: Uint8Array, customId: string, fileName: string) => globalApi.saveAsset(bytes, customId, fileName), newId: () => uuid.v4(),
         }
+        snapshot = snapshotPersonas(getDatabase())
         const plan = await applyReceivedPersonas(getDatabase(), received.personas as ReceivedPersona[], received.blobs ?? {}, io)
-        changed = true
         await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
         await post(`/${key}/persona-applied`)
         transferStatus.set(`페르소나를 가져왔어요.${plan.updated.length ? ` 바꿈 ${plan.updated.length}개` : ''}${plan.added.length ? ` · 추가 ${plan.added.length}개` : ''}`)
     } catch (error) {
-        transferStatus.set(String(error))
-        if (changed) {
-            // The personas changed in memory but the save did not confirm: reload reads the durable state instead of keeping
-            // (or guessing how to undo) an unsaved change. The received file stays in the list, so it can be applied again.
-            location.reload()
+        if (snapshot) {
+            // The save (or the applied mark) did not confirm. Put the personas back as they were, in memory and through the normal
+            // save, so a retried save never writes a half-confirmed import. If part of it did reach storage, the file is still in
+            // the list: applying it again updates the same personas (added ones by their stable ids) instead of adding them twice.
+            restorePersonas(getDatabase(), snapshot)
+            await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true }).catch(() => {})
+            transferStatus.set(`페르소나 가져오기를 확인하지 못해 되돌렸어요. 수신 목록에서 다시 가져올 수 있어요. ${String(error)}`)
             return
         }
+        transferStatus.set(String(error))
         throw error
     } finally { transferBusy.set(false); await refreshTransfers() }
 }
