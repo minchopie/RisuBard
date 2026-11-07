@@ -10,7 +10,10 @@ import { applyMemorySavePromptSettings } from '../risubard/memorySaveSlots'
 import { transferBusy, transferStatus, syncSaveHold } from './transferState'
 import { hashLocalJson } from '../../../shared/play-set/protocol'
 import { playNative, playSetAvailable, sendNative } from './transferNative'
-import { applyReceivedPersonas, planPersonas, personaPlanText, type ReceivedPersona } from './personaTransfer'
+import { applyReceivedPersonas, planPersonas, personaPlanText, personaTargetMap, type ReceivedPersona } from './personaTransfer'
+/** Persona files already asked about automatically in this session: a failed or declined automatic apply is not asked again by
+ *  the poll (the list's 「가져오기」 still works), so a lasting failure never turns into a repeating question. */
+const personaAutoAsked = new Set<string>()
 export { transferBusy, transferStatus } from './transferState'
 /**
  * One native inbox entry through the server. Play sets are queued as before. A NAS sync key share is answered by the server
@@ -106,10 +109,11 @@ export async function exportPersonaTransfer(personaIds: string[]) {
  *  Only names are read before asking; pictures come after the answer. */
 export async function receivePersonaTransfer(key: string, automatic = false, inspected?: { personas?: { name: string }[] }) {
     if (transferUnavailable()) { transferStatus.set('기존 작업이 끝나면 가져올 수 있어요. 받은 파일은 보관됩니다.'); return }
+    if (automatic) personaAutoAsked.add(key)
     const names = (inspected ?? await (await transferRequest(`/${key}/inspect`)).json()).personas ?? []
     if (!await alertConfirm(personaPlanText(planPersonas(getDatabase(), names)))) {
         // An automatic (NAS "앱으로 받기") apply that was declined is not asked again every poll; the entry stays in the list.
-        if (automatic) await post(`/${key}/apply-request`, { requested: false })
+        if (automatic) await post(`/${key}/apply-request`, { requested: false }).catch(() => {})
         transferStatus.set('페르소나 가져오기를 미뤘어요. 수신 목록에서 다시 가져올 수 있어요.')
         await refreshTransfers()
         return
@@ -127,16 +131,22 @@ export async function receivePersonaTransfer(key: string, automatic = false, ins
             saveImage: (bytes: Uint8Array) => database.saveImage(bytes), reencodeImage: (bytes: Uint8Array) => inlays.reencodeImage(bytes),
             saveAsset: (bytes: Uint8Array, customId: string, fileName: string) => globalApi.saveAsset(bytes, customId, fileName), newId: () => uuid.v4(),
         }
-        const plan = await applyReceivedPersonas(getDatabase(), received.personas as ReceivedPersona[], received.blobs ?? {}, io)
+        const rows = received.personas as ReceivedPersona[], planned = planPersonas(getDatabase(), rows)
+        // Recorded first, so applying this file again reaches the same personas even after one is renamed.
+        await post(`/${key}/persona-map`, { map: personaTargetMap(getDatabase(), rows, planned) })
+        const plan = await applyReceivedPersonas(getDatabase(), rows, received.blobs ?? {}, io, planned)
         applied = true
         await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
         await post(`/${key}/persona-applied`)
         transferStatus.set(`페르소나를 가져왔어요.${plan.updated.length ? ` 바꿈 ${plan.updated.length}개` : ''}${plan.added.length ? ` · 추가 ${plan.added.length}개` : ''}`)
     } catch (error) {
-        transferStatus.set(applied
-            ? `페르소나는 가져왔지만 저장이나 완료 표시를 확인하지 못했어요. 앱이 저장을 다시 시도해요. 받은 파일은 수신 목록에 남겨 두었고, 다시 가져와도 같은 페르소나가 두 번 생기지 않아요. ${String(error)}`
-            : String(error))
-        if (!applied) throw error
+        if (!applied) { transferStatus.set(String(error)); throw error }
+        // The server may have recorded "applied" and only the answer was lost: say which it is.
+        await refreshTransfers().catch(() => {})
+        const done = get(transferQueue).find(entry => entry.id === key)?.state === 'applied'
+        transferStatus.set(done
+            ? `페르소나를 가져왔어요. 저장 확인 응답만 받지 못했어요. 앱이 저장을 다시 시도해요. ${String(error)}`
+            : `페르소나는 가져왔지만 저장이나 완료 표시를 확인하지 못했어요. 앱이 저장을 다시 시도해요. 받은 파일은 수신 목록에 남겨 두었고, 다시 가져와도 같은 페르소나가 두 번 생기지 않아요. ${String(error)}`)
     } finally { transferBusy.set(false); await refreshTransfers() }
 }
 export async function receiveTransfer(key: string, automatic = false) {
@@ -261,7 +271,7 @@ export function startTransferInbox() {
                 await refreshTransfers()
                 // A persona file changes existing personas, so it is applied on its own only when the user asked for it (NAS "앱으로 받기"),
                 // never just because a registered Wi-Fi device sent it; it still asks before changing anything.
-                const next = get(transferQueue).find(item => item.direction === 'receive' && item.state === 'waiting' && (item.kind === 'persona' ? item.applyRequested === true : (item.applyRequested ?? item.trusted)))
+                const next = get(transferQueue).find(item => item.direction === 'receive' && item.state === 'waiting' && (item.kind === 'persona' ? item.applyRequested === true && !personaAutoAsked.has(item.id) : (item.applyRequested ?? item.trusted)))
                 if (next) await receiveTransfer(next.id, true)
             }
         } catch (error: any) { if (!gateRace(error)) transferStatus.set(String(error)) } // a gate race is expected and silent; real network/IO errors are shown as before

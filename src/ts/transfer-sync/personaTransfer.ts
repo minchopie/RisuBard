@@ -11,6 +11,8 @@ export interface ReceivedPersona {
     name: string
     /** Stable id the server derives from the received file and the row: the id a persona added from this row gets. */
     transferId?: string
+    /** The local persona this row was applied to before (recorded on this device with the received file). */
+    localId?: string
     personaPrompt: string
     note?: string
     largePortrait?: boolean
@@ -46,15 +48,17 @@ export interface PersonaPlan {
 }
 
 /** Which received personas replace an existing one and which are added — fixed before anything changes. */
-export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<ReceivedPersona, 'name' | 'transferId'>[]): PersonaPlan {
+export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<ReceivedPersona, 'name' | 'transferId' | 'localId'>[]): PersonaPlan {
     const received = new Map<string, number>()
     for (const row of rows) received.set(row.name, (received.get(row.name) ?? 0) + 1)
     const plan: PersonaPlan = { targets: rows.map(() => -1), updated: [], added: [], ambiguous: [] }
-    // First: personas this same file added before (by their stable ids). Those are reserved, so a name match below never
-    // sends a second received row onto the same persona.
+    // First: personas this same file was applied to before — the one recorded for the row (kept even if renamed since), or the
+    // one it added (its stable id). Those are reserved, so a name match below never sends a second row onto the same persona.
     const reserved = new Set<number>()
     rows.forEach((row, i) => {
-        const again = row.transferId ? db.personas.findIndex(p => p?.id === row.transferId) : -1
+        const ids = [row.localId, row.transferId].filter((id): id is string => !!id)
+        const found = ids.map(id => db.personas.findIndex((p, k) => p?.id === id && !reserved.has(k))).find(k => k >= 0)
+        const again = found ?? -1
         if (again >= 0 && !reserved.has(again)) { plan.targets[i] = again; reserved.add(again) }
     })
     rows.forEach((row, i) => {
@@ -67,8 +71,19 @@ export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<R
     return plan
 }
 
-export async function applyReceivedPersonas(db: PersonaDatabase, rows: ReceivedPersona[], blobs: ReceivedBlobs, io: PersonaApplyIo): Promise<PersonaPlan> {
-    const plan = planPersonas(db, rows)
+/** Which local persona each row goes to (by persona id), to be recorded before applying: rows that are added get their stable id. */
+export function personaTargetMap(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<ReceivedPersona, 'transferId'>[], plan: PersonaPlan): Record<string, string> {
+    const map: Record<string, string> = {}
+    rows.forEach((row, i) => {
+        if (!row.transferId) return
+        const id = plan.targets[i] >= 0 ? db.personas[plan.targets[i]]?.id : row.transferId
+        if (id) map[row.transferId] = id
+    })
+    return map
+}
+
+export async function applyReceivedPersonas(db: PersonaDatabase, rows: ReceivedPersona[], blobs: ReceivedBlobs, io: PersonaApplyIo, planned?: PersonaPlan): Promise<PersonaPlan> {
+    const plan = planned ?? planPersonas(db, rows)
     const bytesOf = (key: string | null | undefined) => {
         if (!key) return null
         const base64 = blobs[key]

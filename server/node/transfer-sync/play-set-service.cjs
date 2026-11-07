@@ -203,7 +203,22 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         const record = await personaRecord(key);
         if (!['waiting', 'failed'].includes(record.state)) throw new Error('이미 가져왔거나 취소한 페르소나예요.');
         const bundle = await readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')));
-        return { ...publicState(record), personas: bundle.personas.map((p, i) => ({ ...p, transferId: transferPersonaId(record.sha256, i) })), blobs: Object.fromEntries([...bundle.files].map(([path, bytes]) => [path, Buffer.from(bytes).toString('base64')])) };
+        return { ...publicState(record), personas: bundle.personas.map((p, i) => ({ ...p, ...personaIds(record, i) })), blobs: Object.fromEntries([...bundle.files].map(([path, bytes]) => [path, Buffer.from(bytes).toString('base64')])) };
+    }
+    /** Row i's stable id, and the local persona it was applied to before (recorded by `personaMap`), if any. */
+    const personaIds = (record, i) => {
+        const transferId = transferPersonaId(record.sha256, i), localId = record.personaMap?.[transferId];
+        return typeof localId === 'string' ? { transferId, localId } : { transferId };
+    };
+    /** Before the client changes anything it records which local persona each row goes to, so applying the file again finds the
+     *  same persona even after it was renamed (device-local, kept with this received file; not part of the app database). */
+    async function personaMap(key, map) {
+        const record = await personaRecord(key);
+        if (!['waiting', 'failed'].includes(record.state)) throw new Error('이미 가져왔거나 취소한 페르소나예요.');
+        const entries = map && typeof map === 'object' && !Array.isArray(map) ? Object.entries(map) : null;
+        if (!entries || entries.length > MAX_PERSONAS || entries.some(([k, v]) => !/^[0-9a-f-]{36}$/.test(k) || typeof v !== 'string' || !v || v.length > 200)) throw new Error('페르소나 대응 기록 형식이 달라요.');
+        record.personaMap = { ...(record.personaMap ?? {}), ...Object.fromEntries(entries) }; write(record);
+        return publicState(record);
     }
     async function personaApplied(key) {
         const record = await personaRecord(key);
@@ -228,7 +243,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         // Persona file: names only (no pictures), so the receiver can ask before anything large is read.
         if (record.kind === 'persona') {
             const bundle = await readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')));
-            return { ...publicState(record), characters: [], personas: bundle.personas.map((p, i) => ({ name: p.name, transferId: transferPersonaId(record.sha256, i) })) };
+            return { ...publicState(record), characters: [], personas: bundle.personas.map((p, i) => ({ name: p.name, ...personaIds(record, i) })) };
         }
         const archive = await openPlaySetArchive(join(directory(key), 'incoming.risuplay'), directory(key));
         try {
@@ -482,6 +497,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/persona-export', async (req, res) => res.json(await exclusive(() => exportPersonas(req.body))));
         route('get', '/:id/personas', async (req, res) => res.json(await receivedPersonas(req.params.id)));
         route('post', '/:id/persona-applied', async (req, res) => res.json(await exclusive(() => personaApplied(req.params.id))));
+        route('post', '/:id/persona-map', async (req, res) => res.json(await exclusive(() => personaMap(req.params.id, req.body.map))));
         route('get', '/:id/inspect', async (req, res) => res.json(await inspect(req.params.id)));
         route('get', '/:id/file', async (req, res) => res.download(await file(req.params.id), (await read(req.params.id)).name));
         route('post', '/:id/prepare', async (req, res) => res.json(await exclusive(() => prepare(req.params.id, req.body.targets))));
@@ -491,7 +507,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/:id/cancel', async (req, res) => res.json(await exclusive(() => cancel(req.params.id))));
         route('post', '/:id/apply-request', async (req, res) => res.json(await exclusive(() => requestApply(req.params.id, req.body.requested))));
     }
-    return { assertWrite, list, ingest, exportSet, exportPersonas, receivedPersonas, personaApplied: key => exclusive(() => personaApplied(key)), inspect, prepare: (...args) => exclusive(() => prepare(...args)), arm: (...args) => exclusive(() => arm(...args)),
+    return { assertWrite, list, ingest, exportSet, exportPersonas, receivedPersonas, personaApplied: key => exclusive(() => personaApplied(key)), personaMap: (key, map) => exclusive(() => personaMap(key, map)), inspect, prepare: (...args) => exclusive(() => prepare(...args)), arm: (...args) => exclusive(() => arm(...args)),
         finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), requestApply: (...args) => exclusive(() => requestApply(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes };
 }
 async function safeParents(root, path) {

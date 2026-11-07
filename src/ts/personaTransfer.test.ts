@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, test, expect, vi } from 'vitest'
 import { writable } from 'svelte/store'
-import { applyReceivedPersonas, planPersonas, personaPlanText, type ReceivedPersona } from './transfer-sync/personaTransfer'
+import { applyReceivedPersonas, planPersonas, personaPlanText, personaTargetMap, type ReceivedPersona } from './transfer-sync/personaTransfer'
 
 const b64 = (text: string) => Buffer.from(text).toString('base64')
 /** Blobs as the server sends them: one entry per distinct file. */
@@ -79,6 +79,19 @@ test('a persona found by its stable id is reserved: a name match from another ro
     expect(db.personas.map(p => [p.id, p.name, p.personaPrompt])).toEqual([['t0', 'B', 'a'], ['t1', 'B', 'b']])
 })
 
+test('a row applied by name before is found again through its recorded local persona even after renames', async () => {
+    // A and B were updated by name; here A was renamed to C and B to A. The recorded map keeps each row on its persona.
+    const db = { ...baseDb(), personas: [{ id: 'local-a', name: 'C', personaPrompt: 'a0', icon: '' }, { id: 'local-b', name: 'A', personaPrompt: 'b0', icon: '' }] as any[] }
+    const rows: ReceivedPersona[] = [{ name: 'A', personaPrompt: 'a1', transferId: 't0', localId: 'local-a' }, { name: 'B', personaPrompt: 'b1', transferId: 't1', localId: 'local-b' }]
+    const plan = await applyReceivedPersonas(db as any, rows, {}, io())
+    expect(plan).toEqual({ targets: [0, 1], updated: ['A', 'B'], added: [], ambiguous: [] })
+    expect(db.personas.map(p => [p.id, p.name, p.personaPrompt])).toEqual([['local-a', 'C', 'a1'], ['local-b', 'A', 'b1']])
+    // Without the record (first time), the map to send says which persona each row goes to; added rows get their stable id.
+    const fresh = { ...baseDb() }
+    const firstRows: ReceivedPersona[] = [{ name: 'A', personaPrompt: 'x', transferId: 't0' }, { name: 'Z', personaPrompt: 'z', transferId: 't1' }]
+    expect(personaTargetMap(fresh, firstRows, planPersonas(fresh, firstRows))).toEqual({ t0: 'a', t1: 't1' })
+})
+
 test('module files are stored first and the module points at the new keys; a storage failure or a missing blob changes no persona', async () => {
     const db = baseDb(), x = io()
     const module = { id: 'm', name: 'mod', description: '', assets: [['map', '', 'webp'], ['skip', '', 'png']] as [string, string, string][] }
@@ -136,6 +149,10 @@ test('receiving a persona file asks first (names only), then reads pictures, sav
     expect(f.db.personas[1]).toMatchObject({ id: 'b', personaPrompt: 'from tablet', icon: 'assets/pic' })
     expect(f.save.mock.invocationCallOrder[0]).toBeLessThan(f.request.mock.invocationCallOrder[paths().indexOf('/in/persona-applied')])
     expect(paths()).not.toContain('/in/prepare'); expect(reload).not.toHaveBeenCalled()
+    // Which persona each row went to is recorded before the personas change (and before the save).
+    const mapCall = paths().indexOf('/in/persona-map')
+    expect(JSON.parse(f.request.mock.calls[mapCall][1].body)).toEqual({ map: {} }) // no transferId in this fixture row
+    expect(f.request.mock.invocationCallOrder[mapCall]).toBeLessThan(f.save.mock.invocationCallOrder[0])
 })
 
 test('declining reads no pictures and keeps everything; a declined automatic (requested) apply is not asked again every poll', async () => {

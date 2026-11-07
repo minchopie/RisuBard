@@ -86,7 +86,16 @@ test('persona export makes one send entry (same file every transfer method sends
     expect(Buffer.from(received.blobs[two.moduleAssets[0]], 'base64').toString()).toBe('module-file')
     expect(three.image).toBeNull()
 
+    // The client records which local persona each row goes to; it comes back with the rows (and survives a restart).
+    const [t0, t1] = inspected.personas.map((p: any) => p.transferId)
+    await expect(receiver.personaMap(entry.id, { 'not-an-id': 'x' })).rejects.toThrow('형식')
+    await receiver.personaMap(entry.id, { [t0]: 'local-a' }); await receiver.personaMap(entry.id, { [t1]: t1 })
+    const reopened = await create('receiver', { characters: [], personas: [] })
+    expect((await reopened.inspect(entry.id)).personas.slice(0, 3).map((p: any) => p.localId)).toEqual(['local-a', t1, undefined])
+    expect((await reopened.receivedPersonas(entry.id)).personas[0]).toMatchObject({ transferId: t0, localId: 'local-a' })
+
     expect((await receiver.personaApplied(entry.id)).state).toBe('applied')
+    await expect(receiver.personaMap(entry.id, { [t0]: 'x' })).rejects.toThrow('이미')
     await expect(receiver.personaApplied(entry.id)).rejects.toThrow('이미')
     await expect(receiver.receivedPersonas(entry.id)).rejects.toThrow('이미')
     // A restart keeps the entry as a persona file.
