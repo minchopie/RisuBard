@@ -216,7 +216,10 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         const record = await personaRecord(key);
         if (!['waiting', 'failed'].includes(record.state)) throw new Error('이미 가져왔거나 취소한 페르소나예요.');
         const entries = map && typeof map === 'object' && !Array.isArray(map) ? Object.entries(map) : null;
-        if (!entries || entries.length > MAX_PERSONAS || entries.some(([k, v]) => !/^[0-9a-f-]{36}$/.test(k) || typeof v !== 'string' || !v || v.length > 200)) throw new Error('페르소나 대응 기록 형식이 달라요.');
+        // Keys are this file's own row ids; a value may be a local persona id or the row's own id, never another row's id.
+        const rows = (await readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')))).personas.length;
+        const own = new Set(Array.from({ length: rows }, (_, i) => transferPersonaId(record.sha256, i)));
+        if (!entries || entries.some(([k, v]) => !own.has(k) || typeof v !== 'string' || !v || v.length > 200 || (own.has(v) && v !== k))) throw new Error('페르소나 대응 기록 형식이 달라요.');
         record.personaMap = { ...(record.personaMap ?? {}), ...Object.fromEntries(entries) }; write(record);
         return publicState(record);
     }

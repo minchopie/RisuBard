@@ -1323,9 +1323,9 @@
       "path": "server/node/transfer-sync/play-set-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "f428cc3a0331c365e01f597e80b0b4d60e7f3c168be4958eea33a3c6780bae54",
-      "contentSha256": "f428cc3a0331c365e01f597e80b0b4d60e7f3c168be4958eea33a3c6780bae54",
-      "bytes": 42396
+      "sha256": "70a1c0e28d34ea2cb5f2409dadbf2d433399fad13a393272d547411fb5f3bfc3",
+      "contentSha256": "70a1c0e28d34ea2cb5f2409dadbf2d433399fad13a393272d547411fb5f3bfc3",
+      "bytes": 42731
     },
     {
       "path": "server/node/transfer-sync/transfer-remote.cjs",
@@ -1787,25 +1787,25 @@
       "path": "server/node/persona-transfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "62a9a209bbd1c9ff10b3aa464a4a25ba8d75c4f032ca6214bebd4ba59106e3c9",
-      "contentSha256": "62a9a209bbd1c9ff10b3aa464a4a25ba8d75c4f032ca6214bebd4ba59106e3c9",
-      "bytes": 15706
+      "sha256": "dd34d74e81e663e0d5796685cc0f7cbb8453d6c8f2979ba92a7ed8bbfec6c248",
+      "contentSha256": "dd34d74e81e663e0d5796685cc0f7cbb8453d6c8f2979ba92a7ed8bbfec6c248",
+      "bytes": 15999
     },
     {
       "path": "src/ts/transfer-sync/personaTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "2f22d2ff0a39bf387153f6de9162303848723b1f373084b8f3a81393fe005285",
-      "contentSha256": "2f22d2ff0a39bf387153f6de9162303848723b1f373084b8f3a81393fe005285",
-      "bytes": 8702
+      "sha256": "1eae69b9aedce573a580a73ec2e88e0168ae6715657beab80691140cbb5b77f7",
+      "contentSha256": "1eae69b9aedce573a580a73ec2e88e0168ae6715657beab80691140cbb5b77f7",
+      "bytes": 10401
     },
     {
       "path": "src/ts/personaTransfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "9e3f21baaca9cc6b88c342d2c563c38158bf8f654d66e2c6a5de7fe19b4f5f1b",
-      "contentSha256": "9e3f21baaca9cc6b88c342d2c563c38158bf8f654d66e2c6a5de7fe19b4f5f1b",
-      "bytes": 15340
+      "sha256": "5bc0cf9ecc5f82d562bfcc0a9a54330a86b46a5e403f04901e4abca6381513ca",
+      "contentSha256": "5bc0cf9ecc5f82d562bfcc0a9a54330a86b46a5e403f04901e4abca6381513ca",
+      "bytes": 17231
     },
     {
       "path": "index.html",

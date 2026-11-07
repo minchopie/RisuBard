@@ -31,7 +31,7 @@ test('a unique same name updates in place (id kept, all four active fields follo
         { name: 'C', personaPrompt: 'c2', image: null },
     ]
     const plan = await applyReceivedPersonas(db as any, rows, blobs('pic-b', 'pic-c'), x)
-    expect(plan).toEqual({ targets: [1, 0, -1, -1], updated: ['B', 'A'], added: ['C', 'C'], ambiguous: ['C'] })
+    expect(plan).toMatchObject({ targets: [1, 0, -1, -1], updated: ['B', 'A'], added: ['C', 'C'], ambiguous: ['C'] })
     expect(db.personas[1]).toEqual({ id: 'b', name: 'B', personaPrompt: 'new b', note: 'new note', icon: 'assets/img-pic-b', largePortrait: true })
     expect(db).toMatchObject({ username: 'B', personaPrompt: 'new b', userNote: 'new note', userIcon: 'assets/img-pic-b' })
     // No picture and no note in the file: this device's picture and note stay.
@@ -49,7 +49,7 @@ test('names that are not unique never overwrite: two received "A" for one local 
     const plan = await applyReceivedPersonas(db as any, [
         { name: 'A', personaPrompt: 'first' }, { name: 'A', personaPrompt: 'second' }, { name: 'X', personaPrompt: 'third' },
     ], {}, x)
-    expect(plan).toEqual({ targets: [-1, -1, -1], updated: [], added: ['A', 'A', 'X'], ambiguous: ['A', 'X'] })
+    expect(plan).toMatchObject({ targets: [-1, -1, -1], updated: [], added: ['A', 'A', 'X'], ambiguous: ['A', 'X'] })
     expect(db.personas.slice(0, 4)).toEqual(before)
     expect(db.personas.slice(4).map(p => p.personaPrompt)).toEqual(['first', 'second', 'third'])
     expect(personaPlanText(plan)).toBe('페르소나 3개를 가져올까요?\n이름이 겹쳐서 덮어쓰지 않고 새로 추가: A, X')
@@ -75,7 +75,7 @@ test('a persona found by its stable id is reserved: a name match from another ro
     // The file had A(t0) and B(t1); A was imported, then renamed to B here, and the old B was deleted.
     const db = { ...baseDb(), personas: [{ id: 't0', name: 'B', personaPrompt: 'was A', icon: '' }] as any[] }
     const plan = await applyReceivedPersonas(db as any, [{ name: 'A', personaPrompt: 'a', transferId: 't0' }, { name: 'B', personaPrompt: 'b', transferId: 't1' }], {}, io())
-    expect(plan).toEqual({ targets: [0, -1], updated: ['A'], added: ['B'], ambiguous: [] })
+    expect(plan).toMatchObject({ targets: [0, -1], updated: ['A'], added: ['B'], ambiguous: [] })
     expect(db.personas.map(p => [p.id, p.name, p.personaPrompt])).toEqual([['t0', 'B', 'a'], ['t1', 'B', 'b']])
 })
 
@@ -84,12 +84,35 @@ test('a row applied by name before is found again through its recorded local per
     const db = { ...baseDb(), personas: [{ id: 'local-a', name: 'C', personaPrompt: 'a0', icon: '' }, { id: 'local-b', name: 'A', personaPrompt: 'b0', icon: '' }] as any[] }
     const rows: ReceivedPersona[] = [{ name: 'A', personaPrompt: 'a1', transferId: 't0', localId: 'local-a' }, { name: 'B', personaPrompt: 'b1', transferId: 't1', localId: 'local-b' }]
     const plan = await applyReceivedPersonas(db as any, rows, {}, io())
-    expect(plan).toEqual({ targets: [0, 1], updated: ['A', 'B'], added: [], ambiguous: [] })
+    expect(plan).toMatchObject({ targets: [0, 1], updated: ['A', 'B'], added: [], ambiguous: [] })
     expect(db.personas.map(p => [p.id, p.name, p.personaPrompt])).toEqual([['local-a', 'C', 'a1'], ['local-b', 'A', 'b1']])
     // Without the record (first time), the map to send says which persona each row goes to; added rows get their stable id.
     const fresh = { ...baseDb() }
     const firstRows: ReceivedPersona[] = [{ name: 'A', personaPrompt: 'x', transferId: 't0' }, { name: 'Z', personaPrompt: 'z', transferId: 't1' }]
     expect(personaTargetMap(fresh, firstRows, planPersonas(fresh, firstRows))).toEqual({ t0: 'a', t1: 't1' })
+})
+
+test('targets are found again by id after the awaited picture saves; a target deleted meanwhile stops before any change', async () => {
+    // Reordered while a picture was being saved: each row still reaches its own persona.
+    const db = baseDb(), x = io()
+    x.saveImage.mockImplementationOnce(async () => { db.personas.reverse(); db.selectedPersona = 0; return 'assets/pic' })
+    await applyReceivedPersonas(db as any, [{ name: 'A', personaPrompt: 'new a', image: 'blobs/p' }, { name: 'B', personaPrompt: 'new b' }], blobs('p'), x)
+    expect(db.personas.map(p => [p.id, p.personaPrompt, p.icon])).toEqual([['b', 'new b', 'assets/old-b'], ['a', 'new a', 'assets/pic']])
+    // Deleted while a picture was being saved: nothing else changes.
+    const db2 = baseDb(), y = io()
+    y.saveImage.mockImplementationOnce(async () => { db2.personas.splice(1, 1); return 'assets/pic' })
+    const before = structuredClone(db2.personas)
+    await expect(applyReceivedPersonas(db2 as any, [{ name: 'A', personaPrompt: 'x', image: 'blobs/p' }, { name: 'B', personaPrompt: 'y' }], blobs('p'), y)).rejects.toThrow('목록이 바뀌었어요')
+    expect(db2.personas).toEqual(before.slice(0, 1))
+})
+
+test('a stable id already used here is never given to a second persona', async () => {
+    // A damaged record pointed row A(t0) at the persona whose id is row B's stable id t1.
+    const db = { ...baseDb(), personas: [{ id: 't1', name: 'A', personaPrompt: 'old', icon: '' }] as any[] }
+    const rows: ReceivedPersona[] = [{ name: 'A', personaPrompt: 'a', transferId: 't0', localId: 't1' }, { name: 'B', personaPrompt: 'b', transferId: 't1' }]
+    await applyReceivedPersonas(db as any, rows, {}, io())
+    expect(db.personas.map(p => p.id)).toEqual(['t1', 'new-1'])
+    expect(new Set(db.personas.map(p => p.id)).size).toBe(2)
 })
 
 test('module files are stored first and the module points at the new keys; a storage failure or a missing blob changes no persona', async () => {
@@ -108,9 +131,9 @@ test('module files are stored first and the module points at the new keys; a sto
 
 test('the confirm text names what is replaced and what is added', () => {
     const plan = planPersonas(baseDb(), [{ name: 'A' }, { name: 'Z' }])
-    expect(plan).toEqual({ targets: [0, -1], updated: ['A'], added: ['Z'], ambiguous: [] })
+    expect(plan).toMatchObject({ targets: [0, -1], updated: ['A'], added: ['Z'], ambiguous: [] })
     expect(personaPlanText(plan)).toBe('페르소나 2개를 가져올까요?\n같은 이름이 있어 내용을 바꿈: A\n새로 추가: Z\n바꾸는 페르소나는 그대로 유지돼서, 연결된 대화·봇도 그대로 그 페르소나를 써요.')
-    expect(personaPlanText({ targets: [-1], updated: [], added: ['Z'], ambiguous: [] })).toBe('페르소나 1개를 가져올까요?\n새로 추가: Z')
+    expect(personaPlanText({ targets: [-1], targetIds: [null], addIds: [null], updated: [], added: ['Z'], ambiguous: [] })).toBe('페르소나 1개를 가져올까요?\n새로 추가: Z')
 })
 
 // ── Flow through playTransfer (server answers mocked) ──

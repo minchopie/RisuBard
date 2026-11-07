@@ -89,6 +89,9 @@ test('persona export makes one send entry (same file every transfer method sends
     // The client records which local persona each row goes to; it comes back with the rows (and survives a restart).
     const [t0, t1] = inspected.personas.map((p: any) => p.transferId)
     await expect(receiver.personaMap(entry.id, { 'not-an-id': 'x' })).rejects.toThrow('형식')
+    // Keys must be this file's rows; a value may not be another row's stable id.
+    await expect(receiver.personaMap(entry.id, { [t0]: t1 })).rejects.toThrow('형식')
+    await expect(receiver.personaMap(entry.id, { '00000000-0000-5000-8000-000000000000': 'x' })).rejects.toThrow('형식')
     await receiver.personaMap(entry.id, { [t0]: 'local-a' }); await receiver.personaMap(entry.id, { [t1]: t1 })
     const reopened = await create('receiver', { characters: [], personas: [] })
     expect((await reopened.inspect(entry.id)).personas.slice(0, 3).map((p: any) => p.localId)).toEqual(['local-a', t1, undefined])
