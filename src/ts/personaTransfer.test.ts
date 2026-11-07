@@ -106,6 +106,18 @@ test('targets are found again by id after the awaited picture saves; a target de
     expect(db2.personas).toEqual(before.slice(0, 1))
 })
 
+test('a persona whose id another persona shares is never a target (the id could not tell them apart)', async () => {
+    const db = { ...baseDb(), personas: [{ id: 'same', name: 'A', personaPrompt: 'old-a', icon: '' }, { id: 'same', name: 'B', personaPrompt: 'old-b', icon: '' }] as any[] }
+    const plan = await applyReceivedPersonas(db as any, [{ name: 'B', personaPrompt: 'incoming-b' }], {}, io())
+    expect(plan).toMatchObject({ targets: [-1], added: ['B'], ambiguous: ['B'] })
+    expect(db.personas.map(p => p.personaPrompt)).toEqual(['old-a', 'old-b', 'incoming-b'])
+    // A duplicate appearing while pictures were saved also stops before any change.
+    const db2 = baseDb(), y = io()
+    y.saveImage.mockImplementationOnce(async () => { db2.personas.push({ id: 'b', name: 'copy', personaPrompt: 'c', icon: '' }); return 'assets/pic' })
+    await expect(applyReceivedPersonas(db2 as any, [{ name: 'B', personaPrompt: 'x', image: 'blobs/p' }], blobs('p'), y)).rejects.toThrow('목록이 바뀌었어요')
+    expect(db2.personas[1].personaPrompt).toBe('old b')
+})
+
 test('a stable id already used here is never given to a second persona', async () => {
     // A damaged record pointed row A(t0) at the persona whose id is row B's stable id t1.
     const db = { ...baseDb(), personas: [{ id: 't1', name: 'A', personaPrompt: 'old', icon: '' }] as any[] }

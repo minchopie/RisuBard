@@ -56,20 +56,23 @@ export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<R
     const received = new Map<string, number>()
     for (const row of rows) received.set(row.name, (received.get(row.name) ?? 0) + 1)
     const plan: PersonaPlan = { targets: rows.map(() => -1), targetIds: rows.map(() => null), addIds: rows.map(() => null), updated: [], added: [], ambiguous: [] }
-    // Only a persona with an id can be a target: the id is what is checked again just before the change.
+    // Only a persona with an id that no other persona shares can be a target: the id is what is checked again just before the change.
+    const idCount = new Map<string, number>()
+    for (const p of db.personas) if (p?.id) idCount.set(p.id, (idCount.get(p.id) ?? 0) + 1)
+    const targetable = (k: number) => { const id = db.personas[k]?.id; return !!id && idCount.get(id) === 1 }
     // First: personas this same file was applied to before — the one recorded for the row (kept even if renamed since), or the
     // one it added (its stable id). Those are reserved, so a name match below never sends a second row onto the same persona.
     const reserved = new Set<number>()
     rows.forEach((row, i) => {
         const ids = [row.localId, row.transferId].filter((id): id is string => !!id)
-        const found = ids.map(id => db.personas.findIndex((p, k) => !!p?.id && p.id === id && !reserved.has(k))).find(k => k >= 0)
+        const found = ids.map(id => db.personas.findIndex((p, k) => p?.id === id && targetable(k) && !reserved.has(k))).find(k => k >= 0)
         const again = found ?? -1
         if (again >= 0 && !reserved.has(again)) { plan.targets[i] = again; reserved.add(again) }
     })
     rows.forEach((row, i) => {
         if (plan.targets[i] >= 0) { plan.updated.push(row.name); return }
         const local = db.personas.flatMap((p, k) => (p?.name === row.name && !reserved.has(k) ? [k] : []))
-        if (local.length === 1 && received.get(row.name) === 1 && db.personas[local[0]]?.id) { plan.targets[i] = local[0]; reserved.add(local[0]); plan.updated.push(row.name); return }
+        if (local.length === 1 && received.get(row.name) === 1 && targetable(local[0])) { plan.targets[i] = local[0]; reserved.add(local[0]); plan.updated.push(row.name); return }
         plan.added.push(row.name)
         if ((local.length || received.get(row.name)! > 1) && !plan.ambiguous.includes(row.name)) plan.ambiguous.push(row.name)
     })
@@ -125,7 +128,7 @@ export async function applyReceivedPersonas(db: PersonaDatabase, rows: ReceivedP
     // Saving pictures (and recording the map) awaited: the list may have been reordered or edited meanwhile. Find every target by
     // its id again and stop before changing anything if one is gone or an added id is now taken.
     const indexes = plan.targetIds.map(id => (id ? db.personas.findIndex(p => p?.id === id) : -1))
-    if (plan.targetIds.some((id, i) => id && indexes[i] < 0) || plan.addIds.some(id => id && db.personas.some(p => p?.id === id))
+    if (plan.targetIds.some((id, i) => id && (indexes[i] < 0 || db.personas.filter(p => p?.id === id).length !== 1)) || plan.addIds.some(id => id && db.personas.some(p => p?.id === id))
         || new Set(indexes.filter(k => k >= 0)).size !== indexes.filter(k => k >= 0).length) {
         throw new Error('가져오는 동안 페르소나 목록이 바뀌었어요. 아무것도 바꾸지 않았으니 다시 가져와 주세요.')
     }
