@@ -20,6 +20,7 @@ const { resolveMemoryWorkspace } = require('../risubard-memory-workspace.ts');
 const { saveStoreDirectory } = require('../risubard-memory-save-store.ts');
 const { memorySaveWorkspaceId } = require('../risubard-memory-save.ts');
 const { bardFingerprints } = require('./play-set-fingerprint.cjs');
+const { MAX_PERSONAS, MAX_BUNDLE_BYTES, readPersonaBundle, isPersonaBundle, buildPersonaBundle, bundleName } = require('./persona-bundle.cjs');
 
 const id = value => { if (typeof value !== 'string' || !/^[a-f0-9-]{36}$/i.test(value)) throw new Error('Invalid transfer handle'); return value; };
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -29,6 +30,15 @@ async function syncDir(path) {
     catch (error) { if (process.platform !== 'win32') throw error; }
     finally { await fd?.close(); }
 }
+/** A received file that is a persona bundle: its validated persona names. Null for anything else (play sets go on as before). */
+async function detectPersonaBundle(path) {
+    const stat = await fs.stat(path);
+    if (stat.size > MAX_BUNDLE_BYTES) return null;
+    const bytes = await fs.readFile(path);
+    if (!isPersonaBundle(bytes)) return null;
+    return { names: readPersonaBundle(bytes).personas.map(p => p.name) };
+}
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInlay, installInlay, removeInlay, nativeInbox, foreignArchive = null }) {
     const root = join(dataRoot, 'play-transfer');
@@ -92,6 +102,13 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             const partial = join(dir, 'incoming.part');
             await pipeline(source, meter, createWriteStream(partial, { flags: 'wx', mode: 0o600 }));
             const fd = await fs.open(partial, 'r+'); try { await fd.sync(); } finally { await fd.close(); }
+            // A persona bundle travels the same transports but is not a play set: keep it as its own queue entry.
+            const persona = await detectPersonaBundle(partial);
+            if (persona) {
+                await fs.rename(partial, join(dir, 'incoming.risuplay')); await syncDir(dir);
+                Object.assign(record, { state: 'waiting', bytes, sha256: digest.digest('hex'), kind: 'persona', name: bundleName(persona.names) }); write(record);
+                return publicState(record);
+            }
             const archive = await openPlaySetArchive(partial, dir); await archive.close();
             await fs.rename(partial, join(dir, 'incoming.risuplay')); await syncDir(dir);
             Object.assign(record, { state: 'waiting', bytes, sha256: digest.digest('hex') }); write(record);
@@ -142,6 +159,52 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             return { ...publicState(record), missing: [], external: snapshot.external, excluded: snapshot.excluded, registry: exported.risuPlaySets };
         } finally { await fs.rm(recorded ? work : dir, { recursive: true, force: true }); }
     }
+    /** Persona transfer: the chosen personas (by id, from the saved database) as one bundle send entry for every transport. */
+    async function exportPersonas(selection) {
+        if ((await list()).some(item => item.plan && item.state === 'applying')) throw new Error('Finish pending import first');
+        const ids = selection?.personaIds;
+        if (!Array.isArray(ids) || !ids.length || ids.length > MAX_PERSONAS || ids.some(v => typeof v !== 'string' || !v) || new Set(ids).size !== ids.length) throw new Error('보낼 페르소나를 골라 주세요.');
+        const database = await readDatabase();
+        const personas = ids.map(pid => (database?.personas ?? []).find(p => p?.id === pid));
+        if (personas.some(p => !p)) throw new Error('보낼 페르소나를 찾지 못했어요. 저장된 뒤 다시 골라 주세요.');
+        const key = randomUUID(), dir = directory(key);
+        await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+        const work = await mkdtempLong(join(dir, 'export-work-'));
+        let recorded = false;
+        try {
+            const readAsset = async assetKey => {
+                const path = join(work, randomUUID());
+                try { return await storage.kvExportFile(assetKey, path) ? await fs.readFile(path) : null; }
+                finally { await fs.rm(path, { force: true }); }
+            };
+            const bundle = await buildPersonaBundle(personas, readAsset);
+            await fs.writeFile(join(dir, 'export.risuplay'), bundle.bytes, { mode: 0o600, flag: 'wx' });
+            const record = { id: key, direction: 'send', state: 'ready', createdAt: Date.now(), kind: 'persona', name: bundleName(bundle.names),
+                // GitHub keeps one latest file per backup key: the same set of persona names replaces its previous upload.
+                backupKey: sha256('personas\n' + [...bundle.names].sort().join('\n')), bytes: bundle.bytes.length, sha256: sha256(bundle.bytes) };
+            write(record); recorded = true;
+            return { ...publicState(record), personas: bundle.names, missing: [], external: [], excluded: bundle.excluded };
+        } finally { await fs.rm(recorded ? work : dir, { recursive: true, force: true }); }
+    }
+    async function personaRecord(key) {
+        const record = await read(key);
+        if (record.kind !== 'persona' || record.direction !== 'receive') throw new Error('페르소나 전송 항목이 아니에요.');
+        return record;
+    }
+    /** The received personas for the client to apply (pictures as base64). */
+    async function receivedPersonas(key) {
+        const record = await personaRecord(key);
+        if (!['waiting', 'failed'].includes(record.state)) throw new Error('이미 가져왔거나 취소한 페르소나예요.');
+        const bundle = readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')));
+        const file = path => path ? Buffer.from(bundle.files.get(path)).toString('base64') : null;
+        return { ...publicState(record), personas: bundle.personas.map(p => ({ ...p, image: file(p.image), moduleIcon: file(p.moduleIcon), moduleAssets: (p.moduleAssets ?? []).map(file) })) };
+    }
+    async function personaApplied(key) {
+        const record = await personaRecord(key);
+        if (!['waiting', 'failed'].includes(record.state)) throw new Error('이미 가져왔거나 취소한 페르소나예요.');
+        record.state = 'applied'; delete record.error; write(record);
+        return publicState(record);
+    }
     async function legacyChat(selection) {
         const database = await readDatabase();
         const character = database?.characters?.find(c => c.chaId === selection.characterId);
@@ -156,6 +219,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
     }
     async function inspect(key) {
         const record = await read(key);
+        if (record.kind === 'persona') return { ...publicState(record), characters: [] };
         const archive = await openPlaySetArchive(join(directory(key), 'incoming.risuplay'), directory(key));
         try {
             const db = await readDatabase();
@@ -167,6 +231,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         const all = await list();
         if (all.some(item => item.plan && item.state === 'applying')) throw new Error('Another import requires recovery');
         const record = await read(key);
+        if (record.kind === 'persona') throw new Error('페르소나 파일은 페르소나 가져오기로 받아요.');
         if (!['waiting', 'failed'].includes(record.state)) throw new Error('This transfer cannot be imported');
         const db = await readDatabase(), transaction = randomUUID();
         const dir = directory(key), staging = join(dir, transaction);
@@ -404,6 +469,9 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/native-import', async (req, res) => res.json(await exclusive(() => importNative(req.body.id))));
         route('post', '/incoming', async (req, res) => res.json(await ingest(req, { name: decodeURIComponent(req.headers['x-transfer-name'] ?? '대화 자료.risuplay') })));
         route('post', '/export', async (req, res) => res.json(await exclusive(() => exportSet(req.body))));
+        route('post', '/persona-export', async (req, res) => res.json(await exclusive(() => exportPersonas(req.body))));
+        route('get', '/:id/personas', async (req, res) => res.json(await receivedPersonas(req.params.id)));
+        route('post', '/:id/persona-applied', async (req, res) => res.json(await exclusive(() => personaApplied(req.params.id))));
         route('get', '/:id/inspect', async (req, res) => res.json(await inspect(req.params.id)));
         route('get', '/:id/file', async (req, res) => res.download(await file(req.params.id), (await read(req.params.id)).name));
         route('post', '/:id/prepare', async (req, res) => res.json(await exclusive(() => prepare(req.params.id, req.body.targets))));
@@ -413,7 +481,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/:id/cancel', async (req, res) => res.json(await exclusive(() => cancel(req.params.id))));
         route('post', '/:id/apply-request', async (req, res) => res.json(await exclusive(() => requestApply(req.params.id, req.body.requested))));
     }
-    return { assertWrite, list, ingest, exportSet, inspect, prepare: (...args) => exclusive(() => prepare(...args)), arm: (...args) => exclusive(() => arm(...args)),
+    return { assertWrite, list, ingest, exportSet, exportPersonas, receivedPersonas, personaApplied: key => exclusive(() => personaApplied(key)), inspect, prepare: (...args) => exclusive(() => prepare(...args)), arm: (...args) => exclusive(() => arm(...args)),
         finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), requestApply: (...args) => exclusive(() => requestApply(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes };
 }
 async function safeParents(root, path) {

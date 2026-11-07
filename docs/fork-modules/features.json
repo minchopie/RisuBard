@@ -230,7 +230,11 @@
         "android-app/app/src/main/java/app/risubard/personal/NativeNotify.kt",
         "android-app/app/src/main/res/drawable/ic_notify.xml",
         "src/ts/transfer-sync/androidNotification.ts",
-        "src/ts/transfer-sync/androidNotification.test.ts"
+        "src/ts/transfer-sync/androidNotification.test.ts",
+        "server/node/transfer-sync/persona-bundle.cjs",
+        "server/node/persona-transfer.test.ts",
+        "src/ts/transfer-sync/personaTransfer.ts",
+        "src/ts/personaTransfer.test.ts"
       ]
     },
     {
@@ -582,7 +586,8 @@
         "patchnote/0.9.92.md",
         "docs/fork-modules/WEEKLY-20261104.md",
         "patchnote/0.9.90-ver1.md",
-        "patchnote/0.9.90-ver2.md"
+        "patchnote/0.9.90-ver2.md",
+        "patchnote/0.9.91-ver1.md"
       ]
     },
     {

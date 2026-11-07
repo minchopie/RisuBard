@@ -7,12 +7,13 @@
     import { downloadFile } from 'src/ts/globalApi.svelte'
     import { alertConfirm } from 'src/ts/alert'
     import { playSetAvailable, androidTransferAvailable, playNative, sendNative, nativeSend } from 'src/ts/transferNative'
-    import { transferBusy, transferStatus, transferQueue, refreshTransfers, queueTransferFile, exportTransfer, receiveTransfer, cancelTransfer, requestRemoteTransfer, uploadLegacyChat } from 'src/ts/playTransfer'
+    import { transferBusy, transferStatus, transferQueue, refreshTransfers, queueTransferFile, exportTransfer, exportPersonaTransfer, receiveTransfer, cancelTransfer, requestRemoteTransfer, uploadLegacyChat } from 'src/ts/playTransfer'
     import { isNodeServer } from 'src/ts/platform'
     import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, resolveAllSync, startAdoptionSync, endAdoptionSync, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
     let selected = $state<string[]>([])
+    let selectedPersonas = $state<string[]>([])
     let compatibility = $state(false)
     let result = $state<any>(null)
     let working = $state(false)
@@ -297,6 +298,16 @@
             <label><input type="checkbox" bind:checked={compatibility} />구 RisuAI USB 앱용 호환 파일 (BardWiki·저장 슬롯 제외)</label>
             <ShButton disabled={!selected.length} onclick={() => run(async () => { result = await exportTransfer(selected, compatibility) })}>보낼 자료 확인</ShButton>
         {:else}<p>보낼 캐릭터를 먼저 열어 주세요. 파일 받기는 바로 사용할 수 있어요.</p>{/if}
+    </fieldset>
+    <fieldset disabled={working || $transferBusy}>
+        <legend>1-1. 보낼 페르소나</legend>
+        {#if DBState.db.personas?.some((p: any) => p?.id)}
+            {#each DBState.db.personas as persona, i (persona?.id ?? i)}
+                {#if persona?.id}<label><input type="checkbox" value={persona.id} bind:group={selectedPersonas} />{persona.name || `페르소나 ${i + 1}`}{i === DBState.db.selectedPersona ? ' (사용 중)' : ''}</label>{/if}
+            {/each}
+            <p class="hint">받는 기기에 같은 이름의 페르소나가 있으면 그 페르소나의 설명·메모·그림을 바꾸고(연결된 대화·봇은 그대로), 없으면 새로 추가해요. 받는 기기에서 가져오기 전에 한 번 물어봐요.</p>
+            <ShButton disabled={!selectedPersonas.length} onclick={() => run(async () => { result = await exportPersonaTransfer(selectedPersonas.filter(id => DBState.db.personas.some((p: any) => p?.id === id))) })}>페르소나 보낼 자료 확인</ShButton>
+        {:else}<p>보낼 페르소나가 없어요.</p>{/if}
     </fieldset>
     {#if result}
         {#each result.missing ?? [] as item}<p class="error">빠진 자료: {item.path} · {item.reason}</p>{/each}

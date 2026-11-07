@@ -1323,9 +1323,9 @@
       "path": "server/node/transfer-sync/play-set-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "8c700779d7b3a57f9aee74cbdec7ac510d59910011dd92b51f43082066eeaac9",
-      "contentSha256": "8c700779d7b3a57f9aee74cbdec7ac510d59910011dd92b51f43082066eeaac9",
-      "bytes": 34559
+      "sha256": "0f81c716a378c1459ad935282d73dff918293fd40ec288a3d4a0d541b92095d1",
+      "contentSha256": "0f81c716a378c1459ad935282d73dff918293fd40ec288a3d4a0d541b92095d1",
+      "bytes": 39908
     },
     {
       "path": "server/node/transfer-sync/transfer-remote.cjs",
@@ -1491,9 +1491,9 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "fd5ea7d58abd52b30a203d4aaebbabe5f829db3382abd907f63f977247a46d74",
-      "contentSha256": "fd5ea7d58abd52b30a203d4aaebbabe5f829db3382abd907f63f977247a46d74",
-      "bytes": 45611
+      "sha256": "c3b5c884c32d2d73fbba1d0fedf9409ba5cd3b1933df3a4f63500610d05cccd6",
+      "contentSha256": "c3b5c884c32d2d73fbba1d0fedf9409ba5cd3b1933df3a4f63500610d05cccd6",
+      "bytes": 46787
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -1627,9 +1627,9 @@
       "path": "src/ts/transfer-sync/playTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "8b5db0403f614fc063adf02e8044c28ac7f39102b57d0b15159e98d146dbadb1",
-      "contentSha256": "8b5db0403f614fc063adf02e8044c28ac7f39102b57d0b15159e98d146dbadb1",
-      "bytes": 16071
+      "sha256": "05bc877d10f6173d6c3e5d8f5519240a15f61c8ace632df4d7f6afef4a8d6032",
+      "contentSha256": "05bc877d10f6173d6c3e5d8f5519240a15f61c8ace632df4d7f6afef4a8d6032",
+      "bytes": 19796
     },
     {
       "path": "src/ts/transfer-sync/transferAssets.ts",
@@ -1774,6 +1774,38 @@
       "sha256": "ef01827a56968976fd5a46e15c1f940a0b1884c7f66b4122a861f6bd6bcd4a76",
       "contentSha256": "ef01827a56968976fd5a46e15c1f940a0b1884c7f66b4122a861f6bd6bcd4a76",
       "bytes": 9286
+    },
+    {
+      "path": "server/node/transfer-sync/persona-bundle.cjs",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "6e9642fd61d7d780b5c19c4d27ccf302674183b3aa75e8a768893b591f8871dc",
+      "contentSha256": "6e9642fd61d7d780b5c19c4d27ccf302674183b3aa75e8a768893b591f8871dc",
+      "bytes": 10352
+    },
+    {
+      "path": "server/node/persona-transfer.test.ts",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "b90ea75bca64214af76799587808124fde5f3255753928dd4b358b6b6738c88d",
+      "contentSha256": "b90ea75bca64214af76799587808124fde5f3255753928dd4b358b6b6738c88d",
+      "bytes": 11597
+    },
+    {
+      "path": "src/ts/transfer-sync/personaTransfer.ts",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "713d41eab2e9ac94008701cfc9bb6b265ae608d455e5b8a12adfeeda168e9c28",
+      "contentSha256": "713d41eab2e9ac94008701cfc9bb6b265ae608d455e5b8a12adfeeda168e9c28",
+      "bytes": 5343
+    },
+    {
+      "path": "src/ts/personaTransfer.test.ts",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "597e703993df99f57a3e1d8d4c05a5cfb36a3c88fb486b840e9688cacf7d2f7d",
+      "contentSha256": "597e703993df99f57a3e1d8d4c05a5cfb36a3c88fb486b840e9688cacf7d2f7d",
+      "bytes": 8390
     },
     {
       "path": "index.html",
@@ -4096,6 +4128,14 @@
       "bytes": 2149
     },
     {
+      "path": "patchnote/0.9.91-ver1.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "93440a763838abe1f6b788e78776678840b5f8f39b40d6752132b95dce796505",
+      "contentSha256": "93440a763838abe1f6b788e78776678840b5f8f39b40d6752132b95dce796505",
+      "bytes": 1924
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4539,7 +4579,11 @@
         "android-app/app/src/main/java/app/risubard/personal/NativeNotify.kt",
         "android-app/app/src/main/res/drawable/ic_notify.xml",
         "src/ts/transfer-sync/androidNotification.ts",
-        "src/ts/transfer-sync/androidNotification.test.ts"
+        "src/ts/transfer-sync/androidNotification.test.ts",
+        "server/node/transfer-sync/persona-bundle.cjs",
+        "server/node/persona-transfer.test.ts",
+        "src/ts/transfer-sync/personaTransfer.ts",
+        "src/ts/personaTransfer.test.ts"
       ],
       "patch": {
         "path": "docs/fork-modules/patches/transfer-sync.patch",
@@ -4923,7 +4967,8 @@
         "patchnote/0.9.92.md",
         "docs/fork-modules/WEEKLY-20261104.md",
         "patchnote/0.9.90-ver1.md",
-        "patchnote/0.9.90-ver2.md"
+        "patchnote/0.9.90-ver2.md",
+        "patchnote/0.9.91-ver1.md"
       ],
       "patch": null
     },
@@ -5013,7 +5058,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "e3ab060c5f0f67f01f4f636734ae9cdc8166d2dcddf015e130c23df842a3795b"
+      "sha256": "46b227b9f6c7c0684b7c297e67146f0ef16e9490dbaf114bc79aa1023fc02e49"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",

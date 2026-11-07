@@ -10,6 +10,7 @@ import { applyMemorySavePromptSettings } from '../risubard/memorySaveSlots'
 import { transferBusy, transferStatus, syncSaveHold } from './transferState'
 import { hashLocalJson } from '../../../shared/play-set/protocol'
 import { playNative, playSetAvailable, sendNative } from './transferNative'
+import { applyReceivedPersonas, planPersonas, personaPlanText, type ReceivedPersona } from './personaTransfer'
 export { transferBusy, transferStatus } from './transferState'
 /**
  * One native inbox entry through the server. Play sets are queued as before. A NAS sync key share is answered by the server
@@ -28,7 +29,7 @@ export async function handleNativeInboxEntry(entry: { id: string }, io: { post: 
     return result?.share ? String(result.state) : 'queued'
 }
 
-export interface TransferEntry { id: string; name: string; direction: 'send' | 'receive'; state: string; bytes?: number; error?: string; trusted?: boolean; applyRequested?: boolean; nativeId?: string }
+export interface TransferEntry { id: string; name: string; direction: 'send' | 'receive'; state: string; bytes?: number; error?: string; trusted?: boolean; applyRequested?: boolean; nativeId?: string; kind?: string }
 export const transferQueue = writable<TransferEntry[]>([])
 export async function transferRequest(path = '', init: RequestInit = {}) {
     await forageStorage.Init()
@@ -87,9 +88,50 @@ export async function exportTransfer(chatIds: string[], compatibility = false) {
         return result
     } finally { transferBusy.set(false); await refreshTransfers() }
 }
+/** Persona transfer: bundles the chosen personas (saved values) as one file for any transfer method. */
+export async function exportPersonaTransfer(personaIds: string[]) {
+    if (transferUnavailable()) throw new Error('진행 중인 생성이나 가져오기가 끝난 뒤 다시 보내 주세요.')
+    if (!personaIds.length) throw new Error('보낼 페르소나를 골라 주세요.')
+    transferBusy.set(true); transferStatus.set('보낼 페르소나를 묶는 중…')
+    try {
+        // The selected persona is edited through the active fields; write them back to its row first (upstream saveUserPersona).
+        ;(await import('../persona')).saveUserPersona()
+        await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
+        const result = await post('/persona-export', { personaIds })
+        transferStatus.set(result.excluded?.length ? '일부 파일을 빼고 묶었어요. 아래 목록을 확인해 주세요.' : '파일 준비 완료 · 보낼 방법을 선택해 주세요.')
+        return result
+    } finally { transferBusy.set(false); await refreshTransfers() }
+}
+/** Applies a received persona file after the user confirms: same name → updated in place (id kept), otherwise added. */
+export async function receivePersonaTransfer(key: string, automatic = false) {
+    if (transferUnavailable()) { transferStatus.set('기존 작업이 끝나면 가져올 수 있어요. 받은 파일은 보관됩니다.'); return }
+    const received = await (await transferRequest(`/${key}/personas`)).json()
+    const rows = received.personas as ReceivedPersona[]
+    if (!await alertConfirm(personaPlanText(planPersonas(getDatabase(), rows)))) {
+        // An automatic (NAS "앱으로 받기") apply that was declined is not asked again every poll; the entry stays in the list.
+        if (automatic) await post(`/${key}/apply-request`, { requested: false })
+        transferStatus.set('페르소나 가져오기를 미뤘어요. 수신 목록에서 다시 가져올 수 있어요.')
+        await refreshTransfers()
+        return
+    }
+    if (transferUnavailable()) return
+    transferBusy.set(true); transferStatus.set('페르소나를 가져오는 중…')
+    try {
+        const [database, inlays, globalApi, uuid] = await Promise.all([import('../storage/database.svelte'), import('../process/files/inlays'), import('../globalApi.svelte'), import('uuid')])
+        const plan = await applyReceivedPersonas(getDatabase(), rows, {
+            saveImage: bytes => database.saveImage(bytes), reencodeImage: bytes => inlays.reencodeImage(bytes),
+            saveAsset: (bytes, customId, fileName) => globalApi.saveAsset(bytes, customId, fileName), newId: () => uuid.v4(),
+        })
+        await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
+        await post(`/${key}/persona-applied`)
+        transferStatus.set(`페르소나를 가져왔어요.${plan.updated.length ? ` 바꿈 ${plan.updated.length}개` : ''}${plan.added.length ? ` · 추가 ${plan.added.length}개` : ''}`)
+    } catch (error) { transferStatus.set(String(error)); throw error }
+    finally { transferBusy.set(false); await refreshTransfers() }
+}
 export async function receiveTransfer(key: string, automatic = false) {
     if (transferUnavailable()) { transferStatus.set('기존 작업이 끝나면 가져올 수 있어요. 받은 파일은 보관됩니다.'); return }
     const inspection = await (await transferRequest(`/${key}/inspect`)).json()
+    if (inspection.kind === 'persona') return receivePersonaTransfer(key, automatic)
     const targets: Record<string, string> = {}
     for (const c of inspection.characters) if (c.candidates.length > 1) {
         if (automatic) { await post(`/${key}/apply-request`, { requested: false }); transferStatus.set('같은 이름의 캐릭터가 여러 개예요. 수신 목록에서 대상을 선택해 주세요.'); await refreshTransfers(); return }
@@ -206,7 +248,9 @@ export function startTransferInbox() {
             } catch (error: any) { if (!gateRace(error)) transferStatus.set(String(error)) } // A USB/Wi-Fi bridge failure must not block NAS/GitHub's durable inbox.
             if (get(loadedStore) && !transferUnavailable() && get(alertStore).type === 'none') {
                 await refreshTransfers()
-                const next = get(transferQueue).find(item => item.direction === 'receive' && item.state === 'waiting' && (item.applyRequested ?? item.trusted))
+                // A persona file changes existing personas, so it is applied on its own only when the user asked for it (NAS "앱으로 받기"),
+                // never just because a registered Wi-Fi device sent it; it still asks before changing anything.
+                const next = get(transferQueue).find(item => item.direction === 'receive' && item.state === 'waiting' && (item.kind === 'persona' ? item.applyRequested === true : (item.applyRequested ?? item.trusted)))
                 if (next) await receiveTransfer(next.id, true)
             }
         } catch (error: any) { if (!gateRace(error)) transferStatus.set(String(error)) } // a gate race is expected and silent; real network/IO errors are shown as before
