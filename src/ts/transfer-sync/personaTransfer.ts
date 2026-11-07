@@ -3,7 +3,8 @@
 // so chats and bots bound to it keep it — and any other persona is added with a new id. Nothing is deleted or merged away:
 // when a name is not unique (it appears more than once in the file, or more than once on this device) the received persona
 // is added as a new one instead of overwriting a guess. A persona added from a file gets that file's stable id for it
-// (`transferId`), so applying the same file again (after an unconfirmed save) updates it instead of adding it twice.
+// (`transferId`), so applying the same file again (after an unconfirmed save) updates it instead of adding it twice. When that
+// id is already taken here, the new id is decided before anything changes and recorded with the file, for the same reason.
 import type { RisuPersona } from '../storage/database.svelte'
 
 /** One persona as the server hands it over; pictures and module files are `blobs/<sha256>` keys into `blobs`. */
@@ -43,7 +44,8 @@ export interface PersonaPlan {
     targets: number[]
     /** Per received row: the id of the persona it updates (checked again right before anything changes), or null when added. */
     targetIds: (string | null)[]
-    /** Per received row that is added: the id it gets (its stable id, unless that id is already taken here), else null. */
+    /** Per received row that is added: the id it gets (its stable id, unless that id is already taken here; then a new id when
+     *  planning was given `newId`), else null. */
     addIds: (string | null)[]
     updated: string[]
     added: string[]
@@ -52,7 +54,7 @@ export interface PersonaPlan {
 }
 
 /** Which received personas replace an existing one and which are added — fixed before anything changes. */
-export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<ReceivedPersona, 'name' | 'transferId' | 'localId'>[]): PersonaPlan {
+export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<ReceivedPersona, 'name' | 'transferId' | 'localId'>[], newId?: () => string): PersonaPlan {
     const received = new Map<string, number>()
     for (const row of rows) received.set(row.name, (received.get(row.name) ?? 0) + 1)
     const plan: PersonaPlan = { targets: rows.map(() => -1), targetIds: rows.map(() => null), addIds: rows.map(() => null), updated: [], added: [], ambiguous: [] }
@@ -81,7 +83,10 @@ export function planPersonas(db: Pick<PersonaDatabase, 'personas'>, rows: Pick<R
         if (plan.targets[i] >= 0) { plan.targetIds[i] = db.personas[plan.targets[i]].id!; return }
         // A stable id already used here (a damaged or edited record could point another row at it) is never reused: two personas
         // with one id could not be told apart.
-        if (row.transferId && !taken.has(row.transferId)) { plan.addIds[i] = row.transferId; taken.add(row.transferId) }
+        if (row.transferId && !taken.has(row.transferId)) { plan.addIds[i] = row.transferId; taken.add(row.transferId); return }
+        // Otherwise the new id is decided here too, so the recorded map holds the id the persona really gets and applying the
+        // file again finds it by that id instead of adding another one.
+        if (newId) { const id = newId(); plan.addIds[i] = id; taken.add(id) }
     })
     return plan
 }
@@ -98,7 +103,7 @@ export function personaTargetMap(db: Pick<PersonaDatabase, 'personas'>, rows: Pi
 }
 
 export async function applyReceivedPersonas(db: PersonaDatabase, rows: ReceivedPersona[], blobs: ReceivedBlobs, io: PersonaApplyIo, planned?: PersonaPlan): Promise<PersonaPlan> {
-    const plan = planned ?? planPersonas(db, rows)
+    const plan = planned ?? planPersonas(db, rows, io.newId)
     const bytesOf = (key: string | null | undefined) => {
         if (!key) return null
         const base64 = blobs[key]

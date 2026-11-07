@@ -131,7 +131,7 @@ export async function receivePersonaTransfer(key: string, automatic = false, ins
             saveImage: (bytes: Uint8Array) => database.saveImage(bytes), reencodeImage: (bytes: Uint8Array) => inlays.reencodeImage(bytes),
             saveAsset: (bytes: Uint8Array, customId: string, fileName: string) => globalApi.saveAsset(bytes, customId, fileName), newId: () => uuid.v4(),
         }
-        const rows = received.personas as ReceivedPersona[], planned = planPersonas(getDatabase(), rows)
+        const rows = received.personas as ReceivedPersona[], planned = planPersonas(getDatabase(), rows, io.newId)
         // Recorded first, so applying this file again reaches the same personas even after one is renamed.
         await post(`/${key}/persona-map`, { map: personaTargetMap(getDatabase(), rows, planned) })
         const plan = await applyReceivedPersonas(getDatabase(), rows, received.blobs ?? {}, io, planned)

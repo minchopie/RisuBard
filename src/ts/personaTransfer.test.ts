@@ -118,6 +118,22 @@ test('a persona whose id another persona shares is never a target (the id could 
     expect(db2.personas[1].personaPrompt).toBe('old b')
 })
 
+test('when the stable id is taken here, the new id is decided before the map is recorded, so retries do not add again', async () => {
+    // Two local personas share the id that is also the received row's stable id; each save fails, so the row is applied again.
+    const db = { ...baseDb(), personas: [{ id: 't0', name: 'A', personaPrompt: 'old-a', icon: '' }, { id: 't0', name: 'B', personaPrompt: 'old-b', icon: '' }] as any[] }
+    const x = io()
+    let recorded: Record<string, string> = {}
+    for (let attempt = 0; attempt < 3; attempt++) {
+        // The server hands back the recorded persona as localId.
+        const rows: ReceivedPersona[] = [{ name: 'B', personaPrompt: 'incoming-b', transferId: 't0', ...(recorded.t0 ? { localId: recorded.t0 } : {}) }]
+        const plan = planPersonas(db, rows, x.newId)
+        recorded = { ...recorded, ...personaTargetMap(db, rows, plan) }
+        await applyReceivedPersonas(db as any, rows, {}, x, plan)
+    }
+    expect(recorded).toEqual({ t0: 'new-1' })
+    expect(db.personas.map(p => [p.id, p.personaPrompt])).toEqual([['t0', 'old-a'], ['t0', 'old-b'], ['new-1', 'incoming-b']])
+})
+
 test('a stable id already used here is never given to a second persona', async () => {
     // A damaged record pointed row A(t0) at the persona whose id is row B's stable id t1.
     const db = { ...baseDb(), personas: [{ id: 't1', name: 'A', personaPrompt: 'old', icon: '' }] as any[] }
