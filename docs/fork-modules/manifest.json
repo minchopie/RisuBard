@@ -4195,9 +4195,9 @@
       "path": "patchnote/0.9.92-ver2.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "7cdbca127c8f7929262d6a82431272a287b23bc099616be33d5e2946ffb60059",
-      "contentSha256": "7cdbca127c8f7929262d6a82431272a287b23bc099616be33d5e2946ffb60059",
-      "bytes": 2876
+      "sha256": "8102ad0ddb6aa7310130d553f307dc2e8bb791ec92c2ec75a216f9e3e7a5b300",
+      "contentSha256": "8102ad0ddb6aa7310130d553f307dc2e8bb791ec92c2ec75a216f9e3e7a5b300",
+      "bytes": 3345
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4411,9 +4411,9 @@
       "path": "docs/content-updates/README.md",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "a068366808103de37d952c579cb33deeb1ba22b69dc7c1e4f848dc1589724e93",
-      "contentSha256": "a068366808103de37d952c579cb33deeb1ba22b69dc7c1e4f848dc1589724e93",
-      "bytes": 11584
+      "sha256": "549082543cfee989b953af7dcbd3932e2c986e5700674ab351ee80249d73c5c5",
+      "contentSha256": "549082543cfee989b953af7dcbd3932e2c986e5700674ab351ee80249d73c5c5",
+      "bytes": 12100
     },
     {
       "path": "server/node/content-updates/app-code-watch.cjs",
