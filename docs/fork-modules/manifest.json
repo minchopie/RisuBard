@@ -2819,8 +2819,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "6da70fae36047a65ab081922b9a7b3e0b230a1344b4129d911b79b2ed5c61a30",
-      "contentSha256": "6da70fae36047a65ab081922b9a7b3e0b230a1344b4129d911b79b2ed5c61a30",
+      "sha256": "b7a47e6932bd8f3680dc2da9c45c67f6deb73b853af99fc275eebaf0f0009193",
+      "contentSha256": "b7a47e6932bd8f3680dc2da9c45c67f6deb73b853af99fc275eebaf0f0009193",
       "bytes": 6476
     },
     {
@@ -2995,9 +2995,9 @@
       "path": "server/node/server.cjs",
       "module": "host-bridges",
       "kind": "hosts",
-      "sha256": "b45ffbf0334ef56e073f67bc81579d81de307a35961d7d97bd4232ebad65d19c",
-      "contentSha256": "328fc32c07325bc576fead81d4f61860656496d7c79e8557c69347c9ddd403c9",
-      "bytes": 344142
+      "sha256": "c5e129758235a316cd7aca6f143471bce38fdb72df9403700facb36a3d21141f",
+      "contentSha256": "5b9978fa59392dcf27e4f38686ccbb7378d45b4aad02bef798e202845a2bfbdb",
+      "bytes": 344547
     },
     {
       "path": "src/lib/ChatScreens/DefaultChatScreen.svelte",
@@ -4136,6 +4136,14 @@
       "bytes": 2605
     },
     {
+      "path": "patchnote/0.9.91-ver2.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "0d360fb8c05ea64199d8478ad3c588e2fb168cda193724851f04d6ef3f8128f2",
+      "contentSha256": "0d360fb8c05ea64199d8478ad3c588e2fb168cda193724851f04d6ef3f8128f2",
+      "bytes": 695
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4807,7 +4815,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "2f3f12df06035f9e8ee4f3e9300b2c56edc11281264b75a18d50bc8ad0dc4db1"
+        "sha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08"
       }
     },
     {
@@ -4826,7 +4834,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/host-bridges.patch",
-        "sha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0"
+        "sha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
       }
     },
     {
@@ -4968,7 +4976,8 @@
         "docs/fork-modules/WEEKLY-20261104.md",
         "patchnote/0.9.90-ver1.md",
         "patchnote/0.9.90-ver2.md",
-        "patchnote/0.9.91-ver1.md"
+        "patchnote/0.9.91-ver1.md",
+        "patchnote/0.9.91-ver2.md"
       ],
       "patch": null
     },
@@ -5058,7 +5067,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "46b227b9f6c7c0684b7c297e67146f0ef16e9490dbaf114bc79aa1023fc02e49"
+      "sha256": "f8d93e62661d3df328358c93fcb93a409735d95b6791cfec228180783ca7cb38"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5121,14 +5130,14 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "2f3f12df06035f9e8ee4f3e9300b2c56edc11281264b75a18d50bc8ad0dc4db1",
-          "sha256": "be7183a1287ee895bc3a938e6c7418de72dd3a29aca1e51d87796cb513b89b87"
+          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08",
+          "sha256": "25995b213a8b2f74c879cc622e297a3e3385e383c68010cfddb2507c3db4803c"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0",
-          "sha256": "f10f0f8f7d1f12342a2a7402f146ad8b7d59ebef97ecfa7284e60b46dbdc2be3"
+          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
+          "sha256": "7875c543672ec4555c279e61556c95b09650f927b45c5afede0fe28278b90e7c"
         }
       ],
       "payloadTargets": {
@@ -5205,8 +5214,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "2f3f12df06035f9e8ee4f3e9300b2c56edc11281264b75a18d50bc8ad0dc4db1",
-          "sha256": "4142641983a5462dda0bc4094b7136acc8e18375c9849a45e4a1a024449a9d7d"
+          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08",
+          "sha256": "552ca6c6bf0e9963c245149e57a8ddb623d4b646f2b748e95b16422e7a83fff3"
         },
         {
           "module": "lore-lua",
@@ -5217,8 +5226,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.84/host-bridges.patch",
-          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0",
-          "sha256": "4cf2b7c461d22f07cebeb51e96a3d64e326e303531ea99acad614b39976e524b"
+          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
+          "sha256": "4657eef53a85e82772a66c22b7652763a582b1ade2aa4107c64b2ed360c7a0d2"
         },
         {
           "module": "file-export",
@@ -5357,8 +5366,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "2f3f12df06035f9e8ee4f3e9300b2c56edc11281264b75a18d50bc8ad0dc4db1",
-          "sha256": "c04a75fa6eec8a263b02f9657a7bf6c5380127e526017b524a9a8b50c6bb37e8"
+          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08",
+          "sha256": "3ed51353be403df36d5ed58ddd25fb2b96f448aff7d2165f3d1053741adb75e8"
         },
         {
           "module": "lore-lua",
@@ -5369,8 +5378,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.86/host-bridges.patch",
-          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0",
-          "sha256": "89a20e919b03d75d11a50a35ff8abd0fe36f2922daef29a4eee2d8de68053f28"
+          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
+          "sha256": "646d250ac24fca2a2359ed949f8fce9d7bba5c0778947cb39a96c3a1f5a7a03e"
         },
         {
           "module": "file-export",
@@ -5526,8 +5535,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.89/distribution.patch",
-          "sourceSha256": "2f3f12df06035f9e8ee4f3e9300b2c56edc11281264b75a18d50bc8ad0dc4db1",
-          "sha256": "978c61fe28bbfb8e353f90d6725268dc555a1d780e8fc25d5f3546d1c7a5a787"
+          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08",
+          "sha256": "8b50652f8f11b35d38d52bfd9f82b32490f2f104d74f49e1b67af9aa83852525"
         },
         {
           "module": "lore-lua",
@@ -5538,8 +5547,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.89/host-bridges.patch",
-          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0",
-          "sha256": "0b4c86f7fde848dbc930ebe45f1b76e1a61a12c6e868fd0fe40264830c8f785a"
+          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
+          "sha256": "340d94815710f3e52cf8ccf08055fcf09fc76dc31bffce2aa196845858db808e"
         },
         {
           "module": "file-export",
@@ -5709,8 +5718,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.90/distribution.patch",
-          "sourceSha256": "2f3f12df06035f9e8ee4f3e9300b2c56edc11281264b75a18d50bc8ad0dc4db1",
-          "sha256": "d3d6f66859ff35ecba184f73bba743d1346cee7237a5034bfa32a3a92972197e"
+          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08",
+          "sha256": "ef49a35c2125abc37020fdd0db1f081e1a47f61374ee4d87d106e6aa0cabde4a"
         },
         {
           "module": "lore-lua",
@@ -5721,8 +5730,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0",
-          "sha256": "f387363ee0656719e012e2c1f642893d849a7bfabc1b003ef51c845822c5b858"
+          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
+          "sha256": "d1fb3703a7fc6af3c33cea2540f199866eb683a709cbcbe32d58f53cbd29cde2"
         },
         {
           "module": "file-export",
@@ -5898,8 +5907,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.91/distribution.patch",
-          "sourceSha256": "2f3f12df06035f9e8ee4f3e9300b2c56edc11281264b75a18d50bc8ad0dc4db1",
-          "sha256": "0c26f33525e931b3f01eecc2eb22e132ff55325c881228d53b2c084a0905e951"
+          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08",
+          "sha256": "5f25179c3c5862dae9917ebe558d16e0a177149d47da803d31edf6d33952e9fa"
         },
         {
           "module": "lore-lua",
@@ -5910,8 +5919,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "b159412c40353f2767f6365159aa5ca8e92208a4681b23996e1afc02aa3969f0",
-          "sha256": "f387363ee0656719e012e2c1f642893d849a7bfabc1b003ef51c845822c5b858"
+          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
+          "sha256": "d1fb3703a7fc6af3c33cea2540f199866eb683a709cbcbe32d58f53cbd29cde2"
         },
         {
           "module": "file-export",

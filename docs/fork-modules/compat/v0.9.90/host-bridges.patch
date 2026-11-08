@@ -192,7 +192,20 @@ index 7c9f378..7cd0611 100644
              });
              atomicRestorePublished = true;
          } else {
-@@ -4739,6 +4779,8 @@ app.delete('/api/logs', async (req, res, next) => {
+@@ -3719,6 +3759,12 @@ modelJobs.registerRoutes(app, { auth: checkProxyAuth });
+ 
+ app.get('/api/test_auth', async(req, res) => {
+ 
++    // RisuBard: the owner turned the password off on this device (an empty file `__password_off` in the data folder),
++    // so the app opens without asking. Any device that can reach this server then gets in, like before a password was set.
++    if(password && existsSync(path.join(savePath, '__password_off'))){
++        res.send({status: 'success', token: createServerJwt()})
++        return
++    }
+     if(!password){
+         res.send({status: 'unset'})
+     }
+@@ -4739,6 +4785,8 @@ app.delete('/api/logs', async (req, res, next) => {
  // Registered with the same auth the /api/logs
  // endpoints use.
  const requestLogs = createRequestLogs({ saveDir: savePath });
@@ -201,7 +214,7 @@ index 7c9f378..7cd0611 100644
  requestLogs.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
  const narrativeMemoryService = createRuntimeMemoryService(savePath);
  const windowsTransfers = require('./transfer-windows.cjs').createWindowsTransfers(savePath, path.resolve(__dirname, '../..'));
-@@ -4796,6 +4838,7 @@ if (syncSecretsDir) require('node:fs').mkdirSync(syncSecretsDir, { recursive: tr
+@@ -4796,6 +4844,7 @@ if (syncSecretsDir) require('node:fs').mkdirSync(syncSecretsDir, { recursive: tr
  const nasSync = require('./nas-sync-service.cjs').createNasSyncService({
      dataRoot: savePath,
      identityDir: syncSecretsDir, secretsDir: syncSecretsDir, transfers: playTransfer,
@@ -209,7 +222,7 @@ index 7c9f378..7cd0611 100644
      readDatabase: () => queueStorageOperation(() => loadPersistedFullDatabase()),
      memory: narrativeMemoryService,
      storage: require('./db.cjs'),
-@@ -4827,6 +4870,11 @@ app.post('/api/play-transfer/remote/:kind/:operation', async (req, res) => {
+@@ -4827,6 +4876,11 @@ app.post('/api/play-transfer/remote/:kind/:operation', async (req, res) => {
      try { res.json(await remoteTransfers.dispatch(req.params.kind, req.params.operation, req.body)); }
      catch (error) { res.status(400).json({ error: error.message }); }
  });
@@ -221,7 +234,7 @@ index 7c9f378..7cd0611 100644
  registerRisuBardMemoryRoutes(app, {
      auth: checkAuth,
      service: narrativeMemoryService,
-@@ -4974,6 +5022,12 @@ app.post('/api/write', async (req, res, next) => {
+@@ -4974,6 +5028,12 @@ app.post('/api/write', async (req, res, next) => {
                      phaseStartedAt = performance.now();
                      initChatStore(fullDb);
                      metrics.refreshMs = elapsedMs(phaseStartedAt);
@@ -234,7 +247,7 @@ index 7c9f378..7cd0611 100644
                      errorStage = 'kv-write';
                      phaseStartedAt = performance.now();
                      kvSet(key, mergedContent);
-@@ -4994,6 +5048,7 @@ app.post('/api/write', async (req, res, next) => {
+@@ -4994,6 +5054,7 @@ app.post('/api/write', async (req, res, next) => {
                          overlappingPersists, ...metrics,
                      });
                      logger.error('[Write] Failed to merge chats into database.bin:', e.message);
@@ -242,7 +255,7 @@ index 7c9f378..7cd0611 100644
                      // Do NOT write stubs-only to disk — that would permanently
                      // destroy existing full chat data. Preserve disk as-is.
                      res.status(500).json({ error: 'Database merge failed' });
-@@ -5005,9 +5060,10 @@ app.post('/api/write', async (req, res, next) => {
+@@ -5005,9 +5066,10 @@ app.post('/api/write', async (req, res, next) => {
                  kvSet(key, fileContent);
              }
  
@@ -255,7 +268,7 @@ index 7c9f378..7cd0611 100644
                  if (saveTimers[DB_HEX_KEY]) {
                      clearTimeout(saveTimers[DB_HEX_KEY]);
                      delete saveTimers[DB_HEX_KEY];
-@@ -6549,7 +6605,7 @@ app.post('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next) =>
+@@ -6549,7 +6611,7 @@ app.post('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next) =>
          // Recheck writer ownership and canonical conflicts at commit time.
          return saveChatContentHandler(req, res, next);
      } catch (error) {
@@ -264,7 +277,7 @@ index 7c9f378..7cd0611 100644
          next(error);
      }
  });
-@@ -6559,7 +6615,7 @@ app.delete('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next)
+@@ -6559,7 +6621,7 @@ app.delete('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next)
          await chatContentUploads.abort(req);
          res.json({ success: true });
      } catch (error) {
@@ -273,7 +286,7 @@ index 7c9f378..7cd0611 100644
          next(error);
      }
  });
-@@ -8073,10 +8129,9 @@ app.post('/api/local-shutdown', (req, res) => {
+@@ -8073,10 +8135,9 @@ app.post('/api/local-shutdown', (req, res) => {
  app.use(expressErrorMiddleware);
  app.use((err, req, res, next) => {
      if (res.headersSent) return next(err);
@@ -287,7 +300,7 @@ index 7c9f378..7cd0611 100644
  });
  
  // ─────────────────────────────────────────────────────────────────────────────
-@@ -8145,7 +8200,7 @@ async function startServer() {
+@@ -8145,7 +8206,7 @@ async function startServer() {
          // No time limit for receiving a request: large bot saves on a busy disk can
          // take longer than Node's 5-minute default, and waiting is not a failure.
          server.requestTimeout = 0;
@@ -296,7 +309,7 @@ index 7c9f378..7cd0611 100644
          // Written only once bound, so a server that lost the port race keeps the owner's token intact.
          server.once('listening', () => writeFileSync(localShutdownTokenPath, localShutdownToken, { mode: 0o600 }));
          // Move BardWiki vectors out of the KV in the background once serving.
-@@ -8189,11 +8244,13 @@ async function shutdownGracefully(reason) {
+@@ -8189,11 +8250,13 @@ async function shutdownGracefully(reason) {
      console.log(`[Server] Received ${reason}, flushing pending data...`);
      try {
          try { liveFileEvents.close(); } catch (e) { logger.warn('[Server] File event cleanup error:', e); }

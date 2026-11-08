@@ -3614,6 +3614,12 @@ modelJobs.registerRoutes(app, { auth: checkProxyAuth });
 
 app.get('/api/test_auth', async(req, res) => {
 
+    // RisuBard: the owner turned the password off on this device (an empty file `__password_off` in the data folder),
+    // so the app opens without asking. Any device that can reach this server then gets in, like before a password was set.
+    if(password && existsSync(path.join(savePath, '__password_off'))){
+        res.send({status: 'success', token: createServerJwt()})
+        return
+    }
     if(!password){
         res.send({status: 'unset'})
     }
