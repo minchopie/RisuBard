@@ -1,4 +1,4 @@
-// Content updates (client): asks "a new character/persona was published on the NAS — import it?" and imports it with
+// Content updates (client): asks "a new character/persona/prompt preset was published on the NAS — import it?" and imports it with
 // the app's own import. A character goes through upstream importCharacterProcess, which offers to update the installed
 // bot (upstream "update an installed bot" dialog, chats kept, a backup copy in the trash). A persona with the same name
 // is updated in place (same id, so chats bound to it keep it); otherwise it is added.
@@ -16,7 +16,7 @@ const app = () => Promise.all([
     import('../importSession'),
 ]).then(([database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session]) => ({ database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session }))
 
-export type ContentKind = 'character' | 'persona'
+export type ContentKind = 'character' | 'persona' | 'preset'
 export interface ContentItem {
     key: string; kind: ContentKind; title: string; version: string; file: string; fileName: string
     sha256: string; bytes: number; publishedAt: string; publishedBy: string; decision: '' | 'applied' | 'declined' | 'published'
@@ -50,7 +50,7 @@ export async function fetchContent(item: ContentItem): Promise<Uint8Array> {
     return bytes
 }
 
-const kindLabel = (kind: ContentKind) => kind === 'character' ? '캐릭터 카드' : '페르소나'
+export const kindLabel = (kind: ContentKind) => kind === 'character' ? '캐릭터 카드' : kind === 'preset' ? '프롬프트 프리셋' : '페르소나'
 export const itemLabel = (item: Pick<ContentItem, 'title' | 'version'>) =>
     item.version && !item.title.includes(item.version) ? `${item.title} (${item.version})` : item.title
 
@@ -90,9 +90,21 @@ export function baseName(title: string): string {
 
 export interface Described { kind: ContentKind; title: string; version: string }
 
-/** What a picked file is: a character card (.charx/.json/.png with a card) or a persona PNG. */
+/** A prompt preset's display name from its file name (".risup", ".risupreset", ".preset.json", a trailing "_preset"). */
+export function presetTitle(fileName: string): string {
+    return fileName.replace(/\.(?:risup|risupreset|preset\.json)$/i, '').replace(/_preset$/i, '').trim()
+}
+const isPresetFile = (lower: string) => lower.endsWith('.risup') || lower.endsWith('.risupreset') || lower.endsWith('.preset.json')
+
+/** What a picked file is: a character card (.charx/.json/.png with a card), a persona PNG or a prompt preset (.risup/.risupreset/.preset.json). */
 export async function describeFile(name: string, bytes: Uint8Array): Promise<Described> {
     const lower = name.toLowerCase()
+    if (isPresetFile(lower)) {
+        let title = presetTitle(name)
+        if (lower.endsWith('.json')) { const data = JSON.parse(new TextDecoder().decode(bytes)); if (typeof data?.name === 'string' && data.name.trim()) title = data.name.trim() }
+        if (!title) throw new Error('프리셋 이름이 없어요.')
+        return { kind: 'preset', title, version: versionIn(title) }
+    }
     if (lower.endsWith('.charx')) {
         const files = unzipSync(bytes, { filter: file => file.name === 'card.json' })
         if (!files['card.json']) throw new Error('card.json이 없는 charx예요.')
@@ -110,7 +122,7 @@ export async function describeFile(name: string, bytes: Uint8Array): Promise<Des
         if (card) return fromCard(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(card), c => c.charCodeAt(0)))))
         throw new Error('캐릭터 카드나 페르소나 정보가 없는 PNG예요.')
     }
-    throw new Error('charx, json, png 파일만 올릴 수 있어요.')
+    throw new Error('charx, json, png, risup 파일만 올릴 수 있어요.')
 }
 
 function fromCard(card: any): Described {
@@ -150,9 +162,39 @@ async function applyPersona(bytes: Uint8Array): Promise<void> {
     }
 }
 
+/** Connection fields an exported preset leaves blank (database.svelte.ts downloadPreset): an update keeps this device's values. */
+const PRESET_DEVICE_FIELDS = ['openAIKey', 'forceReplaceUrl', 'forceReplaceUrl2', 'proxyKey', 'textgenWebUIStreamURL', 'textgenWebUIBlockingURL']
+
+/** Imports a prompt preset with the app's own preset import. A preset with the same name is updated in place (same id, so chats
+ *  bound to it keep it; this device's keys and addresses kept); otherwise it is added. Resolves to the preset's name. */
+async function applyPreset(fileName: string, bytes: Uint8Array): Promise<string> {
+    const { database } = await app()
+    const db = database.getDatabase()
+    if (!Array.isArray(db.botPresets)) db.botPresets = []
+    const before = db.botPresets.length
+    await database.importPreset({ name: fileName, data: bytes })
+    if (db.botPresets.length !== before + 1) throw new Error('프롬프트 프리셋을 읽지 못했어요.')
+    const added: any = db.botPresets[before]
+    const index = db.botPresets.findIndex((preset, i) => i < before && preset?.name === added.name)
+    if (index < 0) return added.name
+    const existing: any = db.botPresets[index]
+    for (const field of PRESET_DEVICE_FIELDS) if (!added[field] && existing[field]) added[field] = existing[field]
+    added.id = existing.id
+    db.botPresets.splice(before, 1)
+    db.botPresets[index] = added
+    // The active preset is also held in the root fields: load the new values there, without saving the old ones back over it.
+    if (db.botPresetsId === index) database.changeToPreset(index, false)
+    return added.name
+}
+
 /** Imports one published item; resolves to the decision to record (declined when the user cancelled the import). */
 export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<ContentDecision> {
     const { cards, globalApi, importTransaction, alert, session } = await app()
+    if (item.kind === 'preset') {
+        const name = await applyPreset(item.fileName, bytes)
+        alert.notifySuccess(`프롬프트 프리셋 「${name}」를 가져왔어요.`)
+        return 'applied'
+    }
     if (item.kind === 'persona') {
         await applyPersona(bytes)
         alert.notifySuccess(`페르소나 「${item.title}」를 가져왔어요.`)
@@ -200,7 +242,9 @@ export async function checkContentUpdates(force = false): Promise<ContentOvervie
                 `새 ${kindLabel(item.kind)}가 올라왔어요. 지금 가져올까요?`,
                 ['네, 가져오기', '아니오'],
                 `${itemLabel(item)}\n${(item.bytes / 1_000_000).toFixed(1)} MB · ${new Date(item.publishedAt).toLocaleString()}${item.publishedBy ? ` · ${item.publishedBy}` : ''}`
-                + (item.kind === 'character' ? '\n\n이미 있는 같은 캐릭터를 고르면 대화는 그대로 두고 카드만 새 판으로 바꿔요.' : '\n\n같은 이름의 페르소나가 있으면 그 페르소나를 새 내용으로 바꿔요.'),
+                + (item.kind === 'character' ? '\n\n이미 있는 같은 캐릭터를 고르면 대화는 그대로 두고 카드만 새 판으로 바꿔요.'
+                    : item.kind === 'preset' ? '\n\n같은 이름의 프롬프트 프리셋이 있으면 그 프리셋을 새 내용으로 바꿔요(이 기기의 API 키·주소는 그대로). 이름이 다르면 새로 추가해요.'
+                    : '\n\n같은 이름의 페르소나가 있으면 그 페르소나를 새 내용으로 바꿔요.'),
             )
             // -1 is the dialog's own cancel/close: no answer yet, so it is asked again at the next check.
             if (choice === -1) break

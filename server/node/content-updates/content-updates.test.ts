@@ -83,6 +83,8 @@ describe('content updates', () => {
         expect(() => validItem({ ...good, file: '../x.charx' })).toThrow()
         expect(() => validItem({ ...good, fileName: '../a.charx' })).toThrow()
         expect(() => validItem({ ...good, kind: 'persona' })).toThrow()
+        expect(validItem({ ...good, key: 'preset:바드 프롬프트 젬', kind: 'preset', file: `${'a'.repeat(64)}.risup`, fileName: 'gem.risup' })).toMatchObject({ kind: 'preset' })
+        expect(() => validItem({ ...good, key: 'preset:x', kind: 'preset', file: `${'a'.repeat(64)}.png`, fileName: 'x.png' })).toThrow()
         expect(recordName('character:a')).toMatch(/^[a-f0-9]{64}\.json$/)
         const h = 'b'.repeat(64)
         expect(recordNames(`<d:multistatus><d:response><d:href>/x/items/</d:href></d:response><d:response><d:href>/x/items/${h}.json</d:href></d:response><d:response><d:href>/x/items/${h}.json.part-1</d:href></d:response><D:response><D:href>https://nas/x/items/../${'c'.repeat(64)}.json</D:href></D:response></d:multistatus>`))

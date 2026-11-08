@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { zipSync, strToU8 } from 'fflate'
 import { createHash } from 'node:crypto'
 
-vi.mock('../storage/database.svelte', () => ({ getDatabase: vi.fn(), saveImage: vi.fn(async () => 'new-icon') }))
+vi.mock('../storage/database.svelte', () => ({ getDatabase: vi.fn(), saveImage: vi.fn(async () => 'new-icon'), importPreset: vi.fn(), changeToPreset: vi.fn() }))
 vi.mock('../globalApi.svelte', () => ({ checkCharOrder: vi.fn() }))
 vi.mock('../characterCards', () => ({ importCharacterProcess: vi.fn() }))
 vi.mock('../process/files/inlays', () => ({ reencodeImage: vi.fn(async (b: Uint8Array) => b) }))
@@ -39,6 +39,29 @@ describe('content updates (client helpers)', () => {
         expect(await mod.describeFile('a.json', strToU8(JSON.stringify({ data: { name: 'Bot 2.0.1 ver' } })))).toEqual({ kind: 'character', title: 'Bot 2.0.1 ver', version: '2.0.1' })
         expect(mod.itemLabel({ title: 'Bot', version: '2.0.1' })).toBe('Bot (2.0.1)')
         expect(mod.itemLabel({ title: 'Bot 2.0.1 ver', version: '2.0.1' })).toBe('Bot 2.0.1 ver')
+    })
+    test('a .risup, .risupreset or .preset.json is described as a prompt preset', async () => {
+        expect(await mod.describeFile('바드 프롬프트 젬 0.5.2 — Argon 단일 시스템 v1.0.0 r2.risup', new Uint8Array([1]))).toEqual({ kind: 'preset', title: '바드 프롬프트 젬 0.5.2 — Argon 단일 시스템 v1.0.0 r2', version: '0.5.2' })
+        expect(await mod.describeFile('Gem_preset.risupreset', new Uint8Array([1]))).toEqual({ kind: 'preset', title: 'Gem', version: '' })
+        expect(await mod.describeFile('x.preset.json', strToU8(JSON.stringify({ name: 'Gem 1.2', mainPrompt: 'm' })))).toEqual({ kind: 'preset', title: 'Gem 1.2', version: '1.2' })
+        expect(mod.kindLabel('preset')).toBe('프롬프트 프리셋')
+    })
+    test('a prompt preset with the same name is updated in place (same id, this device\'s keys kept, the active one reloaded); a new name is added', async () => {
+        const database = await import('../storage/database.svelte') as any
+        const db: any = { botPresetsId: 1, botPresets: [{ id: 'p0', name: '다른 것' }, { id: 'p1', name: '바드 프롬프트 젬', mainPrompt: 'old', openAIKey: 'device-key', proxyKey: '' }] }
+        database.getDatabase.mockReturnValue(db)
+        let next: any = { name: '바드 프롬프트 젬', mainPrompt: 'new', openAIKey: '', proxyKey: 'file-proxy' }
+        database.importPreset.mockImplementation(async () => { db.botPresets.push({ ...next, id: 'fresh' }) })
+        const item = { kind: 'preset', title: '바드 프롬프트 젬', fileName: 'gem.risup' } as any
+        expect(await mod.applyItem(item, new Uint8Array([1]))).toBe('applied')
+        expect(db.botPresets).toEqual([{ id: 'p0', name: '다른 것' }, { id: 'p1', name: '바드 프롬프트 젬', mainPrompt: 'new', openAIKey: 'device-key', proxyKey: 'file-proxy' }])
+        expect(database.importPreset).toHaveBeenCalledWith({ name: 'gem.risup', data: new Uint8Array([1]) })
+        expect(database.changeToPreset).toHaveBeenCalledWith(1, false)
+        database.changeToPreset.mockClear(); next = { name: '새 프리셋 0.5.2', mainPrompt: 'x' }
+        expect(await mod.applyItem(item, new Uint8Array([2]))).toBe('applied')
+        expect(db.botPresets.map((p: any) => p.name)).toEqual(['다른 것', '바드 프롬프트 젬', '새 프리셋 0.5.2']); expect(database.changeToPreset).not.toHaveBeenCalled()
+        database.importPreset.mockImplementation(async () => {}) // unreadable file: nothing added
+        await expect(mod.applyItem(item, new Uint8Array([3]))).rejects.toThrow(/프롬프트 프리셋/)
     })
     test('persona json must have a name and a prompt', () => {
         const b64 = (value: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))))

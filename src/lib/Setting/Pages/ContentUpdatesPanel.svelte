@@ -4,8 +4,7 @@
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import {
         fetchOverview, describeFile, baseName, publishContent, checkContentUpdates, recordDecision, itemLabel, contentUpdateStatus,
-        type ContentItem, type ContentKind,
-    } from 'src/ts/content-updates/contentUpdates'
+        type ContentItem, type ContentKind, kindLabel } from 'src/ts/content-updates/contentUpdates'
 
     let items = $state<ContentItem[]>([])
     let configured = $state(true)
@@ -32,11 +31,11 @@
     function pick() {
         return run(async () => {
             const { selectSingleFile } = await import('src/ts/util')
-            const file = await selectSingleFile(['charx', 'png', 'json'])
+            const file = await selectSingleFile(['charx', 'png', 'json', 'risup', 'risupreset'])
             if (!file) return
             const described = await describeFile(file.name, file.data)
             picked = { fileName: file.name, bytes: file.data, ...described }
-            publishName = described.kind === 'character' ? baseName(described.title) : described.title
+            publishName = described.kind === 'persona' ? described.title : baseName(described.title)
         })
     }
     function publish() {
@@ -71,12 +70,12 @@
         <p class="hint">NAS 연결이 아직 설정되지 않았어요. 위의 「NAS 연결 설정」을 먼저 해 주세요.</p>
     {/if}
     <div class="transfer-actions">
-        <ShButton variant="outline" onclick={pick}>파일 골라서 올리기 (charx · json · png)</ShButton>
+        <ShButton variant="outline" onclick={pick}>파일 골라서 올리기 (charx · json · png · risup)</ShButton>
         <ShButton variant="outline" onclick={() => run(async () => { await checkContentUpdates(true); await refresh() })}>지금 새 배포 확인</ShButton>
     </div>
     {#if picked}
         <div class="sync-card">
-            <strong>{picked.kind === 'character' ? '캐릭터 카드' : '페르소나'} · {itemLabel(picked)}</strong>
+            <strong>{kindLabel(picked.kind)} · {itemLabel(picked)}</strong>
             <span>{picked.fileName} · {(picked.bytes.length / 1_000_000).toFixed(1)} MB</span>
             <label>배포 이름<input bind:value={publishName} maxlength="120" /></label>
             <p class="hint">같은 배포 이름으로 다시 올리면 그 항목이 새 판으로 바뀌어요. 다른 계열(예: 별도 판)은 이름을 다르게 적어 주세요.</p>
@@ -93,7 +92,7 @@
             <summary>NAS에 올라온 배포 {items.length}개</summary>
             {#each items as item (item.key)}
                 <div class="remote-file">
-                    <strong>{item.kind === 'character' ? '캐릭터' : '페르소나'} · {itemLabel(item)}</strong>
+                    <strong>{item.kind === 'character' ? '캐릭터' : kindLabel(item.kind)} · {itemLabel(item)}</strong>
                     <span>{new Date(item.publishedAt).toLocaleString()}{item.publishedBy ? ` · ${item.publishedBy}` : ''} · {decisionText[item.decision] ?? item.decision}</span>
                     {#if !item.decision}
                         <ShButton variant="outline" onclick={() => askAgain(item)}>지금 물어보기</ShButton>

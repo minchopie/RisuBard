@@ -1,5 +1,5 @@
 'use strict';
-// Content updates: one NAS folder where a character card or persona card is published once; every device
+// Content updates: one NAS folder where a character card, persona card or prompt preset is published once; every device
 // that uses the same NAS asks "a new one was published — import it? yes/no" and imports it through the
 // app's own import (a character goes through the upstream "update an installed bot" flow, chats kept).
 // On the NAS: the files (named by their SHA-256) and one small record per published name (items/<sha256(name)>.json),
@@ -20,8 +20,9 @@ const FILE_LIMIT = 512 * 1024 * 1024;
 const MAX_ITEMS = 200; // new names are refused at this count
 const READ_ITEMS = 256; // read cap, above MAX_ITEMS so names that passed the count check at the same moment are all still read
 const READ_CONCURRENCY = 8;
-const KINDS = new Set(['character', 'persona']);
-const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']) };
+const KINDS = new Set(['character', 'persona', 'preset']);
+// preset (0.9.92-ver1): a prompt preset as exported by the app (.risup / .risupreset) or its JSON form.
+const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']), preset: new Set(['risup', 'risupreset', 'json']) };
 const DECISIONS = new Set(['applied', 'declined', 'published']);
 const SHA = /^[a-f0-9]{64}$/;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
@@ -30,7 +31,7 @@ function text(value, max) {
     return typeof value === 'string' && value.trim() && value.length <= max && !CONTROL.test(value) ? value.trim() : null;
 }
 function validKey(value) {
-    const match = typeof value === 'string' && /^(character|persona):(.+)$/.exec(value);
+    const match = typeof value === 'string' && /^(character|persona|preset):(.+)$/.exec(value);
     return !!match && !!text(match[2], 120) && match[2] === match[2].trim();
 }
 function validItem(value) {
