@@ -68,6 +68,34 @@ describe('app code watch', () => {
         expect(log.filter(l => l.startsWith('download'))).toEqual([])
     })
 
+    test('a patch rolled back just now is not "ready" (the next start skips it, like the loader); after that start it is', async () => {
+        const root = app(), r = release('0.9.92-ver2')
+        const w = watch(root, nas(r))
+        await w.check()
+        core.status(root, { failedHash: r.manifest.sha256, attempts: 1, state: 'rolled-back' })
+        expect(await w.check()).toMatchObject({ ready: null, state: 'retry-next-launch' })
+        core.status(root, { failedHash: r.manifest.sha256, attempts: 1, state: 'retry-next-launch' })
+        expect(await w.check()).toMatchObject({ ready: '0.9.92-ver2', state: 'ready' })
+    })
+
+    test('a newer release cached by another writer while downloading is kept; this download is dropped', async () => {
+        const root = app(), older = release('0.9.92-ver2'), newer = release('0.9.92-ver3')
+        const cache = core.stateRoot(root)
+        const connect = async () => ({
+            latest: async () => older.manifest,
+            download: async (_r: any, destination: string) => {
+                // The loader's slow start-up download finishing meanwhile with a newer release.
+                fs.mkdirSync(cache, { recursive: true })
+                fs.writeFileSync(path.join(cache, `ready-${newer.manifest.sha256}.zip`), newer.bytes)
+                core.saveState(root, 'ready.json', newer.manifest)
+                fs.writeFileSync(destination, older.bytes, { flag: 'wx' })
+            },
+        })
+        expect(await watch(root, connect).check()).toMatchObject({ ready: '0.9.92-ver3', state: 'ready', version: '0.9.92-ver3' })
+        expect(core.readJson(path.join(cache, 'ready.json')).version).toBe('0.9.92-ver3')
+        expect(fs.readdirSync(cache).filter(f => f.endsWith('.zip') || f.endsWith('.part'))).toEqual([`ready-${newer.manifest.sha256}.zip`])
+    })
+
     test('a failed download leaves no partial file and no ready record', async () => {
         const root = app(), r = release('0.9.92-ver2')
         const connect = async () => ({ latest: async () => r.manifest, download: async (_r: any, d: string) => { fs.writeFileSync(d, 'half'); throw new Error('cut') } })

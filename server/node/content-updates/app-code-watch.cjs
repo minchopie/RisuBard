@@ -28,17 +28,26 @@ function createAppCodeWatch({ appRoot = path.resolve(__dirname, '../../..'), dat
     const archiveOf = release => path.join(cache, `ready-${release.sha256}.zip`);
     let last = { state: on ? 'waiting' : 'off' }, running = null, timer = null;
 
-    // Same retry rule as the loader: a patch that failed twice at start is not offered again.
-    function failedTwice(release) {
-        try { const s = core.readJson(path.join(cache, 'status.json')); return s.failedHash === release.sha256 && s.attempts >= 2; }
-        catch { return false; }
+    // Same retry rules as the loader (bootstrap canTry): a patch that failed twice at start is not taken again; one
+    // rolled back just now is skipped by the next start (retried at the one after), so it is not "ready" for a restart.
+    function blocked(release) {
+        try {
+            const s = core.readJson(path.join(cache, 'status.json'));
+            if (s.failedHash !== release.sha256) return null;
+            if (s.attempts >= 2) return 'failed-before';
+            if (s.state === 'rolled-back') return 'retry-next-launch';
+        } catch { /* no status yet */ }
+        return null;
+    }
+    function cached() {
+        try { return core.validateRelease(core.readJson(path.join(cache, 'ready.json'))); } catch { return null; }
     }
     /** The downloaded release the loader will install at the next start, or null. */
     function ready() {
         try {
-            const release = core.validateRelease(core.readJson(path.join(cache, 'ready.json')));
-            if (core.newer(release.version, current()) && release.runtime === runtime() && fs.existsSync(archiveOf(release)) && !failedTwice(release)) return release;
-        } catch { /* no cached release */ }
+            const release = cached();
+            if (release && core.newer(release.version, current()) && release.runtime === runtime() && fs.existsSync(archiveOf(release)) && !blocked(release)) return release;
+        } catch { /* unreadable app files */ }
         return null;
     }
     function status() {
@@ -56,18 +65,32 @@ function createAppCodeWatch({ appRoot = path.resolve(__dirname, '../../..'), dat
             const release = await remote.latest();
             if (!release || !core.newer(release.version, current())) { last = { state: 'current' }; return; }
             if (release.runtime !== runtime()) { last = { state: 'full-package-required', version: release.version }; return; }
-            if (failedTwice(release)) { last = { state: 'failed-before', version: release.version }; return; }
-            if (ready()?.sha256 === release.sha256) { last = { state: 'ready', version: release.version }; return; }
+            const block = blocked(release);
+            if (block === 'failed-before') { last = { state: block, version: release.version }; return; }
+            const have = cached();
+            if (have?.sha256 === release.sha256 && fs.existsSync(archiveOf(release))) { last = { state: block ?? 'ready', version: release.version }; return; }
             last = { state: 'downloading', version: release.version };
             fs.mkdirSync(cache, { recursive: true });
+            const started = Date.now();
             part = path.join(cache, `download-${randomUUID()}.part`);
             await remote.download(release, part);
+            // Compare, publish and clean up in one tick (no await): the loader's own slow start-up download shares this
+            // cache and may have finished meanwhile; a newer cached release is kept and this one is dropped.
+            const now = cached();
+            if (now && core.newer(now.version, release.version) && fs.existsSync(archiveOf(now))) {
+                last = { state: blocked(now) ?? 'ready', version: now.version };
+                return;
+            }
             fs.renameSync(part, archiveOf(release)); part = null;
             core.saveState(appRoot, 'ready.json', release);
             for (const file of fs.readdirSync(cache)) {
-                if (READY_ARCHIVE.test(file) && file !== path.basename(archiveOf(release))) fs.rmSync(path.join(cache, file), { force: true });
+                // Only archives older than this download: one another writer finished meanwhile is left alone.
+                if (READY_ARCHIVE.test(file) && file !== path.basename(archiveOf(release))) {
+                    const other = path.join(cache, file);
+                    try { if (fs.statSync(other).mtimeMs < started) fs.rmSync(other, { force: true }); } catch { /* gone */ }
+                }
             }
-            last = { state: 'ready', version: release.version };
+            last = { state: block ?? 'ready', version: release.version };
         } catch (error) {
             last = { state: 'error', error: error?.name === 'AbortError' ? 'timeout' : String(error?.message ?? error) };
         } finally {

@@ -27,10 +27,10 @@
 
 앱 코드 업데이트(app-update 모듈, NAS `.risubard-app-updates/`) 자체는 앱 시작 때 로더가 적용한다. 이 모듈은 그 사이를 채운다.
 
-- 서버(`server/node/content-updates/app-code-watch.cjs`): 로더가 도는 곳(Android 임베디드 런타임, Windows 포터블 패키지, `RISUBARD_APP_UPDATE=0`이 아닐 때)에서만 켜진다. 시작 90초 뒤, 그 뒤 30분마다 `remote.latest()`를 확인하고, 지금보다 새롭고 런타임 지문이 같고 시작 때 두 번 실패한 패치가 아니면 로더 캐시에 받아 둔다: `<앱>/.app-updates/download-<uuid>.part` → `ready-<sha256>.zip`, 그다음 `ready.json`. 이전에 받아 둔 다른 `ready-*.zip`은 지운다. 확인은 한 번에 하나, 10분 제한. 런타임 지문이 다르면 받지 않고 `full-package-required`로만 알린다. 코드를 설치하거나 사용자 데이터를 건드리지 않는다.
+- 서버(`server/node/content-updates/app-code-watch.cjs`): 로더가 도는 곳(Android 임베디드 런타임, Windows 포터블 패키지, `RISUBARD_APP_UPDATE=0`이 아닐 때)에서만 켜진다. 시작 90초 뒤, 그 뒤 30분마다 `remote.latest()`를 확인하고, 지금보다 새롭고 런타임 지문이 같고 시작 때 두 번 실패한 패치가 아니면 로더 캐시에 받아 둔다(로더 `canTry`와 같은 규칙: 방금 되돌린(`rolled-back`) 패치는 받아 둬도 「준비됨」으로 알리지 않는다 — 다음 시작은 건너뛰고 그다음 시작이 다시 시도하므로): `<앱>/.app-updates/download-<uuid>.part` → `ready-<sha256>.zip`, 그다음 `ready.json`. 다운로드가 끝난 그 순간(await 없이) `ready.json`을 다시 읽어, 로더의 느린 시작 다운로드 등이 더 새 판을 이미 받아 뒀으면 그 판을 두고 이번 것은 버린다. 이 다운로드보다 오래된 다른 `ready-*.zip`만 지운다. 로더(bootstrap.cjs)도 늦게 끝난 시작 다운로드가 더 새 캐시를 덮어쓰지 않는다. 확인은 한 번에 하나, 10분 제한. 런타임 지문이 다르면 받지 않고 `full-package-required`로만 알린다. 코드를 설치하거나 사용자 데이터를 건드리지 않는다.
 - 경로: `POST /api/play-transfer/content-updates/app-code` `{ check }` → `{ enabled, current, ready, state, version?, error? }`. `check: true`면 확인을 마친 뒤 답한다(클라이언트는 상태만 묻는다).
 - 클라이언트(`src/ts/content-updates/appCodeUpdate.ts`, `startContentUpdates`가 시작): 시작 20초 뒤, 5분마다, 앱이 다시 보일 때 상태를 묻는다. 받아 둔 판이 있고 바쁘지 않으면(위 「묻기」와 같은 조건) 버전마다 한 번 「새 버전이 준비됐어요. 지금 적용할까요? [지금 적용] [나중에]」. 창을 답 없이 닫으면 다음 확인 때 다시 묻는다.
-  - 지금 적용(Android 앱): `risubard-native-background` 이벤트로 앱의 백그라운드 저장을 시작하고 2초 기다린 뒤 네이티브 `app.restart`를 부른다. 앱은 응답을 보낸 뒤 화면을 비우고 서버를 정상 종료(stdin 닫기 → 데이터 저장 후 종료)한 다음 다시 시작한다. 로더가 받아 둔 코드를 설치하고 화면이 다시 연결된다. `app.restart`가 없는 APK면 「앱을 완전히 닫았다가 다시 켜면 적용돼요」.
+  - 지금 적용(Android 앱): 대기 창(`alertWait`)으로 새 작업을 막은 채 `requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })`를 기다린다. 실패하면 적용하지 않고 알린 뒤 다음에 다시 묻는다. 저장 뒤 동기화 적용·전송·응답 생성·가져오기가 시작됐으면 미룬다. 그다음 네이티브 `app.restart`를 부른다. 15초 뒤에도 페이지가 남아 있으면(재시작 안 됨) 대기 창을 닫는다. 앱은 응답을 보낸 뒤 화면을 비우고 서버를 정상 종료(stdin 닫기 → 데이터 저장 후 종료)한 다음 다시 시작한다. 로더가 받아 둔 코드를 설치하고 화면이 다시 연결된다. `app.restart`가 없는 APK면 「앱을 완전히 닫았다가 다시 켜면 적용돼요」.
   - PC·브라우저: 「다시 켜면 적용돼요」만 알린다.
 - 네이티브(transfer-sync 모듈 파일): `PlaySetController`의 `app.restart`, `MainActivity.restartServer()`, `EmbeddedServer.shutdown()`. 네이티브가 바뀌므로 런타임 지문이 바뀌어, 0.9.92-ver2는 모든 기기에 전체 APK·PC 패키지 설치가 한 번 필요하다.
 

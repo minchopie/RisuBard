@@ -228,6 +228,22 @@ describe('NAS app code patches', () => {
         expect(second.stdout).toContain('0.9.91')
         expect(core.journal(dir).phase).toBe('healthy')
     })
+    test('a slow start-up download that finishes after the app code watch cached a newer release keeps the newer one', async () => {
+        const dir = root(); installed(dir); put(dir, '.portable', '')
+        fs.cpSync(path.resolve('server/node/app-update'), path.join(dir, 'server/node/app-update'), { recursive: true })
+        for (const name of ['data-root.cjs', 'data-root-lock.cjs']) fs.copyFileSync(path.resolve('server/node', name), path.join(dir, 'server/node', name))
+        fs.symlinkSync(path.resolve('node_modules'), path.join(dir, 'node_modules'), 'junction')
+        put(dir, 'server/node/app-update/runtime.json', JSON.stringify({ fingerprint: runtime }))
+        const older = await archive(dir, {}, '0.9.91'), newer = await archive(dir, {}, '0.9.92')
+        // The app (standing in for content-updates/app-code-watch.cjs) caches 0.9.92 while the loader still downloads 0.9.91.
+        const cacheNewer = `const fs=require('node:fs'),p=require('node:path'),c=p.join(${JSON.stringify(dir)},'.app-updates');fs.mkdirSync(c,{recursive:true});fs.copyFileSync(${JSON.stringify(newer.file)},p.join(c,'ready-${newer.release.sha256}.zip'));fs.writeFileSync(p.join(c,'ready.json'),${JSON.stringify(JSON.stringify(newer.release))});`
+        put(dir, 'server/node/server.cjs', `if(require('./app-update/bootstrap.cjs').start(__filename))return; require('./app-update/bootstrap.cjs').ready(); ${cacheNewer} setTimeout(()=>{},2000);`)
+        put(dir, 'server/node/app-update/remote.cjs', `exports.connect=async()=>({latest:async()=>(${JSON.stringify(older.release)}),download:async(_,dest)=>{await new Promise(r=>setTimeout(r,2600));require('node:fs').copyFileSync(${JSON.stringify(older.file)},dest)}});`)
+        const result = spawnSync(process.execPath, [path.join(dir, 'server/node/server.cjs')], { cwd: dir, env: { ...process.env, RISUBARD_EMBEDDED_ANDROID: '1', RISUBARD_DATA_ROOT: path.join(dir, 'save') }, encoding: 'utf8', timeout: 15000 })
+        expect(result.status, result.stderr).toBe(0)
+        expect(fs.existsSync(path.join(dir, `.app-updates/ready-${older.release.sha256}.zip`))).toBe(true)
+        expect(core.readJson(path.join(dir, '.app-updates/ready.json')).version).toBe('0.9.92')
+    })
     test('slow credential/route detection cannot hold startup past the discovery budget', async () => {
         const dir = root(); installed(dir)
         fs.cpSync(path.resolve('server/node/app-update'), path.join(dir, 'server/node/app-update'), { recursive: true })

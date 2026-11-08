@@ -241,10 +241,11 @@ let running = false
 let lastCheck = 0
 let started = false
 
-export async function busy(): Promise<boolean> {
+/** `ignoreAlert`: the caller's own dialog is the open one (app code update apply). */
+export async function busy(ignoreAlert = false): Promise<boolean> {
     const { stores, generation, session } = await app()
     // An import in progress or waiting in rollback recovery has its own dialog: finish that first.
-    return !get(stores.loadedStore) || get(transferBusy) || get(generation.isAnyGenerating) || get(stores.alertStore).type !== 'none'
+    return !get(stores.loadedStore) || get(transferBusy) || get(generation.isAnyGenerating) || (!ignoreAlert && get(stores.alertStore).type !== 'none')
         || get(session.importSession).phase !== 'idle'
 }
 

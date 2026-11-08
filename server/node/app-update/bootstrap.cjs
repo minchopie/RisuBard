@@ -78,7 +78,11 @@ async function check(appRoot, dataRoot) {
             try {
                 await remote.download(release, archive);
                 fs.renameSync(archive, cachedArchive(release));
-                core.saveState(appRoot, 'ready.json', release);
+                // A slow download finishes while the app runs, where the app code watch (content-updates) may already
+                // have cached a newer release: that one stays the release to install. Same tick: no await in between.
+                let cachedNewer = null;
+                try { cachedNewer = core.validateRelease(core.readJson(readyFile)); } catch { /* no cached release */ }
+                if (!(cachedNewer && core.newer(cachedNewer.version, release.version) && fs.existsSync(cachedArchive(cachedNewer)))) core.saveState(appRoot, 'ready.json', release);
                 return true;
             } catch {
                 core.status(appRoot, { state: 'kept-installed', reason: 'download-unavailable' });
