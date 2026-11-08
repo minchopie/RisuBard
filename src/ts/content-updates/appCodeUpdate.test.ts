@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({ busy: false, busyAfterSave: false, saved: false, status: {} as any, choice: 0, native: vi.fn(), save: vi.fn(), order: [] as string[] }))
 vi.mock('./contentUpdates', () => ({ busy: vi.fn(async (ignoreAlert = false) => state.busy || (ignoreAlert && state.saved && state.busyAfterSave)) }))
@@ -12,6 +12,8 @@ vi.mock('../alert', () => ({
 }))
 vi.mock('../transfer-sync/transferNative', () => ({ playNative: state.native }))
 vi.mock('../globalApi.svelte', () => ({ requestImmediateSave: state.save }))
+vi.mock('../storage/chatDraft', () => ({ loadChatDraft: vi.fn(async () => { state.order.push('draft'); return null }) }))
+vi.mock('../../lang', () => ({ language: { chatSendPreparing: 'Preparing to send', chatSendBusy: 'Sending' } }))
 
 let alert: any, transferRequest: any
 const ready = { enabled: true, current: '0.9.92-ver1', ready: '0.9.92-ver2', state: 'ready' }
@@ -22,7 +24,10 @@ beforeEach(() => {
     state.save.mockImplementation(async () => { state.order.push('save'); state.saved = true })
     state.native.mockImplementation(async () => { state.order.push('restart'); return null })
     vi.unstubAllGlobals()
+    vi.useFakeTimers()
 })
+// Run every pending restart grace timer, so held input from one test never leaks into the next.
+afterEach(async () => { await vi.runAllTimersAsync(); vi.useRealTimers() })
 const load = async () => { const m = await import('./appCodeUpdate'); alert = await import('../alert'); transferRequest = (await import('../playTransfer')).transferRequest; return m }
 const android = () => { vi.stubGlobal('RisuPlay', {}); vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 RisuBardAndroid/0.9.92' }) }
 
@@ -43,7 +48,7 @@ describe('app code update (client)', () => {
         expect(vi.mocked(alert.alertConfirmMulti).mock.calls[0][1]).toEqual(['지금 적용', '나중에'])
         expect(state.save).toHaveBeenCalledWith({ flushServer: 'canonical', rejectOnFailure: true })
         expect(state.native).toHaveBeenCalledWith('app.restart')
-        expect(state.order).toEqual(['wait', 'save', 'restart'])
+        expect(state.order).toEqual(['wait', 'draft', 'save', 'restart'])
     })
 
     test('a failed save stops the update (no restart) and asks again later', async () => {
@@ -72,9 +77,10 @@ describe('app code update (client)', () => {
         const m = await load()
         let finish: () => void = () => {}
         const restart = vi.fn(async () => null)
-        const result = await m.applyNow({ save: () => new Promise<void>(r => { finish = r }), restart, busy: async () => false, ownDialog: async () => true, saveLimit: 20 })
-        expect(result).toBe('save-failed')
-        finish(); await new Promise(r => setTimeout(r, 10))
+        const pending = m.applyNow({ flushDraft: async () => {}, save: () => new Promise<void>(r => { finish = r }), restart, busy: async () => false, ownDialog: async () => true, saveLimit: 20 })
+        await vi.advanceTimersByTimeAsync(20)
+        expect(await pending).toBe('save-failed')
+        finish(); await vi.advanceTimersByTimeAsync(10)
         expect(restart).not.toHaveBeenCalled()
     })
 
@@ -85,6 +91,55 @@ describe('app code update (client)', () => {
         await m.checkAppCodeUpdate(true)
         expect(state.native).not.toHaveBeenCalled()
         expect(alert.alertClear).not.toHaveBeenCalled()
+    })
+
+    test('a send being prepared in the composer (button in its preparing/busy state) counts as busy', async () => {
+        const m = await load()
+        document.body.innerHTML = '<button aria-label="Preparing to send"></button>'
+        expect(await m.composerBusy(document)).toBe(true)
+        document.body.innerHTML = '<button aria-label="Send"></button>'
+        expect(await m.composerBusy(document)).toBe(false)
+        document.body.innerHTML = ''
+    })
+
+    test('a send prepared while saving: no restart, asked again later', async () => {
+        android()
+        const m = await load()
+        state.save.mockImplementation(async () => { state.saved = true; document.body.innerHTML = '<button aria-label="Preparing to send"></button>' })
+        await m.checkAppCodeUpdate(true)
+        document.body.innerHTML = ''
+        expect(state.native).not.toHaveBeenCalled()
+        let current: any; alertState.store.subscribe((v: any) => { current = v })()
+        expect(current.type).toBe('none')
+    })
+
+    test('an exception after input is held releases it and clears the own wait dialog', async () => {
+        android()
+        const m = await load()
+        state.save.mockImplementation(async () => { state.saved = true })
+        vi.mocked(alert.alertConfirmMulti).mockImplementationOnce(async () => 0)
+        const { alertWait } = await import('../alert')
+        vi.mocked(alertWait).mockImplementationOnce((msg: string) => { alertState.store.set({ type: 'wait', msg }); throw new Error('dialog failed') })
+        await m.checkAppCodeUpdate(true)
+        const key = new KeyboardEvent('keydown', { cancelable: true, bubbles: true })
+        document.body.dispatchEvent(key)
+        expect(key.defaultPrevented).toBe(false)
+        expect(state.native).not.toHaveBeenCalled()
+        let current: any; alertState.store.subscribe((v: any) => { current = v })()
+        expect(current.type).toBe('none')
+    })
+
+    test('the restart grace timer releases input but leaves a dialog that replaced the wait dialog', async () => {
+        android()
+        const m = await load()
+        await m.checkAppCodeUpdate(true)
+        alertState.store.set({ type: 'input', msg: 'other' })
+        await vi.advanceTimersByTimeAsync(15_000)
+        let current: any; alertState.store.subscribe((v: any) => { current = v })()
+        expect(current.type).toBe('input')
+        const key = new KeyboardEvent('keydown', { cancelable: true, bubbles: true })
+        document.body.dispatchEvent(key)
+        expect(key.defaultPrevented).toBe(false)
     })
 
     test('input is held while applying (capture phase, before the chat box and the hotkeys) and released after', async () => {
@@ -101,13 +156,10 @@ describe('app code update (client)', () => {
     test('if the page is still there after the restart request, the wait dialog is cleared', async () => {
         android()
         const m = await load()
-        vi.useFakeTimers()
-        try {
-            await m.checkAppCodeUpdate(true)
-            expect(alert.alertClear).not.toHaveBeenCalled()
-            await vi.advanceTimersByTimeAsync(15_000)
-            expect(alert.alertClear).toHaveBeenCalled()
-        } finally { vi.useRealTimers() }
+        await m.checkAppCodeUpdate(true)
+        expect(alert.alertClear).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(15_000)
+        expect(alert.alertClear).toHaveBeenCalled()
     })
 
     test('"나중에" is not asked again for the same version this run; closing the dialog asks again', async () => {

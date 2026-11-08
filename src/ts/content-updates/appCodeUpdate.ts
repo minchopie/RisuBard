@@ -1,9 +1,10 @@
 // App code update (client, content-updates module): the app server downloads a newer app code patch from the NAS in the
 // background (server/node/content-updates/app-code-watch.cjs). When one is ready and the app is idle, this asks once per
-// version and app start "새 버전 준비됨 · 지금 적용/나중에". On the Android app "지금 적용" holds the screen with a wait
-// dialog, saves to the server's file (waiting for it, failures stop the update), checks that nothing started meanwhile,
-// then asks the app to restart its embedded server: the loader installs the downloaded code and the app reconnects with
-// no tap. Where that is not available (the PC package, an APK without app.restart), the code is installed at the next start.
+// version and app start "새 버전 준비됨 · 지금 적용/나중에". On the Android app "지금 적용" holds input and shows a wait
+// dialog, writes the unsent message draft and saves to the server's file (waiting for both, a failed or unfinished save
+// stops the update), checks that nothing started meanwhile, then asks the app to restart its embedded server: the loader
+// installs the downloaded code and the app reconnects with no tap. Where that is not available (the PC package, an APK
+// without app.restart), the code is installed at the next start.
 import { get } from 'svelte/store'
 import { transferRequest } from '../playTransfer'
 import { busy } from './contentUpdates'
@@ -32,11 +33,27 @@ export const fetchAppCodeStatus = async (check = false): Promise<AppCodeStatus> 
 export const nativeRestartAvailable = (env: any = globalThis): boolean =>
     !!env?.RisuPlay && String(env.navigator?.userAgent ?? '').includes('RisuBardAndroid/')
 
+/** The chat composer's send button shows the preparing/busy state (upstream DefaultChatScreen: preparingInput, sendingChat
+ *  or doingChat — local to the screen, before a generation is registered). */
+export async function composerBusy(doc: any = globalThis.document): Promise<boolean> {
+    if (!doc?.querySelector) return false
+    const { language } = await import('../../lang') as any
+    return [language?.chatSendPreparing, language?.chatSendBusy]
+        .some(label => typeof label === 'string' && label && doc.querySelector(`[aria-label="${CSS.escape(label)}"]`))
+}
+
 const defaults = {
+    // The unsent draft: the composer writes it on pagehide (upstream DefaultChatScreen; the other pagehide listener is the
+    // app's own flush) into the draft queue, and loading any draft waits for that queue (upstream chatDraft.ts).
+    // The draft queue keeps its upstream best-effort rule (a failed draft write is not reported).
+    flushDraft: async () => {
+        globalThis.dispatchEvent?.(new Event('pagehide'))
+        await (await import('../storage/chatDraft')).loadChatDraft('app-code-update', 'flush')
+    },
     // The app's own durable save, flushed to the server's canonical file; rejects when it could not be written.
     save: async () => (await import('../globalApi.svelte')).requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true }),
     restart: async () => (await import('../transfer-sync/transferNative')).playNative('app.restart'),
-    busy: (ignoreAlert: boolean) => busy(ignoreAlert),
+    busy: async (ignoreAlert: boolean) => await busy(ignoreAlert) || await composerBusy(),
     // The open dialog is still this update's own wait dialog (another dialog replacing it means something else started).
     ownDialog: async () => { const a: any = get((await import('../stores.svelte')).alertStore); return a?.type === 'wait' && a?.msg === APPLY_MESSAGE },
     saveLimit: SAVE_LIMIT,
@@ -49,16 +66,19 @@ export function holdInput(env: any = globalThis): () => void {
     return () => { for (const type of HELD_INPUT) env.removeEventListener?.(type, stop, { capture: true }) }
 }
 
-/** Saves (with a time limit), then asks the Android app to restart its server. Call with the wait dialog shown and input held. */
+/** Writes the draft and saves (within a time limit), then asks the Android app to restart its server.
+ *  Call with the wait dialog shown and input held. */
 export async function applyNow(deps: Partial<typeof defaults> = {}): Promise<ApplyResult> {
     const d = { ...defaults, ...deps }
     let limit: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<'timeout'>(resolve => { limit = setTimeout(() => resolve('timeout'), d.saveLimit) })
     // A save that never settles ends this attempt; finishing later does not restart anything.
-    const saved = await Promise.race([d.save().then(() => 'saved' as const), deadline]).catch(() => 'failed' as const)
+    const work = (async () => { await d.flushDraft(); await d.save(); return 'saved' as const })()
+    const saved = await Promise.race([work, deadline]).catch(() => 'failed' as const)
     clearTimeout(limit)
     if (saved !== 'saved') return 'save-failed'
-    // A NAS sync apply, transfer, reply or import that started meanwhile, or another dialog: leave the update for later.
+    // A NAS sync apply, transfer, reply (or one being prepared) or import that started meanwhile, or another dialog:
+    // leave the update for later.
     if (await d.busy(true) || !await d.ownDialog()) return 'busy'
     try { await d.restart(); return 'restarting' } catch { return 'unsupported' }
 }
@@ -68,12 +88,14 @@ export async function checkAppCodeUpdate(force = false): Promise<AppCodeStatus |
     if (running) return null
     if (!force && Date.now() - lastCheck < CHECK_INTERVAL) return null
     running = true
+    let release: (() => void) | null = null
+    let version: string | null = null
     try {
-        if (await busy()) return null
+        if (await defaults.busy(false)) return null
         lastCheck = Date.now()
         const status = await fetchAppCodeStatus()
-        const version = status?.ready
-        if (!status?.enabled || !version || asked.has(version) || await busy()) return status
+        version = status?.ready ?? null
+        if (!status?.enabled || !version || asked.has(version) || await defaults.busy(false)) return status
         asked.add(version)
         const alert = await import('../alert')
         if (!nativeRestartAvailable()) {
@@ -85,27 +107,37 @@ export async function checkAppCodeUpdate(force = false): Promise<AppCodeStatus |
         // -1 is the dialog's own close: no answer yet, so it is asked again at the next check.
         if (choice === -1) { asked.delete(version); return status }
         if (choice !== 0) return status
-        if (await busy(true)) { asked.delete(version); return status }
-        const release = holdInput()
+        if (await defaults.busy(true)) { asked.delete(version); return status }
+        release = holdInput()
         alert.alertWait(APPLY_MESSAGE)
         const result = await applyNow()
         if (result === 'restarting') {
             // The app replaces the page right away; if this page is still here later, the restart did not happen.
-            setTimeout(() => { release(); alert.alertClear(); asked.delete(version) }, RESTART_GRACE)
+            const held = release, again = version
+            release = null // handed to the grace timer
+            setTimeout(() => {
+                held()
+                void defaults.ownDialog().then(own => { if (own) alert.alertClear() }).catch(() => {})
+                asked.delete(again)
+            }, RESTART_GRACE)
             return status
         }
-        release()
-        // Clear only this update's own dialog; one that replaced it belongs to whatever opened it.
-        if (await defaults.ownDialog()) alert.alertClear()
         if (result === 'save-failed') { asked.delete(version); alert.alertError('저장을 마치지 못해서 새 버전을 적용하지 않았어요. 다음에 다시 물어볼게요.') }
         else if (result === 'busy') asked.delete(version)
         else alert.alertNormal('이 앱 판에서는 바로 적용할 수 없어요. 앱을 완전히 닫았다가 다시 켜면 적용돼요.')
         return status
     } catch (error) {
+        if (release && version) asked.delete(version)
         // An old server without the route, or no NAS: stay quiet and try again later.
         console.warn('[AppCodeUpdate] check skipped:', error instanceof Error ? error.message : String(error))
         return null
     } finally {
+        // Every path that did not hand the held input to the restart grace timer releases it here, and clears this
+        // update's own wait dialog (a dialog that replaced it belongs to whatever opened it).
+        if (release) {
+            release()
+            try { if (await defaults.ownDialog()) (await import('../alert')).alertClear() } catch { /* nothing to clear */ }
+        }
         running = false
     }
 }
