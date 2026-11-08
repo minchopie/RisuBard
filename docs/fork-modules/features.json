@@ -9,7 +9,9 @@
       "name": "전송·NAS 동기화",
       "hosts": [
         "src/App.svelte",
+        "src/lib/Others/ChatList.svelte",
         "src/lib/Setting/Pages/SystemBackup.svelte",
+        "src/lib/SideBars/SideChatList.svelte",
         "src/ts/importSession.ts",
         "src/ts/process/index.svelte.ts"
       ],
@@ -234,7 +236,9 @@
         "server/node/transfer-sync/persona-bundle.cjs",
         "server/node/persona-transfer.test.ts",
         "src/ts/transfer-sync/personaTransfer.ts",
-        "src/ts/personaTransfer.test.ts"
+        "src/ts/personaTransfer.test.ts",
+        "src/ts/transfer-sync/chatDeviceLabel.ts",
+        "src/ts/transfer-sync/chatDeviceLabel.test.ts"
       ]
     },
     {
@@ -588,7 +592,8 @@
         "patchnote/0.9.90-ver1.md",
         "patchnote/0.9.90-ver2.md",
         "patchnote/0.9.91-ver1.md",
-        "patchnote/0.9.91-ver2.md"
+        "patchnote/0.9.91-ver2.md",
+        "patchnote/0.9.91-ver3.md"
       ]
     },
     {
@@ -691,12 +696,17 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08"
+          "sourceSha256": "171e2710ec0428dd83e10b980c7636311c57c9885be29f03f08cdb70c381c4c3"
         },
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
           "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
+        },
+        {
+          "module": "transfer-sync",
+          "path": "docs/fork-modules/compat/v0.9.81/transfer-sync.patch",
+          "sourceSha256": "a36731a4fc35ee414716b3154266ff9dc7f494d46b440325a611c09a158115f7"
         }
       ],
       "payloadTargets": {
@@ -770,7 +780,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08"
+          "sourceSha256": "171e2710ec0428dd83e10b980c7636311c57c9885be29f03f08cdb70c381c4c3"
         },
         {
           "module": "lore-lua",
@@ -791,6 +801,11 @@
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
           "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
+        },
+        {
+          "module": "transfer-sync",
+          "path": "docs/fork-modules/compat/v0.9.84/transfer-sync.patch",
+          "sourceSha256": "a36731a4fc35ee414716b3154266ff9dc7f494d46b440325a611c09a158115f7"
         }
       ],
       "payloadTargets": {
@@ -913,7 +928,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08"
+          "sourceSha256": "171e2710ec0428dd83e10b980c7636311c57c9885be29f03f08cdb70c381c4c3"
         },
         {
           "module": "lore-lua",
@@ -934,6 +949,11 @@
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
           "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
+        },
+        {
+          "module": "transfer-sync",
+          "path": "docs/fork-modules/compat/v0.9.86/transfer-sync.patch",
+          "sourceSha256": "a36731a4fc35ee414716b3154266ff9dc7f494d46b440325a611c09a158115f7"
         }
       ],
       "payloadTargets": {
@@ -1073,7 +1093,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.89/distribution.patch",
-          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08"
+          "sourceSha256": "171e2710ec0428dd83e10b980c7636311c57c9885be29f03f08cdb70c381c4c3"
         },
         {
           "module": "lore-lua",
@@ -1094,6 +1114,11 @@
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
           "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
+        },
+        {
+          "module": "transfer-sync",
+          "path": "docs/fork-modules/compat/v0.9.89/transfer-sync.patch",
+          "sourceSha256": "a36731a4fc35ee414716b3154266ff9dc7f494d46b440325a611c09a158115f7"
         }
       ],
       "payloadTargets": {
@@ -1247,7 +1272,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.90/distribution.patch",
-          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08"
+          "sourceSha256": "171e2710ec0428dd83e10b980c7636311c57c9885be29f03f08cdb70c381c4c3"
         },
         {
           "module": "lore-lua",
@@ -1268,6 +1293,11 @@
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
           "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
+        },
+        {
+          "module": "transfer-sync",
+          "path": "docs/fork-modules/compat/v0.9.90/transfer-sync.patch",
+          "sourceSha256": "a36731a4fc35ee414716b3154266ff9dc7f494d46b440325a611c09a158115f7"
         }
       ],
       "payloadTargets": {
@@ -1427,7 +1457,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.91/distribution.patch",
-          "sourceSha256": "76e52693d223412d2abe2309e227b0e71622703f2254f1f3c7ec90ed04e12c08"
+          "sourceSha256": "171e2710ec0428dd83e10b980c7636311c57c9885be29f03f08cdb70c381c4c3"
         },
         {
           "module": "lore-lua",
@@ -1448,6 +1478,11 @@
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
           "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
+        },
+        {
+          "module": "transfer-sync",
+          "path": "docs/fork-modules/compat/v0.9.91/transfer-sync.patch",
+          "sourceSha256": "a36731a4fc35ee414716b3154266ff9dc7f494d46b440325a611c09a158115f7"
         }
       ],
       "payloadTargets": {

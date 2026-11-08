@@ -1,3 +1,101 @@
+diff --git a/src/lib/Others/ChatList.svelte b/src/lib/Others/ChatList.svelte
+index c88e01d..f45c042 100644
+--- a/src/lib/Others/ChatList.svelte
++++ b/src/lib/Others/ChatList.svelte
+@@ -5,6 +5,7 @@
+     import { DBState } from 'src/ts/stores.svelte';
+     import { newChatModelDefaults } from 'src/ts/storage/database.svelte';
+     import { createUniqueDisplayName } from 'src/ts/displayName';
++    import { chatDeviceLabels, chatDisplayName, newChatName, refreshChatDeviceLabels } from 'src/ts/transfer-sync/chatDeviceLabel';
+     import { ReloadGUIPointer, selectedCharID } from "../../ts/stores.svelte";
+     import { DownloadIcon, SquarePenIcon, HardDriveUploadIcon, PlusIcon, TrashIcon, XIcon } from "@lucide/svelte";
+     import { exportChat, importChat } from "../../ts/characters";
+@@ -14,6 +15,7 @@
+     import { v4 } from "uuid";
+ 
+     let editMode = $state(false)
++    void refreshChatDeviceLabels() // RisuBard (transfer-sync): device marks for this list
+     /** @type {{close?: any}} */
+     let { close = () => {} } = $props();
+ 
+@@ -45,7 +47,7 @@
+                 {#if editMode}
+                     <TextInput bind:value={DBState.db.characters[$selectedCharID].chats[i].name} onchange={() => commitChatName(i)} padding={false}/>
+                 {:else}
+-                    <span>{chat.name}</span>
++                    <span>{chatDisplayName(chat, $chatDeviceLabels)}</span>
+                 {/if}
+                 <div class="grow flex justify-end">
+                     <div class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" role="button" tabindex="0" onclick={async (e) => {
+@@ -85,7 +87,7 @@
+                 const len = character.chats.length
+                 let chats = character.chats
+                 const newChat = {
+-                    message:[], note:'', name:createUniqueDisplayName(`New Chat ${len + 1}`, chats), localLore:[], fmIndex: -1, id: v4(),
++                    message:[], note:'', name:createUniqueDisplayName(newChatName(len), chats), localLore:[], fmIndex: -1, id: v4(),
+                     ...newChatModelDefaults(character, currentChat)
+                 }
+                 chats.unshift(newChat)
+diff --git a/src/lib/SideBars/SideChatList.svelte b/src/lib/SideBars/SideChatList.svelte
+index 01c6b4c..b1710b9 100644
+--- a/src/lib/SideBars/SideChatList.svelte
++++ b/src/lib/SideBars/SideChatList.svelte
+@@ -30,6 +30,7 @@
+     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork";
+     import { mergeCharacterChats } from "src/ts/risubard/chatMerge";
+     import { createUniqueDisplayName } from 'src/ts/displayName';
++    import { chatDeviceLabels, chatDisplayName, newChatName, refreshChatDeviceLabels } from 'src/ts/transfer-sync/chatDeviceLabel';
+     import { doingChat, isAnyGenerating } from "src/ts/process/generationState";
+     import { isWikiGenerating } from "src/ts/risubard/wikiGenerationState";
+     import ChatMergeDialog from "./ChatMergeDialog.svelte";
+@@ -47,6 +48,11 @@
+     }
+ 
+     let { chara = $bindable() }: Props = $props();
++    // RisuBard (transfer-sync): device marks for this list, read again when the character or its number of chats changes (sync adds copies).
++    $effect(() => {
++        void chara?.chaId; void chara?.chats?.length
++        untrack(() => { void refreshChatDeviceLabels() })
++    })
+     let editMode = $state(false)
+ 
+     // Safety net: chats whose folderId references a deleted folder would
+@@ -106,7 +112,7 @@
+         const newChat = {
+             message: [] as any[],
+             note: '',
+-            name: createUniqueDisplayName(`New Chat ${chara.chats.length + 1}`, chara.chats),
++            name: createUniqueDisplayName(newChatName(chara.chats.length), chara.chats),
+             localLore: [] as any[],
+             fmIndex: -1,
+             id: v4(),
+@@ -469,7 +475,7 @@
+     <section data-current-chat-section class="border-b border-darkborderc pb-2">
+         <div data-chat-file-header class="flex min-h-10 items-center gap-1">
+             <div data-current-chat-title class="flex min-w-0 grow items-center px-1.5 py-2 text-textcolor">
+-                <span class="truncate font-semibold">{activeChat?.name ?? language.newChat}</span>
++                <span class="truncate font-semibold">{activeChat?.name != null ? chatDisplayName(activeChat, $chatDeviceLabels) : language.newChat}</span>
+             </div>
+         </div>
+     </section>
+@@ -617,7 +623,7 @@
+                                 changeChatTo(chatIdx)
+                             }
+                         }} class="flex min-w-0 grow items-center text-textcolor border-solid border-0 border-darkborderc p-2 pl-1 cursor-pointer rounded-md">
+-                            <span class="truncate">{chat.name}</span>
++                            <span class="truncate">{chatDisplayName(chat, $chatDeviceLabels)}</span>
+                         </button>
+                     </div>
+                     {/each}
+@@ -637,7 +643,7 @@
+                     }
+                 }}
+                 class="flex min-w-0 grow items-center text-textcolor border-solid border-0 border-darkborderc p-2 pl-1 cursor-pointer rounded-md">
+-                    <span class="truncate">{chat.name}</span>
++                    <span class="truncate">{chatDisplayName(chat, $chatDeviceLabels)}</span>
+                 </button>
+             </div>
+             {/if}
 diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
 index d8b1110..0929329 100644
 --- a/src/ts/process/index.svelte.ts

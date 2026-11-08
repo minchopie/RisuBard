@@ -30,6 +30,7 @@
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork";
     import { mergeCharacterChats } from "src/ts/risubard/chatMerge";
     import { createUniqueDisplayName } from 'src/ts/displayName';
+    import { chatDeviceLabels, chatDisplayName, newChatName, refreshChatDeviceLabels } from 'src/ts/transfer-sync/chatDeviceLabel';
     import { doingChat, isAnyGenerating } from "src/ts/process/generationState";
     import { isWikiGenerating } from "src/ts/risubard/wikiGenerationState";
     import ChatMergeDialog from "./ChatMergeDialog.svelte";
@@ -47,6 +48,11 @@
     }
 
     let { chara = $bindable() }: Props = $props();
+    // RisuBard (transfer-sync): device marks for this list, read again when the character or its number of chats changes (sync adds copies).
+    $effect(() => {
+        void chara?.chaId; void chara?.chats?.length
+        untrack(() => { void refreshChatDeviceLabels() })
+    })
     let editMode = $state(false)
 
     // Safety net: chats whose folderId references a deleted folder would
@@ -106,7 +112,7 @@
         const newChat = {
             message: [] as any[],
             note: '',
-            name: createUniqueDisplayName(`New Chat ${chara.chats.length + 1}`, chara.chats),
+            name: createUniqueDisplayName(newChatName(chara.chats.length), chara.chats),
             localLore: [] as any[],
             fmIndex: -1,
             id: v4(),
@@ -469,7 +475,7 @@
     <section data-current-chat-section class="border-b border-darkborderc pb-2">
         <div data-chat-file-header class="flex min-h-10 items-center gap-1">
             <div data-current-chat-title class="flex min-w-0 grow items-center px-1.5 py-2 text-textcolor">
-                <span class="truncate font-semibold">{activeChat?.name ?? language.newChat}</span>
+                <span class="truncate font-semibold">{activeChat?.name != null ? chatDisplayName(activeChat, $chatDeviceLabels) : language.newChat}</span>
             </div>
         </div>
     </section>
@@ -617,7 +623,7 @@
                                 changeChatTo(chatIdx)
                             }
                         }} class="flex min-w-0 grow items-center text-textcolor border-solid border-0 border-darkborderc p-2 pl-1 cursor-pointer rounded-md">
-                            <span class="truncate">{chat.name}</span>
+                            <span class="truncate">{chatDisplayName(chat, $chatDeviceLabels)}</span>
                         </button>
                     </div>
                     {/each}
@@ -637,7 +643,7 @@
                     }
                 }}
                 class="flex min-w-0 grow items-center text-textcolor border-solid border-0 border-darkborderc p-2 pl-1 cursor-pointer rounded-md">
-                    <span class="truncate">{chat.name}</span>
+                    <span class="truncate">{chatDisplayName(chat, $chatDeviceLabels)}</span>
                 </button>
             </div>
             {/if}

@@ -1943,3 +1943,34 @@ test('a plugin the same plan enables: the arm echo the client sends before apply
     expect((await phone.service.finish(plan.transaction, true)).state).toBe('applied')
     expect(phone.db().plugins.find((p: any) => p.name === 'plug').enabled).toBe(true)
 })
+
+test('0.9.91-ver3 chat labels: the device that first recorded a chat and the device that continued each sibling copy (display only, read-only)', async t => {
+    const dav = fixtureDav(), a = await seedTablet(t, dav)
+    const b = await device(t, dav, 'label-phone', EMPTY_DB()), c = await device(t, dav, 'label-pc', EMPTY_DB())
+    b.service.enable({ workspaceId: 'ws-fixture' }); c.service.enable({ workspaceId: 'ws-fixture' })
+    a.service.store().setProfile({ kind: 'tablet' }); b.service.store().setProfile({ kind: 'phone' })
+    await applyAll(b); await applyAll(c)
+    const ea = a.db(); ea.characters[0].chats[0].message.push({ role: 'user', data: 'A의 편집' }); a.save(ea)
+    const eb = b.db(); eb.characters[0].chats[0].message.push({ role: 'user', data: 'B의 편집' }); b.save(eb)
+    await a.service.snapshot(); await a.service.publish(); await b.service.snapshot(); await b.service.publish()
+    await applyAll(c)
+    const sibling = c.db().characters[0].chats.find((ch: any) => ch.id !== 'chat')
+    expect(sibling.id).toMatch(/^chat~[a-f0-9]{8}$/)
+    const commits = c.service.store().state().commits.length
+    const labels = await c.service.chatLabels()
+    expect(labels).toEqual({ origin: { chat: 'tablet', [sibling.id]: 'tablet' }, branch: { [sibling.id]: sibling.message.at(-1).data === 'A의 편집' ? 'tablet' : 'phone' }, self: null })
+    expect(c.service.store().state().commits.length).toBe(commits) // nothing recorded
+    // A keeps its own chat; B's copy arrives there as a sibling marked with the phone.
+    await applyAll(a)
+    const aSibling = a.db().characters[0].chats.find((ch: any) => ch.id !== 'chat')
+    expect(aSibling.message.at(-1).data).toBe('B의 편집')
+    expect(await a.service.chatLabels()).toEqual({ origin: { chat: 'tablet', [aSibling.id]: 'tablet' }, branch: { [aSibling.id]: 'phone' }, self: 'tablet' })
+    // Over HTTP too.
+    const routes = new Map<string, any>()
+    a.service.registerRoutes({ get: (path: string, handler: any) => routes.set(path, handler), post: (path: string, handler: any) => routes.set(path, handler) }, { auth: async () => true, activeSession: () => true })
+    let body: any; await routes.get('/api/nas-sync/chat-labels')({}, { json: (value: any) => { body = value } })
+    expect(body).toEqual(await a.service.chatLabels())
+    // History without any device profile gives no mark.
+    const plain = await device(t, fixtureDav(), 'label-plain', { ...EMPTY_DB(), characters: [{ chaId: 'solo', type: 'character', name: '혼자', chatPage: 0, chats: [{ id: 'solo-chat', name: 'New Chat 1', note: '', localLore: [], message: [{ role: 'user', data: '안녕' }] }] }] }); plain.service.enable({ workspaceId: 'ws-fixture' }); await plain.service.snapshot()
+    expect(await plain.service.chatLabels()).toEqual({ origin: {}, branch: {}, self: null })
+})

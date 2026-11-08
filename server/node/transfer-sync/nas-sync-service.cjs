@@ -383,6 +383,39 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         });
         return { chats: rows, items, personas: (db?.personas ?? []).map(p => ({ name: p.name || '이름 없는 페르소나' })), localIssues: [personaMirrorIssue(db ?? {})].filter(Boolean), peerApplied: 'unconfirmed' }; });
     }
+    /** RisuBard 0.9.91-ver3: display-only device marks for the chat list. `origin`: the device kind that recorded the chat root's first
+     *  revision; `branch`: for a local sibling branch, the device kind that continued the copy it carries. Read-only (no plan, no
+     *  commit). History without a device profile, or a revision claimed by devices of different kinds, gives no mark. `self` is this
+     *  device's own reported kind (null until the client reports it). */
+    async function chatLabels() {
+        const s = requireEnabled(), db = await readDatabase(), state = s.state(), kinds = new Map(), KNOWN = new Set(['pc', 'tablet', 'phone']);
+        const note = (id, kind) => { const k = KNOWN.has(kind) ? kind : '?'; kinds.set(id, !kinds.has(id) || kinds.get(id) === k ? k : '?'); };
+        for (const commit of state.commits) for (const id of commit.revisions ?? []) note(id, commit.device?.kind ?? state.profile?.kind);
+        for (const p of Object.values(state.peers)) for (const ids of Object.values(p.admittedRevisions ?? {})) for (const id of ids) note(id, p.profile?.kind);
+        const kindOf = ids => { const found = new Set(ids.map(id => kinds.get(id) ?? '?')); return ids.length && found.size === 1 && !found.has('?') ? [...found][0] : null; };
+        const origin = {}, branch = {}, segmentsOf = new Map();
+        for (const character of db?.characters ?? []) for (const chat of character.chats ?? []) {
+            if (!chat || typeof chat.id !== 'string') continue;
+            const b = service().branches[chat.id], key = `play\nchat\n${b?.root ?? chat.id}`;
+            if (!segmentsOf.has(key)) { let map = new Map(); try { map = s.graph.branchSegments(key); } catch {} segmentsOf.set(key, map); }
+            const segments = segmentsOf.get(key);
+            if (!segments.size) continue;
+            const first = kindOf([...segments.keys()].filter(id => !s.graph.get(id).parents.length));
+            if (first) origin[chat.id] = first;
+            if (!b) continue;
+            // The copy's own line: from its head back to where it left the other live variants; its oldest revision there is the device
+            // that continued this copy (a variant that kept the root segment is handled the same way).
+            const own = service().lineage[key + '#' + chat.id];
+            if (!own || !s.graph.get(own)) continue;
+            const others = s.graph.classify(key).liveHeads.filter(h => h !== own && !s.graph.isAncestor(h, own) && !s.graph.isAncestor(own, h));
+            const shared = id => others.some(h => h === id || s.graph.isAncestor(id, h));
+            let start = own;
+            for (let id = own; id && !shared(id); id = s.graph.get(id).parents[0]) start = id;
+            const started = kindOf([start]);
+            if (started) branch[chat.id] = started;
+        }
+        return { origin, branch, self: state.profile?.kind ?? null };
+    }
     /** Resolution parents every head (core resolve) with the kept head's content; the plan then materializes it locally. */
     async function resolveConflict({ root, keep }) {
         if (root === 'settings\ngroup\nuserNote') throw new Error('The selected persona owns its note; this legacy mirror is read-only');
@@ -1420,6 +1453,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/share/discard', req => exclusive(() => discardShare(req.body)));
         route('get', '/conflicts', () => conflicts());
         route('get', '/overview', () => overview());
+        route('get', '/chat-labels', () => chatLabels()); // RisuBard 0.9.91-ver3: display-only device marks for the chat list
         route('post', '/resolve', req => exclusive(() => resolveConflict(req.body)));
         route('post', '/resolve-all', req => exclusive(() => resolveAll(req.body)));
     route('post', '/adoption/start', () => startAdoption());
@@ -1433,7 +1467,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/open-deletion/accept', req => exclusive(() => acceptOpenDeletion(req.body)));
     }
     return { assertWrite, status, pendingRoots, enable, disable, setCardOnlyUpload: input => exclusive(() => setCardOnlyUpload(input)), markRestore, clearRestore, shareRequest: () => exclusive(shareRequest), detectShare, consumed, consumedAll, receiveForeign: (...a) => exclusive(() => receiveForeign(...a)), acceptPendingGrant: (...a) => exclusive(() => acceptPendingGrant(...a)), discardShare, sweepShares,
-        conflicts, overview, resolveConflict: (...a) => exclusive(() => resolveConflict(...a)), resolveAll: (...a) => exclusive(() => resolveAll(...a)), startAdoption: () => startAdoption(), endAdoption: () => exclusive(() => endAdoption()), restoreRevision: (...a) => exclusive(() => restoreRevision(...a)), trashList, restoreTrash: (...a) => exclusive(() => restoreTrash(...a)), restoreOpenDeletion: (...a) => exclusive(() => restoreOpenDeletion(...a)), acceptOpenDeletion, snapshot: takeSnapshot, bootstrap: (...a) => exclusive(() => bootstrap(...a)), plan: () => exclusive(plan), currentPlan: () => exclusive(currentPlan), arm: (...a) => exclusive(() => arm(...a)), finish: (...a) => exclusive(() => finish(...a)), hold: (...a) => exclusive(() => hold(...a)), recovery, publish, pull, registerRoutes,
+        conflicts, overview, chatLabels, resolveConflict: (...a) => exclusive(() => resolveConflict(...a)), resolveAll: (...a) => exclusive(() => resolveAll(...a)), startAdoption: () => startAdoption(), endAdoption: () => exclusive(() => endAdoption()), restoreRevision: (...a) => exclusive(() => restoreRevision(...a)), trashList, restoreTrash: (...a) => exclusive(() => restoreTrash(...a)), restoreOpenDeletion: (...a) => exclusive(() => restoreOpenDeletion(...a)), acceptOpenDeletion, snapshot: takeSnapshot, bootstrap: (...a) => exclusive(() => bootstrap(...a)), plan: () => exclusive(plan), currentPlan: () => exclusive(currentPlan), arm: (...a) => exclusive(() => arm(...a)), finish: (...a) => exclusive(() => finish(...a)), hold: (...a) => exclusive(() => hold(...a)), recovery, publish, pull, registerRoutes,
         store: () => openStore(), transport: () => openTransport(), vault: () => openVault(), state: () => manifest.view() };
 }
 module.exports = { createNasSyncService };

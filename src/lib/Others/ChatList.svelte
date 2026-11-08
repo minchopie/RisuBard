@@ -5,6 +5,7 @@
     import { DBState } from 'src/ts/stores.svelte';
     import { newChatModelDefaults } from 'src/ts/storage/database.svelte';
     import { createUniqueDisplayName } from 'src/ts/displayName';
+    import { chatDeviceLabels, chatDisplayName, newChatName, refreshChatDeviceLabels } from 'src/ts/transfer-sync/chatDeviceLabel';
     import { ReloadGUIPointer, selectedCharID } from "../../ts/stores.svelte";
     import { DownloadIcon, SquarePenIcon, HardDriveUploadIcon, PlusIcon, TrashIcon, XIcon } from "@lucide/svelte";
     import { exportChat, importChat } from "../../ts/characters";
@@ -14,6 +15,7 @@
     import { v4 } from "uuid";
 
     let editMode = $state(false)
+    void refreshChatDeviceLabels() // RisuBard (transfer-sync): device marks for this list
     /** @type {{close?: any}} */
     let { close = () => {} } = $props();
 
@@ -45,7 +47,7 @@
                 {#if editMode}
                     <TextInput bind:value={DBState.db.characters[$selectedCharID].chats[i].name} onchange={() => commitChatName(i)} padding={false}/>
                 {:else}
-                    <span>{chat.name}</span>
+                    <span>{chatDisplayName(chat, $chatDeviceLabels)}</span>
                 {/if}
                 <div class="grow flex justify-end">
                     <div class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" role="button" tabindex="0" onclick={async (e) => {
@@ -85,7 +87,7 @@
                 const len = character.chats.length
                 let chats = character.chats
                 const newChat = {
-                    message:[], note:'', name:createUniqueDisplayName(`New Chat ${len + 1}`, chats), localLore:[], fmIndex: -1, id: v4(),
+                    message:[], note:'', name:createUniqueDisplayName(newChatName(len), chats), localLore:[], fmIndex: -1, id: v4(),
                     ...newChatModelDefaults(character, currentChat)
                 }
                 chats.unshift(newChat)
