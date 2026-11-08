@@ -192,7 +192,7 @@ index ac794a9..2ed44e6 100644
              });
              atomicRestorePublished = true;
          } else {
-@@ -3706,6 +3746,12 @@ modelJobs.registerRoutes(app, { auth: checkProxyAuth });
+@@ -3752,6 +3792,12 @@ modelJobs.registerRoutes(app, { auth: checkProxyAuth });
  
  app.get('/api/test_auth', async(req, res) => {
  

@@ -4139,9 +4139,9 @@
       "path": "patchnote/0.9.91-ver2.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "0d360fb8c05ea64199d8478ad3c588e2fb168cda193724851f04d6ef3f8128f2",
-      "contentSha256": "0d360fb8c05ea64199d8478ad3c588e2fb168cda193724851f04d6ef3f8128f2",
-      "bytes": 695
+      "sha256": "9cfa53940a124fdc86bbfe51cd951b00191bbb7bfa48eb6fa5b49351bf31c1cd",
+      "contentSha256": "9cfa53940a124fdc86bbfe51cd951b00191bbb7bfa48eb6fa5b49351bf31c1cd",
+      "bytes": 838
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -5137,7 +5137,7 @@
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
           "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
-          "sha256": "7875c543672ec4555c279e61556c95b09650f927b45c5afede0fe28278b90e7c"
+          "sha256": "29961a23d383bea13af138cd6cbd5038cb01d68159af51070240761cd82860a8"
         }
       ],
       "payloadTargets": {
@@ -5227,7 +5227,7 @@
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.84/host-bridges.patch",
           "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
-          "sha256": "4657eef53a85e82772a66c22b7652763a582b1ade2aa4107c64b2ed360c7a0d2"
+          "sha256": "0a484a5872e7b592a26c9136ae593829e3dcc97dd251cdf9b872b60fb7a52821"
         },
         {
           "module": "file-export",
@@ -5379,7 +5379,7 @@
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.86/host-bridges.patch",
           "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
-          "sha256": "646d250ac24fca2a2359ed949f8fce9d7bba5c0778947cb39a96c3a1f5a7a03e"
+          "sha256": "ccff2047bf182fba942964adaad4ebf8472d6979850278fae66a93e7ae06ba67"
         },
         {
           "module": "file-export",
@@ -5548,7 +5548,7 @@
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.89/host-bridges.patch",
           "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
-          "sha256": "340d94815710f3e52cf8ccf08055fcf09fc76dc31bffce2aa196845858db808e"
+          "sha256": "1e3d87d0649bd5f9c43429b0b15728ebd6d0b3d9fd057111e2eafde454ab5d8d"
         },
         {
           "module": "file-export",
@@ -5731,7 +5731,7 @@
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
           "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
-          "sha256": "d1fb3703a7fc6af3c33cea2540f199866eb683a709cbcbe32d58f53cbd29cde2"
+          "sha256": "1586600021f9a9be211f8259865c5430150032838d89189e41dbd450ca42a2f2"
         },
         {
           "module": "file-export",
@@ -5920,7 +5920,7 @@
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
           "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7",
-          "sha256": "d1fb3703a7fc6af3c33cea2540f199866eb683a709cbcbe32d58f53cbd29cde2"
+          "sha256": "1586600021f9a9be211f8259865c5430150032838d89189e41dbd450ca42a2f2"
         },
         {
           "module": "file-export",
