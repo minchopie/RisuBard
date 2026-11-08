@@ -1011,9 +1011,9 @@
       "path": "server/node/nas-sync-projection.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "4a35b7952daaace3bcc49ae7a6ceaef1b8d2b9c375ab494fdbd72966feeea7bb",
-      "contentSha256": "4a35b7952daaace3bcc49ae7a6ceaef1b8d2b9c375ab494fdbd72966feeea7bb",
-      "bytes": 37011
+      "sha256": "b951d2ac8647a7d7faca8f2577db4fcf07f3794f597225e4d34909f04f0d1bfa",
+      "contentSha256": "b951d2ac8647a7d7faca8f2577db4fcf07f3794f597225e4d34909f04f0d1bfa",
+      "bytes": 37208
     },
     {
       "path": "server/node/nas-sync-reconcile.test.ts",

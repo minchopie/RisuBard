@@ -39,7 +39,9 @@ test('ownership is disjoint and total over the real Database interface; the pres
     for (const key of LEGACY_OWNED) expect(ownerOf(key), `${key} must stay owned by a settings group`).toMatch(/^settings:/)
     // mobileMessageActionsInline: upstream v0.9.84 display toggle, declared device-local ahead of that Database interface
     // so the fork assembled on an older upstream never publishes it as an unknown settings root.
-    const known = new Set([...keys, ...MIRROR, ...LEGACY_OWNED, 'risuPlaySets', 'formatversion', 'personaEnabledModules', 'hypaV3Settings', 'pluginDevelopMode', 'mobileMessageActionsInline'])
+    const known = new Set([...keys, ...MIRROR, ...LEGACY_OWNED, 'risuPlaySets', 'formatversion', 'personaEnabledModules', 'hypaV3Settings', 'pluginDevelopMode', 'mobileMessageActionsInline',
+        // upstream v0.9.92 keys, grouped ahead of that Database interface (skins with the theme, sub default with the model presets)
+        'appSkins', 'appSkinId', 'subUseModelPresetByDefault'])
     const stale = [...Object.values(SETTINGS_GROUPS).flat(), ...DEVICE_LOCAL].filter(k => !known.has(k))
     expect(stale).toEqual([])
     expect(ownerOf('nodeOnlyModelModeLock')).toBe('settings:model-presets'); expect(ownerOf('nodeOnlyScrollButtonType')).toBe('local')
