@@ -4,6 +4,7 @@
 // dialog, saves to the server's file (waiting for it, failures stop the update), checks that nothing started meanwhile,
 // then asks the app to restart its embedded server: the loader installs the downloaded code and the app reconnects with
 // no tap. Where that is not available (the PC package, an APK without app.restart), the code is installed at the next start.
+import { get } from 'svelte/store'
 import { transferRequest } from '../playTransfer'
 import { busy } from './contentUpdates'
 
@@ -15,6 +16,11 @@ export type ApplyResult = 'restarting' | 'save-failed' | 'busy' | 'unsupported'
 const CHECK_INTERVAL = 5 * 60_000
 const START_DELAY = 20_000
 const RESTART_GRACE = 15_000
+const SAVE_LIMIT = 60_000
+const APPLY_MESSAGE = '새 버전을 적용하고 있어요. 저장하는 중…'
+// While applying, input is held at the window's capture phase (before the chat box, the send button and the global
+// hotkeys on document), so no send or settings action can start between the save and the restart.
+const HELD_INPUT = ['keydown', 'keypress', 'keyup', 'pointerdown', 'mousedown', 'click', 'touchstart', 'touchend'] as const
 const asked = new Set<string>()
 let running = false
 let started = false
@@ -31,14 +37,29 @@ const defaults = {
     save: async () => (await import('../globalApi.svelte')).requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true }),
     restart: async () => (await import('../transfer-sync/transferNative')).playNative('app.restart'),
     busy: (ignoreAlert: boolean) => busy(ignoreAlert),
+    // The open dialog is still this update's own wait dialog (another dialog replacing it means something else started).
+    ownDialog: async () => { const a: any = get((await import('../stores.svelte')).alertStore); return a?.type === 'wait' && a?.msg === APPLY_MESSAGE },
+    saveLimit: SAVE_LIMIT,
 }
 
-/** Saves, then asks the Android app to restart its server. Call with the wait dialog shown (it keeps new work from starting). */
+/** Holds keyboard, pointer and touch input until the returned release is called. */
+export function holdInput(env: any = globalThis): () => void {
+    const stop = (event: Event) => { event.stopImmediatePropagation(); if (event.cancelable) event.preventDefault() }
+    for (const type of HELD_INPUT) env.addEventListener?.(type, stop, { capture: true, passive: false })
+    return () => { for (const type of HELD_INPUT) env.removeEventListener?.(type, stop, { capture: true }) }
+}
+
+/** Saves (with a time limit), then asks the Android app to restart its server. Call with the wait dialog shown and input held. */
 export async function applyNow(deps: Partial<typeof defaults> = {}): Promise<ApplyResult> {
     const d = { ...defaults, ...deps }
-    try { await d.save() } catch { return 'save-failed' }
-    // A NAS sync apply, transfer, reply or import that started meanwhile: leave the update for later.
-    if (await d.busy(true)) return 'busy'
+    let limit: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<'timeout'>(resolve => { limit = setTimeout(() => resolve('timeout'), d.saveLimit) })
+    // A save that never settles ends this attempt; finishing later does not restart anything.
+    const saved = await Promise.race([d.save().then(() => 'saved' as const), deadline]).catch(() => 'failed' as const)
+    clearTimeout(limit)
+    if (saved !== 'saved') return 'save-failed'
+    // A NAS sync apply, transfer, reply or import that started meanwhile, or another dialog: leave the update for later.
+    if (await d.busy(true) || !await d.ownDialog()) return 'busy'
     try { await d.restart(); return 'restarting' } catch { return 'unsupported' }
 }
 
@@ -65,15 +86,18 @@ export async function checkAppCodeUpdate(force = false): Promise<AppCodeStatus |
         if (choice === -1) { asked.delete(version); return status }
         if (choice !== 0) return status
         if (await busy(true)) { asked.delete(version); return status }
-        alert.alertWait('새 버전을 적용하고 있어요. 저장하는 중…')
+        const release = holdInput()
+        alert.alertWait(APPLY_MESSAGE)
         const result = await applyNow()
         if (result === 'restarting') {
             // The app replaces the page right away; if this page is still here later, the restart did not happen.
-            setTimeout(() => { alert.alertClear(); asked.delete(version) }, RESTART_GRACE)
+            setTimeout(() => { release(); alert.alertClear(); asked.delete(version) }, RESTART_GRACE)
             return status
         }
-        alert.alertClear()
-        if (result === 'save-failed') { asked.delete(version); alert.alertError('저장하지 못해서 새 버전을 적용하지 않았어요. 다음에 다시 물어볼게요.') }
+        release()
+        // Clear only this update's own dialog; one that replaced it belongs to whatever opened it.
+        if (await defaults.ownDialog()) alert.alertClear()
+        if (result === 'save-failed') { asked.delete(version); alert.alertError('저장을 마치지 못해서 새 버전을 적용하지 않았어요. 다음에 다시 물어볼게요.') }
         else if (result === 'busy') asked.delete(version)
         else alert.alertNormal('이 앱 판에서는 바로 적용할 수 없어요. 앱을 완전히 닫았다가 다시 켜면 적용돼요.')
         return status

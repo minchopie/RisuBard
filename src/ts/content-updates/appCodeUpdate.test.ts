@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 const state = vi.hoisted(() => ({ busy: false, busyAfterSave: false, saved: false, status: {} as any, choice: 0, native: vi.fn(), save: vi.fn(), order: [] as string[] }))
 vi.mock('./contentUpdates', () => ({ busy: vi.fn(async (ignoreAlert = false) => state.busy || (ignoreAlert && state.saved && state.busyAfterSave)) }))
 vi.mock('../playTransfer', () => ({ transferRequest: vi.fn(async (_path: string, init: any) => ({ json: async () => ({ ...state.status, asked: JSON.parse(init.body) }) })) }))
+const alertState = await vi.hoisted(async () => { const { writable } = await import('svelte/store'); return { store: writable<any>({ type: 'none', msg: '' }) } })
+vi.mock('../stores.svelte', () => ({ alertStore: alertState.store }))
 vi.mock('../alert', () => ({
     alertConfirmMulti: vi.fn(async () => state.choice), alertNormal: vi.fn(), alertError: vi.fn(),
-    alertWait: vi.fn(() => { state.order.push('wait') }), alertClear: vi.fn(() => { state.order.push('clear') }),
+    alertWait: vi.fn((msg: string) => { state.order.push('wait'); alertState.store.set({ type: 'wait', msg }) }),
+    alertClear: vi.fn(() => { state.order.push('clear'); alertState.store.set({ type: 'none', msg: '' }) }),
 }))
 vi.mock('../transfer-sync/transferNative', () => ({ playNative: state.native }))
 vi.mock('../globalApi.svelte', () => ({ requestImmediateSave: state.save }))
@@ -14,7 +17,7 @@ let alert: any, transferRequest: any
 const ready = { enabled: true, current: '0.9.92-ver1', ready: '0.9.92-ver2', state: 'ready' }
 
 beforeEach(() => {
-    vi.resetModules(); vi.clearAllMocks(); state.native.mockReset(); state.save.mockReset()
+    vi.resetModules(); vi.clearAllMocks(); state.native.mockReset(); state.save.mockReset(); alertState.store.set({ type: 'none', msg: '' })
     state.busy = false; state.busyAfterSave = false; state.saved = false; state.status = ready; state.choice = 0; state.order = []
     state.save.mockImplementation(async () => { state.order.push('save'); state.saved = true })
     state.native.mockImplementation(async () => { state.order.push('restart'); return null })
@@ -63,6 +66,36 @@ describe('app code update (client)', () => {
         expect(state.save).toHaveBeenCalled()
         expect(state.native).not.toHaveBeenCalled()
         expect(alert.alertClear).toHaveBeenCalled()
+    })
+
+    test('a save that never settles ends the attempt after the limit (no restart, even if it finishes later)', async () => {
+        const m = await load()
+        let finish: () => void = () => {}
+        const restart = vi.fn(async () => null)
+        const result = await m.applyNow({ save: () => new Promise<void>(r => { finish = r }), restart, busy: async () => false, ownDialog: async () => true, saveLimit: 20 })
+        expect(result).toBe('save-failed')
+        finish(); await new Promise(r => setTimeout(r, 10))
+        expect(restart).not.toHaveBeenCalled()
+    })
+
+    test('another dialog that replaced the wait dialog while saving: no restart, that dialog is left open', async () => {
+        android()
+        const m = await load()
+        state.save.mockImplementation(async () => { state.saved = true; alertState.store.set({ type: 'input', msg: 'other' }) })
+        await m.checkAppCodeUpdate(true)
+        expect(state.native).not.toHaveBeenCalled()
+        expect(alert.alertClear).not.toHaveBeenCalled()
+    })
+
+    test('input is held while applying (capture phase, before the chat box and the hotkeys) and released after', async () => {
+        const m = await load()
+        const target = new EventTarget(), seen: string[] = []
+        target.addEventListener('keydown', () => seen.push('hotkey'))
+        const release = m.holdInput(target)
+        target.dispatchEvent(new Event('keydown', { cancelable: true }))
+        release()
+        target.dispatchEvent(new Event('keydown', { cancelable: true }))
+        expect(seen).toEqual(['hotkey'])
     })
 
     test('if the page is still there after the restart request, the wait dialog is cleared', async () => {
