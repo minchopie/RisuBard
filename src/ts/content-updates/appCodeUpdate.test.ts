@@ -29,13 +29,15 @@ beforeEach(() => {
 // Run every pending restart grace timer, so held input from one test never leaks into the next.
 afterEach(async () => { await vi.runAllTimersAsync(); vi.useRealTimers() })
 const load = async () => { const m = await import('./appCodeUpdate'); alert = await import('../alert'); transferRequest = (await import('../playTransfer')).transferRequest; return m }
+// Runs a check while advancing past the draft settle wait (fake timers).
+const run = async (m: any) => { const p = m.checkAppCodeUpdate(true); await vi.advanceTimersByTimeAsync(2_000); return p }
 const android = () => { vi.stubGlobal('RisuPlay', {}); vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 RisuBardAndroid/0.9.92' }) }
 
 describe('app code update (client)', () => {
     test('asks for status only (the server downloads on its own schedule)', async () => {
         const m = await load()
         state.status = { enabled: true, current: '0.9.92-ver1', ready: null, state: 'current' }
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(vi.mocked(transferRequest).mock.calls[0][0]).toBe('/content-updates/app-code')
         expect(JSON.parse(vi.mocked(transferRequest).mock.calls[0][1]!.body as string)).toEqual({ check: false })
         expect(alert.alertConfirmMulti).not.toHaveBeenCalled()
@@ -43,23 +45,27 @@ describe('app code update (client)', () => {
 
     test('Android "지금 적용": wait dialog, durable save to the server file, then the native restart', async () => {
         android()
+        let pagehides = 0
+        window.addEventListener('pagehide', () => { pagehides++ })
         const m = await load()
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(vi.mocked(alert.alertConfirmMulti).mock.calls[0][1]).toEqual(['지금 적용', '나중에'])
         expect(state.save).toHaveBeenCalledWith({ flushServer: 'canonical', rejectOnFailure: true })
         expect(state.native).toHaveBeenCalledWith('app.restart')
         expect(state.order).toEqual(['wait', 'draft', 'save', 'restart'])
+        // No synthetic pagehide (it would make a composer still loading its draft write an empty one).
+        expect(pagehides).toBe(0)
     })
 
     test('a failed save stops the update (no restart) and asks again later', async () => {
         android()
         const m = await load()
         state.save.mockRejectedValue(new Error('disk full'))
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(state.native).not.toHaveBeenCalled()
         expect(alert.alertError).toHaveBeenCalled()
         expect(alert.alertClear).toHaveBeenCalled()
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(alert.alertConfirmMulti).toHaveBeenCalledTimes(2)
     })
 
@@ -67,7 +73,7 @@ describe('app code update (client)', () => {
         android()
         const m = await load()
         state.busyAfterSave = true
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(state.save).toHaveBeenCalled()
         expect(state.native).not.toHaveBeenCalled()
         expect(alert.alertClear).toHaveBeenCalled()
@@ -88,7 +94,7 @@ describe('app code update (client)', () => {
         android()
         const m = await load()
         state.save.mockImplementation(async () => { state.saved = true; alertState.store.set({ type: 'input', msg: 'other' }) })
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(state.native).not.toHaveBeenCalled()
         expect(alert.alertClear).not.toHaveBeenCalled()
     })
@@ -96,6 +102,11 @@ describe('app code update (client)', () => {
     test('a send being prepared in the composer (button in its preparing/busy state) counts as busy', async () => {
         const m = await load()
         document.body.innerHTML = '<button aria-label="Preparing to send"></button>'
+        expect(await m.composerBusy(document)).toBe(true)
+        // While sending (before the generation is registered) the button is the cancel button: label only in title/status.
+        document.body.innerHTML = '<button aria-label="Cancel" title="Preparing to send"></button>'
+        expect(await m.composerBusy(document)).toBe(true)
+        document.body.innerHTML = '<button aria-label="Cancel"><span class="sr-only" role="status"> Sending </span></button>'
         expect(await m.composerBusy(document)).toBe(true)
         document.body.innerHTML = '<button aria-label="Send"></button>'
         expect(await m.composerBusy(document)).toBe(false)
@@ -106,7 +117,7 @@ describe('app code update (client)', () => {
         android()
         const m = await load()
         state.save.mockImplementation(async () => { state.saved = true; document.body.innerHTML = '<button aria-label="Preparing to send"></button>' })
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         document.body.innerHTML = ''
         expect(state.native).not.toHaveBeenCalled()
         let current: any; alertState.store.subscribe((v: any) => { current = v })()
@@ -120,7 +131,7 @@ describe('app code update (client)', () => {
         vi.mocked(alert.alertConfirmMulti).mockImplementationOnce(async () => 0)
         const { alertWait } = await import('../alert')
         vi.mocked(alertWait).mockImplementationOnce((msg: string) => { alertState.store.set({ type: 'wait', msg }); throw new Error('dialog failed') })
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         const key = new KeyboardEvent('keydown', { cancelable: true, bubbles: true })
         document.body.dispatchEvent(key)
         expect(key.defaultPrevented).toBe(false)
@@ -132,7 +143,7 @@ describe('app code update (client)', () => {
     test('the restart grace timer releases input but leaves a dialog that replaced the wait dialog', async () => {
         android()
         const m = await load()
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         alertState.store.set({ type: 'input', msg: 'other' })
         await vi.advanceTimersByTimeAsync(15_000)
         let current: any; alertState.store.subscribe((v: any) => { current = v })()
@@ -156,7 +167,7 @@ describe('app code update (client)', () => {
     test('if the page is still there after the restart request, the wait dialog is cleared', async () => {
         android()
         const m = await load()
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(alert.alertClear).not.toHaveBeenCalled()
         await vi.advanceTimersByTimeAsync(15_000)
         expect(alert.alertClear).toHaveBeenCalled()
@@ -166,10 +177,10 @@ describe('app code update (client)', () => {
         android()
         const m = await load()
         state.choice = -1
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         state.choice = 1
-        await m.checkAppCodeUpdate(true)
-        await m.checkAppCodeUpdate(true)
+        await run(m)
+        await run(m)
         expect(alert.alertConfirmMulti).toHaveBeenCalledTimes(2)
         expect(state.native).not.toHaveBeenCalled()
         expect(state.save).not.toHaveBeenCalled()
@@ -179,7 +190,7 @@ describe('app code update (client)', () => {
         android()
         const m = await load()
         state.busy = true
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(transferRequest).not.toHaveBeenCalled()
         expect(alert.alertConfirmMulti).not.toHaveBeenCalled()
     })
@@ -188,15 +199,15 @@ describe('app code update (client)', () => {
         android()
         const m = await load()
         state.native.mockRejectedValue(new Error('unknown op'))
-        await m.checkAppCodeUpdate(true)
+        await run(m)
         expect(alert.alertClear).toHaveBeenCalled()
         expect(vi.mocked(alert.alertNormal).mock.calls[0][0]).toContain('다시 켜면')
     })
 
     test('PC / browser (no native restart): one notice per version, no save or restart', async () => {
         const m = await load()
-        await m.checkAppCodeUpdate(true)
-        await m.checkAppCodeUpdate(true)
+        await run(m)
+        await run(m)
         expect(alert.alertNormal).toHaveBeenCalledTimes(1)
         expect(vi.mocked(alert.alertNormal).mock.calls[0][0]).toContain('0.9.92-ver2')
         expect(alert.alertConfirmMulti).not.toHaveBeenCalled()
@@ -207,9 +218,9 @@ describe('app code update (client)', () => {
     test('an old server without the route or a disabled loader: quiet', async () => {
         const m = await load()
         state.status = { enabled: false, current: null, ready: null, state: 'off' }
-        expect(await m.checkAppCodeUpdate(true)).toMatchObject({ enabled: false })
+        expect(await run(m)).toMatchObject({ enabled: false })
         vi.mocked(transferRequest).mockRejectedValueOnce(new Error('404'))
-        expect(await m.checkAppCodeUpdate(true)).toBeNull()
+        expect(await run(m)).toBeNull()
         expect(alert.alertNormal).not.toHaveBeenCalled()
     })
 })

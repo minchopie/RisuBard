@@ -18,6 +18,7 @@ const CHECK_INTERVAL = 5 * 60_000
 const START_DELAY = 20_000
 const RESTART_GRACE = 15_000
 const SAVE_LIMIT = 60_000
+const DRAFT_SETTLE = 1_000 // longer than the composer's 800 ms draft debounce
 const APPLY_MESSAGE = '새 버전을 적용하고 있어요. 저장하는 중…'
 // While applying, input is held at the window's capture phase (before the chat box, the send button and the global
 // hotkeys on document), so no send or settings action can start between the save and the restart.
@@ -33,21 +34,24 @@ export const fetchAppCodeStatus = async (check = false): Promise<AppCodeStatus> 
 export const nativeRestartAvailable = (env: any = globalThis): boolean =>
     !!env?.RisuPlay && String(env.navigator?.userAgent ?? '').includes('RisuBardAndroid/')
 
-/** The chat composer's send button shows the preparing/busy state (upstream DefaultChatScreen: preparingInput, sendingChat
- *  or doingChat — local to the screen, before a generation is registered). */
+/** The chat composer shows a send in preparation or in progress (upstream DefaultChatScreen: preparingInput, sendingChat
+ *  or doingChat — local to the screen, before a generation is registered). The send button carries the label as
+ *  aria-label (preparing) or title (the cancel button while sending), and the screen-reader status text always. */
 export async function composerBusy(doc: any = globalThis.document): Promise<boolean> {
     if (!doc?.querySelector) return false
     const { language } = await import('../../lang') as any
-    return [language?.chatSendPreparing, language?.chatSendBusy]
-        .some(label => typeof label === 'string' && label && doc.querySelector(`[aria-label="${CSS.escape(label)}"]`))
+    const labels = [language?.chatSendPreparing, language?.chatSendBusy].filter((label): label is string => typeof label === 'string' && label.length > 0)
+    if (labels.some(label => doc.querySelector(`[aria-label="${CSS.escape(label)}"],[title="${CSS.escape(label)}"]`))) return true
+    return Array.from(doc.querySelectorAll?.('[role="status"]') ?? []).some((el: any) => labels.includes(String(el.textContent ?? '').trim()))
 }
 
 const defaults = {
-    // The unsent draft: the composer writes it on pagehide (upstream DefaultChatScreen; the other pagehide listener is the
-    // app's own flush) into the draft queue, and loading any draft waits for that queue (upstream chatDraft.ts).
-    // The draft queue keeps its upstream best-effort rule (a failed draft write is not reported).
+    // The unsent draft (upstream DefaultChatScreen + chatDraft.ts): the composer already wrote it when it lost focus to
+    // the dialogs (onblur), a text set without focus is written by its 800 ms debounce (input is held, so nothing new),
+    // and loading any draft waits for the draft write queue. No synthetic event: the composer's own writes only (a
+    // draft still loading is never written). The queue keeps its upstream best-effort rule (failures not reported).
     flushDraft: async () => {
-        globalThis.dispatchEvent?.(new Event('pagehide'))
+        await new Promise(resolve => setTimeout(resolve, DRAFT_SETTLE))
         await (await import('../storage/chatDraft')).loadChatDraft('app-code-update', 'flush')
     },
     // The app's own durable save, flushed to the server's canonical file; rejects when it could not be written.

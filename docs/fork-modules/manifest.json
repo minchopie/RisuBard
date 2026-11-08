@@ -4195,9 +4195,9 @@
       "path": "patchnote/0.9.92-ver2.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "94548e6317fc281f87efef6ea1f376636c359f5f0642cf681b35b8a068fa3a31",
-      "contentSha256": "94548e6317fc281f87efef6ea1f376636c359f5f0642cf681b35b8a068fa3a31",
-      "bytes": 2647
+      "sha256": "7cdbca127c8f7929262d6a82431272a287b23bc099616be33d5e2946ffb60059",
+      "contentSha256": "7cdbca127c8f7929262d6a82431272a287b23bc099616be33d5e2946ffb60059",
+      "bytes": 2876
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4411,9 +4411,9 @@
       "path": "docs/content-updates/README.md",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "ba2c2d1bf2fcbd65018b4a26457b08f976e369dbb19361c8d512b8ee7851370d",
-      "contentSha256": "ba2c2d1bf2fcbd65018b4a26457b08f976e369dbb19361c8d512b8ee7851370d",
-      "bytes": 11220
+      "sha256": "a068366808103de37d952c579cb33deeb1ba22b69dc7c1e4f848dc1589724e93",
+      "contentSha256": "a068366808103de37d952c579cb33deeb1ba22b69dc7c1e4f848dc1589724e93",
+      "bytes": 11584
     },
     {
       "path": "server/node/content-updates/app-code-watch.cjs",
@@ -4435,17 +4435,17 @@
       "path": "src/ts/content-updates/appCodeUpdate.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "945368c538aecf33ed831260a284873467aeeacb577cf7e099d047bcf9bd90f3",
-      "contentSha256": "945368c538aecf33ed831260a284873467aeeacb577cf7e099d047bcf9bd90f3",
-      "bytes": 9586
+      "sha256": "685b331aa2f66588ce24fa795d0fde98f265657e5f3a0da31f57a79e8a330242",
+      "contentSha256": "685b331aa2f66588ce24fa795d0fde98f265657e5f3a0da31f57a79e8a330242",
+      "bytes": 10214
     },
     {
       "path": "src/ts/content-updates/appCodeUpdate.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "dce1491bbe1bffec6b1fb3ec205515b6553c1126499221a2e2cb6208a4c7ba57",
-      "contentSha256": "dce1491bbe1bffec6b1fb3ec205515b6553c1126499221a2e2cb6208a4c7ba57",
-      "bytes": 11837
+      "sha256": "c90c494c3f21f6a358e3cbdf5330598ad0c02b050418d73b3a9a9659010bfcac",
+      "contentSha256": "c90c494c3f21f6a358e3cbdf5330598ad0c02b050418d73b3a9a9659010bfcac",
+      "bytes": 12360
     }
   ],
   "modules": [
