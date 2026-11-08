@@ -1,7 +1,7 @@
 // RisuBard 0.9.91-ver3 (transfer-sync): device marks on chat names.
 // - A chat made with the chat list's + button is named after this device: `(pc) Chat 3`, `(tablet) Chat 3`, `(phone) Chat 3`.
-// - A chat that still has a default name (`New Chat N`, `Chat N`) shows the device that first recorded it in NAS sync, and a sibling
-//   copy that NAS sync made when one chat went two ways shows the device that continued that copy. These two marks are display only:
+// - A chat that still has a default name (`New Chat N`, `Chat N`) shows the device that first recorded it in NAS sync, and once a
+//   chat went two ways (NAS sync keeps both as separate chats) each of them shows the device that continued it. These marks are display only:
 //   the stored names never change, so they produce no sync revision and no new conflict.
 import { writable, type Readable } from 'svelte/store'
 import { detectDeviceKind, type SyncDeviceKind } from './nasSyncUi'
@@ -9,11 +9,17 @@ import { detectDeviceKind, type SyncDeviceKind } from './nasSyncUi'
 export interface ChatDeviceLabels { origin: Record<string, SyncDeviceKind>; branch: Record<string, SyncDeviceKind> }
 const KINDS: readonly string[] = ['pc', 'tablet', 'phone']
 const MARK = /^\((?:pc|tablet|phone)\) /
-const DEFAULT_NAME = /^(?:New Chat|Chat) \d+$/
+const DEFAULT_NAME = /^(?:New Chat|Chat) \d+(?: \(\d+\))?$/
 const empty = (): ChatDeviceLabels => ({ origin: {}, branch: {} })
 const store = writable<ChatDeviceLabels>(empty())
 export const chatDeviceLabels: Readable<ChatDeviceLabels> = { subscribe: store.subscribe }
 
+/** Only the app's own screen may tell its server what device it is: the Android app (its embedded server) or a browser on the PC
+ *  itself. A tablet browser using the PC's server must never register that server as a tablet. */
+export function ownsServer(userAgent: string = globalThis.navigator?.userAgent ?? '', hostname: string = globalThis.location?.hostname ?? ''): boolean {
+    if (/RisuBardAndroid/i.test(userAgent)) return true
+    return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname)
+}
 export function thisDeviceKind(): SyncDeviceKind {
     try { return detectDeviceKind(navigator.userAgent, window.screen) } catch { return 'pc' }
 }
@@ -52,7 +58,7 @@ export function refreshChatDeviceLabels(): Promise<void> {
                 let data = await read()
                 // The service has never been told what this device is (the sync panel normally does that when it opens): tell it once,
                 // the same display-only profile the panel reports, so this device's own chats get a mark too.
-                if (data && data.self == null) { await sync.reportSyncProfile({ kind: thisDeviceKind() }); data = await read() }
+                if (data && data.self == null && ownsServer()) { await sync.reportSyncProfile({ kind: thisDeviceKind() }); data = await read() }
                 store.set(parseChatDeviceLabels(data))
             } while (again)
         } catch { store.set(empty()) }

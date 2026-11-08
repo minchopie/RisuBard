@@ -384,7 +384,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         return { chats: rows, items, personas: (db?.personas ?? []).map(p => ({ name: p.name || '이름 없는 페르소나' })), localIssues: [personaMirrorIssue(db ?? {})].filter(Boolean), peerApplied: 'unconfirmed' }; });
     }
     /** RisuBard 0.9.91-ver3: display-only device marks for the chat list. `origin`: the device kind that recorded the chat root's first
-     *  revision; `branch`: for a local sibling branch, the device kind that continued the copy it carries. Read-only (no plan, no
+     *  revision; `branch`: once the chat went two ways, the device kind that continued the line this chat carries. Read-only (no plan, no
      *  commit). History without a device profile, or a revision claimed by devices of different kinds, gives no mark. `self` is this
      *  device's own reported kind (null until the client reports it). */
     async function chatLabels() {
@@ -393,26 +393,33 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const commit of state.commits) for (const id of commit.revisions ?? []) note(id, commit.device?.kind ?? state.profile?.kind);
         for (const p of Object.values(state.peers)) for (const ids of Object.values(p.admittedRevisions ?? {})) for (const id of ids) note(id, p.profile?.kind);
         const kindOf = ids => { const found = new Set(ids.map(id => kinds.get(id) ?? '?')); return ids.length && found.size === 1 && !found.has('?') ? [...found][0] : null; };
-        const origin = {}, branch = {}, segmentsOf = new Map();
+        const origin = {}, branch = {}, roots = new Map();
+        // Per root: its revisions and how many live revisions continue each one as their FIRST parent (a resolution is a child of every
+        // head it closes, so only first parents count; a deletion never starts a line).
+        const rootOf = key => {
+            if (!roots.has(key)) {
+                let ids = []; try { ids = [...s.graph.branchSegments(key).keys()]; } catch {}
+                const next = new Map();
+                for (const id of ids) { const r = s.graph.get(id), parent = r.parents[0]; if (parent && !r.tombstone) next.set(parent, (next.get(parent) ?? 0) + 1); }
+                roots.set(key, { ids, next });
+            }
+            return roots.get(key);
+        };
         for (const character of db?.characters ?? []) for (const chat of character.chats ?? []) {
             if (!chat || typeof chat.id !== 'string') continue;
-            const b = service().branches[chat.id], key = `play\nchat\n${b?.root ?? chat.id}`;
-            if (!segmentsOf.has(key)) { let map = new Map(); try { map = s.graph.branchSegments(key); } catch {} segmentsOf.set(key, map); }
-            const segments = segmentsOf.get(key);
-            if (!segments.size) continue;
-            const first = kindOf([...segments.keys()].filter(id => !s.graph.get(id).parents.length));
+            const key = `play\nchat\n${service().branches[chat.id]?.root ?? chat.id}`, { ids, next } = rootOf(key);
+            if (!ids.length) continue;
+            const first = kindOf(ids.filter(id => !s.graph.get(id).parents.length));
             if (first) origin[chat.id] = first;
-            if (!b) continue;
-            // The copy's own line: from its head back to where it left the other live variants; its oldest revision there is the device
-            // that continued this copy (a variant that kept the root segment is handled the same way).
-            const own = service().lineage[key + '#' + chat.id];
-            if (!own || !s.graph.get(own)) continue;
-            const others = s.graph.classify(key).liveHeads.filter(h => h !== own && !s.graph.isAncestor(h, own) && !s.graph.isAncestor(own, h));
-            const shared = id => others.some(h => h === id || s.graph.isAncestor(id, h));
-            let start = own;
-            for (let id = own; id && !shared(id); id = s.graph.get(id).parents[0]) start = id;
-            const started = kindOf([start]);
-            if (started) branch[chat.id] = started;
+            // The line this chat carries: from its recorded head back along first parents to the nearest point where the chat went two
+            // ways; the revision right after that point is the device that continued this line. The same for every variant (whichever
+            // got the original id on this device), unchanged by later resolutions; a line that never split gets no mark. Linear per chat.
+            const head = service().lineage[key + '#' + chat.id];
+            if (!head || !s.graph.get(head)) continue;
+            let start = null;
+            for (let id = head, parent = s.graph.get(id).parents[0]; parent; id = parent, parent = s.graph.get(id).parents[0]) if ((next.get(parent) ?? 0) > 1) { start = id; break; }
+            const continued = start ? kindOf([start]) : null;
+            if (continued) branch[chat.id] = continued;
         }
         return { origin, branch, self: state.profile?.kind ?? null };
     }

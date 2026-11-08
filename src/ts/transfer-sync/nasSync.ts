@@ -337,6 +337,7 @@ async function applySyncOnce(automatic: boolean, signal?: AbortSignal, guard?: S
         const result = await finishWithRetry(plan!.transaction, saveError === null)
         if (result?.state === 'applied') {
             resolved = true; forageStorage.realStorage.syncTransaction = undefined
+            void import('./chatDeviceLabel').then(m => m.refreshChatDeviceLabels()).catch(() => {}) // RisuBard 0.9.91-ver3: marks for chats this apply added or moved
             transferStatus.set(result.pending?.length || result.keptDeletions?.length ? '일부 적용 완료 · 확인할 변경이 남아 있어요.' : '동기화 적용 완료')
             return { state: result.pending?.length || result.keptDeletions?.length ? 'applied-pending' : 'applied', transaction: plan!.transaction, pending: result.pending, keptDeletions: result.keptDeletions }
         }

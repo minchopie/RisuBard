@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import { get } from 'svelte/store'
-import { chatDisplayName, newChatName, parseChatDeviceLabels } from './chatDeviceLabel'
+import { chatDisplayName, newChatName, ownsServer, parseChatDeviceLabels } from './chatDeviceLabel'
 
 const labels = parseChatDeviceLabels({ origin: { a: 'pc', b: 'tablet', c: 'phone', bad: 'server', n: 'pc' }, branch: { c: 'tablet', x: 7 } })
 
@@ -25,8 +25,18 @@ test('list marks: default names show the first recording device, sibling copies 
     expect(chatDisplayName({ id: 'c', name: '(pc) Chat 3' }, labels)).toBe('(tablet) Chat 3')
     expect(chatDisplayName({ id: 'c', name: '여행' }, labels)).toBe('(tablet) 여행')
     expect(chatDisplayName({ id: 'zz', name: 'New Chat 9' }, labels)).toBe('New Chat 9')
+    expect(chatDisplayName({ id: 'a', name: 'New Chat 3 (2)' }, labels)).toBe('(pc) New Chat 3 (2)')
+    expect(chatDisplayName({ id: 'a', name: 'New Chat 3 (copy)' }, labels)).toBe('New Chat 3 (copy)')
     expect(chatDisplayName({ name: 'New Chat 1' }, labels)).toBe('New Chat 1')
     expect(chatDisplayName(null, labels)).toBe('')
+})
+
+test('only the app on its own server reports the device kind (never a tablet browser on the PC server)', () => {
+    expect(ownsServer('Mozilla/5.0 (Linux; Android 14) wv RisuBardAndroid/0.9.92-ver1', '127.0.0.1')).toBe(true)
+    expect(ownsServer('Mozilla/5.0 (Windows NT 10.0)', 'localhost')).toBe(true)
+    expect(ownsServer('Mozilla/5.0 (Windows NT 10.0)', '127.0.0.1')).toBe(true)
+    expect(ownsServer('Mozilla/5.0 (Linux; Android 14) Chrome/130', '192.168.0.10')).toBe(false)
+    expect(ownsServer('Mozilla/5.0 (Windows NT 10.0)', 'my-pc.tailnet.ts.net')).toBe(false)
 })
 
 test('refresh reads the marks, tells the service this device once when it has no profile, and shows no marks when sync is off', async () => {
@@ -43,6 +53,12 @@ test('refresh reads the marks, tells the service this device once when it has no
     expect(get(m.chatDeviceLabels)).toEqual({ origin: { a: 'pc' }, branch: { b: 'phone' } })
     await m.refreshChatDeviceLabels()
     expect(calls).toEqual(['/chat-labels', 'profile:pc', '/chat-labels', '/chat-labels'])
+    // A browser that does not own the server never reports, even when the service has no profile.
+    self = null; calls.length = 0
+    vi.stubGlobal('location', { hostname: '192.168.0.10' })
+    await m.refreshChatDeviceLabels()
+    expect(calls).toEqual(['/chat-labels'])
+    vi.unstubAllGlobals()
     fail = true; await m.refreshChatDeviceLabels()
     expect(get(m.chatDeviceLabels)).toEqual({ origin: {}, branch: {} })
     vi.doUnmock('./nasSync')

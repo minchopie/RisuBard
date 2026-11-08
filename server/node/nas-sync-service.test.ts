@@ -1958,13 +1958,21 @@ test('0.9.91-ver3 chat labels: the device that first recorded a chat and the dev
     expect(sibling.id).toMatch(/^chat~[a-f0-9]{8}$/)
     const commits = c.service.store().state().commits.length
     const labels = await c.service.chatLabels()
-    expect(labels).toEqual({ origin: { chat: 'tablet', [sibling.id]: 'tablet' }, branch: { [sibling.id]: sibling.message.at(-1).data === 'A의 편집' ? 'tablet' : 'phone' }, self: null })
+    const lineOf = (chat: any) => chat.message.at(-1).data === 'A의 편집' ? 'tablet' : 'phone'
+    const main = c.db().characters[0].chats.find((ch: any) => ch.id === 'chat')
+    expect(labels).toEqual({ origin: { chat: 'tablet', [sibling.id]: 'tablet' }, branch: { chat: lineOf(main), [sibling.id]: lineOf(sibling) }, self: null })
+    expect(new Set(Object.values(labels.branch))).toEqual(new Set(['tablet', 'phone'])) // whichever variant got the original id, each shows its own device
     expect(c.service.store().state().commits.length).toBe(commits) // nothing recorded
     // A keeps its own chat; B's copy arrives there as a sibling marked with the phone.
     await applyAll(a)
     const aSibling = a.db().characters[0].chats.find((ch: any) => ch.id !== 'chat')
     expect(aSibling.message.at(-1).data).toBe('B의 편집')
-    expect(await a.service.chatLabels()).toEqual({ origin: { chat: 'tablet', [aSibling.id]: 'tablet' }, branch: { [aSibling.id]: 'phone' }, self: 'tablet' })
+    expect(await a.service.chatLabels()).toEqual({ origin: { chat: 'tablet', [aSibling.id]: 'tablet' }, branch: { chat: 'tablet', [aSibling.id]: 'phone' }, self: 'tablet' })
+    // A later resolution of the root moves no mark: lines are read from where they split, not from which heads are still live.
+    const variants = c.service.store().graph.classify('play\nchat\nchat').variants
+    await c.service.resolveConflict({ root: 'play\nchat\nchat', keep: variants[0][0] })
+    expect(c.service.store().graph.classify('play\nchat\nchat').liveHeads).toHaveLength(1)
+    expect(await c.service.chatLabels()).toEqual(labels)
     // Over HTTP too.
     const routes = new Map<string, any>()
     a.service.registerRoutes({ get: (path: string, handler: any) => routes.set(path, handler), post: (path: string, handler: any) => routes.set(path, handler) }, { auth: async () => true, activeSession: () => true })
