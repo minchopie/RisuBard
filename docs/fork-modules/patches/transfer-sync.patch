@@ -37,7 +37,7 @@ index c88e01d..f45c042 100644
                  }
                  chats.unshift(newChat)
 diff --git a/src/lib/SideBars/SideChatList.svelte b/src/lib/SideBars/SideChatList.svelte
-index 01c6b4c..b1710b9 100644
+index 01c6b4c..0f03d76 100644
 --- a/src/lib/SideBars/SideChatList.svelte
 +++ b/src/lib/SideBars/SideChatList.svelte
 @@ -30,6 +30,7 @@
@@ -69,15 +69,6 @@ index 01c6b4c..b1710b9 100644
              localLore: [] as any[],
              fmIndex: -1,
              id: v4(),
-@@ -469,7 +475,7 @@
-     <section data-current-chat-section class="border-b border-darkborderc pb-2">
-         <div data-chat-file-header class="flex min-h-10 items-center gap-1">
-             <div data-current-chat-title class="flex min-w-0 grow items-center px-1.5 py-2 text-textcolor">
--                <span class="truncate font-semibold">{activeChat?.name ?? language.newChat}</span>
-+                <span class="truncate font-semibold">{activeChat?.name != null ? chatDisplayName(activeChat, $chatDeviceLabels) : language.newChat}</span>
-             </div>
-         </div>
-     </section>
 @@ -617,7 +623,7 @@
                                  changeChatTo(chatIdx)
                              }

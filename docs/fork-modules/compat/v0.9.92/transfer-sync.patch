@@ -1,0 +1,117 @@
+diff --git a/src/lib/Others/ChatList.svelte b/src/lib/Others/ChatList.svelte
+--- a/src/lib/Others/ChatList.svelte
++++ b/src/lib/Others/ChatList.svelte
+@@ -4,6 +4,7 @@
+     import { DBState } from 'src/ts/stores.svelte';
+     import { newChatModelDefaults } from 'src/ts/storage/database.svelte';
+     import { createUniqueDisplayName } from 'src/ts/displayName';
++    import { chatDeviceLabels, chatDisplayName, newChatName, refreshChatDeviceLabels } from 'src/ts/transfer-sync/chatDeviceLabel';
+     import { ReloadGUIPointer, selectedCharID } from "../../ts/stores.svelte";
+     import { DownloadIcon, SquarePenIcon, HardDriveUploadIcon, PlusIcon, TrashIcon, XIcon } from "@lucide/svelte";
+     import { exportChat, importChat } from "../../ts/characters";
+@@ -14,6 +15,7 @@
+     import { deleteCharacterChats } from "src/ts/risubard/chatListActions";
+ 
+     let editMode = $state(false)
++    void refreshChatDeviceLabels() // RisuBard (transfer-sync): device marks for this list
+     /** @type {{close?: any}} */
+     let { close = () => {} } = $props();
+ 
+@@ -52,7 +54,7 @@
+                 {#if editMode}
+                     <TextInput bind:value={DBState.db.characters[$selectedCharID].chats[i].name} onchange={() => commitChatName(i)} padding={false}/>
+                 {:else}
+-                    <span>{chat.name}</span>
++                    <span>{chatDisplayName(chat, $chatDeviceLabels)}</span>
+                 {/if}
+                 <div class="grow flex justify-end">
+                     <div class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" role="button" tabindex="0" aria-label="챗 내보내기" onclick={async (e) => {
+@@ -78,7 +80,7 @@
+                 const len = character.chats.length
+                 let chats = character.chats
+                 const newChat = {
+-                    message:[], note:'', name:createUniqueDisplayName(`New Chat ${len + 1}`, chats), localLore:[], fmIndex: -1, id: v4(),
++                    message:[], note:'', name:createUniqueDisplayName(newChatName(len), chats), localLore:[], fmIndex: -1, id: v4(),
+                     ...newChatModelDefaults(character, currentChat)
+                 }
+                 chats.unshift(newChat)
+diff --git a/src/lib/SideBars/SideChatList.svelte b/src/lib/SideBars/SideChatList.svelte
+--- a/src/lib/SideBars/SideChatList.svelte
++++ b/src/lib/SideBars/SideChatList.svelte
+@@ -29,6 +29,7 @@
+     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork";
+     import { mergeCharacterChats } from "src/ts/risubard/chatMerge";
+     import { createUniqueDisplayName } from 'src/ts/displayName';
++    import { chatDeviceLabels, chatDisplayName, newChatName, refreshChatDeviceLabels } from 'src/ts/transfer-sync/chatDeviceLabel';
+     import { doingChat, isAnyGenerating } from "src/ts/process/generationState";
+     import { isWikiGenerating } from "src/ts/risubard/wikiGenerationState";
+     import ChatMergeDialog from "./ChatMergeDialog.svelte";
+@@ -53,6 +54,11 @@
+     }
+ 
+     let { chara = $bindable() }: Props = $props();
++    // RisuBard (transfer-sync): device marks for this list, read again when the character or its number of chats changes (sync adds copies).
++    $effect(() => {
++        void chara?.chaId; void chara?.chats?.length
++        untrack(() => { void refreshChatDeviceLabels() })
++    })
+     let renamingFolderId = $state<string | null>(null)
+     let pendingRenameFolderId: string | null = null
+     let draggingChat = $state(false)
+@@ -135,7 +141,7 @@
+         const newChat = {
+             message: [] as any[],
+             note: '',
+-            name: createUniqueDisplayName(`New Chat ${chara.chats.length + 1}`, chara.chats),
++            name: createUniqueDisplayName(newChatName(chara.chats.length), chara.chats),
+             localLore: [] as any[],
+             fmIndex: -1,
+             id: v4(),
+@@ -781,7 +787,7 @@
+                     onpointerup={cancelLongPress} onpointercancel={cancelLongPress} onpointerleave={() => { cancelLongPress(); hidePreview() }}
+                     oncontextmenu={(e) => { if (lastPointerType === 'touch') e.preventDefault() }}
+                     class="flex min-w-0 grow items-center text-textcolor border-solid border-0 border-darkborderc p-2 pl-1 cursor-pointer rounded-md">
+-                    <span class="truncate">{chat.name}</span>
++                    <span class="truncate">{chatDisplayName(chat, $chatDeviceLabels)}</span>
+                 </button>
+                 <span data-chat-drag-handle aria-hidden="true" title="끌어서 순서 바꾸기"
+                     class="chat-drag-handle hidden shrink-0 cursor-grab items-center self-stretch px-1.5 text-textcolor2 opacity-70 pointer-coarse:flex">
+diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
+index d8b1110..0929329 100644
+--- a/src/ts/process/index.svelte.ts
++++ b/src/ts/process/index.svelte.ts
+@@ -1840,9 +1840,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+                         performance.now() - inquiryStartedAt
+                 }
+             }
+-            // Cache-friendly mode keeps the slow-changing baseline in the
+-            // description slot and moves per-turn sources next to the latest
+-            // user message, after the stable prompt prefix.
++            // Cache-friendly mode keeps original character/lore text; its
++            // baseline is a lossy summary of the same text, not extra memory.
+             const currentPrompt = narrativeContext.sourceChanged
+                 ? null
+                 : createNarrativeSourcesPrompt(
+@@ -1851,10 +1850,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+                     undefined,
+                     requiredWikiSources.length ? '' : responseWikiPromptGuide
+                 )
+-            const baselinePrompt = cacheFriendlyContext
+-                && !narrativeContext.sourceChanged
+-                ? createNarrativeSourcesPrompt([], narrativeContext.baseline ?? '')
+-                : null
++            const baselinePrompt = null
+             if (currentPrompt || baselinePrompt) {
+                 narrativeContextObservation.mode = 'current'
+                 narrativeContextObservation.reason =
+@@ -1906,9 +1902,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+                     cacheFriendlyNarrativeMessage = currentContextMessage
+                 }
+                 const staticContextMessage: OpenAIChat | null = cacheFriendlyContext
+-                    ? baselinePrompt
+-                        ? { role: 'system', content: baselinePrompt, requestStatusSources: baselineStatusSources }
+-                        : null
++                    ? null
+                     : currentContextMessage
+                 if (staticContextMessage) {
+                 const mergedContext = mergeNarrativeContextWithStaticPrompt({

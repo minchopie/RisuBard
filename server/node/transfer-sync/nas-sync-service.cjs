@@ -24,6 +24,9 @@ const { createVault, vaultMasterStore, REFS } = require('./nas-sync-vault.cjs');
 const { createSyncRemote, createSyncTransport } = require('./nas-sync-remote.cjs');
 const { createManifest } = require('./nas-sync-manifest.cjs');
 const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences } = require('./nas-sync-projection.cjs');
+/** Upstream 0.9.92 theme keys. Every 0.9.92 app always stores them, so their absence in a received theme group means the sender
+ *  predates 0.9.92, not that the user removed them: keep this device's skins instead of clearing them. */
+const KEEP_WHEN_ABSENT = new Set(['appSkins', 'appSkinId']);
 const { makeRevision, hashJson } = require('./nas-sync-core.cjs');
 const { PERSONA_MIRRORS, personaSelection, personaMirrorsMatch, personaMirrorIssue, mergePersonaHeads } = require('./nas-sync-reconcile.cjs');
 const { deviceKeyStore, writeRequestArchive, writeGrantArchive, openGrant, readShareArchive, REQUEST, GRANT } = require('./nas-sync-share.cjs');
@@ -968,7 +971,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 const m = materialize(v, 'settings', content, envelopesFor(s, v, head), current);
                 if (!m.applied) { result.pending.push({ root: key, reason: 'vault', pending: m.pending }); continue; }
                 for (const [k, value] of Object.entries(m.value)) { if (k === 'pluginEnabled') result.pluginEnabled = value; else { result.settings[k] = value; before.settings[k] = k in db ? db[k] : null; } }
-                for (const k of GROUP_KEYS[`settings:${rootId}`] ?? []) if (!(rootId === 'personas' && PERSONA_MIRRORS.includes(k)) && !(k in content) && k in db) { result.settings[k] = null; before.settings[k] = db[k]; }
+                for (const k of GROUP_KEYS[`settings:${rootId}`] ?? []) if (!(rootId === 'personas' && PERSONA_MIRRORS.includes(k)) && !KEEP_WHEN_ABSENT.has(k) && !(k in content) && k in db) { result.settings[k] = null; before.settings[k] = db[k]; }
                 if (rootId === 'personas' && Array.isArray(m.value.personas)) {
                     const ids = new Set(m.value.personas.map(p => p.id));
                     result.settings.personas = [...(db.personas ?? []).filter(p => ids.has(p.id)).map(p => m.value.personas.find(x => x.id === p.id)), ...m.value.personas.filter(p => !(db.personas ?? []).some(x => x.id === p.id))];

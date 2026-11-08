@@ -59,6 +59,10 @@ test('refresh reads the marks, tells the service this device once when it has no
     await m.refreshChatDeviceLabels()
     expect(calls).toEqual(['/chat-labels'])
     vi.unstubAllGlobals()
+    // After a sync apply the marks are read again only while a list shows them.
+    self = 'pc'; calls.length = 0; await m.refreshChatDeviceLabelsIfShown(); expect(calls).toEqual([])
+    const stop = m.chatDeviceLabels.subscribe(() => {}); await m.refreshChatDeviceLabelsIfShown(); expect(calls).toEqual(['/chat-labels']); stop()
+    calls.length = 0; await m.refreshChatDeviceLabelsIfShown(); expect(calls).toEqual([])
     fail = true; await m.refreshChatDeviceLabels()
     expect(get(m.chatDeviceLabels)).toEqual({ origin: {}, branch: {} })
     vi.doUnmock('./nasSync')

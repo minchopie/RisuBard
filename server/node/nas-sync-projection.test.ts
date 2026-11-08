@@ -240,6 +240,8 @@ test('dependency pins follow runtime semantics and carry stable secret refs: sam
     expect(Object.keys(pinsFor(pub(locked), charOf(pub(locked)), chatOf(pub(locked))))).toContain('pin:model-preset:mp-default')
     const none = f.database(); none.defaultModelBinding = locked.defaultModelBinding; none.modelPresets = locked.modelPresets; none.characters[0].chats[0].useModelPreset = true
     expect(Object.keys(pinsFor(pub(none), charOf(pub(none)), chatOf(pub(none))))).not.toContain('pin:model-preset:mp-default')
+    // Upstream 0.9.92 settings belong to their groups: skins apply with the theme, the sub default with the model presets.
+    expect([ownerOf('appSkins'), ownerOf('appSkinId'), ownerOf('subUseModelPresetByDefault')]).toEqual(['settings:theme', 'settings:theme', 'settings:model-presets'])
     // Upstream 0.9.92: main and sub regimes are chosen separately; each used regime is pinned, an unmixed chat keeps its old pins.
     const presets = [{ id: 'mp-main', name: 'm', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://m.example' } }, userValues: {} }, { id: 's', name: 's', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://s.example' } }, userValues: {} }]
     const mixed = (main: boolean, sub: boolean | undefined) => { const d = f.database(); Object.assign(d.characters[0].chats[0], { useModelPreset: main, subUseModelPreset: sub, modelBinding: { main: 'mp-main', sub: 's', separateAux: false, aux: {} } }); d.modelPresets = structuredClone(presets); return d }

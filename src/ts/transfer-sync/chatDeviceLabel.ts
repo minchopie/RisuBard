@@ -12,7 +12,11 @@ const MARK = /^\((?:pc|tablet|phone)\) /
 const DEFAULT_NAME = /^(?:New Chat|Chat) \d+(?: \(\d+\))?$/
 const empty = (): ChatDeviceLabels => ({ origin: {}, branch: {} })
 const store = writable<ChatDeviceLabels>(empty())
-export const chatDeviceLabels: Readable<ChatDeviceLabels> = { subscribe: store.subscribe }
+let viewers = 0
+/** The marks for the chat lists. Counting subscribers lets a sync apply skip the request when no list is showing them. */
+export const chatDeviceLabels: Readable<ChatDeviceLabels> = {
+    subscribe(run, invalidate) { viewers++; const stop = store.subscribe(run, invalidate); return () => { viewers--; stop() } },
+}
 
 /** Only the app's own screen may tell its server what device it is: the Android app (its embedded server) or a browser on the PC
  *  itself. A tablet browser using the PC's server must never register that server as a tablet. */
@@ -46,6 +50,8 @@ const pick = (value: unknown): Record<string, SyncDeviceKind> => {
 export function parseChatDeviceLabels(data: any): ChatDeviceLabels { return { origin: pick(data?.origin), branch: pick(data?.branch) } }
 
 let running: Promise<void> | null = null, again = false
+/** After a sync apply: read the marks again only while a chat list shows them (a list reads them itself when it opens). */
+export function refreshChatDeviceLabelsIfShown(): Promise<void> { return viewers > 0 ? refreshChatDeviceLabels() : Promise.resolve() }
 /** Reads the marks from the NAS sync service. Sync off or unreachable: no marks (names show as stored). */
 export function refreshChatDeviceLabels(): Promise<void> {
     if (running) { again = true; return running }

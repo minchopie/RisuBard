@@ -475,7 +475,7 @@
     <section data-current-chat-section class="border-b border-darkborderc pb-2">
         <div data-chat-file-header class="flex min-h-10 items-center gap-1">
             <div data-current-chat-title class="flex min-w-0 grow items-center px-1.5 py-2 text-textcolor">
-                <span class="truncate font-semibold">{activeChat?.name != null ? chatDisplayName(activeChat, $chatDeviceLabels) : language.newChat}</span>
+                <span class="truncate font-semibold">{activeChat?.name ?? language.newChat}</span>
             </div>
         </div>
     </section>
