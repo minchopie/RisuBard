@@ -90,20 +90,34 @@ export function baseName(title: string): string {
 
 export interface Described { kind: ContentKind; title: string; version: string }
 
-/** A prompt preset's display name from its file name (".risup", ".risupreset", ".preset.json", a trailing "_preset"). */
+/** A prompt preset's display name from its file name (".risup", ".risupreset", ".json", a trailing "_preset" / ".preset"). */
 export function presetTitle(fileName: string): string {
-    return fileName.replace(/\.(?:risup|risupreset|preset\.json)$/i, '').replace(/_preset$/i, '').trim()
+    return fileName.replace(/\.(?:risup|risupreset|json)$/i, '').replace(/[._]preset$/i, '').trim()
 }
-const isPresetFile = (lower: string) => lower.endsWith('.risup') || lower.endsWith('.risupreset') || lower.endsWith('.preset.json')
+/** A JSON file is a character card when it carries card fields; a prompt preset when it carries preset fields and no card fields. */
+export function jsonKind(data: any): 'character' | 'preset' | null {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+    if (data.spec || (data.data && typeof data.data === 'object') || 'char_name' in data || 'first_mes' in data) return 'character'
+    if (['promptTemplate', 'mainPrompt', 'jailbreak', 'presetVersion', 'prompt_order', 'NAISettings'].some(key => key in data)) return 'preset'
+    return null
+}
 
 /** What a picked file is: a character card (.charx/.json/.png with a card), a persona PNG or a prompt preset (.risup/.risupreset/.preset.json). */
 export async function describeFile(name: string, bytes: Uint8Array): Promise<Described> {
     const lower = name.toLowerCase()
-    if (isPresetFile(lower)) {
-        let title = presetTitle(name)
-        if (lower.endsWith('.json')) { const data = JSON.parse(new TextDecoder().decode(bytes)); if (typeof data?.name === 'string' && data.name.trim()) title = data.name.trim() }
+    if (lower.endsWith('.risup') || lower.endsWith('.risupreset')) {
+        const title = presetTitle(name)
         if (!title) throw new Error('프리셋 이름이 없어요.')
         return { kind: 'preset', title, version: versionIn(title) }
+    }
+    if (lower.endsWith('.json')) {
+        const data = JSON.parse(new TextDecoder().decode(bytes))
+        if (jsonKind(data) === 'preset') {
+            const title = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : presetTitle(name)
+            if (!title) throw new Error('프리셋 이름이 없어요.')
+            return { kind: 'preset', title, version: versionIn(title) }
+        }
+        return fromCard(data)
     }
     if (lower.endsWith('.charx')) {
         const files = unzipSync(bytes, { filter: file => file.name === 'card.json' })
@@ -111,7 +125,6 @@ export async function describeFile(name: string, bytes: Uint8Array): Promise<Des
         const card = JSON.parse(strFromU8(files['card.json']))
         return fromCard(card)
     }
-    if (lower.endsWith('.json')) return fromCard(JSON.parse(new TextDecoder().decode(bytes)))
     if (lower.endsWith('.png')) {
         const text = await readPngText(bytes, ['persona', 'ccv3', 'chara'])
         if (text.persona) {
@@ -167,16 +180,25 @@ const PRESET_DEVICE_FIELDS = ['openAIKey', 'forceReplaceUrl', 'forceReplaceUrl2'
 
 /** Imports a prompt preset with the app's own preset import. A preset with the same name is updated in place (same id, so chats
  *  bound to it keep it; this device's keys and addresses kept); otherwise it is added. Resolves to the preset's name. */
-async function applyPreset(fileName: string, bytes: Uint8Array): Promise<string> {
+/** Id of a preset added from a published item: the same on every device (sha256 of the key and the preset name, uuid-shaped), so
+ *  two devices that both import the same file end with the same prompt-presets content for NAS sync. */
+export async function publishedPresetId(key: string, name: string): Promise<string> {
+    const hex = await sha256Hex(new TextEncoder().encode(key + '\n' + name))
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}
+
+async function applyPreset(item: Pick<ContentItem, 'key' | 'fileName'>, bytes: Uint8Array): Promise<string> {
     const { database } = await app()
     const db = database.getDatabase()
     if (!Array.isArray(db.botPresets)) db.botPresets = []
     const before = db.botPresets.length
-    await database.importPreset({ name: fileName, data: bytes })
+    await database.importPreset({ name: item.fileName, data: bytes })
     if (db.botPresets.length !== before + 1) throw new Error('프롬프트 프리셋을 읽지 못했어요.')
     const added: any = db.botPresets[before]
+    // A SillyTavern preset is renamed "Imported ST Preset" by the app's import: name it after the published file instead.
+    if (added.name === 'Imported ST Preset' || added.name === 'Imported' || !added.name) added.name = presetTitle(item.fileName) || added.name || 'Imported'
     const index = db.botPresets.findIndex((preset, i) => i < before && preset?.name === added.name)
-    if (index < 0) return added.name
+    if (index < 0) { added.id = await publishedPresetId(item.key, added.name); return added.name }
     const existing: any = db.botPresets[index]
     for (const field of PRESET_DEVICE_FIELDS) if (!added[field] && existing[field]) added[field] = existing[field]
     added.id = existing.id
@@ -191,7 +213,7 @@ async function applyPreset(fileName: string, bytes: Uint8Array): Promise<string>
 export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<ContentDecision> {
     const { cards, globalApi, importTransaction, alert, session } = await app()
     if (item.kind === 'preset') {
-        const name = await applyPreset(item.fileName, bytes)
+        const name = await applyPreset(item, bytes)
         alert.notifySuccess(`프롬프트 프리셋 「${name}」를 가져왔어요.`)
         return 'applied'
     }

@@ -44,6 +44,8 @@ describe('content updates (client helpers)', () => {
         expect(await mod.describeFile('바드 프롬프트 젬 0.5.2 — Argon 단일 시스템 v1.0.0 r2.risup', new Uint8Array([1]))).toEqual({ kind: 'preset', title: '바드 프롬프트 젬 0.5.2 — Argon 단일 시스템 v1.0.0 r2', version: '0.5.2' })
         expect(await mod.describeFile('Gem_preset.risupreset', new Uint8Array([1]))).toEqual({ kind: 'preset', title: 'Gem', version: '' })
         expect(await mod.describeFile('x.preset.json', strToU8(JSON.stringify({ name: 'Gem 1.2', mainPrompt: 'm' })))).toEqual({ kind: 'preset', title: 'Gem 1.2', version: '1.2' })
+        expect(await mod.describeFile('Gem_preset.json', strToU8(JSON.stringify({ name: 'Gem', promptTemplate: [] })))).toEqual({ kind: 'preset', title: 'Gem', version: '' }) // the app's own export name
+        expect((await mod.describeFile('Bot.preset.json', strToU8(JSON.stringify({ spec: 'chara_card_v3', data: { name: 'Bot' } })))).kind).toBe('character') // content decides, not the name
         expect(mod.kindLabel('preset')).toBe('프롬프트 프리셋')
     })
     test('a prompt preset with the same name is updated in place (same id, this device\'s keys kept, the active one reloaded); a new name is added', async () => {
@@ -52,7 +54,7 @@ describe('content updates (client helpers)', () => {
         database.getDatabase.mockReturnValue(db)
         let next: any = { name: '바드 프롬프트 젬', mainPrompt: 'new', openAIKey: '', proxyKey: 'file-proxy' }
         database.importPreset.mockImplementation(async () => { db.botPresets.push({ ...next, id: 'fresh' }) })
-        const item = { kind: 'preset', title: '바드 프롬프트 젬', fileName: 'gem.risup' } as any
+        const item = { key: 'preset:바드 프롬프트 젬', kind: 'preset', title: '바드 프롬프트 젬', fileName: 'gem.risup' } as any
         expect(await mod.applyItem(item, new Uint8Array([1]))).toBe('applied')
         expect(db.botPresets).toEqual([{ id: 'p0', name: '다른 것' }, { id: 'p1', name: '바드 프롬프트 젬', mainPrompt: 'new', openAIKey: 'device-key', proxyKey: 'file-proxy' }])
         expect(database.importPreset).toHaveBeenCalledWith({ name: 'gem.risup', data: new Uint8Array([1]) })
@@ -60,6 +62,13 @@ describe('content updates (client helpers)', () => {
         database.changeToPreset.mockClear(); next = { name: '새 프리셋 0.5.2', mainPrompt: 'x' }
         expect(await mod.applyItem(item, new Uint8Array([2]))).toBe('applied')
         expect(db.botPresets.map((p: any) => p.name)).toEqual(['다른 것', '바드 프롬프트 젬', '새 프리셋 0.5.2']); expect(database.changeToPreset).not.toHaveBeenCalled()
+        // A preset added from a published item has the same id on every device (no NAS divergence), never the import's random one.
+        expect(db.botPresets[2].id).toBe(await mod.publishedPresetId('preset:바드 프롬프트 젬', '새 프리셋 0.5.2')); expect(db.botPresets[2].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+        expect(await mod.publishedPresetId('preset:다른 배포', '새 프리셋 0.5.2')).not.toBe(db.botPresets[2].id)
+        // An ST conversion takes the published file's name, so two ST presets never replace each other.
+        next = { name: 'Imported ST Preset' }
+        await mod.applyItem({ ...item, fileName: 'st one.json' }, new Uint8Array([4])); await mod.applyItem({ ...item, fileName: 'st two.json' }, new Uint8Array([5]))
+        expect(db.botPresets.map((p: any) => p.name).slice(3)).toEqual(['st one', 'st two'])
         database.importPreset.mockImplementation(async () => {}) // unreadable file: nothing added
         await expect(mod.applyItem(item, new Uint8Array([3]))).rejects.toThrow(/프롬프트 프리셋/)
     })
