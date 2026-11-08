@@ -10,6 +10,7 @@ const path = require('node:path');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { createHash, randomUUID } = require('node:crypto');
+const { createAppCodeWatch } = require('./app-code-watch.cjs');
 
 const NAMESPACE = '.risubard-content-updates/';
 const RECORDS = 'items';
@@ -62,7 +63,9 @@ function recordNames(xml) {
     return [...names].sort();
 }
 
-function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = () => '' }) {
+function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = () => '', appCode: appCodeOptions = {} }) {
+    // A newer app code patch on the NAS, downloaded in the background for the loader's next start (app-code-watch.cjs).
+    const appCode = createAppCodeWatch({ dataRoot, secrets, route, ...appCodeOptions });
     const root = path.join(dataRoot, 'content-updates');
     const statePath = path.join(root, 'state.json');
     const scratch = path.join(root, 'tmp');
@@ -273,9 +276,11 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
             try { meta = JSON.parse(decodeURIComponent(String(req.headers['x-content-meta'] ?? ''))); } catch { throw new Error('배포 정보를 읽지 못했어요.'); }
             res.json(await exclusive(() => publish(req, meta)));
         });
+        routeOf('post', '/app-code', async (req, res) => res.json(req.body?.check === true ? await appCode.check() : appCode.status()));
+        appCode.start();
     }
 
-    return { overview, decide, download, publish, registerRoutes, readState };
+    return { overview, decide, download, publish, registerRoutes, readState, appCode };
 }
 
 module.exports = { createContentUpdates, validItem, validKey, recordName, recordNames, NAMESPACE, MAX_ITEMS, READ_ITEMS };

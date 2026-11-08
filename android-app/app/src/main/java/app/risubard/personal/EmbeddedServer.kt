@@ -121,6 +121,9 @@ internal object EmbeddedServer {
         }
     }
 
+    /** App code update: stops the server (graceful: its data is flushed) so the next start lets the loader install a downloaded patch. */
+    @Synchronized fun shutdown() = stop()
+
     private fun stop() {
         val child = process
         try {

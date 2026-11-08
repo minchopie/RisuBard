@@ -148,7 +148,7 @@ class MainActivity : Activity() {
                     origin = session.origin
                     transfers?.removeBridge(); transfers?.destroy()
                     transferPageLocal = false
-                    transfers = PlaySetController(this, webView, session.origin, { transferPageLocal }, stagedDownloads, ::requestDownload).also { it.notifier = notifier; it.configure() }
+                    transfers = PlaySetController(this, webView, session.origin, { transferPageLocal }, stagedDownloads, ::requestDownload, ::restartServer).also { it.notifier = notifier; it.configure() }
                     refreshRecovery()
                     CookieManager.getInstance().setCookie(session.origin, session.cookie) { accepted ->
                         if (isDestroyed) return@setCookie
@@ -162,6 +162,15 @@ class MainActivity : Activity() {
                 if (!isDestroyed) { connecting = false; retry.isEnabled = true; message.text = error.message ?: "시작 실패" }
             } } finally { startupNetwork.stop() }
         }
+    }
+    /** App code update (content-updates): the page saved and asked to apply a downloaded code patch. The server stops
+     *  (graceful shutdown) and starts again on the same worker; its loader installs the patch, then the page reloads. */
+    private fun restartServer() {
+        if (isDestroyed || connecting) return
+        webView.loadUrl("about:blank")
+        worker.execute { runCatching { EmbeddedServer.shutdown() } }
+        connect()
+        message.text = "새 버전을 적용하고 있어요…"
     }
     private fun requestDownload(target: NativeDownload.Target) {
         check(downloads.request(target)) { "이미 저장 중인 파일이 있어요. 끝난 뒤 다시 시도해 주세요." }

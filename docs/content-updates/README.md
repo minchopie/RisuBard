@@ -23,9 +23,20 @@
 - 기기: `<데이터>/content-updates/state.json` — 배포 이름별 이 기기의 결정(applied/declined/published, sha256, 시각). 임시 파일은 `content-updates/tmp/`에 두고 끝나면 지운다.
 - 서버 경로: `/api/play-transfer/content-updates/{overview,decide,fetch,publish}` (기존 전송 인증·활성 세션 검사). 올리기 본문은 `application/x-risubard-content`로 보내 express.raw가 메모리에 담지 않고 파일로 흘려 쓴다.
 
+## 앱 코드 업데이트 받아 두기 (0.9.92-ver2)
+
+앱 코드 업데이트(app-update 모듈, NAS `.risubard-app-updates/`) 자체는 앱 시작 때 로더가 적용한다. 이 모듈은 그 사이를 채운다.
+
+- 서버(`server/node/content-updates/app-code-watch.cjs`): 로더가 도는 곳(Android 임베디드 런타임, Windows 포터블 패키지, `RISUBARD_APP_UPDATE=0`이 아닐 때)에서만 켜진다. 시작 90초 뒤, 그 뒤 30분마다 `remote.latest()`를 확인하고, 지금보다 새롭고 런타임 지문이 같고 시작 때 두 번 실패한 패치가 아니면 로더 캐시에 받아 둔다: `<앱>/.app-updates/download-<uuid>.part` → `ready-<sha256>.zip`, 그다음 `ready.json`. 이전에 받아 둔 다른 `ready-*.zip`은 지운다. 확인은 한 번에 하나, 10분 제한. 런타임 지문이 다르면 받지 않고 `full-package-required`로만 알린다. 코드를 설치하거나 사용자 데이터를 건드리지 않는다.
+- 경로: `POST /api/play-transfer/content-updates/app-code` `{ check }` → `{ enabled, current, ready, state, version?, error? }`. `check: true`면 확인을 마친 뒤 답한다(클라이언트는 상태만 묻는다).
+- 클라이언트(`src/ts/content-updates/appCodeUpdate.ts`, `startContentUpdates`가 시작): 시작 20초 뒤, 5분마다, 앱이 다시 보일 때 상태를 묻는다. 받아 둔 판이 있고 바쁘지 않으면(위 「묻기」와 같은 조건) 버전마다 한 번 「새 버전이 준비됐어요. 지금 적용할까요? [지금 적용] [나중에]」. 창을 답 없이 닫으면 다음 확인 때 다시 묻는다.
+  - 지금 적용(Android 앱): `risubard-native-background` 이벤트로 앱의 백그라운드 저장을 시작하고 2초 기다린 뒤 네이티브 `app.restart`를 부른다. 앱은 응답을 보낸 뒤 화면을 비우고 서버를 정상 종료(stdin 닫기 → 데이터 저장 후 종료)한 다음 다시 시작한다. 로더가 받아 둔 코드를 설치하고 화면이 다시 연결된다. `app.restart`가 없는 APK면 「앱을 완전히 닫았다가 다시 켜면 적용돼요」.
+  - PC·브라우저: 「다시 켜면 적용돼요」만 알린다.
+- 네이티브(transfer-sync 모듈 파일): `PlaySetController`의 `app.restart`, `MainActivity.restartServer()`, `EmbeddedServer.shutdown()`. 네이티브가 바뀌므로 런타임 지문이 바뀌어, 0.9.92-ver2는 모든 기기에 전체 APK·PC 패키지 설치가 한 번 필요하다.
+
 ## 모듈 구성
 
-- 소유 파일(`features.json` content-updates): `server/node/content-updates/content-updates.cjs`(+test), `src/ts/content-updates/contentUpdates.ts`(+test), `src/lib/Setting/Pages/ContentUpdatesPanel.svelte`, 이 문서.
+- 소유 파일(`features.json` content-updates): `server/node/content-updates/content-updates.cjs`(+test), `src/ts/content-updates/contentUpdates.ts`(+test), `src/lib/Setting/Pages/ContentUpdatesPanel.svelte`, 이 문서, 0.9.92-ver2부터 `server/node/content-updates/app-code-watch.cjs`(+test)·`src/ts/content-updates/appCodeUpdate.ts`(+test). 앱 코드 확인 경로는 같은 `registerRoutes`, 클라이언트는 `startContentUpdates`에서 시작하므로 연결 줄은 늘지 않는다.
 - 연결(host-bridges): `server/node/server.cjs`에 경로 등록 1곳, `src/ts/bootstrap.ts`에 시작 1줄. 설정 화면 연결은 transfer-sync의 `TransferPanel.svelte` 2줄.
 - 앱 데이터 형식·NAS 동기화 작업공간·기존 전송 프로토콜은 바꾸지 않는다. 캐릭터 적용은 원작 가져오기·업데이트 흐름만 쓴다.
 

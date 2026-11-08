@@ -241,7 +241,7 @@ let running = false
 let lastCheck = 0
 let started = false
 
-async function busy(): Promise<boolean> {
+export async function busy(): Promise<boolean> {
     const { stores, generation, session } = await app()
     // An import in progress or waiting in rollback recovery has its own dialog: finish that first.
     return !get(stores.loadedStore) || get(transferBusy) || get(generation.isAnyGenerating) || get(stores.alertStore).type !== 'none'
@@ -302,6 +302,8 @@ export function startContentUpdates(available: boolean = isNodeServer) {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') void checkContentUpdates()
     })
+    // A newer app code patch the server downloaded from the NAS: "지금 적용/나중에" (appCodeUpdate.ts).
+    void import('./appCodeUpdate').then(m => m.startAppCodeUpdates()).catch(error => console.warn('[AppCodeUpdate] did not start:', String(error?.message ?? error)))
 }
 
 // ── Publishing (settings) ──

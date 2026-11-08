@@ -83,9 +83,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/EmbeddedServer.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "51ad2bbff527098803252868e59b30a412b4ceb1b6e6965e131addc88f93146f",
-      "contentSha256": "51ad2bbff527098803252868e59b30a412b4ceb1b6e6965e131addc88f93146f",
-      "bytes": 9884
+      "sha256": "b63ac1480526f91f9aa52007e5bd738e62bb120523d59b40cb95e2641105f243",
+      "contentSha256": "b63ac1480526f91f9aa52007e5bd738e62bb120523d59b40cb95e2641105f243",
+      "bytes": 10066
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/InstallCredential.kt",
@@ -99,9 +99,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/MainActivity.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "402742ad32f1d6bf286129a9101c9287e33c5d953f71586b5bae767f1dd5dba4",
-      "contentSha256": "402742ad32f1d6bf286129a9101c9287e33c5d953f71586b5bae767f1dd5dba4",
-      "bytes": 18772
+      "sha256": "3bd7cf2da72331fd205ca95640eabd3f979889153bf592bbbae77083ab1c1a2a",
+      "contentSha256": "3bd7cf2da72331fd205ca95640eabd3f979889153bf592bbbae77083ab1c1a2a",
+      "bytes": 19316
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/NativeDownload.kt",
@@ -131,9 +131,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetController.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "a8c38811ce28f7786b4969d6e56f57e66e7773830c820d635833293217d0b10f",
-      "contentSha256": "a8c38811ce28f7786b4969d6e56f57e66e7773830c820d635833293217d0b10f",
-      "bytes": 26775
+      "sha256": "80cd1f66da3487d45fbcb0fd4dcc35e3ce79afe11388657e410aa2fce586c3f0",
+      "contentSha256": "80cd1f66da3487d45fbcb0fd4dcc35e3ce79afe11388657e410aa2fce586c3f0",
+      "bytes": 27027
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/PlaySetNetwork.kt",
@@ -2851,8 +2851,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "412ddba57834038e0ee2267b2573dc621fa0b64c98a53ba6accdf99b65117127",
-      "contentSha256": "412ddba57834038e0ee2267b2573dc621fa0b64c98a53ba6accdf99b65117127",
+      "sha256": "60645e878584f415426e751d63452b98705b10f86af00ea13122747c946821f0",
+      "contentSha256": "60645e878584f415426e751d63452b98705b10f86af00ea13122747c946821f0",
       "bytes": 6476
     },
     {
@@ -4192,6 +4192,14 @@
       "bytes": 2006
     },
     {
+      "path": "patchnote/0.9.92-ver2.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "45fb63395cfb8b19aab890318604f3f92f2682e86781dab49eb0093786b413ac",
+      "contentSha256": "45fb63395cfb8b19aab890318604f3f92f2682e86781dab49eb0093786b413ac",
+      "bytes": 1914
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4363,9 +4371,9 @@
       "path": "server/node/content-updates/content-updates.cjs",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "38a75fc45268c840bdf7af4678a2aaa0a08c9ac1588ac4ec81ab6606dd9dff5b",
-      "contentSha256": "38a75fc45268c840bdf7af4678a2aaa0a08c9ac1588ac4ec81ab6606dd9dff5b",
-      "bytes": 18260
+      "sha256": "5a7de55fe1f0d237af907413e9ccf0381bdec4488a918f00f845ef81502ad2e4",
+      "contentSha256": "5a7de55fe1f0d237af907413e9ccf0381bdec4488a918f00f845ef81502ad2e4",
+      "bytes": 18735
     },
     {
       "path": "server/node/content-updates/content-updates.test.ts",
@@ -4379,9 +4387,9 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "a9d9e4121b3be3853012ade391b931ea4ce62b441e07b4dfa27c84edd92b333f",
-      "contentSha256": "a9d9e4121b3be3853012ade391b931ea4ce62b441e07b4dfa27c84edd92b333f",
-      "bytes": 18777
+      "sha256": "2d8a299bf1fd0e1ebba46002f74b749a351e49ee772e79d7d88543117508d626",
+      "contentSha256": "2d8a299bf1fd0e1ebba46002f74b749a351e49ee772e79d7d88543117508d626",
+      "bytes": 19062
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
@@ -4403,9 +4411,41 @@
       "path": "docs/content-updates/README.md",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "9c9b738826599e44a7bba801d8882d0e0244456bf38a1f9428c7e0ceb8a8e38a",
-      "contentSha256": "9c9b738826599e44a7bba801d8882d0e0244456bf38a1f9428c7e0ceb8a8e38a",
-      "bytes": 6768
+      "sha256": "d35dea7ac38adf5945348ce2168efc4ce889c009f8b24d6994709f815fcf35ac",
+      "contentSha256": "d35dea7ac38adf5945348ce2168efc4ce889c009f8b24d6994709f815fcf35ac",
+      "bytes": 9523
+    },
+    {
+      "path": "server/node/content-updates/app-code-watch.cjs",
+      "module": "content-updates",
+      "kind": "files",
+      "sha256": "bdb645e6872aacdb4198be15e3a56471c882d61e63d07888cae476423074b542",
+      "contentSha256": "bdb645e6872aacdb4198be15e3a56471c882d61e63d07888cae476423074b542",
+      "bytes": 5642
+    },
+    {
+      "path": "server/node/content-updates/app-code-watch.test.ts",
+      "module": "content-updates",
+      "kind": "files",
+      "sha256": "7c517125decd0dbbcaf27f4d60c00e44c872ad40f07146c351a509bb5493b7cd",
+      "contentSha256": "7c517125decd0dbbcaf27f4d60c00e44c872ad40f07146c351a509bb5493b7cd",
+      "bytes": 6138
+    },
+    {
+      "path": "src/ts/content-updates/appCodeUpdate.ts",
+      "module": "content-updates",
+      "kind": "files",
+      "sha256": "609a3f1b54c63c712e8c6b4526717d57d10a476f6614397c76ce649a8098e292",
+      "contentSha256": "609a3f1b54c63c712e8c6b4526717d57d10a476f6614397c76ce649a8098e292",
+      "bytes": 4402
+    },
+    {
+      "path": "src/ts/content-updates/appCodeUpdate.test.ts",
+      "module": "content-updates",
+      "kind": "files",
+      "sha256": "58d89cc763aa1321ae4595a036a268b765ae941cf5a59c23e148598d688fb152",
+      "contentSha256": "58d89cc763aa1321ae4595a036a268b765ae941cf5a59c23e148598d688fb152",
+      "bytes": 4699
     }
   ],
   "modules": [
@@ -4867,7 +4907,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "3f4c52ec2f8663536bc427405d494d970f51b1b6c7fe2f6a805b70f82a61243e"
+        "sha256": "a3b1f79b830eda71bb332ac888326531e2f144473cd464ed35e2fa36e340ceeb"
       }
     },
     {
@@ -5031,7 +5071,8 @@
         "patchnote/0.9.91-ver1.md",
         "patchnote/0.9.91-ver2.md",
         "patchnote/0.9.91-ver3.md",
-        "patchnote/0.9.92-ver1.md"
+        "patchnote/0.9.92-ver1.md",
+        "patchnote/0.9.92-ver2.md"
       ],
       "patch": null
     },
@@ -5097,7 +5138,11 @@
         "src/ts/content-updates/contentUpdates.ts",
         "src/ts/content-updates/contentUpdates.test.ts",
         "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
-        "docs/content-updates/README.md"
+        "docs/content-updates/README.md",
+        "server/node/content-updates/app-code-watch.cjs",
+        "server/node/content-updates/app-code-watch.test.ts",
+        "src/ts/content-updates/appCodeUpdate.ts",
+        "src/ts/content-updates/appCodeUpdate.test.ts"
       ],
       "patch": null
     }
@@ -5121,7 +5166,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "7fa20de440303aebe2bf624c64b663bd004b0d421478b10ff8278fcba21f5e95"
+      "sha256": "0320d9f23717a027a71270b91b17def3e848eb3423e87be0e501e254648dbb9f"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5184,8 +5229,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.81/distribution.patch",
-          "sourceSha256": "3f4c52ec2f8663536bc427405d494d970f51b1b6c7fe2f6a805b70f82a61243e",
-          "sha256": "a043b0489b92dd0d281670a4deb4c8bac41f5c7ec927eaed5cf6d1cfa050fcd5"
+          "sourceSha256": "a3b1f79b830eda71bb332ac888326531e2f144473cd464ed35e2fa36e340ceeb",
+          "sha256": "c6bf7e989748e5dbfe15416ce84f874174df5fce203edd18ee66440e5829609c"
         },
         {
           "module": "host-bridges",
@@ -5274,8 +5319,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.84/distribution.patch",
-          "sourceSha256": "3f4c52ec2f8663536bc427405d494d970f51b1b6c7fe2f6a805b70f82a61243e",
-          "sha256": "d4e1106440316e28cf73ed456fd850f60cd96f845a4db573db33b2e4bb854cf1"
+          "sourceSha256": "a3b1f79b830eda71bb332ac888326531e2f144473cd464ed35e2fa36e340ceeb",
+          "sha256": "c10b4395a921f6ae905a5b607350e62f5be490985a3f01fe6b8d91e6e609a598"
         },
         {
           "module": "lore-lua",
@@ -5432,8 +5477,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.86/distribution.patch",
-          "sourceSha256": "3f4c52ec2f8663536bc427405d494d970f51b1b6c7fe2f6a805b70f82a61243e",
-          "sha256": "9d586bee54ff2e405b4ccacf5c7bc46fa1ad7b9732242be37030759293699dd0"
+          "sourceSha256": "a3b1f79b830eda71bb332ac888326531e2f144473cd464ed35e2fa36e340ceeb",
+          "sha256": "d44588ff62ad92428ce066bc2a925f4e44c8d32c314f3bcfacff8ea32b99bcc8"
         },
         {
           "module": "lore-lua",
@@ -5607,8 +5652,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.89/distribution.patch",
-          "sourceSha256": "3f4c52ec2f8663536bc427405d494d970f51b1b6c7fe2f6a805b70f82a61243e",
-          "sha256": "b28b3a8635a0e783883feb6815cfdcde9a184c97aaf0070eff37422f998fdcbe"
+          "sourceSha256": "a3b1f79b830eda71bb332ac888326531e2f144473cd464ed35e2fa36e340ceeb",
+          "sha256": "ede3c8e30e8987d64002802a6be62b754df002efd954c04ed8356c9e9d967dcd"
         },
         {
           "module": "lore-lua",
@@ -5796,8 +5841,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.90/distribution.patch",
-          "sourceSha256": "3f4c52ec2f8663536bc427405d494d970f51b1b6c7fe2f6a805b70f82a61243e",
-          "sha256": "6da522a795ebe8813abbed6f77833cb71208da75f61453c458e438956755c348"
+          "sourceSha256": "a3b1f79b830eda71bb332ac888326531e2f144473cd464ed35e2fa36e340ceeb",
+          "sha256": "e071b5d1ac537685e6e726d12d12d95656d089e4f86f23bab8a66f0fe2480ba8"
         },
         {
           "module": "lore-lua",
@@ -5991,8 +6036,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.91/distribution.patch",
-          "sourceSha256": "3f4c52ec2f8663536bc427405d494d970f51b1b6c7fe2f6a805b70f82a61243e",
-          "sha256": "4f0526b1eb8d0c6cbccdfe93f39f56d2c25d6514224154fc7af17a2b357d923c"
+          "sourceSha256": "a3b1f79b830eda71bb332ac888326531e2f144473cd464ed35e2fa36e340ceeb",
+          "sha256": "a54b3d181aba97be83114d5f927a24058605a0c4acb9c9aa5883bd8dbbe4ef9d"
         },
         {
           "module": "lore-lua",
@@ -6189,8 +6234,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
-          "sourceSha256": "3f4c52ec2f8663536bc427405d494d970f51b1b6c7fe2f6a805b70f82a61243e",
-          "sha256": "8c42e665ce0949dd5da65ea41c0ceb30692357284af3521cc6d665ba5c160ce6"
+          "sourceSha256": "a3b1f79b830eda71bb332ac888326531e2f144473cd464ed35e2fa36e340ceeb",
+          "sha256": "7e833fa2a250bb18d5024c62c890c6cf12fdaffd270c63d279d45c0568d3aca8"
         },
         {
           "module": "lore-lua",

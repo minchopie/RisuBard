@@ -18,7 +18,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 /** Local-origin RPC. Archive reader/writer handles use one worker; independent receive streams use UUID files. */
-class PlaySetController(private val activity: Activity, private val webView: android.webkit.WebView, private val allowedOrigin: String, private val local: () -> Boolean, private val downloads: NativeDownload.Staging, private val saveDownload: (NativeDownload.Target) -> Unit) {
+class PlaySetController(private val activity: Activity, private val webView: android.webkit.WebView, private val allowedOrigin: String, private val local: () -> Boolean, private val downloads: NativeDownload.Staging, private val saveDownload: (NativeDownload.Target) -> Unit, private val restartServer: () -> Unit = {}) {
     private val main = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor()
     private val networkExecutor = Executors.newFixedThreadPool(2)
@@ -263,6 +263,8 @@ class PlaySetController(private val activity: Activity, private val webView: and
         "identity" -> identityData()
         "network.start" -> { ensureReceivers(false); if (nativeNetwork.granted()) nativeNetwork.start(); null }
         "wifi.ssid" -> nativeNetwork.info()
+        // App code update (content-updates): reply first, then restart the embedded server on the main thread.
+        "app.restart" -> { main.postDelayed({ if (!destroyed) restartServer() }, 300); null }
         "wifi.permission" -> nativeNetwork.requestPermission()
         "notify.status" -> notifier?.status() ?: "denied"
         "notify.permission" -> notifier?.request() ?: "denied"
