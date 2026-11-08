@@ -39,9 +39,7 @@ test('ownership is disjoint and total over the real Database interface; the pres
     for (const key of LEGACY_OWNED) expect(ownerOf(key), `${key} must stay owned by a settings group`).toMatch(/^settings:/)
     // mobileMessageActionsInline: upstream v0.9.84 display toggle, declared device-local ahead of that Database interface
     // so the fork assembled on an older upstream never publishes it as an unknown settings root.
-    const known = new Set([...keys, ...MIRROR, ...LEGACY_OWNED, 'risuPlaySets', 'formatversion', 'personaEnabledModules', 'hypaV3Settings', 'pluginDevelopMode', 'mobileMessageActionsInline',
-        // upstream v0.9.92 keys, grouped ahead of that Database interface (skins with the theme, sub default with the model presets)
-        'appSkins', 'appSkinId', 'subUseModelPresetByDefault'])
+    const known = new Set([...keys, ...MIRROR, ...LEGACY_OWNED, 'risuPlaySets', 'formatversion', 'personaEnabledModules', 'hypaV3Settings', 'pluginDevelopMode', 'mobileMessageActionsInline'])
     const stale = [...Object.values(SETTINGS_GROUPS).flat(), ...DEVICE_LOCAL].filter(k => !known.has(k))
     expect(stale).toEqual([])
     expect(ownerOf('nodeOnlyModelModeLock')).toBe('settings:model-presets'); expect(ownerOf('nodeOnlyScrollButtonType')).toBe('local')
@@ -242,8 +240,9 @@ test('dependency pins follow runtime semantics and carry stable secret refs: sam
     expect(Object.keys(pinsFor(pub(locked), charOf(pub(locked)), chatOf(pub(locked))))).toContain('pin:model-preset:mp-default')
     const none = f.database(); none.defaultModelBinding = locked.defaultModelBinding; none.modelPresets = locked.modelPresets; none.characters[0].chats[0].useModelPreset = true
     expect(Object.keys(pinsFor(pub(none), charOf(pub(none)), chatOf(pub(none))))).not.toContain('pin:model-preset:mp-default')
-    // Upstream 0.9.92 settings belong to their groups: skins apply with the theme, the sub default with the model presets.
-    expect([ownerOf('appSkins'), ownerOf('appSkinId'), ownerOf('subUseModelPresetByDefault')]).toEqual(['settings:theme', 'settings:theme', 'settings:model-presets'])
+    // Upstream 0.9.92 keys stay their own settings roots, as on every earlier version (grouping them would make old and new devices
+    // project the theme / model-presets groups differently).
+    expect([ownerOf('appSkins'), ownerOf('appSkinId'), ownerOf('subUseModelPresetByDefault')]).toEqual(['settings:appSkins', 'settings:appSkinId', 'settings:subUseModelPresetByDefault'])
     // Upstream 0.9.92: main and sub regimes are chosen separately; each used regime is pinned, an unmixed chat keeps its old pins.
     const presets = [{ id: 'mp-main', name: 'm', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://m.example' } }, userValues: {} }, { id: 's', name: 's', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://s.example' } }, userValues: {} }]
     const mixed = (main: boolean, sub: boolean | undefined) => { const d = f.database(); Object.assign(d.characters[0].chats[0], { useModelPreset: main, subUseModelPreset: sub, modelBinding: { main: 'mp-main', sub: 's', separateAux: false, aux: {} } }); d.modelPresets = structuredClone(presets); return d }
