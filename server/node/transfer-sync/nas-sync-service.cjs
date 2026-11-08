@@ -398,7 +398,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         // head it closes, so only first parents count; a deletion never starts a line).
         const rootOf = key => {
             if (!roots.has(key)) {
-                let ids = []; try { ids = [...s.graph.branchSegments(key).keys()]; } catch {}
+                const ids = [], seen = new Set(), stack = [...s.graph.heads(key)];
+                while (stack.length) { const id = stack.pop(); if (seen.has(id)) continue; seen.add(id); const r = s.graph.get(id); if (!r) continue; ids.push(id); stack.push(...r.parents); }
                 const next = new Map();
                 for (const id of ids) { const r = s.graph.get(id), parent = r.parents[0]; if (parent && !r.tombstone) next.set(parent, (next.get(parent) ?? 0) + 1); }
                 roots.set(key, { ids, next });

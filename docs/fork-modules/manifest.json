@@ -1011,9 +1011,9 @@
       "path": "server/node/nas-sync-projection.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "dd9b2233e689d91d2428d9fbf725f38a6ca008172f6ec8f96cde625e844fe350",
-      "contentSha256": "dd9b2233e689d91d2428d9fbf725f38a6ca008172f6ec8f96cde625e844fe350",
-      "bytes": 34486
+      "sha256": "58b6ca2ae772bb6f268b01e6a8491224fe72b23055b16b8c4aad77cf47f5c56e",
+      "contentSha256": "58b6ca2ae772bb6f268b01e6a8491224fe72b23055b16b8c4aad77cf47f5c56e",
+      "bytes": 36720
     },
     {
       "path": "server/node/nas-sync-reconcile.test.ts",
@@ -1251,9 +1251,9 @@
       "path": "server/node/transfer-sync/nas-sync-projection.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "cc31f6fdcc906977fa7d25b7e6a953c145e0070aa0cb743eb1ddb6b6a2628515",
-      "contentSha256": "cc31f6fdcc906977fa7d25b7e6a953c145e0070aa0cb743eb1ddb6b6a2628515",
-      "bytes": 36123
+      "sha256": "2f958b375e6b99e4a93634cdeb3d02b28ec9852dcbcf1635373362a7a90a19c6",
+      "contentSha256": "2f958b375e6b99e4a93634cdeb3d02b28ec9852dcbcf1635373362a7a90a19c6",
+      "bytes": 36631
     },
     {
       "path": "server/node/transfer-sync/nas-sync-reconcile.cjs",
@@ -1275,9 +1275,9 @@
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "1a95a6f732ce05cd55458e016e1ec9220aa551458b89b68a08ceab49ed626f1b",
-      "contentSha256": "1a95a6f732ce05cd55458e016e1ec9220aa551458b89b68a08ceab49ed626f1b",
-      "bytes": 152708
+      "sha256": "5e391a531a411c733843ac23ec11eebb916a4193a9cbde3cfb5e1b912bb10f5a",
+      "contentSha256": "5e391a531a411c733843ac23ec11eebb916a4193a9cbde3cfb5e1b912bb10f5a",
+      "bytes": 152890
     },
     {
       "path": "server/node/transfer-sync/nas-sync-share.cjs",
@@ -1507,9 +1507,9 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "c3b5c884c32d2d73fbba1d0fedf9409ba5cd3b1933df3a4f63500610d05cccd6",
-      "contentSha256": "c3b5c884c32d2d73fbba1d0fedf9409ba5cd3b1933df3a4f63500610d05cccd6",
-      "bytes": 46787
+      "sha256": "681379fdf88e90799c46455a885aa67256c45733efcb315a41efd47f9b05dc57",
+      "contentSha256": "681379fdf88e90799c46455a885aa67256c45733efcb315a41efd47f9b05dc57",
+      "bytes": 47113
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -1619,9 +1619,9 @@
       "path": "src/ts/transfer-sync/nasSync.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "5f764d3a783c7f9e1d81e297959f45a75065a875c5109d51a8e81497af68dc08",
-      "contentSha256": "5f764d3a783c7f9e1d81e297959f45a75065a875c5109d51a8e81497af68dc08",
-      "bytes": 51238
+      "sha256": "4fa762620f16c638231223ff8709204787d1190453b999cb7238b06dcfc73fc2",
+      "contentSha256": "4fa762620f16c638231223ff8709204787d1190453b999cb7238b06dcfc73fc2",
+      "bytes": 51391
     },
     {
       "path": "src/ts/transfer-sync/nasSyncCoordinator.ts",
@@ -2771,9 +2771,9 @@
       "path": "src/lib/Setting/Pages/LocalAISettings.svelte",
       "module": "legacy-local-ai",
       "kind": "files",
-      "sha256": "207dac7ac528f767a64e8319665b7bf111568968ddc553a37292144151a887d9",
-      "contentSha256": "207dac7ac528f767a64e8319665b7bf111568968ddc553a37292144151a887d9",
-      "bytes": 6067
+      "sha256": "a47e4eebd181b62f55c9f6ac38d1a377b7ae1bab3d4f08ac2c8adc916e283f23",
+      "contentSha256": "a47e4eebd181b62f55c9f6ac38d1a377b7ae1bab3d4f08ac2c8adc916e283f23",
+      "bytes": 6090
     },
     {
       "path": "src/lib/Setting/Pages/LocalAISettings.test.ts",
@@ -4395,9 +4395,9 @@
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "d5dd8c3057a5bf74a02032e44e10797bfd312922bdce7648d944d539925338ce",
-      "contentSha256": "d5dd8c3057a5bf74a02032e44e10797bfd312922bdce7648d944d539925338ce",
-      "bytes": 7103
+      "sha256": "af83b2431ea1581a94f2d2c176815d48c2dc903ba360b716df22605f4195416b",
+      "contentSha256": "af83b2431ea1581a94f2d2c176815d48c2dc903ba360b716df22605f4195416b",
+      "bytes": 7183
     },
     {
       "path": "docs/content-updates/README.md",
@@ -5121,7 +5121,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "ced45caa7bdfc8ae8d06bc2f0c58311e75371e909f7d5033ede49f3dbffe6b8c"
+      "sha256": "63483f7a37308f8500aedd0331ced5692217d2814eae79e49edba7357e073578"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -6273,7 +6273,8 @@
         ],
         "src/lib/ChatScreens/Chat.svelte": [
           "onsubmitcapture={handleFormTriggerWithin}",
-          "mobileMessageActionsInline"
+          "mobileMessageActionsInline",
+          "data-skin-part=\"message-card\""
         ],
         "src/ts/viewportHeight.ts": [
           "'focusout'",
@@ -6317,7 +6318,8 @@
           "setWikiEventStoryTimes"
         ],
         "src/App.svelte": [
-          "CharacterUpdateDialog"
+          "CharacterUpdateDialog",
+          "data-skin-part=\"app-shell\""
         ],
         "server/node/risubard-markdown-wiki.ts": [
           "setDocumentGrade",
@@ -6340,6 +6342,9 @@
         "server/node/risubard-memory-save.ts": [
           "Promise.allSettled([",
           "await Promise.all(entries.map(read))"
+        ],
+        "src/ts/process/request/modelPresetBinding.ts": [
+          "subUseModelPreset"
         ]
       }
     }

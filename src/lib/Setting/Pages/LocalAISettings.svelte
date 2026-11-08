@@ -78,7 +78,7 @@
 {/if}
 
 <style>
-    .local-ai { padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .75rem; min-width: 0; }
+    .local-ai { padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: var(--risu-radius-xl, .75rem); min-width: 0; }
     h2 { font-size: 1.1rem; font-weight: 650; }
     p { margin: .65rem 0; line-height: 1.6; overflow-wrap: anywhere; }
     .controls, .limits { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; margin: 1rem 0; }

@@ -240,6 +240,18 @@ test('dependency pins follow runtime semantics and carry stable secret refs: sam
     expect(Object.keys(pinsFor(pub(locked), charOf(pub(locked)), chatOf(pub(locked))))).toContain('pin:model-preset:mp-default')
     const none = f.database(); none.defaultModelBinding = locked.defaultModelBinding; none.modelPresets = locked.modelPresets; none.characters[0].chats[0].useModelPreset = true
     expect(Object.keys(pinsFor(pub(none), charOf(pub(none)), chatOf(pub(none))))).not.toContain('pin:model-preset:mp-default')
+    // Upstream 0.9.92: main and sub regimes are chosen separately; each used regime is pinned, an unmixed chat keeps its old pins.
+    const presets = [{ id: 'mp-main', name: 'm', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://m.example' } }, userValues: {} }, { id: 's', name: 's', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://s.example' } }, userValues: {} }]
+    const mixed = (main: boolean, sub: boolean | undefined) => { const d = f.database(); Object.assign(d.characters[0].chats[0], { useModelPreset: main, subUseModelPreset: sub, modelBinding: { main: 'mp-main', sub: 's', separateAux: false, aux: {} } }); d.modelPresets = structuredClone(presets); return d }
+    const keysOf = (d: any) => Object.keys(pinsFor(pub(d), charOf(pub(d)), chatOf(pub(d))))
+    expect(keysOf(mixed(false, true))).toEqual(expect.arrayContaining(['pin:provider-main', 'pin:model-bundle', 'pin:model-preset:s'])); expect(keysOf(mixed(false, true))).not.toContain('pin:model-preset:mp-main')
+    expect(keysOf(mixed(true, false))).toEqual(expect.arrayContaining(['pin:provider-main', 'pin:model-bundle', 'pin:model-preset:mp-main'])); expect(keysOf(mixed(true, false))).not.toContain('pin:model-preset:s')
+    const subChanged = mixed(false, true); subChanged.modelPresets[1].userValues = { temperature: 0.2 }
+    expect(pinsFor(pub(subChanged), charOf(pub(subChanged)), chatOf(pub(subChanged)))['pin:model-preset:s']).not.toBe(pinsFor(pub(mixed(false, true)), charOf(pub(mixed(false, true))), chatOf(pub(mixed(false, true))))['pin:model-preset:s'])
+    const mainChanged = mixed(true, false); mainChanged.aiModel = 'other-model'
+    expect(pinsFor(pub(mainChanged), charOf(pub(mainChanged)), chatOf(pub(mainChanged)))['pin:provider-main']).not.toBe(pinsFor(pub(mixed(true, false)), charOf(pub(mixed(true, false))), chatOf(pub(mixed(true, false))))['pin:provider-main'])
+    expect(keysOf(mixed(true, undefined))).not.toContain('pin:provider-main'); expect(keysOf(mixed(true, undefined))).toEqual(expect.arrayContaining(['pin:model-preset:mp-main', 'pin:model-preset:s']))
+    expect(keysOf(mixed(false, undefined))).not.toContain('pin:model-bundle')
     // Module override wins regardless of regime once its master switch is on; globally enabled modules are pinned for every chat.
     const override = f.database(); override.moduleModelBindingsEnabled = true; override.moduleModelBindings = { mod: 'mp-mod' }; override.modelPresets = [{ id: 'mp-mod', name: 'o', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://o.example' } }, userValues: {} }]
     const o = pinsFor(pub(override), charOf(pub(override)), chatOf(pub(override)))

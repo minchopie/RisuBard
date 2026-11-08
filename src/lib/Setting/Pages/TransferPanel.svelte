@@ -12,6 +12,7 @@
     import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, resolveAllSync, startAdoptionSync, endAdoptionSync, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
+    import { ownsServer } from 'src/ts/transfer-sync/chatDeviceLabel'
     let selected = $state<string[]>([])
     let selectedPersonas = $state<string[]>([])
     let compatibility = $state(false)
@@ -109,8 +110,9 @@
         // The saved workspace/role fill the form once (disabled or enabled); later polls never overwrite the user's edits.
         const hydrated = hydrateSyncForm(next, { workspace: syncWorkspace, role: syncRole }, syncFormHydrated)
         if (hydrated.hydrated && !syncFormHydrated) { syncWorkspace = hydrated.form.workspace; syncRole = hydrated.form.role; syncFormHydrated = true }
-        if (next?.enabled && !profileReported) {
-            // Display only: tell the service whether this is the PC app, a tablet or a phone so other devices can name it.
+        if (next?.enabled && !profileReported && ownsServer()) {
+            // Display only: tell the service whether this is the PC app, a tablet or a phone so other devices can name it. Only the
+            // app on its own server reports (0.9.92-ver1): a tablet browser opening the PC's server must not relabel the PC.
             profileReported = true
             const kind = detectDeviceKind(navigator.userAgent, window.screen)
             if (next.sync?.profile?.kind !== kind) await reportSyncProfile({ kind }).then(() => syncStatus()).then(s => { sync = s }).catch(() => { profileReported = false })
@@ -435,21 +437,21 @@
 </section>
 <style>
     .transfer-panel { display: grid; gap: 1rem; margin-block: 1rem; }
-    fieldset, .entry { border: 1px solid var(--color-darkborderc); border-radius: .5rem; padding: 1rem; display: flex; flex-wrap: wrap; gap: .75rem; min-width: 0; }
+    fieldset, .entry { border: 1px solid var(--color-darkborderc); border-radius: var(--risu-radius-lg, .5rem); padding: 1rem; display: flex; flex-wrap: wrap; gap: .75rem; min-width: 0; }
     fieldset > label, fieldset > p, fieldset > strong, .entry > p { width: 100%; }
     label { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
     input[type=file] { max-width: 100%; }
     details, .remote-file { width: 100%; min-width: 0; }
     details label, .remote-file { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: .5rem; }
-    input:not([type=checkbox]), select { border: 1px solid var(--color-darkborderc); background: var(--color-bgcolor); color: var(--color-textcolor); border-radius: .4rem; padding: .6rem; min-width: 0; max-width: 100%; }
+    input:not([type=checkbox]), select { border: 1px solid var(--color-darkborderc); background: var(--color-bgcolor); color: var(--color-textcolor); border-radius: calc(var(--risu-radius-lg, .5rem) * .8); padding: .6rem; min-width: 0; max-width: 100%; }
     p, strong, span { overflow-wrap: anywhere; }
     .error { color: var(--color-draculared); }
     .sync-timeline summary { cursor: pointer; }
-    .sync-headline { width: 100%; display: grid; gap: .25rem; padding: .75rem 1rem; border-radius: .5rem; border: 1px solid var(--color-darkborderc); }
+    .sync-headline { width: 100%; display: grid; gap: .25rem; padding: .75rem 1rem; border-radius: var(--risu-radius-lg, .5rem); border: 1px solid var(--color-darkborderc); }
     .sync-headline[data-tone='ok'] strong { color: var(--color-draculagreen, inherit); }
     .sync-headline[data-tone='attention'] strong { color: var(--color-draculaorange, inherit); }
     .sync-headline[data-tone='waiting'] strong { color: var(--color-draculayellow, inherit); }
-    .sync-card { width: 100%; display: grid; gap: .5rem; padding: .75rem 1rem; border-radius: .5rem; border: 1px solid var(--color-darkborderc); }
+    .sync-card { width: 100%; display: grid; gap: .5rem; padding: .75rem 1rem; border-radius: var(--risu-radius-lg, .5rem); border: 1px solid var(--color-darkborderc); }
     .sync-card summary, details > summary { cursor: pointer; }
     .transfer-actions { width: 100%; display: flex; flex-wrap: wrap; gap: .5rem; }
     .hint { opacity: .8; font-size: .9em; }

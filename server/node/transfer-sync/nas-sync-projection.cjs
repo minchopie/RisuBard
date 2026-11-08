@@ -143,12 +143,17 @@ function pinsFor(pub, character, chat) {
     const moduleBindings = pub.moduleModelBindingsEnabled ? Object.fromEntries([...moduleIds].filter(id => typeof pub.moduleModelBindings?.[id] === 'string').map(id => [id, pub.moduleModelBindings[id]])) : {};
     pins['pin:model-mode'] = pinHash({ lock, moduleModelBindingsEnabled: !!pub.moduleModelBindingsEnabled, moduleBindings });
     for (const id of new Set(Object.values(moduleBindings))) pins['pin:model-preset:' + id] = modelPreset(id);
-    const usePreset = lock === 'preset' ? true : lock === 'legacy' ? false : (chat.useModelPreset ?? false);
-    if (usePreset) {
+    // Upstream 0.9.92 (chatUsesModelPreset): the main slot and the sub slot with its aux tasks choose their regime separately; a sub
+    // slot without its own choice follows the main one, so a chat that does not mix keeps exactly the pins it had.
+    const regime = slot => lock === 'preset' ? true : lock === 'legacy' ? false : slot === 'main' ? (chat.useModelPreset ?? false) : (chat.subUseModelPreset ?? chat.useModelPreset ?? false);
+    const mainPreset = regime('main'), subPreset = regime('sub');
+    if (mainPreset || subPreset) {
         const binding = chat.modelBinding ?? (lock === 'preset' ? pub.defaultModelBinding : undefined) ?? null;
         pins['pin:model-bundle'] = pinHash(chat.modelBinding ? 'own' : binding);
-        for (const id of new Set(Object.values({ main: binding?.main, sub: binding?.sub, ...(binding?.aux ?? {}) }).filter(v => typeof v === 'string' && v))) pins['pin:model-preset:' + id] = modelPreset(id);
-    } else {
+        const used = [...(mainPreset ? [binding?.main] : []), ...(subPreset ? [binding?.sub, ...Object.values(binding?.aux ?? {})] : [])];
+        for (const id of new Set(used.filter(v => typeof v === 'string' && v))) pins['pin:model-preset:' + id] = modelPreset(id);
+    }
+    if (!mainPreset || !subPreset) {
         const provider = {}; for (const key of SETTINGS_GROUPS['provider-main']) if (key in pub) provider[key] = pub[key];
         pins['pin:provider-main'] = pinHash({ item: provider, refs: (pub[REFS] ?? []).filter(r => SETTINGS_GROUPS['provider-main'].includes(r.path.split('/')[1])).map(r => ({ slot: r.slot, version: r.version, origin: r.origin })) });
     }

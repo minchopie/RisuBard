@@ -495,6 +495,7 @@ export function retrySyncApply(): Promise<SyncApplyOutcome> {
         if (result.state === 'rolled-back' && pending.before) restoreBefore(pending.before)
         forageStorage.realStorage.syncTransaction = undefined
         unresolvedApply = null; syncOwnsBusy = false
+        if (result.state === 'applied') void import('./chatDeviceLabel').then(m => m.refreshChatDeviceLabels()).catch(() => {}) // RisuBard 0.9.91-ver3
         syncSaveHold.set(false); transferBusy.set(false); syncBusyOwned.set(false)
         const state = result.state === 'rolled-back' ? 'save-failed' : result.pending?.length || result.keptDeletions?.length ? 'applied-pending' : 'applied'
         transferStatus.set(state === 'save-failed' ? '저장되지 않은 변경을 되돌렸어요. 받은 자료는 보관 중이며 다시 다운로드할 수 있어요.' : state === 'applied-pending' ? '일부 적용 완료 · 확인할 변경이 남아 있어요.' : '이 기기에 적용 완료')

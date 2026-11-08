@@ -107,12 +107,12 @@
     {/if}
 </fieldset>
 <style>
-    fieldset { border: 1px solid var(--color-darkborderc); border-radius: .5rem; padding: 1rem; display: flex; flex-wrap: wrap; gap: .75rem; min-width: 0; }
+    fieldset { border: 1px solid var(--color-darkborderc); border-radius: var(--risu-radius-lg, .5rem); padding: 1rem; display: flex; flex-wrap: wrap; gap: .75rem; min-width: 0; }
     fieldset > p { width: 100%; }
     label { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
-    input { border: 1px solid var(--color-darkborderc); background: var(--color-bgcolor); color: var(--color-textcolor); border-radius: .4rem; padding: .6rem; min-width: 0; max-width: 100%; }
+    input { border: 1px solid var(--color-darkborderc); background: var(--color-bgcolor); color: var(--color-textcolor); border-radius: calc(var(--risu-radius-lg, .5rem) * .8); padding: .6rem; min-width: 0; max-width: 100%; }
     p, strong, span { overflow-wrap: anywhere; }
-    .sync-card { width: 100%; display: grid; gap: .5rem; padding: .75rem 1rem; border-radius: .5rem; border: 1px solid var(--color-darkborderc); }
+    .sync-card { width: 100%; display: grid; gap: .5rem; padding: .75rem 1rem; border-radius: var(--risu-radius-lg, .5rem); border: 1px solid var(--color-darkborderc); }
     .sync-card summary { cursor: pointer; }
     .remote-file { width: 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: .5rem; margin-block: .5rem; }
     .transfer-actions { width: 100%; display: flex; flex-wrap: wrap; gap: .5rem; }

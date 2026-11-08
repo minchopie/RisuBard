@@ -1724,7 +1724,8 @@
         ],
         "src/lib/ChatScreens/Chat.svelte": [
           "onsubmitcapture={handleFormTriggerWithin}",
-          "mobileMessageActionsInline"
+          "mobileMessageActionsInline",
+          "data-skin-part=\"message-card\""
         ],
         "src/ts/viewportHeight.ts": [
           "'focusout'",
@@ -1768,7 +1769,8 @@
           "setWikiEventStoryTimes"
         ],
         "src/App.svelte": [
-          "CharacterUpdateDialog"
+          "CharacterUpdateDialog",
+          "data-skin-part=\"app-shell\""
         ],
         "server/node/risubard-markdown-wiki.ts": [
           "setDocumentGrade",
@@ -1791,6 +1793,9 @@
         "server/node/risubard-memory-save.ts": [
           "Promise.allSettled([",
           "await Promise.all(entries.map(read))"
+        ],
+        "src/ts/process/request/modelPresetBinding.ts": [
+          "subUseModelPreset"
         ]
       }
     }
