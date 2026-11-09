@@ -36,9 +36,18 @@ const post = async <T>(path: string, body: unknown): Promise<T> =>
 // 0.9.92-ver4: the server picks the home or external NAS address from this device's Wi-Fi report, which it trusts for 2 minutes
 // and which is otherwise sent only before a NAS sync cycle (Android). Report it again right before talking to the NAS, so a device
 // on its home Wi-Fi uses the home address (the external one can drop large transfers from inside the home network). Best effort:
-// on failure the server decides as before.
+// on failure, or when it takes longer than ROUTE_REPORT_LIMIT (an unanswered native bridge waits up to 120 s), the call goes on and
+// the server decides as before.
+const ROUTE_REPORT_LIMIT = 3_000
 async function freshRoute() {
-    try { await (await import('../nasSync')).reportSyncNetwork() } catch { /* the server decides as before */ }
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+        await Promise.race([
+            import('../nasSync').then(m => m.reportSyncNetwork(controller.signal)),
+            new Promise(resolve => { timer = setTimeout(resolve, ROUTE_REPORT_LIMIT) }),
+        ])
+    } catch { /* the server decides as before */ } finally { clearTimeout(timer); controller.abort() }
 }
 
 export const fetchOverview = async () => { await freshRoute(); return post<ContentOverview>('/overview', {}) }

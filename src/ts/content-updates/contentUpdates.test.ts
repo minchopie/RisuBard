@@ -176,6 +176,18 @@ describe('content updates: fresh NAS route', () => {
         await mod.fetchContent({ key: 'character:a', sha256: sha, bytes: card.length } as any)
         await mod.publishContent({ key: 'character:a', kind: 'character', title: 'a', version: '1', fileName: 'a.charx', bytes: card })
         expect(order).toEqual(['report', '/content-updates/overview', 'report', '/content-updates/fetch', 'report', '/content-updates/publish'])
+        // a report that never answers (native bridge silent) holds the call at most 3 s
+        vi.useFakeTimers()
+        try {
+            reportSyncNetwork.mockImplementationOnce(() => new Promise(() => {}))
+            order.length = 0
+            const pending = mod.fetchOverview()
+            await vi.advanceTimersByTimeAsync(2_900)
+            expect(order).toEqual([])
+            await vi.advanceTimersByTimeAsync(200)
+            await expect(pending).resolves.toMatchObject({ configured: true })
+            expect(order).toEqual(['/content-updates/overview'])
+        } finally { vi.useRealTimers() }
         reportSyncNetwork.mockRejectedValueOnce(new Error('no native bridge'))
         await expect(mod.fetchOverview()).resolves.toMatchObject({ configured: true })
     })

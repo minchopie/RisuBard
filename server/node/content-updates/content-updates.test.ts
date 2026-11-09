@@ -247,6 +247,48 @@ describe('content update download resume', () => {
         expect(m).toBe(1)
     })
 
+    test('one route decision for the whole download: a retry after the Wi-Fi report aged stays on the home address', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        const { createNasRoute } = require('../transfer-sync/nas-route.cjs')
+        const home = 'https://home.invalid/home/RisuAI/'
+        const secrets = { get: async () => ({ ...(await dav.secrets.get()), homeUrl: home, homeSsids: ['HOME'] }) }
+        let now = 0
+        const nasRoute = createNasRoute({ secrets, now: () => now })
+        nasRoute.report({ transport: 'wifi', ssid: 'HOME' })
+        const hosts: string[] = []
+        const fetch = (url: string, options: any) => { hosts.push(new URL(url).host); return dav.fetch(url.replace(home, dav.base), options) }
+        let n = 0
+        dav.hooks.push(({ method, path }: any) => {
+            if (method !== 'GET' || !path.endsWith(item.file) || n++ > 0) return undefined
+            now += 200_000 // the report is older than its 2-minute trust when the retry starts
+            return dropping(big, 200, {}, 10_000)
+        })
+        const { file } = await createContentUpdates({ dataRoot: root(), secrets, route: nasRoute, fetch, retryDelayMs: 0 }).download(bigMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(big)
+        expect(n).toBe(2)
+        expect(new Set(hosts)).toEqual(new Set(['home.invalid']))
+        fs.rmSync(file)
+    })
+
+    test('the last attempt that brought every byte before its drop is still checked and kept', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        let n = 0
+        dav.hooks.push(({ method, path, headers }: any) => {
+            if (method !== 'GET' || !path.endsWith(item.file)) return undefined
+            n++
+            const start = headers.Range ? Number(/bytes=(\d+)-/.exec(headers.Range)![1]) : 0
+            const rest = big.subarray(start), cut = n < 5 ? Math.min(14_000, rest.length - 1) : rest.length
+            // the data is pushed, read and written before the drop
+            const stream = new Readable({ read() {} }); stream.push(rest.subarray(0, cut))
+            setTimeout(() => stream.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' })), 30)
+            return Object.assign(stream, start ? { statusCode: 206, headers: { 'content-range': `bytes ${start}-${big.length - 1}/${big.length}` } } : { statusCode: 200, headers: {} })
+        })
+        const { file } = await tablet(dav, []).download(bigMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(big)
+        expect(n).toBe(5)
+        fs.rmSync(file)
+    })
+
     test('gives up after 5 dropped attempts and leaves nothing behind', async () => {
         const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
         let n = 0

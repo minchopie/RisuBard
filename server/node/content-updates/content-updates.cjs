@@ -21,7 +21,8 @@ const FILE_LIMIT = 512 * 1024 * 1024;
 const MAX_ITEMS = 200; // new names are refused at this count
 const READ_ITEMS = 256; // read cap, above MAX_ITEMS so names that passed the count check at the same moment are all still read
 // 0.9.92-ver4: a dropped download (common on the external route from inside the home network) resumes with an HTTP Range
-// request from the bytes already on disk, up to this many attempts; each attempt takes the NAS route afresh.
+// request from the bytes already on disk, up to this many attempts. One route decision (home/external) for the whole download
+// (route.run, as a NAS sync run): a retry never switches to the external address because the Wi-Fi report aged meanwhile.
 const DOWNLOAD_ATTEMPTS = 5;
 const RETRY_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNABORTED', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN', 'ERR_STREAM_PREMATURE_CLOSE']);
 /** A network drop or stall (transfer-remote request: 'socket hang up', 'aborted', its 15 s/90 s timeouts), not an HTTP, size or hash answer. */
@@ -199,6 +200,9 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
 
     /** Downloads a published file to a temporary file after checking its size and SHA-256. The caller removes it. */
     async function download(key, sha256) {
+        return typeof route?.run === 'function' ? route.run(() => downloadOnce(key, sha256)) : downloadOnce(key, sha256);
+    }
+    async function downloadOnce(key, sha256) {
         if (!validKey(key)) throw new Error('배포 이름이 올바르지 않아요.');
         const remote = await nas();
         if (!remote) throw new Error('NAS가 설정되지 않았어요.');
@@ -224,6 +228,8 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
                     await pipeline(response, counter, fs.createWriteStream(target, { flags: from ? 'a' : 'w' }));
                     break;
                 } catch (error) {
+                    // Every byte arrived before the drop: the size and hash check below decides (also on the last attempt).
+                    if (retryable(error) && fs.statSync(target).size === item.bytes) break;
                     if (!retryable(error) || attempt >= DOWNLOAD_ATTEMPTS) throw error;
                     console.warn('[ContentUpdates] download interrupted, resuming:', attempt, String(error?.code ?? error?.message ?? error));
                     await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
