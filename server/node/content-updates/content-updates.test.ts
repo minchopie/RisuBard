@@ -270,6 +270,27 @@ describe('content update download resume', () => {
         fs.rmSync(file)
     })
 
+    test('NAS settings saved during a download: every request keeps the pinned address and its own account', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        const { createNasRoute } = require('../transfer-sync/nas-route.cjs')
+        let saved: any = { ...(await dav.secrets.get()), username: 'account-a' }
+        const secrets = { get: async () => saved }
+        const nasRoute = createNasRoute({ secrets })
+        const auth: string[] = []
+        const fetch = (url: string, options: any) => { auth.push(Buffer.from(String(options.headers.Authorization).slice(6), 'base64').toString().split(':')[0]); return dav.fetch(url, options) }
+        let n = 0
+        dav.hooks.push(({ method, path }: any) => {
+            if (method !== 'GET' || !path.endsWith(item.file) || n++ > 0) return undefined
+            saved = { ...saved, url: 'https://nas-b.invalid/vault/', username: 'account-b' } // another NAS saved before the retry
+            return dropping(big, 200, {}, 10_000)
+        })
+        const { file } = await createContentUpdates({ dataRoot: root(), secrets, route: nasRoute, fetch, retryDelayMs: 0 }).download(bigMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(big)
+        expect(n).toBe(2)
+        expect(new Set(auth)).toEqual(new Set(['account-a']))
+        fs.rmSync(file)
+    })
+
     test('the last attempt that brought every byte before its drop is still checked and kept', async () => {
         const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
         let n = 0

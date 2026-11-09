@@ -108,7 +108,8 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
     }
 
     async function nas() {
-        const config = await secrets.get('nas');
+        // Inside route.run (a download): the settings pinned with the route decision, so URL and account always belong together.
+        const config = route?.pinnedConfig?.() ?? await secrets.get('nas');
         if (!config?.url || !config.username || !config.password) return null;
         const endpoint = await route.endpointFor(config);
         const base = endpoint.url + NAMESPACE;
