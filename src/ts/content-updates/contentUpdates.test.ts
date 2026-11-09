@@ -15,6 +15,7 @@ vi.mock('../storage/importTransaction', () => ({ ImportCancelled: class ImportCa
 vi.mock('../pngChunk', () => ({ PngChunk: { readGenerator: vi.fn(async function* () {}) } }))
 vi.mock('uuid', () => ({ v4: () => 'id' }))
 vi.mock('../importSession', async () => { const { writable } = await import('svelte/store'); return { importSession: writable({ phase: 'idle' }) } })
+vi.mock('../nasSync', () => ({ reportSyncNetwork: vi.fn(async () => ({})) }))
 
 const mod = await import('./contentUpdates')
 
@@ -153,5 +154,29 @@ describe('content updates (client helpers)', () => {
         await mod.checkContentUpdates(true)
         expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
         expect(calls).toEqual(['/content-updates/overview'])
+    })
+})
+
+// 0.9.92-ver4: the Wi-Fi report goes to the server right before each NAS call, so the home address is used on the home Wi-Fi.
+describe('content updates: fresh NAS route', () => {
+    test('overview, fetch and publish report the network first; a failed report does not block the call', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        const order: string[] = []
+        reportSyncNetwork.mockReset().mockImplementation(async () => { order.push('report'); return {} })
+        const card = strToU8('card bytes'), sha = createHash('sha256').update(card).digest('hex')
+        transferRequest.mockReset().mockImplementation(async (path: string) => {
+            order.push(path)
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [], pending: [] }))
+            if (path === '/content-updates/fetch') return new Response(card as BodyInit)
+            if (path === '/content-updates/publish') return new Response('{}')
+            throw new Error('unexpected ' + path)
+        })
+        await mod.fetchOverview()
+        await mod.fetchContent({ key: 'character:a', sha256: sha, bytes: card.length } as any)
+        await mod.publishContent({ key: 'character:a', kind: 'character', title: 'a', version: '1', fileName: 'a.charx', bytes: card })
+        expect(order).toEqual(['report', '/content-updates/overview', 'report', '/content-updates/fetch', 'report', '/content-updates/publish'])
+        reportSyncNetwork.mockRejectedValueOnce(new Error('no native bridge'))
+        await expect(mod.fetchOverview()).resolves.toMatchObject({ configured: true })
     })
 })

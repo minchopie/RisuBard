@@ -20,6 +20,14 @@ const LIST_LIMIT = 2 * 1024 * 1024;
 const FILE_LIMIT = 512 * 1024 * 1024;
 const MAX_ITEMS = 200; // new names are refused at this count
 const READ_ITEMS = 256; // read cap, above MAX_ITEMS so names that passed the count check at the same moment are all still read
+// 0.9.92-ver4: a dropped download (common on the external route from inside the home network) resumes with an HTTP Range
+// request from the bytes already on disk, up to this many attempts; each attempt takes the NAS route afresh.
+const DOWNLOAD_ATTEMPTS = 5;
+const RETRY_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNABORTED', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN', 'ERR_STREAM_PREMATURE_CLOSE']);
+/** A network drop or stall (transfer-remote request: 'socket hang up', 'aborted', its 15 s/90 s timeouts), not an HTTP, size or hash answer. */
+const retryable = error => error?.retry === true || RETRY_CODES.has(error?.code) || /socket hang up|^aborted$|멈췄어요|연결하지 못했어요/.test(String(error?.message ?? ''));
+/** First byte of a 206 answer: "bytes <start>-<end>/<total>". */
+const rangeStart = value => { const m = /^bytes (\d+)-\d+\/(?:\d+|\*)$/.exec(String(value ?? '').trim()); return m ? Number(m[1]) : -1; };
 const READ_CONCURRENCY = 8;
 const KINDS = new Set(['character', 'persona', 'preset']);
 // preset (0.9.92-ver1): a prompt preset as exported by the app (.risup / .risupreset) or its JSON form.
@@ -63,7 +71,7 @@ function recordNames(xml) {
     return [...names].sort();
 }
 
-function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = () => '', appCode: appCodeOptions = {} }) {
+function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = () => '', appCode: appCodeOptions = {}, retryDelayMs = 1000 }) {
     // A newer app code patch on the NAS, downloaded in the background for the loader's next start (app-code-watch.cjs).
     const appCode = createAppCodeWatch({ dataRoot, secrets, route, ...appCodeOptions });
     const root = path.join(dataRoot, 'content-updates');
@@ -198,10 +206,30 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         if (!item || item.sha256 !== sha256) throw new Error('NAS의 배포본이 바뀌었어요. 다시 확인해 주세요.');
         const target = tempFile(item.file.split('.').pop());
         try {
-            const response = await checked(await remote.call(item.file));
-            const { counter, bytes } = limitStream(item.bytes, 'Content update file');
-            await pipeline(response, counter, fs.createWriteStream(target, { flags: 'wx', mode: 0o600 }));
-            if (bytes() !== item.bytes || await hashFile(target) !== item.sha256) throw new Error('받은 파일이 배포본과 달라요(크기·해시 불일치).');
+            fs.writeFileSync(target, '', { flag: 'wx', mode: 0o600 });
+            for (let attempt = 1; ; attempt++) {
+                const have = fs.statSync(target).size;
+                if (have >= item.bytes) { if (have === item.bytes) break; fs.truncateSync(target, 0); continue; } // all bytes arrived before the drop (the hash check decides)
+                try {
+                    const current = attempt === 1 ? remote : await nas();
+                    if (!current) throw new Error('NAS가 설정되지 않았어요.');
+                    const response = await current.call(item.file, 'GET', undefined, have > 0 ? { Range: `bytes=${have}-` } : {});
+                    let from = 0;
+                    if (have > 0 && response.statusCode === 206) {
+                        // Another range than asked: start over from the first byte (the hash check at the end decides).
+                        if (rangeStart(response.headers?.['content-range']) !== have) { response.destroy(); fs.truncateSync(target, 0); throw Object.assign(new Error('Content update range mismatch'), { retry: true }); }
+                        from = have;
+                    } else await checked(response); // 200: the whole file again (a server that ignores Range); anything else fails as before
+                    const { counter } = limitStream(item.bytes - from, 'Content update file');
+                    await pipeline(response, counter, fs.createWriteStream(target, { flags: from ? 'a' : 'w' }));
+                    break;
+                } catch (error) {
+                    if (!retryable(error) || attempt >= DOWNLOAD_ATTEMPTS) throw error;
+                    console.warn('[ContentUpdates] download interrupted, resuming:', attempt, String(error?.code ?? error?.message ?? error));
+                    await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
+                }
+            }
+            if (fs.statSync(target).size !== item.bytes || await hashFile(target) !== item.sha256) throw new Error('받은 파일이 배포본과 달라요(크기·해시 불일치).');
             return { file: target, item };
         } catch (error) { fs.rmSync(target, { force: true }); throw error; }
     }

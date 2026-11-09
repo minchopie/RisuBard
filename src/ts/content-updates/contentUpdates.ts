@@ -33,7 +33,15 @@ export const contentUpdateStatus = writable('')
 const post = async <T>(path: string, body: unknown): Promise<T> =>
     (await transferRequest('/content-updates' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
 
-export const fetchOverview = () => post<ContentOverview>('/overview', {})
+// 0.9.92-ver4: the server picks the home or external NAS address from this device's Wi-Fi report, which it trusts for 2 minutes
+// and which is otherwise sent only before a NAS sync cycle (Android). Report it again right before talking to the NAS, so a device
+// on its home Wi-Fi uses the home address (the external one can drop large transfers from inside the home network). Best effort:
+// on failure the server decides as before.
+async function freshRoute() {
+    try { await (await import('../nasSync')).reportSyncNetwork() } catch { /* the server decides as before */ }
+}
+
+export const fetchOverview = async () => { await freshRoute(); return post<ContentOverview>('/overview', {}) }
 export const recordDecision = (item: Pick<ContentItem, 'key' | 'sha256'>, decision: ContentDecisionInput) => post('/decide', { key: item.key, sha256: item.sha256, decision })
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -42,6 +50,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 }
 
 export async function fetchContent(item: ContentItem): Promise<Uint8Array> {
+    await freshRoute()
     const response = await transferRequest('/content-updates/fetch', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: item.key, sha256: item.sha256 }),
     })
@@ -311,6 +320,7 @@ export function startContentUpdates(available: boolean = isNodeServer) {
 
 export async function publishContent(input: { key: string; kind: ContentKind; title: string; version: string; fileName: string; bytes: Uint8Array }): Promise<ContentItem> {
     const meta = encodeURIComponent(JSON.stringify({ key: input.key, kind: input.kind, title: input.title, version: input.version, fileName: input.fileName }))
+    await freshRoute()
     const response = await transferRequest('/content-updates/publish', {
         method: 'POST',
         // Not application/octet-stream: the server streams this body to a file instead of buffering it.

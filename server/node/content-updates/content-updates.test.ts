@@ -184,3 +184,77 @@ describe('content updates', () => {
         await expect(tablet.updates.overview()).rejects.toThrow(/HTTP 500/)
     })
 })
+
+// 0.9.92-ver4: a dropped download resumes from the bytes on disk (HTTP Range), up to 5 attempts, each with a fresh route.
+describe('content update download resume', () => {
+    const big = Buffer.from(Array.from({ length: 64 * 1024 }, (_, i) => i % 251))
+    const bigMeta = { ...meta, fileName: 'big.charx' }
+    // A body that sends `cut` bytes, then fails like a dropped socket.
+    const dropping = (data: Buffer, statusCode: number, headers: Record<string, string>, cut: number) => {
+        const stream = new Readable({ read() {} })
+        stream.push(data.subarray(0, cut)); setTimeout(() => stream.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' })), 5)
+        return Object.assign(stream, { statusCode, headers })
+    }
+    const ranged = (data: Buffer, range: string) => { const start = Number(/bytes=(\d+)-/.exec(range)![1]); return Object.assign(Readable.from([data.subarray(start)]), { statusCode: 206, headers: { 'content-range': `bytes ${start}-${data.length - 1}/${data.length}` } }) }
+    const tablet = (dav: any, routes: string[]) => createContentUpdates({ dataRoot: root(), secrets: dav.secrets, fetch: dav.fetch, deviceName: () => 'tablet', retryDelayMs: 0,
+        route: { endpointFor: async (config: any) => { routes.push('route'); return { url: config.url, servername: '' } } } })
+
+    test('drops twice, resumes with Range from the bytes received, ends with the exact file', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        const seen: string[] = [], routes: string[] = []
+        let drops = 0
+        dav.hooks.push(({ method, path, headers }: any) => {
+            if (method !== 'GET' || !path.endsWith(item.file)) return undefined
+            seen.push(headers.Range ?? 'whole')
+            if (drops++ === 0) return dropping(big, 200, {}, 10_000)
+            if (drops === 2) return dropping(big.subarray(10_000), 206, { 'content-range': `bytes 10000-${big.length - 1}/${big.length}` }, 20_000)
+            return ranged(big, headers.Range)
+        })
+        const t = tablet(dav, routes)
+        const { file } = await t.download(bigMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(big)
+        expect(seen).toEqual(['whole', 'bytes=10000-', 'bytes=30000-'])
+        expect(routes.length).toBe(3 + 0) // one NAS route per attempt (the record read shares the first)
+        fs.rmSync(file)
+    })
+
+    test('a server that ignores Range sends the whole file again: it is rewritten from the first byte', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        let n = 0
+        dav.hooks.push(({ method, path }: any) => method === 'GET' && path.endsWith(item.file) && n++ === 0 ? dropping(big, 200, {}, 30_000) : undefined)
+        const { file } = await tablet(dav, []).download(bigMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(big)
+        fs.rmSync(file)
+    })
+
+    test('a 206 for another range than asked starts over; HTTP errors and a damaged file are not retried', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        let n = 0
+        dav.hooks.push(({ method, path }: any) => {
+            if (method !== 'GET' || !path.endsWith(item.file)) return undefined
+            n++
+            if (n === 1) return dropping(big, 200, {}, 10_000)
+            if (n === 2) return Object.assign(Readable.from([big.subarray(5)]), { statusCode: 206, headers: { 'content-range': `bytes 5-${big.length - 1}/${big.length}` } })
+            return undefined
+        })
+        const { file } = await tablet(dav, []).download(bigMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(big)
+        expect(n).toBe(3)
+        fs.rmSync(file)
+        let m = 0
+        dav.hooks.splice(0, dav.hooks.length, ({ method, path }: any) => method === 'GET' && path.endsWith(item.file) ? (m++, Object.assign(Readable.from([Buffer.from('')]), { statusCode: 500, headers: {} })) : undefined)
+        await expect(tablet(dav, []).download(bigMeta.key, item.sha256)).rejects.toThrow(/HTTP 500/)
+        expect(m).toBe(1)
+    })
+
+    test('gives up after 5 dropped attempts and leaves nothing behind', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        let n = 0
+        dav.hooks.push(({ method, path }: any) => method === 'GET' && path.endsWith(item.file) ? (n++, Object.assign(new Readable({ read() { this.destroy(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })) } }), { statusCode: 200, headers: {} })) : undefined)
+        const data = root()
+        const t = createContentUpdates({ dataRoot: data, secrets: dav.secrets, route, fetch: dav.fetch, retryDelayMs: 0 })
+        await expect(t.download(bigMeta.key, item.sha256)).rejects.toThrow(/socket hang up/)
+        expect(n).toBe(5)
+        expect(fs.readdirSync(path.join(data, 'content-updates', 'tmp'))).toEqual([])
+    })
+})
