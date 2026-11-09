@@ -77,10 +77,10 @@ diff --git a/src/lib/SideBars/SideChatList.svelte b/src/lib/SideBars/SideChatLis
                  <span data-chat-drag-handle aria-hidden="true" title="끌어서 순서 바꾸기"
                      class="chat-drag-handle hidden shrink-0 cursor-grab items-center self-stretch px-1.5 text-textcolor2 opacity-70 pointer-coarse:flex">
 diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
-index d8b1110..0929329 100644
+index 2274f4b..8cd7770 100644
 --- a/src/ts/process/index.svelte.ts
 +++ b/src/ts/process/index.svelte.ts
-@@ -1840,9 +1840,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+@@ -2354,9 +2354,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                          performance.now() - inquiryStartedAt
                  }
              }
@@ -92,7 +92,7 @@ index d8b1110..0929329 100644
              const currentPrompt = narrativeContext.sourceChanged
                  ? null
                  : createNarrativeSourcesPrompt(
-@@ -1851,10 +1850,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+@@ -2365,10 +2364,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                      undefined,
                      requiredWikiSources.length ? '' : responseWikiPromptGuide
                  )
@@ -104,7 +104,7 @@ index d8b1110..0929329 100644
              if (currentPrompt || baselinePrompt) {
                  narrativeContextObservation.mode = 'current'
                  narrativeContextObservation.reason =
-@@ -1906,9 +1902,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+@@ -2420,9 +2416,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                      cacheFriendlyNarrativeMessage = currentContextMessage
                  }
                  const staticContextMessage: OpenAIChat | null = cacheFriendlyContext
@@ -115,3 +115,21 @@ index d8b1110..0929329 100644
                      : currentContextMessage
                  if (staticContextMessage) {
                  const mergedContext = mergeNarrativeContextWithStaticPrompt({
+@@ -3425,7 +3419,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+         }, 'instruction'))
+     }
+ 
+-    formated = await runLuaEditTrigger(currentChar, 'editRequest', formated)
++    formated = await runLuaEditTrigger(currentChar, 'editRequest', formated, undefined, target)
+     for(const message of formated) syncRequestStatusSource(message)
+ 
+     // Inject after preset/script assembly, before the model's token check. This
+@@ -3446,7 +3440,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+     narrativeContextObservation.inquiryDurationMs += requiredWikiDurationMs
+ 
+     if(requestSettings.promptInfoInsideChat && requestSettings.promptTextInfoInsideChat){
+-        promptBodyformatedForChatStore = await runLuaEditTrigger(currentChar, 'editRequest', promptBodyformatedForChatStore)
++        promptBodyformatedForChatStore = await runLuaEditTrigger(currentChar, 'editRequest', promptBodyformatedForChatStore, undefined, target)
+         if (cacheFriendlyWikiMessages.length) {
+             promptBodyformatedForChatStore = insertBeforeLatestUserMessage(promptBodyformatedForChatStore, cacheFriendlyWikiMessages)
+         }

@@ -88,7 +88,7 @@ index 01c6b4c..0f03d76 100644
              </div>
              {/if}
 diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
-index d8b1110..0929329 100644
+index d8b1110..ada7fa2 100644
 --- a/src/ts/process/index.svelte.ts
 +++ b/src/ts/process/index.svelte.ts
 @@ -1840,9 +1840,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
@@ -126,3 +126,21 @@ index d8b1110..0929329 100644
                      : currentContextMessage
                  if (staticContextMessage) {
                  const mergedContext = mergeNarrativeContextWithStaticPrompt({
+@@ -2912,7 +2906,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+         }, 'instruction'))
+     }
+ 
+-    formated = await runLuaEditTrigger(currentChar, 'editRequest', formated)
++    formated = await runLuaEditTrigger(currentChar, 'editRequest', formated, undefined, target)
+     for(const message of formated) syncRequestStatusSource(message)
+ 
+     // Inject after preset/script assembly, before the model's token check. This
+@@ -2933,7 +2927,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+     narrativeContextObservation.inquiryDurationMs += requiredWikiDurationMs
+ 
+     if(requestSettings.promptInfoInsideChat && requestSettings.promptTextInfoInsideChat){
+-        promptBodyformatedForChatStore = await runLuaEditTrigger(currentChar, 'editRequest', promptBodyformatedForChatStore)
++        promptBodyformatedForChatStore = await runLuaEditTrigger(currentChar, 'editRequest', promptBodyformatedForChatStore, undefined, target)
+         if (cacheFriendlyWikiMessages.length) {
+             promptBodyformatedForChatStore = insertBeforeLatestUserMessage(promptBodyformatedForChatStore, cacheFriendlyWikiMessages)
+         }

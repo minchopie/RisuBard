@@ -2906,7 +2906,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }, 'instruction'))
     }
 
-    formated = await runLuaEditTrigger(currentChar, 'editRequest', formated)
+    formated = await runLuaEditTrigger(currentChar, 'editRequest', formated, undefined, target)
     for(const message of formated) syncRequestStatusSource(message)
 
     // Inject after preset/script assembly, before the model's token check. This
@@ -2927,7 +2927,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     narrativeContextObservation.inquiryDurationMs += requiredWikiDurationMs
 
     if(requestSettings.promptInfoInsideChat && requestSettings.promptTextInfoInsideChat){
-        promptBodyformatedForChatStore = await runLuaEditTrigger(currentChar, 'editRequest', promptBodyformatedForChatStore)
+        promptBodyformatedForChatStore = await runLuaEditTrigger(currentChar, 'editRequest', promptBodyformatedForChatStore, undefined, target)
         if (cacheFriendlyWikiMessages.length) {
             promptBodyformatedForChatStore = insertBeforeLatestUserMessage(promptBodyformatedForChatStore, cacheFriendlyWikiMessages)
         }

@@ -51,9 +51,9 @@
       "path": "src/ts/process/index.svelte.ts",
       "module": "transfer-sync",
       "kind": "hosts",
-      "sha256": "fd626c80c255675b95cd410aa4e4bc067d44a027ac1ae2945da910c820b0d63c",
-      "contentSha256": "26b620f6d3c9d171da707c92445d9e7a74bdb892dc0f6b56aa709c01c3cf24a6",
-      "bytes": 159796
+      "sha256": "ff0b17ef7dda75179dacc014519948bc6c43a03d200be82f938755bcf11e6a42",
+      "contentSha256": "09530f156a709ed2ffcec58c641a0791d75949125948e21ce617230d6534b914",
+      "bytes": 159834
     },
     {
       "path": "android-app/app/build.gradle.kts",
@@ -4219,9 +4219,9 @@
       "path": "patchnote/0.9.92-ver3.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "de3bf3377d30d8396331fbacdfaf00d9597a1416d6bfbeea281edc3a47f0ed2a",
-      "contentSha256": "de3bf3377d30d8396331fbacdfaf00d9597a1416d6bfbeea281edc3a47f0ed2a",
-      "bytes": 849
+      "sha256": "e00be3483ec5cce11b4e5a74c65fde8cad74bbab1fa15033fd98b3ff8534adc4",
+      "contentSha256": "e00be3483ec5cce11b4e5a74c65fde8cad74bbab1fa15033fd98b3ff8534adc4",
+      "bytes": 2040
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4711,7 +4711,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/transfer-sync.patch",
-        "sha256": "7ddbd8984ac54dc78e309e78be0b7a9b036e31d78f53b81e5c9535e51ec574ff"
+        "sha256": "f861e1a5462ea67ba2d5de152000057d65f42fabaf737420ba03a19d9a8f1f55"
       }
     },
     {
@@ -5193,7 +5193,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "1c2b437529c0029b284b9c3eb1a5da361689f6615f5557423abd60fe8776cb15"
+      "sha256": "d0635fbe077bba3af65fac73777f5fabad6ab892a6bb684ec447a63013bcbabb"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5268,8 +5268,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.81/transfer-sync.patch",
-          "sourceSha256": "7ddbd8984ac54dc78e309e78be0b7a9b036e31d78f53b81e5c9535e51ec574ff",
-          "sha256": "71802c974f9d372ce8695c236741ea0b9366e9af4558063a568afb7fc937e10f"
+          "sourceSha256": "f861e1a5462ea67ba2d5de152000057d65f42fabaf737420ba03a19d9a8f1f55",
+          "sha256": "c813959773d4fd5a58a85d323985d31e7b269ac66a6d5a13f709ce685595aefc"
         }
       ],
       "payloadTargets": {
@@ -5376,8 +5376,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.84/transfer-sync.patch",
-          "sourceSha256": "7ddbd8984ac54dc78e309e78be0b7a9b036e31d78f53b81e5c9535e51ec574ff",
-          "sha256": "71802c974f9d372ce8695c236741ea0b9366e9af4558063a568afb7fc937e10f"
+          "sourceSha256": "f861e1a5462ea67ba2d5de152000057d65f42fabaf737420ba03a19d9a8f1f55",
+          "sha256": "219932cf6dc03c497d9e1a6c6ef17c46aa0a01858d63dfe3ff22aac776e68244"
         }
       ],
       "payloadTargets": {
@@ -5534,8 +5534,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.86/transfer-sync.patch",
-          "sourceSha256": "7ddbd8984ac54dc78e309e78be0b7a9b036e31d78f53b81e5c9535e51ec574ff",
-          "sha256": "71802c974f9d372ce8695c236741ea0b9366e9af4558063a568afb7fc937e10f"
+          "sourceSha256": "f861e1a5462ea67ba2d5de152000057d65f42fabaf737420ba03a19d9a8f1f55",
+          "sha256": "2d6b22723275652a44d1fee223ca914fe2821827fde0018d494b723b31667367"
         }
       ],
       "payloadTargets": {
@@ -5709,8 +5709,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.89/transfer-sync.patch",
-          "sourceSha256": "7ddbd8984ac54dc78e309e78be0b7a9b036e31d78f53b81e5c9535e51ec574ff",
-          "sha256": "f705358da2c648bdd9af769a8b68444a0a012deab0c68f7e0dda97c2aa531abb"
+          "sourceSha256": "f861e1a5462ea67ba2d5de152000057d65f42fabaf737420ba03a19d9a8f1f55",
+          "sha256": "71d70ccea89c3cc2d7a82a0a9475dd620f5c56f3d0a2d8f496ab72696c35a760"
         }
       ],
       "payloadTargets": {
@@ -5898,8 +5898,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.90/transfer-sync.patch",
-          "sourceSha256": "7ddbd8984ac54dc78e309e78be0b7a9b036e31d78f53b81e5c9535e51ec574ff",
-          "sha256": "0edc1c5aea197f1d83e8fd2b521cef64aa5bdb1f1705625c494b2ccb9cd306e2"
+          "sourceSha256": "f861e1a5462ea67ba2d5de152000057d65f42fabaf737420ba03a19d9a8f1f55",
+          "sha256": "504ed4821ab8ef5db650ca8a1a90325485a68bfb50161f135d62a1680132d4e6"
         }
       ],
       "payloadTargets": {
@@ -6093,8 +6093,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.91/transfer-sync.patch",
-          "sourceSha256": "7ddbd8984ac54dc78e309e78be0b7a9b036e31d78f53b81e5c9535e51ec574ff",
-          "sha256": "0edc1c5aea197f1d83e8fd2b521cef64aa5bdb1f1705625c494b2ccb9cd306e2"
+          "sourceSha256": "f861e1a5462ea67ba2d5de152000057d65f42fabaf737420ba03a19d9a8f1f55",
+          "sha256": "acd1230b2007f14deba15ebfc9d9324c3b17b20d89e6347cc7d15b80110f71b3"
         }
       ],
       "payloadTargets": {
@@ -6291,8 +6291,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.92/transfer-sync.patch",
-          "sourceSha256": "7ddbd8984ac54dc78e309e78be0b7a9b036e31d78f53b81e5c9535e51ec574ff",
-          "sha256": "0edc1c5aea197f1d83e8fd2b521cef64aa5bdb1f1705625c494b2ccb9cd306e2"
+          "sourceSha256": "f861e1a5462ea67ba2d5de152000057d65f42fabaf737420ba03a19d9a8f1f55",
+          "sha256": "01fc70b01184110bb29851a98341639408453152031247da7cb59863f2366785"
         }
       ],
       "payloadTargets": {
