@@ -19,6 +19,7 @@ import { fetchNative, readImage } from "../globalApi.svelte";
 import { loadLoreBookV3Prompt } from './lorebook.svelte';
 import { getPersonaPrompt, getUserName, getUserIcon } from '../util';
 import { resolveGenerationTarget, type GenerationTarget } from './generationTarget';
+import { luaChatEntry } from './luaChatEntry';
 let luaFactory:LuaFactory
 let ScriptingSafeIds = new Set<string>()
 let ScriptingEditDisplayIds = new Set<string>()
@@ -277,13 +278,8 @@ export async function runScripted(code:string, arg:{
             })
 
             declareAPI('getFullChatMain', (id:string) => {
-                const data = JSON.stringify(ScriptingEngineState.chat.message.map((v) => {
-                    return {
-                        role: v.role,
-                        data: v.data,
-                        time: v.time ?? 0
-                    }
-                }))
+                // fork lore-lua: each message also carries its id (chatId), as the request's chat messages do in memo
+                const data = JSON.stringify(ScriptingEngineState.chat.message.map(luaChatEntry))
                 return data
             })
 

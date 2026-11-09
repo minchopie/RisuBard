@@ -311,10 +311,34 @@ index 1fcede8..a66d2b1 100644
          mockModuleSources.length = 0
          const a = { id: 'a', localLore: [lore('A lore', 'A keyword', 'A FACT')], message: [{ role: 'user', data: 'A keyword' }] }
 diff --git a/src/ts/process/scriptings.ts b/src/ts/process/scriptings.ts
-index 1088b2c..5bbc461 100644
+index 1088b2c..7cfa0a6 100644
 --- a/src/ts/process/scriptings.ts
 +++ b/src/ts/process/scriptings.ts
-@@ -1241,7 +1241,8 @@ export async function runScripted(code:string, arg:{
+@@ -19,6 +19,7 @@ import { fetchNative, readImage } from "../globalApi.svelte";
+ import { loadLoreBookV3Prompt } from './lorebook.svelte';
+ import { getPersonaPrompt, getUserName, getUserIcon } from '../util';
+ import { resolveGenerationTarget, type GenerationTarget } from './generationTarget';
++import { luaChatEntry } from './luaChatEntry';
+ import { mergeLuaFullChat } from './luaFullChat';
+ import { debugTiming } from '../debugTiming';
+ let luaFactory:LuaFactory
+@@ -291,13 +292,8 @@ export async function runScripted(code:string, arg:{
+             })
+ 
+             declareAPI('getFullChatMain', (id:string) => {
+-                const data = JSON.stringify(ScriptingEngineState.chat.message.map((v) => {
+-                    return {
+-                        role: v.role,
+-                        data: v.data,
+-                        time: v.time ?? 0
+-                    }
+-                }))
++                // fork lore-lua: each message also carries its id (chatId), as the request's chat messages do in memo
++                const data = JSON.stringify(ScriptingEngineState.chat.message.map(luaChatEntry))
+                 return data
+             })
+ 
+@@ -1241,7 +1237,8 @@ export async function runScripted(code:string, arg:{
  }
  
  async function makeLuaFactory(){
