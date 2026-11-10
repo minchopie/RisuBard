@@ -319,7 +319,8 @@ export async function alreadyInstalled(item: Pick<ContentItem, 'kind' | 'title' 
             const text = await readPngText(await fetchContent(item as ContentItem), ['persona'])
             if (!text.persona) return false
             const data = readPersonaJson(text.persona)
-            return named.some((p: any) => p.name === data.name && (p.personaPrompt ?? '') === data.personaPrompt && (p.note ?? '') === (data.note ?? ''))
+            // The list as it is now (a persona deleted during the download no longer counts).
+            return (database.getDatabase().personas ?? []).some((p: any) => p?.name === item.title && p.name === data.name && (p.personaPrompt ?? '') === data.personaPrompt && (p.note ?? '') === (data.note ?? ''))
         } catch { return false } // could not compare: ask as before
     }
     return false
@@ -347,7 +348,9 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
         const overview = await fetchOverview()
         for (const item of overview.pending) {
             if (await busy()) { retry = true; break }
-            if (await alreadyInstalled(item)) { await recordDecision(item, 'applied'); continue }
+            const installed = await alreadyInstalled(item)
+            if (await busy()) { retry = true; break } // the comparison download took a while: another dialog/activity may have started
+            if (installed) { await recordDecision(item, 'applied'); continue }
             const choice = await alert.alertConfirmMulti(
                 `새 ${kindLabel(item.kind)}가 올라왔어요. 지금 가져올까요?`,
                 ['네, 가져오기', '아니오'],

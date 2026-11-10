@@ -376,6 +376,12 @@ describe('content updates: already installed', () => {
         expect(await mod.alreadyInstalled(personaItem(same) as any)).toBe(true)
         serving = changed
         expect(await mod.alreadyInstalled(personaItem(changed) as any)).toBe(false) // same name and note, new prompt: asked
+        // deleted while the comparison download ran: the current list decides
+        serving = same
+        const db = getDatabase()
+        tr.mockImplementationOnce(async () => { db.personas = []; return new Response(same.bytes as BodyInit) })
+        expect(await mod.alreadyInstalled(personaItem(same) as any)).toBe(false)
+        db.personas = [{ name: '함건희(보어)', note: '함건희(보어) v1.0.33-vore.9 · …', personaPrompt: 'prompt 35' }]
         PngChunk.readGenerator.mockImplementation(async function* () {})
         expect(await mod.alreadyInstalled({ kind: 'persona', title: '함건희(보어·꿈각성)', version: 'v1.0.34-awakening.3' })).toBe(false) // no persona of that name: no download
         expect(await mod.alreadyInstalled({ kind: 'preset', title: '바드 프롬프트 젬', version: '0.5.2-r2' })).toBe(false)
@@ -399,5 +405,33 @@ describe('content updates: already installed', () => {
         await mod.checkContentUpdates(true)
         expect(decisions).toEqual([['character:마물소녀도감', 'applied'], ['persona:함건희(보어·꿈각성)', 'declined']])
         expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+    })
+})
+
+describe('content updates: comparison download then busy', () => {
+    test('another dialog opened during the persona comparison download: no question over it', async () => {
+        const { getDatabase } = await import('../storage/database.svelte') as any
+        const { transferRequest } = await import('../playTransfer') as any
+        const { alertConfirmMulti } = await import('../alert') as any
+        const { alertStore } = await import('../stores.svelte') as any
+        const { PngChunk } = await import('../pngChunk') as any
+        getDatabase.mockReturnValue({ characters: [], personas: [{ name: '함건희(보어)', note: 'n', personaPrompt: 'old' }] })
+        const bytes = strToU8('png new'), sha = createHash('sha256').update(bytes).digest('hex')
+        const json = btoa(unescape(encodeURIComponent(JSON.stringify({ name: '함건희(보어)', personaPrompt: 'new', note: 'n' }))))
+        PngChunk.readGenerator.mockImplementation(async function* () { yield { key: 'persona', value: json } })
+        const item = { key: 'persona:함건희(보어)', kind: 'persona', title: '함건희(보어)', version: '1', file: sha + '.png', fileName: 'p.png', sha256: sha, bytes: bytes.length, publishedAt: new Date().toISOString(), publishedBy: 'pc', decision: '' }
+        const decisions: string[] = []
+        transferRequest.mockReset().mockImplementation(async (path: string, init: any) => {
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [item], pending: [item] }))
+            if (path === '/content-updates/fetch') { alertStore.set({ type: 'confirm' }); return new Response(bytes as BodyInit) }
+            if (path === '/content-updates/decide') { decisions.push(JSON.parse(init.body).decision); return new Response('{}') }
+            throw new Error('unexpected ' + path)
+        })
+        alertConfirmMulti.mockReset().mockResolvedValue(1)
+        try {
+            await mod.checkContentUpdates(true)
+            expect(alertConfirmMulti).not.toHaveBeenCalled()
+            expect(decisions).toEqual([])
+        } finally { alertStore.set({ type: 'none' }); PngChunk.readGenerator.mockImplementation(async function* () {}) }
     })
 })

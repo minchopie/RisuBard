@@ -4435,17 +4435,17 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "0c9472a7adcd33940bb7045692ab0c9890c58f548cdb5be27d66c12fa0432f42",
-      "contentSha256": "0c9472a7adcd33940bb7045692ab0c9890c58f548cdb5be27d66c12fa0432f42",
-      "bytes": 25874
+      "sha256": "d1acaf6c314cf275f33b91f2cea9dbdfd0b92efbd8adce1851872217b1abf92c",
+      "contentSha256": "d1acaf6c314cf275f33b91f2cea9dbdfd0b92efbd8adce1851872217b1abf92c",
+      "bytes": 26205
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "dd0d4fb53d7912deeaacf29601fdf0cb4d06083f2915cee52a56bea6d7cf5918",
-      "contentSha256": "dd0d4fb53d7912deeaacf29601fdf0cb4d06083f2915cee52a56bea6d7cf5918",
-      "bytes": 31045
+      "sha256": "499cc34d96466f764f60d0b836f379787c2aee3b145d8837f515a5e6f7360a38",
+      "contentSha256": "499cc34d96466f764f60d0b836f379787c2aee3b145d8837f515a5e6f7360a38",
+      "bytes": 33734
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
