@@ -87,6 +87,63 @@ index 01c6b4c..0f03d76 100644
                  </button>
              </div>
              {/if}
+diff --git a/src/ts/importSession.ts b/src/ts/importSession.ts
+index 713480a..f0c548e 100644
+--- a/src/ts/importSession.ts
++++ b/src/ts/importSession.ts
+@@ -14,6 +14,8 @@ export const importSession = writable<{ phase: 'idle' | 'installing' | 'rolling-
+ let active: ImportTransaction | undefined
+ // Lets the cancel button stop waiting for a slow install flush.
+ let installFlush: AbortController | undefined
++// fork 0.9.92-ver6: an asset write waiting behind the NAS sync gate (nodeStorage setItems) stops resending when the import is cancelled.
++let writeAbort: AbortController | undefined
+ let reloadForReset = false
+ 
+ async function removeOwners(owners: ImportOwner[]) {
+@@ -34,7 +36,10 @@ async function removeOwners(owners: ImportOwner[]) {
+ 
+ function dependencies(retainAssets = false) {
+     return {
+-        write: (entries: Parameters<ImportTransaction['write']>[0]) => forageStorage.setItems(entries),
++        write: (entries: Parameters<ImportTransaction['write']>[0]) => {
++            const real: any = forageStorage.realStorage
++            return typeof real?.setItems === 'function' ? real.setItems(entries, writeAbort?.signal) : forageStorage.setItems(entries)
++        },
+         journal: (record: ImportJournal | null) => {
+             if (reloadForReset) return
+             if (record) localStorage.setItem(JOURNAL_KEY, JSON.stringify(record))
+@@ -63,6 +68,7 @@ export function requestImportReset() {
+     if (record) localStorage.setItem(RESET_KEY, record.id)
+     reloadForReset = true
+     active?.cancel()
++    writeAbort?.abort(new ImportCancelled())
+     location.reload()
+ }
+ 
+@@ -78,6 +84,7 @@ export function dismissImportRecovery() {
+ 
+ export function cancelImport() {
+     active?.cancel()
++    writeAbort?.abort(new ImportCancelled())
+     installFlush?.abort(new ImportCancelled())
+     importSession.set({ phase: 'rolling-back' })
+     alertWait(language.importInstall.rollbackMessage)
+@@ -121,6 +128,7 @@ export async function runImport<T>(work: (transaction: ImportTransaction) => Pro
+     startImportProgress()
+     alertWait(language.importInstall.preparing)
+     // Claim the session before any async operation so two file imports cannot overlap.
++    writeAbort = new AbortController()
+     active = new ImportTransaction(new Set(), dependencies())
+     let transaction = active
+     let stopWatching: (() => void) | undefined
+@@ -166,6 +174,7 @@ export async function runImport<T>(work: (transaction: ImportTransaction) => Pro
+         throw error
+     } finally {
+         installFlush = undefined
++        writeAbort = undefined
+         stopWatching?.()
+         stopImportProgress()
+     }
 diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
 index d8b1110..ada7fa2 100644
 --- a/src/ts/process/index.svelte.ts

@@ -238,7 +238,8 @@ export class NodeStorage{
 
     // Saves wait for the server however long it takes. Aborting transport
     // never undoes a write, so a time limit only reported false failures.
-    private async saveRequest(path: string, init: RequestInit) {
+    // `retrySignal` (fork 0.9.92-ver6): stops only the waiting/resending after a 423; a request already sent is never aborted by it.
+    private async saveRequest(path: string, init: RequestInit, retrySignal?: AbortSignal) {
         this.pendingSaveRequests++
         try {
             // Identity of this write: ordinary (no sync transaction) and whatever manual-transfer transaction it started under. A retry
@@ -257,6 +258,7 @@ export class NodeStorage{
                 if (response.status !== 423 || !ordinary || identity() !== started || Date.now() >= until || init.body instanceof ReadableStream || !await NodeStorage.isSyncBusy(response)) return response
                 await new Promise(resolve => setTimeout(resolve, NodeStorage.SYNC_BUSY_RETRY_MS))
                 init.signal?.throwIfAborted()
+                retrySignal?.throwIfAborted()
                 if (identity() !== started) return response // changed during the wait: the previous 423 stands, nothing is resent
             }
         } finally {
@@ -966,7 +968,8 @@ export class NodeStorage{
         }
     }
 
-    async setItems(entries: {key: string, value: Uint8Array}[]) {
+    // `cancel` (fork 0.9.92-ver6): an import's cancel stops the wait behind the NAS sync gate (no further resend).
+    async setItems(entries: {key: string, value: Uint8Array}[], cancel?: AbortSignal) {
         for (let i = 0; i < entries.length; i += NodeStorage.BULK_WRITE_CLIENT_BATCH) {
             const batch = entries.slice(i, i + NodeStorage.BULK_WRITE_CLIENT_BATCH)
             const body = batch.map(e => ({
@@ -981,7 +984,7 @@ export class NodeStorage{
                 headers: {
                     'content-type': 'application/json'
                 }
-            })
+            }, cancel)
             if (da.status < 200 || da.status >= 300) throw 'setItems Error'
         }
     }

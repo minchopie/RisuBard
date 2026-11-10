@@ -299,6 +299,22 @@ export async function busy(ignoreAlert = false): Promise<boolean> {
         || get(session.importSession).phase !== 'idle'
 }
 
+/** 0.9.92-ver6: this device already has the published version (a card or persona imported by hand, or via another route): it is
+ *  recorded as applied without asking. Same version = a character with the same base name whose card version (or name) carries that
+ *  version, or a persona with the same name whose note carries it. Prompt presets are always asked. A different file published under
+ *  the same version number is not told apart (no download to compare). */
+export async function alreadyInstalled(item: Pick<ContentItem, 'kind' | 'title' | 'version'>): Promise<boolean> {
+    const plain = (value: string | undefined) => (value ?? '').trim().replace(/^v/i, '')
+    const version = plain(item.version)
+    if (!version) return false
+    const { database } = await app()
+    const db = database.getDatabase()
+    if (item.kind === 'character') return (db.characters ?? []).some((c: any) => c && c.type !== 'group' && baseName(c.name ?? '') === baseName(item.title)
+        && (plain(c.characterVersion) === version || versionIn(c.name) === version))
+    if (item.kind === 'persona') return (db.personas ?? []).some((p: any) => p?.name === item.title && versionIn(p.note) === version)
+    return false
+}
+
 /** A NAS sync cycle is running (startup/foreground sync, possibly preparing an apply): a question waits for it to end. */
 async function syncCycleRunning(): Promise<boolean> {
     try { return !!get((await import('../nasSyncCoordinator')).coordinatorState)?.running } catch { return false }
@@ -321,6 +337,7 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
         const overview = await fetchOverview()
         for (const item of overview.pending) {
             if (await busy()) { retry = true; break }
+            if (await alreadyInstalled(item)) { await recordDecision(item, 'applied'); continue }
             const choice = await alert.alertConfirmMulti(
                 `새 ${kindLabel(item.kind)}가 올라왔어요. 지금 가져올까요?`,
                 ['네, 가져오기', '아니오'],

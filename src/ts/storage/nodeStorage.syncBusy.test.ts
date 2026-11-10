@@ -49,6 +49,22 @@ describe('ordinary writes behind the NAS sync write gate', () => {
         expect(armed).toHaveBeenCalledTimes(1)
     })
 
+    it('an import cancel stops resending an asset batch waiting behind the gate; the request in flight is not aborted', async () => {
+        const storage = new NodeStorage()
+        const fetch = vi.fn(async (_path: string, init: any) => { expect(init.signal).toBeUndefined(); return busy() })
+        ;(storage as any).authFetch = fetch
+        const cancel = new AbortController()
+        const pending = storage.setItems([{ key: 'assets/c.png', value: new Uint8Array([4]) }], cancel.signal)
+        const outcome = expect(pending).rejects.toBeTruthy()
+        await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS * 2 + 10)
+        const sent = fetch.mock.calls.length
+        cancel.abort(new Error('Import cancelled'))
+        await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS * 4)
+        await outcome
+        expect(fetch.mock.calls.length).toBe(sent)
+        expect((storage as any).pendingSaveRequests).toBe(0)
+    })
+
     it('other 423s (session takeover) and non-busy failures keep the old behaviour: no retry', async () => {
         const storage = new NodeStorage()
         const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'session', code: 'SESSION_INACTIVE' }), { status: 423 }))

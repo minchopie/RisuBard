@@ -353,3 +353,39 @@ describe('content updates: NAS sync busy answer', () => {
         } finally { vi.useRealTimers() }
     })
 })
+
+// 0.9.92-ver6: a version this device already has is recorded as applied without asking.
+describe('content updates: already installed', () => {
+    test('same card version or same persona version → recorded, not asked; other versions and presets are asked', async () => {
+        const { getDatabase } = await import('../storage/database.svelte') as any
+        getDatabase.mockReturnValue({
+            characters: [{ name: '마물소녀도감 1.2.35-argon.16 ver', characterVersion: '1.2.35-argon.16' }, { name: 'Shecubus!', characterVersion: '' }],
+            personas: [{ name: '함건희(보어)', note: '함건희(보어) v1.0.35-vore.10 · …' }],
+        })
+        expect(await mod.alreadyInstalled({ kind: 'character', title: '마물소녀도감 1.2.35-argon.16 ver', version: '1.2.35-argon.16' })).toBe(true)
+        expect(await mod.alreadyInstalled({ kind: 'character', title: '마물소녀도감 1.2.35-argon.17 ver', version: '1.2.35-argon.17' })).toBe(false)
+        expect(await mod.alreadyInstalled({ kind: 'persona', title: '함건희(보어)', version: 'v1.0.35-vore.10' })).toBe(true)
+        expect(await mod.alreadyInstalled({ kind: 'persona', title: '함건희(보어·꿈각성)', version: 'v1.0.34-awakening.3' })).toBe(false)
+        expect(await mod.alreadyInstalled({ kind: 'preset', title: '바드 프롬프트 젬', version: '0.5.2-r2' })).toBe(false)
+        expect(await mod.alreadyInstalled({ kind: 'character', title: 'Shecubus!', version: '' })).toBe(false)
+
+        const { transferRequest } = await import('../playTransfer') as any
+        const { alertConfirmMulti } = await import('../alert') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        reportSyncNetwork.mockReset().mockResolvedValue({})
+        const sha = 'a'.repeat(64)
+        const item = (kind: string, key: string, title: string, version: string) => ({ key, kind, title, version, file: sha + '.x', fileName: 'x', sha256: sha, bytes: 1, publishedAt: new Date().toISOString(), publishedBy: 'pc', decision: '' })
+        const decisions: any[] = []
+        transferRequest.mockReset().mockImplementation(async (path: string, init: any) => {
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [], pending: [
+                item('character', 'character:마물소녀도감', '마물소녀도감 1.2.35-argon.16 ver', '1.2.35-argon.16'),
+                item('persona', 'persona:함건희(보어·꿈각성)', '함건희(보어·꿈각성)', 'v1.0.34-awakening.3')] }))
+            if (path === '/content-updates/decide') { const b = JSON.parse(init.body); decisions.push([b.key, b.decision]); return new Response('{}') }
+            throw new Error('unexpected ' + path)
+        })
+        alertConfirmMulti.mockReset().mockResolvedValue(1)
+        await mod.checkContentUpdates(true)
+        expect(decisions).toEqual([['character:마물소녀도감', 'applied'], ['persona:함건희(보어·꿈각성)', 'declined']])
+        expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+    })
+})
