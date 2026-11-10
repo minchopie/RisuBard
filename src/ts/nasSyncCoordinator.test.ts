@@ -205,17 +205,59 @@ test('a NAS that never answers never touches local play: publish hangs across sa
     c.stop()
 })
 
-test('generation in progress: publish and pull still run, the snapshot is skipped, nothing is applied even in a foreground window; the next settled save snapshots', async () => {
-    const h = harness(); h.setPending(1)
+test('0.9.92-ver10: while a model request runs no automatic cycle starts (save, foreground, chat open, poll, download direction); its end resumes sync after the save debounce without a save or a full poll', async () => {
+    const generatingChanged = writable(false)
+    const h = harness({ generatingChanged }); h.setPending(1)
     await h.c.start(); await vi.advanceTimersByTimeAsync(1_000); await flush(); h.calls.length = 0
-    f.activity.mockReturnValue(true)
+    f.activity.mockReturnValue(true); generatingChanged.set(true)
     canonicalSaveSettled.set(Date.now()); await vi.advanceTimersByTimeAsync(5_000); await flush()
-    expect(h.calls).toEqual(['status', 'publish', 'pull', 'preview']); h.calls.length = 0 // no snapshot of a streaming state, no apply
-    document.dispatchEvent(new Event('visibilitychange')); await flush()
-    expect(h.calls).toEqual(['status', 'publish', 'pull', 'preview']); expect(h.c.state.lastOutcome).toBe('pulled'); expect(get(transferBusy)).toBe(false); h.calls.length = 0
-    f.activity.mockReturnValue(false)
-    canonicalSaveSettled.set(Date.now()); await vi.advanceTimersByTimeAsync(5_000); await flush()
-    expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview']) // settled → snapshot; still no apply on a save cycle
+    expect(h.calls).toEqual([]); expect(h.c.state).toMatchObject({ lastOutcome: 'deferred', running: false })
+    document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new CustomEvent('risubard-chat-opened')); await flush(); expect(h.calls).toEqual([])
+    expect(await h.c.cycle('timer', undefined, null, 'download')).toBe('deferred'); expect(h.calls).toEqual([])
+    await vi.advanceTimersByTimeAsync(30_000); await flush(); expect(h.calls).toEqual([]) // the fallback poll waits again
+    f.activity.mockReturnValue(false); generatingChanged.set(false)
+    await vi.advanceTimersByTimeAsync(4_999); expect(h.calls).toEqual([])
+    await vi.advanceTimersByTimeAsync(1); await flush()
+    expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview']); expect(h.c.state.lastOutcome).toBe('pulled') // resumed (timer cycle: no window, no apply)
+    expect(get(transferBusy)).toBe(false); expect(get(syncSaveHold)).toBe(false)
+    h.c.stop()
+})
+
+test('0.9.92-ver10: a generation that starts during a running automatic cycle stops it at the next step boundary (the step in flight finishes, the next never starts, no apply, no hold); the end resumes it', async () => {
+    for (const at of ['status', 'snapshot', 'publish', 'pull', 'preview'] as const) {
+        const generatingChanged = writable(false)
+        const h = harness({ generatingChanged }); h.setPending(1)
+        const name = at === 'preview' ? 'pendingRoots' : at
+        const original = (h.io as any)[name].getMockImplementation()
+        ;(h.io as any)[name].mockImplementation(async (...args: any[]) => { const value = await original(...args); if (h.c.state.running) { f.activity.mockReturnValue(true); generatingChanged.set(true) } return value })
+        await h.c.start(); await vi.advanceTimersByTimeAsync(1_000); await flush() // the startup cycle (a safe window: it would apply)
+        expect(h.calls.at(-1)).toBe(at); expect(h.calls).not.toContain('apply')
+        expect(h.c.state).toMatchObject({ running: false, lastOutcome: 'deferred', failures: 0, lastError: '' })
+        expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
+        ;(h.io as any)[name].mockImplementation(original); f.activity.mockReturnValue(false); generatingChanged.set(false)
+        h.calls.length = 0; await vi.advanceTimersByTimeAsync(5_000); await flush()
+        expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview'])
+        h.c.stop()
+    }
+})
+
+test('0.9.92-ver10: an apply already armed when a generation starts is never interrupted; it settles through its own verdict', async () => {
+    const generatingChanged = writable(false)
+    const h = harness({ generatingChanged }); h.setPending(1)
+    let finish!: () => void
+    h.io.apply.mockImplementation(async (_auto: boolean, _signal?: AbortSignal, guard?: any) => {
+        h.calls.push('apply'); guard?.planReady?.()
+        transferBusy.set(true); syncSaveHold.set(true) // armed
+        f.activity.mockReturnValue(true); generatingChanged.set(true) // a send starts meanwhile
+        await new Promise<void>(r => { finish = r })
+        syncSaveHold.set(false); transferBusy.set(false)
+        return { state: 'applied' }
+    })
+    await h.c.start(); await vi.advanceTimersByTimeAsync(1_000); await flush()
+    expect(h.calls.at(-1)).toBe('apply')
+    await vi.advanceTimersByTimeAsync(3_000); await flush(); expect(h.c.state.running).toBe(true); expect(get(syncSaveHold)).toBe(true)
+    finish(); await flush()
+    expect(h.c.state).toMatchObject({ running: false, lastOutcome: 'applied' }); expect(get(syncSaveHold)).toBe(false); expect(get(transferBusy)).toBe(false)
     h.c.stop()
 })
 

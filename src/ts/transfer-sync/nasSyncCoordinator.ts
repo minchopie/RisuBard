@@ -1,8 +1,9 @@
-import { get, writable, type Unsubscriber } from 'svelte/store'
+import { get, writable, type Readable, type Unsubscriber } from 'svelte/store'
 import { canonicalSaveSettled, transferStatus, syncSaveHold } from './transferState'
 import { applySync, retrySyncApply, pullSync, publishSync, snapshotSync, syncStatus, activityBlocksSync, reportSyncNetwork, pendingRootsSync, activeChatSignature, releaseSyncPlan, type SyncApplyGuard } from './nasSync'
 import { transferUnavailable } from './playTransfer'
 import { isNodeServer } from '../platform'
+import { isAnyGenerating } from '../process/generationState'
 import { alertStore, selectedCharID } from '../stores.svelte'
 
 /**
@@ -11,8 +12,8 @@ import { alertStore, selectedCharID } from '../stores.svelte'
  *
  * Non-interrupting contract (local play first):
  * - Local play and sending never wait for the NAS. `preSendSync` refuses only while an apply is left unresolved (hold kept).
- * - Every cycle is status → [snapshot → publish] → pull → pending preview. Publish/pull are network-only and run even while a
- *   generation streams; the snapshot (which takes the server's exclusive lane for a consistent capture) runs only when nothing is
+ * - Every cycle is status → [snapshot → publish] → pull → pending preview. 0.9.92-ver10: while a model request runs
+ *   (`generating`) no automatic cycle starts and a running one stops at its next step boundary; the snapshot (which takes the server's exclusive lane for a consistent capture) runs only when nothing is
  *   generating/importing and after the save settled (5 s debounce). Pulled commits are durable in the store ("received, applied later").
  * - Apply (plan → arm → save → finish) happens only in a SAFE WINDOW opened by a lifecycle event: app start, coming to the foreground
  *   (visibilitychange/focus), the user (re)opening a chat (`risubard-chat-opened`, character switch), or an explicit manual run.
@@ -34,8 +35,11 @@ export interface CoordinatorOptions {
     retryApply?: typeof retrySyncApply
     /** Manual transfer/import in progress or an unresolved hold: no sync work at all. */
     blocked?: () => boolean
-    /** Generation/streaming/import: no snapshot, no apply; publish/pull still run. */
+    /** Generation/streaming/import: no snapshot, no apply. 0.9.92-ver10: no automatic cycle at all (a running one stops at its next step
+     *  boundary); manual upload defers, manual download stays receive-only. */
     generating?: () => boolean
+    /** Generation on/off; its end resumes a cycle deferred by `generating` after the save debounce (default: isAnyGenerating). */
+    generatingChanged?: Readable<boolean>
     /** A modal alert is open: no apply (nothing may change under it); network still runs. */
     alerting?: () => boolean
     /** Monotonic count of real user interactions (pointer/keyboard/input/touch); the coordinator's own document listener when omitted. */
@@ -62,7 +66,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         supported: () => isNodeServer, status: syncStatus, snapshot: snapshotSync, publish: publishSync, pull: pullSync, apply: applySync, retryApply: retrySyncApply, pendingRoots: pendingRootsSync, release: releaseSyncPlan, network: reportSyncNetwork,
         // A foreign manual transfer/import or an unresolved hold blocks everything; generation alone does not (handled by `generating`).
         blocked: () => (transferUnavailable() && !activityBlocksSync()) || get(syncSaveHold),
-        generating: () => activityBlocksSync(), alerting: () => get(alertStore).type !== 'none',
+        generating: () => activityBlocksSync(), generatingChanged: isAnyGenerating, alerting: () => get(alertStore).type !== 'none',
         interactions: () => interactions, activeChat: () => { try { return activeChatSignature() } catch { return '' } },
         ...options,
     }
@@ -71,6 +75,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
     let started = false, timer: ReturnType<typeof setTimeout> | null = null, debounce: ReturnType<typeof setTimeout> | null = null
     let unsubscribe: Unsubscriber | null = null, unsubscribeSelection: Unsubscriber | null = null, controller: AbortController | null = null, current: Promise<string> | null = null
     let startupWindow: SafeWindow | null = null // captured at start(), consumed by the first cycle; voided by any interaction before it
+    let resumeAfterGeneration = false // 0.9.92-ver10: an automatic cycle waited for a generation; its end schedules sync again
     let pendingWindow: SafeWindow | null = null // a lifecycle event that arrived while a cycle ran: kept with ITS epoch and run right after (never renewed)
     const listeners: Array<{ target: EventTarget; type: string; handler: EventListener; capture: boolean }> = []
     const listen = (target: EventTarget | undefined, type: string, handler: EventListener, capture = false) => { if (!target) return; target.addEventListener(type, handler, { capture, passive: true }); listeners.push({ target, type, handler, capture }) }
@@ -81,6 +86,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
     const invalidate = (reason: string) => { state.generation += 1; controller?.abort(new Cancelled(reason)); controller = null }
     const stopTimers = () => { if (timer) { o.clearTimer(timer); timer = null } if (debounce) { o.clearTimer(debounce); debounce = null } state.nextAt = 0 }
     const schedule = (delay: number) => { if (!active()) return; if (timer) o.clearTimer(timer); state.nextAt = o.now() + delay; timer = o.setTimer(() => { timer = null; void cycle('timer') }, delay) }
+    /** 0.9.92-ver10: a model request is in progress: automatic sync waits (the poll stays as a fallback; the generation's end resumes sooner). */
+    const deferForGeneration = () => { resumeAfterGeneration = true; state.lastOutcome = 'deferred'; schedule(o.pollMs); return 'deferred' }
     /** Bounded status probe: start, and recovery after a failed start probe (reconnect/visible/focus). */
     async function probe(): Promise<boolean> {
         const generation = state.generation, ctl = new AbortController(), deadline = o.setTimer(() => ctl.abort(new Error('sync network deadline')), o.deadlineMs)
@@ -99,12 +106,13 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         if (state.running) return 'running'
         if (!o.visible()) { state.lastOutcome = 'hidden'; return 'hidden' } // no background work; the visibility listener resumes
         if (o.blocked()) { state.lastOutcome = 'busy'; schedule(Math.min(o.pollMs, 5_000)); return 'busy' } // manual transfer/import or an unresolved hold: try again shortly
+        if (reason !== 'manual' && o.generating()) { deferForGeneration(); publish(); return 'deferred' } // 0.9.92-ver10: no automatic sync while a model request runs
         if (direction === 'upload' && o.generating()) { state.lastOutcome = 'deferred'; publish(); return 'deferred' } // upload must capture settled local edits first; download can receive and wait
         const generation = state.generation, mine = controller = new AbortController(), signal = mine.signal
         const onExternal = () => mine.abort(new Cancelled('cancelled'))
         if (external) { if (external.aborted) onExternal(); else external.addEventListener('abort', onExternal, { once: true }) }
         // Boundary guard: a late response after disable/pause/stop (new generation) or an abort never proceeds to the next step.
-        const boundary = () => { if (generation !== state.generation || !active()) throw new Cancelled('sync cycle invalidated'); if (signal.aborted) throw signal.reason ?? new Error('sync network deadline') }
+        const boundary = () => { if (generation !== state.generation || !active()) throw new Cancelled('sync cycle invalidated'); if (signal.aborted) throw signal.reason ?? new Error('sync network deadline'); if (reason !== 'manual' && o.generating()) throw new Cancelled('generating') }
         const interacted = () => !safe || o.interactions() > safe.epoch
         let receiveOnly = direction === 'download' && o.generating()
         state.running = true; state.direction = direction; state.lastWindow = safe?.window ?? ''; publish()
@@ -181,6 +189,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 if (generation === state.generation) schedule(o.pollMs)
                 return state.lastOutcome
             } catch (error: any) {
+                if (error instanceof Cancelled && error.message === 'generating' && generation === state.generation && active()) return deferForGeneration() // stopped between steps (never inside the apply)
                 if (error instanceof Cancelled || generation !== state.generation || !active()) { state.lastOutcome = 'cancelled'; return 'cancelled' } // never reschedule a stopped/disabled/paused coordinator
                 if (stage === 'snapshot' && error?.code === 'NAS_SYNC_PLAN_PENDING') { state.lastOutcome = 'deferred'; state.lastError = ''; schedule(o.pollMs); return state.lastOutcome }
                 if (stage === 'apply' && /deadline/i.test(String(error?.message ?? error))) { state.lastOutcome = 'pulled'; state.lastError = ''; state.deferredForChat ||= o.activeChat() || '-'; transferStatus.set('받은 변경은 보관 중이에요. 다음 적용 기회에 다시 시도해요.'); if (generation === state.generation) schedule(o.pollMs); return state.lastOutcome } // plan released; incoming stays received
@@ -230,7 +239,9 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
             try { await probe() } catch (error) { this.stop(); throw error }
             if (!started) return false // stopped while probing: no listeners, no timers, nothing enabled
             try {
-                unsubscribe = canonicalSaveSettled.subscribe(at => { if (!at || !active()) return; if (debounce) o.clearTimer(debounce); debounce = o.setTimer(() => { debounce = null; void cycle('save') }, o.debounceMs) })
+                const unsubscribeGenerating = o.generatingChanged.subscribe(on => { if (on || !resumeAfterGeneration || !active()) return; resumeAfterGeneration = false; schedule(o.debounceMs) })
+                const unsubscribeSave = canonicalSaveSettled.subscribe(at => { if (!at || !active()) return; if (debounce) o.clearTimer(debounce); debounce = o.setTimer(() => { debounce = null; void cycle('save') }, o.debounceMs) })
+                unsubscribe = () => { unsubscribeSave(); unsubscribeGenerating() }
                 // Foreground: visible/focus open a window (epoch at the event). Reconnect is network-only: it never opens a window.
                 const wake = (why: string, window: SyncApplyGuard['window'] | null) => { if (!started || state.paused) return; if (!state.probed) { void probe().then(ok => { if (ok && active()) schedule(500) }); return } if (!active()) return; if (window) { lifecycle(window, why); return } if (!state.running) void cycle(why, undefined, null) }
                 if (typeof document !== 'undefined') listen(document, 'visibilitychange', () => { if (o.visible()) wake('visible', 'foreground') })
