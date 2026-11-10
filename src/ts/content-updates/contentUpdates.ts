@@ -35,8 +35,25 @@ const START_RETRY = 3_000
 const START_WINDOW = 3 * 60_000
 export const contentUpdateStatus = writable('')
 
+// 0.9.92-ver6: the app server answers 423 NAS_SYNC_BUSY to these POST routes (its write gate) while a NAS sync step or an armed sync apply
+// runs. That answer comes before the route runs (nothing fetched, recorded or published yet), so the request is sent again every
+// BUSY_STEP until the sync step ends, for at most BUSY_WAIT. Before, it failed at once ("NAS sync apply must finish before saving").
+const BUSY_WAIT = 60_000
+const BUSY_STEP = 1_000
+async function contentRequest(path: string, init: RequestInit): Promise<Response> {
+    const until = Date.now() + BUSY_WAIT, shown = get(contentUpdateStatus)
+    for (;;) {
+        try { const response = await transferRequest(path, init); contentUpdateStatus.set(shown); return response }
+        catch (error: any) {
+            if (error?.status !== 423 || error?.code !== 'NAS_SYNC_BUSY') { contentUpdateStatus.set(shown); throw error }
+            if (Date.now() >= until) { contentUpdateStatus.set(shown); throw Object.assign(new Error('NAS 동기화가 1분 넘게 진행 중이라 지금은 처리하지 못했어요(NAS sync busy).'), { status: 423, code: 'NAS_SYNC_BUSY' }) }
+            contentUpdateStatus.set('NAS 동기화가 끝나면 이어서 받아요…')
+            await new Promise(resolve => setTimeout(resolve, BUSY_STEP))
+        }
+    }
+}
 const post = async <T>(path: string, body: unknown): Promise<T> =>
-    (await transferRequest('/content-updates' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
+    (await contentRequest('/content-updates' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
 
 // 0.9.92-ver4: the server picks the home or external NAS address from this device's Wi-Fi report, which it trusts for 2 minutes
 // and which is otherwise sent only before a NAS sync cycle (Android). Report it again right before talking to the NAS, so a device
@@ -65,7 +82,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 
 export async function fetchContent(item: ContentItem): Promise<Uint8Array> {
     await freshRoute()
-    const response = await transferRequest('/content-updates/fetch', {
+    const response = await contentRequest('/content-updates/fetch', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: item.key, sha256: item.sha256 }),
     })
     const bytes = new Uint8Array(await response.arrayBuffer())
@@ -349,7 +366,7 @@ export function startContentUpdates(available: boolean = isNodeServer) {
 export async function publishContent(input: { key: string; kind: ContentKind; title: string; version: string; fileName: string; bytes: Uint8Array }): Promise<ContentItem> {
     const meta = encodeURIComponent(JSON.stringify({ key: input.key, kind: input.kind, title: input.title, version: input.version, fileName: input.fileName }))
     await freshRoute()
-    const response = await transferRequest('/content-updates/publish', {
+    const response = await contentRequest('/content-updates/publish', {
         method: 'POST',
         // Not application/octet-stream: the server streams this body to a file instead of buffering it.
         headers: { 'content-type': 'application/x-risubard-content', 'x-content-meta': meta },

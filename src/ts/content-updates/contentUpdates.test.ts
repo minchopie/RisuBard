@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
+import { get } from 'svelte/store'
 import { zipSync, strToU8 } from 'fflate'
 import { createHash } from 'node:crypto'
 
@@ -286,5 +287,57 @@ describe('content updates: start check retries (per call)', () => {
             await vi.advanceTimersByTimeAsync(30_000)
             expect(s.alertConfirmMulti).toHaveBeenCalledTimes(1)
         } finally { vi.useRealTimers(); s.coordinatorState.set(null) }
+    })
+})
+
+// 0.9.92-ver6: the server's write gate (423 NAS_SYNC_BUSY while a NAS sync step runs) is waited out, not reported as a failure.
+describe('content updates: NAS sync busy answer', () => {
+    const busy423 = () => Object.assign(new Error('NAS sync apply must finish before saving'), { status: 423, code: 'NAS_SYNC_BUSY' })
+    test('fetch, decide and publish are sent again until the sync step ends; other errors fail at once', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        reportSyncNetwork.mockReset().mockResolvedValue({})
+        const card = strToU8('card bytes'), sha = createHash('sha256').update(card).digest('hex')
+        const seen: string[] = []
+        let refusals = 0
+        transferRequest.mockReset().mockImplementation(async (path: string) => {
+            seen.push(path)
+            if (refusals > 0) { refusals--; throw busy423() }
+            if (path === '/content-updates/fetch') return new Response(card as BodyInit)
+            return new Response('{}')
+        })
+        vi.useFakeTimers()
+        try {
+            refusals = 3
+            const fetched = mod.fetchContent({ key: 'character:a', sha256: sha, bytes: card.length } as any)
+            await vi.advanceTimersByTimeAsync(3_000)
+            await expect(fetched).resolves.toEqual(card)
+            expect(seen.filter(p => p === '/content-updates/fetch')).toHaveLength(4)
+            expect(get(mod.contentUpdateStatus)).toBe('')
+            refusals = 1; seen.length = 0
+            const decided = mod.recordDecision({ key: 'character:a', sha256: sha }, 'applied')
+            await vi.advanceTimersByTimeAsync(1_000)
+            await decided
+            expect(seen).toEqual(['/content-updates/decide', '/content-updates/decide'])
+            refusals = 2; seen.length = 0
+            const published = mod.publishContent({ key: 'character:a', kind: 'character', title: 'a', version: '1', fileName: 'a.charx', bytes: card })
+            await vi.advanceTimersByTimeAsync(2_000)
+            await published
+            expect(seen).toEqual(['/content-updates/publish', '/content-updates/publish', '/content-updates/publish'])
+            transferRequest.mockImplementationOnce(async () => { throw Object.assign(new Error('HTTP 500'), { status: 500 }) })
+            await expect(mod.recordDecision({ key: 'character:a', sha256: sha }, 'applied')).rejects.toThrow('HTTP 500')
+        } finally { vi.useRealTimers() }
+    })
+    test('a sync step longer than a minute: a clear error, nothing left in the status line', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        transferRequest.mockReset().mockImplementation(async () => { throw busy423() })
+        vi.useFakeTimers()
+        try {
+            const decided = mod.recordDecision({ key: 'character:a', sha256: 'x' }, 'applied')
+            const outcome = expect(decided).rejects.toThrow(/1분 넘게/)
+            await vi.advanceTimersByTimeAsync(61_000)
+            await outcome
+            expect(get(mod.contentUpdateStatus)).toBe('')
+        } finally { vi.useRealTimers() }
     })
 })
