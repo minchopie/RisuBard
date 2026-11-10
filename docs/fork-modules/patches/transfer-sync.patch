@@ -1,5 +1,5 @@
 diff --git a/src/App.svelte b/src/App.svelte
-index 2c33473..e75fabd 100644
+index 2c33473..b66b2fc 100644
 --- a/src/App.svelte
 +++ b/src/App.svelte
 @@ -2,7 +2,8 @@
@@ -8,7 +8,7 @@ index 2c33473..e75fabd 100644
      import { transferBusy, transferStatus, syncBusyOwned, syncApplyRecovery } from './ts/transferState';
 -    import { syncCoordinator } from './ts/nasSyncCoordinator';
 +    import { syncCoordinator, coordinatorState } from './ts/nasSyncCoordinator';
-+import NasSyncProgress from './lib/Setting/Pages/NasSyncProgress.svelte';
++    import NasSyncProgress from './lib/Setting/Pages/NasSyncProgress.svelte';
      import { DBState } from './ts/stores.svelte';
      import ChatScreen from './lib/ChatScreens/ChatScreen.svelte';
      import RisuBardPromptAssistant from './lib/Others/RisuBardPromptAssistant.svelte';

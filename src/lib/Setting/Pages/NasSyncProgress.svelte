@@ -9,7 +9,7 @@
     let progress = $state<any>(null)
     let now = $state(Date.now())
     let timer: ReturnType<typeof setInterval> | undefined
-    let polling = false
+    let polling = false, generation = 0, controller: AbortController | undefined
 
     const STEPS: Record<string, string> = {
         status: '상태 확인 중', release: '이전 준비 정리 중', snapshot: '내 변경을 묶는 중', publish: 'NAS에 올리는 중',
@@ -19,19 +19,29 @@
         now = Date.now()
         if (polling) return
         polling = true
-        try { progress = await syncTransferProgress() } catch { progress = null } finally { polling = false }
+        // A hung request is cut after 5 s; a reply that lands after the cycle ended (generation changed) is dropped.
+        const mine = generation, c = new AbortController(), limit = setTimeout(() => c.abort(), 5000)
+        controller = c
+        try { const value = await syncTransferProgress(c.signal); if (mine === generation) progress = value }
+        catch { if (mine === generation) progress = null }
+        finally { clearTimeout(limit); if (controller === c) { controller = undefined; polling = false } }
+    }
+    function stop() {
+        generation++; controller?.abort(); controller = undefined; polling = false
+        if (timer) clearInterval(timer); timer = undefined; progress = null
     }
     $effect(() => {
         if ($coordinatorState?.running) { if (!timer) { void tick(); timer = setInterval(tick, 1000) } }
-        else { if (timer) clearInterval(timer); timer = undefined; progress = null }
+        else stop()
     })
-    onDestroy(() => { if (timer) clearInterval(timer) })
+    onDestroy(stop)
 
     const mb = (n: number) => (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)
     const clock = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초` }
-    const step = $derived(progress?.phase === 'pull-scan' ? 'NAS 목록 확인 중' : STEPS[progress?.phase ?? $coordinatorState?.stage ?? 'status'] ?? '동기화 중')
-    const total = $derived(progress ? (progress.bytesTotal || progress.filesTotal) : 0)
-    const done = $derived(progress ? (progress.bytesTotal ? progress.bytes : progress.files) : 0)
+    const step = $derived(STEPS[progress?.phase ?? $coordinatorState?.stage ?? 'status'] ?? '동기화 중')
+    const byBytes = $derived(!!progress?.bytesTotal && !progress?.sizeUnknown)
+    const total = $derived(progress ? (byBytes ? progress.bytesTotal : progress.filesTotal) : 0)
+    const done = $derived(progress ? (byBytes ? Math.min(progress.bytes, progress.bytesTotal) : progress.files) : 0)
     const percent = $derived(total ? Math.min(100, Math.floor(done / total * 100)) : null)
     const detail = $derived(progress && progress.filesTotal
         ? `파일 ${Math.min(progress.files, progress.filesTotal)}/${progress.filesTotal}${progress.bytesTotal ? ` · ${mb(Math.min(progress.bytes, progress.bytesTotal))}/${mb(progress.bytesTotal)} MB` : ''}`

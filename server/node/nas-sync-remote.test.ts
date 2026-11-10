@@ -390,6 +390,23 @@ test('0.9.92-ver7: progress of a running publish/pull — totals known before th
     expect(transport.progress()).toBeNull()
 }, 60_000)
 
+test('0.9.92-ver7: the progress look-ahead keeps per-object admission — a commit object that cannot be read stops the pull only after the earlier objects were admitted (Codex A1: two-pass pull lost them)', async t => {
+    const dav = fixtureDav(), a = device(t, dav, await temp(t)), bRoot = await temp(t, 'bard-sync-b-')
+    a.store.commit([chat('one', { n: 1 })]); a.store.commit([chat('two', { n: 2 })])
+    const published = await a.transport.publish()
+    expect(published.stored).toHaveLength(2)
+    const second = published.stored[1]
+    const store = createSyncStore({ dataRoot: bRoot, now }); store.setWorkspace('ws-fixture')
+    const transport = createSyncTransport({ store, remote: createSyncRemote({ secrets: dav.secrets, fetch: dav.fetch }), now })
+    dav.hooks.push(async ({ method, path }: any) => method === 'GET' && path.includes(`/${second.sequence}_${second.commitId}.json`) ? Object.assign(Readable.from([Buffer.alloc(0)]), { statusCode: 503, headers: {} }) : null)
+    await expect(transport.pull()).rejects.toThrow('HTTP 503')
+    expect(transport.progress()).toBeNull()
+    dav.hooks.length = 0
+    const again = await transport.pull()
+    expect(again.identical).toBe(1)      // the first object was admitted by the failed pull
+    expect(again.admitted).toHaveLength(1)
+}, 60_000)
+
 test('every ignored WebDAV success response is read to its end, never destroyed unread: put/exists-same/conflict/404 paths keep the keep-alive socket (Codex: first-sync connect timeouts)', async t => {
     const dav = fixtureDav(); let responses = 0, closedUnread = 0
     const fetch = async (url: string, init?: any) => { const res: any = await dav.fetch(url, init); responses++; res.on('close', () => { if (!res.readableEnded) closedUnread++ }); return res }

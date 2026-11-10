@@ -3,7 +3,7 @@
     import Sidebar from './lib/SideBars/Sidebar.svelte';
     import { transferBusy, transferStatus, syncBusyOwned, syncApplyRecovery } from './ts/transferState';
     import { syncCoordinator, coordinatorState } from './ts/nasSyncCoordinator';
-import NasSyncProgress from './lib/Setting/Pages/NasSyncProgress.svelte';
+    import NasSyncProgress from './lib/Setting/Pages/NasSyncProgress.svelte';
     import { DBState } from './ts/stores.svelte';
     import ChatScreen from './lib/ChatScreens/ChatScreen.svelte';
     import RisuBardPromptAssistant from './lib/Others/RisuBardPromptAssistant.svelte';

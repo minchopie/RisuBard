@@ -122,9 +122,10 @@ function createSyncRemote({ secrets, fetch = request, route = null }) {
 function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan = OLD_BUCKETS_PER_SCAN, statfs = path => fsp.statfs(path, { bigint: true }) }) {
     const ws = () => { const { workspaceId } = store.identity(); if (!workspaceId) throw new Error('Sync workspace is not bound'); return workspaceId; };
     // 0.9.92-ver7: progress of the running publish/pull for the UI (GET /api/nas-sync/progress). Display only: nothing reads it back.
-    // phase publish | pull-scan (reading the NAS lists; totals not known yet) | pull; files/bytes count the blobs (content files).
+    // phase publish | pull; files/bytes count the blobs (content files). sizeUnknown: a counted file has no recorded size (bytes are then
+    // not a reliable share of the total; the UI uses the file count).
     let progress = null;
-    const track = phase => (progress = { phase, files: 0, filesTotal: 0, bytes: 0, bytesTotal: 0, startedAt: now() });
+    const track = phase => (progress = { phase, files: 0, filesTotal: 0, bytes: 0, bytesTotal: 0, sizeUnknown: false, startedAt: now() });
     const sizeOf = async path => { try { return (await fsp.stat(path)).size; } catch { return 0; } };
     const devicePath = (device, incarnation) => [ws(), 'devices', device, incarnation];
     const blobSegments = hash => [ws(), 'blobs', hash.slice(0, 2), hash];
@@ -154,6 +155,7 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                 for (const hash of entry.blobs) {
                     const present = onNas.has(hash) ? 'ok' : await remote.verify(blobSegments(hash), hash);
                     if (present === 'ok') { onNas.add(hash); if (!store.unpublishedBlobs(entry).includes(hash)) continue; store.markBlobPublished(hash); if (counted.delete(hash)) { p.files++; p.bytes += await sizeOf(store.blobFile(hash)); } continue; }
+                    if (!counted.has(hash)) { counted.add(hash); p.filesTotal++; p.bytesTotal += await sizeOf(store.blobFile(hash)); } // re-upload of a blob marked published
                     const result = await remote.putFile(blobSegments(hash), store.blobFile(hash), hash, { overwrite: present === 'damaged' }, n => { p.bytes += n; });
                     if (counted.delete(hash)) p.files++;
                     if (result.state === 'conflict') throw new Error('Remote blob differs from local content: ' + hash);
@@ -180,7 +182,7 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
             catch (error) { report.failed.push({ ack: true, error: String(error.message) }); }
         }
         return report;
-        } finally { progress = null; }
+        } finally { if (progress === p) progress = null; }
     }
     /** Download every blob a commit object lists that is missing locally; each is verified by its own hash. */
     async function fetchBlobs(object, tick) { // `tick` (0.9.92-ver7): { onBytes, onFile } progress display only
@@ -194,8 +196,7 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                 if (space.bavail * space.bsize < BigInt(size) * 2n) throw Object.assign(new Error(`Not enough storage space for blob ${hash.slice(0, 8)} (${size} bytes)`), { code: 'ENOSPC' });
             }
             const path = await remote.getToFile(blobSegments(hash), store.blobFile(hash), hash, tick?.onBytes);
-            tick?.onFile?.(hash);
-            if (!path) missing.push(hash);
+            if (path) tick?.onFile?.(hash); else missing.push(hash);
         }
         return missing;
     }
@@ -203,9 +204,13 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
     async function pull({ full = false } = {}) {
         const report = { admitted: [], waiting: [], held: [], quarantined: [], identical: 0, scanned: [] };
         const self = store.identity();
-        // 0.9.92-ver7: the commit objects are read first and their blobs fetched afterwards, in the same order, so the download total
-        // is known for the progress display (before: each object's blobs were fetched right after reading it).
-        const p = track('pull-scan'), queue = [];
+        // 0.9.92-ver7 progress (display only): each bucket's new commit objects are read once ahead to grow the download total, then
+        // handled exactly as before (per object: read, fetch its blobs, admit) from those bytes. A failed read ends the look-ahead; the
+        // loop reads that object again and fails at the same point as before. Waiting and repair downloads are added when they start.
+        const p = track('pull'), counted = new Set();
+        const expect = (hash, size) => { if (counted.has(hash)) return; counted.add(hash); p.filesTotal++; if (Number.isSafeInteger(size)) p.bytesTotal += size; else p.sizeUnknown = true; };
+        const expectObject = object => { for (const hash of store.missingCommitBlobs(object)) expect(hash, object.sizes?.[hash]); };
+        const tick = { onBytes: n => { p.bytes += n; }, onFile: hash => { if (counted.delete(hash)) p.files++; } };
         try {
         for (const device of (await remote.list([ws(), 'devices'])).filter(e => e.collection)) {
             for (const incarnation of (await remote.list([ws(), 'devices', device.name])).filter(e => e.collection)) {
@@ -217,34 +222,32 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                 for (const bucket of chosen) {
                     report.scanned.push(`${device.name}/${incarnation.name}/${bucket}`);
                     const objects = await listObjects([...base, String(bucket)]);
+                    const ahead = new Map(); // 0.9.92-ver7 look-ahead (progress total only)
+                    try {
+                        for (const { name, sequence, commitId } of objects) {
+                            if (Math.floor(sequence / BUCKET) !== bucket || store.knownRemote(device.name, incarnation.name, sequence, commitId) || store.isWaiting(device.name, incarnation.name, sequence, commitId)) continue;
+                            const bytes = await remote.get([...base, String(bucket), name]); ahead.set(name, bytes);
+                            try { const object = JSON.parse(bytes.toString('utf8')); if (object?.v === 1 && Array.isArray(object.blobs) && object.blobs.every(h => DIGEST.test(h))) expectObject(object); } catch { /* handled by the loop below */ }
+                        }
+                    } catch { /* look-ahead only: the loop below reads it again */ }
                     for (const { name, sequence, commitId } of objects) {
                         if (Math.floor(sequence / BUCKET) !== bucket) continue; // misplaced object: never trusted
                         if (store.knownRemote(device.name, incarnation.name, sequence, commitId)) { report.identical++; continue; }
                         if (store.isWaiting(device.name, incarnation.name, sequence, commitId)) continue; // retried below from the durable copy
-                        const bytes = await remote.get([...base, String(bucket), name]);
+                        const bytes = ahead.has(name) ? ahead.get(name) : await remote.get([...base, String(bucket), name]);
                         if (!bytes) continue;
-                        let object, valid = false;
-                        try { object = JSON.parse(bytes.toString('utf8')); valid = object?.v === 1 && Array.isArray(object.blobs) && object.blobs.every(h => DIGEST.test(h)); }
-                        catch (error) { object = { corrupt: bytes.toString('base64').slice(0, 4096), error: String(error.message) }; }
-                        queue.push({ object, valid, at: { device: device.name, incarnation: incarnation.name, sequence, commitId } });
+                        let object;
+                        try { object = JSON.parse(bytes.toString('utf8')); if (object?.v === 1 && Array.isArray(object.blobs) && object.blobs.every(h => DIGEST.test(h))) await fetchBlobs(object, tick); }
+                        catch (error) { object = object ?? { corrupt: bytes.toString('base64').slice(0, 4096), error: String(error.message) }; }
+                        const result = store.admitRemote(object, { device: device.name, incarnation: incarnation.name, sequence, commitId });
+                        if (result.state === 'identical') report.identical++; else report[result.state].push({ device: device.name, incarnation: incarnation.name, sequence, commitId, ...(result.reason ? { reason: result.reason } : {}) });
                     }
                     try { store.noteNasTimes(objects.filter(item => Math.floor(item.sequence / BUCKET) === bucket).map(item => ({ device: device.name, incarnation: incarnation.name, sequence: item.sequence, commitId: item.commitId, at: item.modifiedAt }))); } catch { /* display metadata must not fail a pull */ }
                 }
             }
         }
-        const counted = new Set();
-        for (const { object, valid } of queue) if (valid) for (const hash of store.missingCommitBlobs(object)) {
-            if (counted.has(hash)) continue; counted.add(hash); p.filesTotal++; p.bytesTotal += Number.isSafeInteger(object.sizes?.[hash]) ? object.sizes[hash] : 0;
-        }
-        p.phase = 'pull';
-        const tick = { onBytes: n => { p.bytes += n; }, onFile: hash => { if (counted.delete(hash)) p.files++; } };
-        for (const { object, valid, at } of queue) {
-            try { if (valid) await fetchBlobs(object, tick); } catch { /* as before: the object stays as read; admission decides (waiting) */ }
-            const result = store.admitRemote(object, at);
-            if (result.state === 'identical') report.identical++; else report[result.state].push({ ...at, ...(result.reason ? { reason: result.reason } : {}) });
-        }
         // Waiting commits: re-download blobs that were missing or damaged on an earlier pull, then retry admission.
-        for (const entry of store.waitingEntries()) if (entry.object && entry.blobs.length) { try { await fetchBlobs(entry.object); } catch (error) { report.waiting.push({ ...entry, object: undefined, reason: 'blob fetch: ' + error.message }); } }
+        for (const entry of store.waitingEntries()) if (entry.object && entry.blobs.length) { try { expectObject(entry.object); await fetchBlobs(entry.object, tick); } catch (error) { report.waiting.push({ ...entry, object: undefined, reason: 'blob fetch: ' + error.message }); } }
         for (const retry of await store.retryWaitingAsync()) if (retry.state !== 'waiting') report[retry.state].push(retry);
         // Repair: a blob pinned by an already ADMITTED revision that is no longer in the local store (consumed or cleaned up) is
         // re-fetched by its hash, so later plans stop reporting it as missing material. Only admitted revisions qualify — held,
@@ -252,12 +255,13 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
         // reported per hash and never fails the pull. The set is bounded by what admitted revisions pin; nothing is skipped.
         report.repaired = []; report.repairFailed = [];
         const admitted = [...new Set(Object.values(store.state().peers).flatMap(p => Object.values(p.admittedRevisions ?? {}).flat()))].map(id => store.graph.get(id)).filter(Boolean);
-        for (const hash of store.missingBlobs(admitted)) {
-            try { const path = await remote.getToFile(blobSegments(hash), store.blobFile(hash), hash); if (path) report.repaired.push(hash); else report.repairFailed.push({ hash, reason: 'absent on NAS' }); }
+        const repairing = [...store.missingBlobs(admitted)]; for (const hash of repairing) expect(hash); // 0.9.92-ver7: size not recorded here
+        for (const hash of repairing) {
+            try { const path = await remote.getToFile(blobSegments(hash), store.blobFile(hash), hash, tick.onBytes); if (path) { tick.onFile(hash); report.repaired.push(hash); } else report.repairFailed.push({ hash, reason: 'absent on NAS' }); }
             catch (error) { report.repairFailed.push({ hash, reason: String(error.message) }); }
         }
         return report;
-        } finally { progress = null; }
+        } finally { if (progress === p) progress = null; }
     }
     /** Maintenance: verify every blob pinned by already published commits and re-upload missing/damaged ones. */
     async function repair() {

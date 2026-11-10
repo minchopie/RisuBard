@@ -11,9 +11,9 @@
       "path": "src/App.svelte",
       "module": "transfer-sync",
       "kind": "hosts",
-      "sha256": "a6b5b48e8b2a115deacbc09e82b35a43a644f3b3eb1d286a459961e1a9c49ef8",
-      "contentSha256": "a6b5b48e8b2a115deacbc09e82b35a43a644f3b3eb1d286a459961e1a9c49ef8",
-      "bytes": 19057
+      "sha256": "a877559de76da396286407f42aa2bd8523b56e7b5bf67614acacbff102bc4742",
+      "contentSha256": "a877559de76da396286407f42aa2bd8523b56e7b5bf67614acacbff102bc4742",
+      "bytes": 19061
     },
     {
       "path": "src/lib/Others/ChatList.svelte",
@@ -1035,9 +1035,9 @@
       "path": "server/node/nas-sync-remote.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "68a804b9b894edf238cc1d168f84f2fa762d4d8f0dc7dd8b93ce5cfec6e47856",
-      "contentSha256": "68a804b9b894edf238cc1d168f84f2fa762d4d8f0dc7dd8b93ce5cfec6e47856",
-      "bytes": 47394
+      "sha256": "617cdbd8b6bc93ae55fa2ae57d8c3d3760792762ae0336fc1f01d67e63d9ca9c",
+      "contentSha256": "617cdbd8b6bc93ae55fa2ae57d8c3d3760792762ae0336fc1f01d67e63d9ca9c",
+      "bytes": 48705
     },
     {
       "path": "server/node/nas-sync-service.cjs",
@@ -1267,9 +1267,9 @@
       "path": "server/node/transfer-sync/nas-sync-remote.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "d96f4eb090886d779e96742d657fd9ed5d92d184ce7900658de88b829ca37a0b",
-      "contentSha256": "d96f4eb090886d779e96742d657fd9ed5d92d184ce7900658de88b829ca37a0b",
-      "bytes": 24312
+      "sha256": "1dca0ecc41f491546369a9c98796c6c3d6b490ce5afc5c61f048bc46e4b1b89b",
+      "contentSha256": "1dca0ecc41f491546369a9c98796c6c3d6b490ce5afc5c61f048bc46e4b1b89b",
+      "bytes": 25726
     },
     {
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
@@ -1515,9 +1515,9 @@
       "path": "src/lib/Setting/Pages/NasSyncProgress.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "eb71e4271d4ba0762543d36ed2829fc0bdcd76a4f226fef6eea4e281987b2834",
-      "contentSha256": "eb71e4271d4ba0762543d36ed2829fc0bdcd76a4f226fef6eea4e281987b2834",
-      "bytes": 3495
+      "sha256": "e02397b055f2050fff506c190e6be58feec32f0d459ab65e67fefa9124d2a5ae",
+      "contentSha256": "e02397b055f2050fff506c190e6be58feec32f0d459ab65e67fefa9124d2a5ae",
+      "bytes": 4093
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -4259,9 +4259,9 @@
       "path": "patchnote/0.9.92-ver7.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "fb5c2b22c2651c6f71abcb426ba0d5ff3b841a1b9c8c6bd070d874e4203a964d",
-      "contentSha256": "fb5c2b22c2651c6f71abcb426ba0d5ff3b841a1b9c8c6bd070d874e4203a964d",
-      "bytes": 2283
+      "sha256": "451cd9cb059019d4a40fb415fb06b61ba30dad9dfc8a5eae6f61b3b06ef471f5",
+      "contentSha256": "451cd9cb059019d4a40fb415fb06b61ba30dad9dfc8a5eae6f61b3b06ef471f5",
+      "bytes": 2747
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4752,7 +4752,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/transfer-sync.patch",
-        "sha256": "f1df356fef17217bc2a333fcd225d718de73ddedb7296cb5b215348f4d8c3240"
+        "sha256": "035bdf73463c02cc2aad66d117fdcece382974cd794fe7fda259cb3fbbcd3e5c"
       }
     },
     {
@@ -5238,7 +5238,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "da9fc1ede8592f5565d4f81e0600ef11d075d870fd892df9a604259f2eb79028"
+      "sha256": "5e4a270fbcf36aa39c356b23f29dba4014a6b1aea175e4d2a2284c37510351fa"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5345,8 +5345,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.92/transfer-sync.patch",
-          "sourceSha256": "f1df356fef17217bc2a333fcd225d718de73ddedb7296cb5b215348f4d8c3240",
-          "sha256": "ae3b46012496b92a2b2af81ac814bbbb9705e23a719e6cbdcdbe77fbb3ae745f"
+          "sourceSha256": "035bdf73463c02cc2aad66d117fdcece382974cd794fe7fda259cb3fbbcd3e5c",
+          "sha256": "8b645be36d81224169ef57112d3779ce13fd2a3744f2f7161339daac184c6ada"
         }
       ],
       "payloadTargets": {

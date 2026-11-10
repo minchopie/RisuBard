@@ -749,7 +749,7 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.92/transfer-sync.patch",
-          "sourceSha256": "f1df356fef17217bc2a333fcd225d718de73ddedb7296cb5b215348f4d8c3240"
+          "sourceSha256": "035bdf73463c02cc2aad66d117fdcece382974cd794fe7fda259cb3fbbcd3e5c"
         }
       ],
       "payloadTargets": {
