@@ -3051,9 +3051,9 @@
       "path": "server/node/server.cjs",
       "module": "host-bridges",
       "kind": "hosts",
-      "sha256": "ea920f9c63792b7f52a9f64b6045805fd83f4f0478d403ae72364f93ecb21aa1",
-      "contentSha256": "9e0e9c700155f6ddbd6178640f486274611be73040fc4e348c235587666415ae",
-      "bytes": 344899
+      "sha256": "eb6a5bc3490ce605e307704474545840918af977a19985958328ba878c84ceca",
+      "contentSha256": "f90a9dc5923c8c3b446380da60466a5e00ce72a0b101e6a74e42c8081b35e026",
+      "bytes": 345247
     },
     {
       "path": "src/lib/ChatScreens/DefaultChatScreen.svelte",
@@ -4259,9 +4259,9 @@
       "path": "patchnote/0.9.92-ver7.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "a14d62a72cc4765e4df1263581f7a36271286515631266c4d56f29495c9c4461",
-      "contentSha256": "a14d62a72cc4765e4df1263581f7a36271286515631266c4d56f29495c9c4461",
-      "bytes": 4735
+      "sha256": "31ab093a8d26c6af154f4360359b17e823ebf928d2fbe401fe3d98e00515d092",
+      "contentSha256": "31ab093a8d26c6af154f4360359b17e823ebf928d2fbe401fe3d98e00515d092",
+      "bytes": 4895
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4993,7 +4993,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/host-bridges.patch",
-        "sha256": "7aa155ab270c207493fb7ed1380f32f830518ca21a313dca38a898772058a507"
+        "sha256": "df7b2a782d00bc4c7f42b248b6f8a199f3b899fc85ddc57f10731d17762a29cf"
       }
     },
     {
@@ -5238,7 +5238,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "4caff2c4483956277f9d21037cfcf7158da78318ceb10b5b6eb005b938a173fc"
+      "sha256": "d86fdcd0c4948f820d12ebd6fc26250eed64d940b8fe2c139b4b0b3d0618495f"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5327,8 +5327,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "7aa155ab270c207493fb7ed1380f32f830518ca21a313dca38a898772058a507",
-          "sha256": "8ea2907d38459502914f9964dad75dd0efb420a97e2b4b186bfd26d3543a2325"
+          "sourceSha256": "df7b2a782d00bc4c7f42b248b6f8a199f3b899fc85ddc57f10731d17762a29cf",
+          "sha256": "c4662c3844334ba477f90e9e05b6cbdd38e0cdb7dd96aaab57987941acdb69db"
         },
         {
           "module": "file-export",

@@ -6180,7 +6180,9 @@ app.post('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next) =>
         if (!result.body) return res.status(202).json(result);
         req.body = result.body;
         // Recheck writer ownership and canonical conflicts at commit time.
-        return saveChatContentHandler(req, res, next);
+        // 0.9.92-ver7: the upload record is gone once the body is assembled, so a resent last chunk cannot complete (409): a NAS sync
+        // gate refusal from the save keeps its previous 500 answer here (the final error handler now answers it with 423 elsewhere).
+        return saveChatContentHandler(req, res, error => next(error?.code === 'NAS_SYNC_BUSY' ? new Error(error.message) : error));
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}), ...(error.transaction ? { transaction: error.transaction } : {}) }); // write-gate errors thrown inside a queued storage operation keep their code/transaction
         next(error);
