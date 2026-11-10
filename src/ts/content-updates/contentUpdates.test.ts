@@ -192,3 +192,40 @@ describe('content updates: fresh NAS route', () => {
         await expect(mod.fetchOverview()).resolves.toMatchObject({ configured: true })
     })
 })
+
+// 0.9.92-ver5: the start check runs when the main screen is up and, while the app is busy, again every 3 s until it asks.
+describe('content updates: start check', () => {
+    test('busy at start (another dialog): no skip — asked as soon as the app is free; not before 1.5 s', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { alertConfirmMulti } = await import('../alert') as any
+        const { alertStore } = await import('../stores.svelte') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        reportSyncNetwork.mockReset().mockResolvedValue({})
+        const card = strToU8('card bytes'), sha = createHash('sha256').update(card).digest('hex')
+        const item = { key: 'persona:a', kind: 'persona', title: 'a', version: '1', file: `${sha}.png`, fileName: 'a.png', sha256: sha, bytes: card.length, publishedAt: new Date().toISOString(), publishedBy: 'pc', decision: '' }
+        const calls: string[] = []
+        transferRequest.mockReset().mockImplementation(async (path: string) => {
+            calls.push(path)
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [item], pending: [item] }))
+            if (path === '/content-updates/decide') return new Response('{}')
+            throw new Error('unexpected ' + path)
+        })
+        alertConfirmMulti.mockReset().mockResolvedValue(1) // "아니오": recorded as declined
+        vi.useFakeTimers()
+        try {
+            alertStore.set({ type: 'wait' }) // e.g. the startup NAS sync dialog
+            mod.startContentUpdates(true)
+            await vi.advanceTimersByTimeAsync(1_400)
+            expect(calls).toEqual([])
+            await vi.advanceTimersByTimeAsync(10_000) // busy: retried every 3 s, nothing asked
+            expect(alertConfirmMulti).not.toHaveBeenCalled()
+            expect(calls).toEqual([])
+            alertStore.set({ type: 'none' })
+            await vi.advanceTimersByTimeAsync(3_100)
+            expect(calls).toEqual(['/content-updates/overview', '/content-updates/decide'])
+            expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+            await vi.advanceTimersByTimeAsync(30_000) // asked once: no more start checks
+            expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+        } finally { vi.useRealTimers(); alertStore.set({ type: 'none' }) }
+    })
+})

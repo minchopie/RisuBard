@@ -27,7 +27,11 @@ export type ContentDecision = 'applied' | 'declined'
 export type ContentDecisionInput = ContentDecision | 'reset'
 
 const CHECK_INTERVAL = 10 * 60_000
-const START_DELAY = 8_000
+// 0.9.92-ver5: the first check runs as soon as the main screen is up; while the app is busy at start (startup NAS sync, another
+// dialog, a reply) it is tried again every START_RETRY until it runs, for START_WINDOW. Before, one check at 8 s was skipped when busy.
+const START_DELAY = 1_500
+const START_RETRY = 3_000
+const START_WINDOW = 3 * 60_000
 export const contentUpdateStatus = writable('')
 
 const post = async <T>(path: string, body: unknown): Promise<T> =>
@@ -258,6 +262,8 @@ export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<C
 let running = false
 let lastCheck = 0
 let started = false
+/** The last check returned without asking because the app was busy (or another check was running). */
+let skippedBusy = false
 
 /** `ignoreAlert`: the caller's own dialog is the open one (app code update apply). */
 export async function busy(ignoreAlert = false): Promise<boolean> {
@@ -269,10 +275,11 @@ export async function busy(ignoreAlert = false): Promise<boolean> {
 
 /** Asks about each published item this device has not answered yet. `force` ignores the interval (the settings button). */
 export async function checkContentUpdates(force = false): Promise<ContentOverview | null> {
-    if (running) return null
+    skippedBusy = false
+    if (running) { skippedBusy = true; return null }
     if (!force && Date.now() - lastCheck < CHECK_INTERVAL) return null
     running = true
-    if (await busy()) { running = false; return null }
+    if (await busy()) { running = false; skippedBusy = true; return null }
     lastCheck = Date.now()
     try {
         const { alert } = await app()
@@ -317,7 +324,12 @@ export async function checkContentUpdates(force = false): Promise<ContentOvervie
 export function startContentUpdates(available: boolean = isNodeServer) {
     if (started || !available) return
     started = true
-    setTimeout(() => { void checkContentUpdates(true) }, START_DELAY)
+    const until = Date.now() + START_DELAY + START_WINDOW
+    const startCheck = async () => {
+        await checkContentUpdates(true)
+        if (skippedBusy && Date.now() < until) setTimeout(() => { void startCheck() }, START_RETRY)
+    }
+    setTimeout(() => { void startCheck() }, START_DELAY)
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') void checkContentUpdates()
     })
