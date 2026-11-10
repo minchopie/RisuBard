@@ -390,7 +390,7 @@ test('0.9.92-ver7: progress of a running publish/pull — totals known before th
     expect(transport.progress()).toBeNull()
 }, 60_000)
 
-test('0.9.92-ver7: the progress look-ahead keeps per-object admission — a commit object that cannot be read stops the pull only after the earlier objects were admitted (Codex A1: two-pass pull lost them)', async t => {
+test('0.9.92-ver7: the progress look-ahead keeps per-object admission — a commit object that cannot be read stops the pull only after the earlier objects were admitted (Codex A1: two-pass pull lost them), and a one-shot read failure is not retried (Codex A2: same failure point as ver6)', async t => {
     const dav = fixtureDav(), a = device(t, dav, await temp(t)), bRoot = await temp(t, 'bard-sync-b-')
     a.store.commit([chat('one', { n: 1 })]); a.store.commit([chat('two', { n: 2 })])
     const published = await a.transport.publish()
@@ -398,13 +398,34 @@ test('0.9.92-ver7: the progress look-ahead keeps per-object admission — a comm
     const second = published.stored[1]
     const store = createSyncStore({ dataRoot: bRoot, now }); store.setWorkspace('ws-fixture')
     const transport = createSyncTransport({ store, remote: createSyncRemote({ secrets: dav.secrets, fetch: dav.fetch }), now })
-    dav.hooks.push(async ({ method, path }: any) => method === 'GET' && path.includes(`/${second.sequence}_${second.commitId}.json`) ? Object.assign(Readable.from([Buffer.alloc(0)]), { statusCode: 503, headers: {} }) : null)
+    let failed = 0
+    dav.hooks.push(async ({ method, path }: any) => method === 'GET' && path.includes(`/${second.sequence}_${second.commitId}.json`) && !failed++ ? Object.assign(Readable.from([Buffer.alloc(0)]), { statusCode: 503, headers: {} }) : null)
     await expect(transport.pull()).rejects.toThrow('HTTP 503')
     expect(transport.progress()).toBeNull()
     dav.hooks.length = 0
     const again = await transport.pull()
     expect(again.identical).toBe(1)      // the first object was admitted by the failed pull
     expect(again.admitted).toHaveLength(1)
+}, 60_000)
+
+test('0.9.92-ver7: bytes of a blob download that failed its hash check are taken back, so a retry in the same pull never shows more than the total (Codex A2)', async t => {
+    const dav = fixtureDav(), a = device(t, dav, await temp(t)), bRoot = await temp(t, 'bard-sync-b-')
+    const media = Buffer.alloc(300_000, 7), file = join(a.store.root, '..', 'p.bin'); await writeFile(file, media)
+    a.store.commit([chat('media', { message: [{ data: 'see assets/p.bin' }] }, [], { 'asset:assets/p.bin': sha(media) })], { blobs: { [sha(media)]: file } })
+    await a.transport.publish()
+    const store = createSyncStore({ dataRoot: bRoot, now }); store.setWorkspace('ws-fixture')
+    const transport = createSyncTransport({ store, remote: createSyncRemote({ secrets: dav.secrets, fetch: dav.fetch }), now })
+    const samples: any[] = []; let tampered = 0
+    dav.hooks.push(async ({ method, path }: any) => {
+        if (method !== 'GET' || !path.includes(sha(media))) return null
+        samples.push(transport.progress())
+        return tampered++ ? null : Object.assign(Readable.from([Buffer.alloc(media.length, 1)]), { statusCode: 200, headers: {} })
+    })
+    await transport.pull()
+    expect(samples.length).toBeGreaterThanOrEqual(2)          // tampered once, fetched again by the waiting path of the same pull
+    const retry = samples[1]
+    expect(retry.bytes + media.length).toBeLessThanOrEqual(retry.bytesTotal)
+    expect(transport.progress()).toBeNull()
 }, 60_000)
 
 test('every ignored WebDAV success response is read to its end, never destroyed unread: put/exists-same/conflict/404 paths keep the keep-alive socket (Codex: first-sync connect timeouts)', async t => {

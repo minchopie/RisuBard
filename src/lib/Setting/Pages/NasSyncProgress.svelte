@@ -44,7 +44,7 @@
     const done = $derived(progress ? (byBytes ? Math.min(progress.bytes, progress.bytesTotal) : progress.files) : 0)
     const percent = $derived(total ? Math.min(100, Math.floor(done / total * 100)) : null)
     const detail = $derived(progress && progress.filesTotal
-        ? `파일 ${Math.min(progress.files, progress.filesTotal)}/${progress.filesTotal}${progress.bytesTotal ? ` · ${mb(Math.min(progress.bytes, progress.bytesTotal))}/${mb(progress.bytesTotal)} MB` : ''}`
+        ? `파일 ${Math.min(progress.files, progress.filesTotal)}/${progress.filesTotal}${byBytes ? ` · ${mb(Math.min(progress.bytes, progress.bytesTotal))}/${mb(progress.bytesTotal)} MB` : progress.bytes > 0 ? ` · ${mb(progress.bytes)} MB` : ''}`
         : '')
     const elapsed = $derived(clock(progress?.elapsedMs ?? (now - ($coordinatorState?.stageAt ?? now))))
 </script>

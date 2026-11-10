@@ -1035,9 +1035,9 @@
       "path": "server/node/nas-sync-remote.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "617cdbd8b6bc93ae55fa2ae57d8c3d3760792762ae0336fc1f01d67e63d9ca9c",
-      "contentSha256": "617cdbd8b6bc93ae55fa2ae57d8c3d3760792762ae0336fc1f01d67e63d9ca9c",
-      "bytes": 48705
+      "sha256": "1fd1d670180c33433ff8ae194341d474e6c3ce0193f89d449e1f664859466446",
+      "contentSha256": "1fd1d670180c33433ff8ae194341d474e6c3ce0193f89d449e1f664859466446",
+      "bytes": 50298
     },
     {
       "path": "server/node/nas-sync-service.cjs",
@@ -1267,9 +1267,9 @@
       "path": "server/node/transfer-sync/nas-sync-remote.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "1dca0ecc41f491546369a9c98796c6c3d6b490ce5afc5c61f048bc46e4b1b89b",
-      "contentSha256": "1dca0ecc41f491546369a9c98796c6c3d6b490ce5afc5c61f048bc46e4b1b89b",
-      "bytes": 25726
+      "sha256": "13d51dd2b4aef89c641398d7eea45ed5019631cbacf50fa3652a8349fc4439b9",
+      "contentSha256": "13d51dd2b4aef89c641398d7eea45ed5019631cbacf50fa3652a8349fc4439b9",
+      "bytes": 26462
     },
     {
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
@@ -1515,9 +1515,9 @@
       "path": "src/lib/Setting/Pages/NasSyncProgress.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "e02397b055f2050fff506c190e6be58feec32f0d459ab65e67fefa9124d2a5ae",
-      "contentSha256": "e02397b055f2050fff506c190e6be58feec32f0d459ab65e67fefa9124d2a5ae",
-      "bytes": 4093
+      "sha256": "699c85f6d15836f760871c2a3a2c0d8e3eca42b286c4eb6efb258f1a7ab579e4",
+      "contentSha256": "699c85f6d15836f760871c2a3a2c0d8e3eca42b286c4eb6efb258f1a7ab579e4",
+      "bytes": 4135
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -4259,9 +4259,9 @@
       "path": "patchnote/0.9.92-ver7.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "451cd9cb059019d4a40fb415fb06b61ba30dad9dfc8a5eae6f61b3b06ef471f5",
-      "contentSha256": "451cd9cb059019d4a40fb415fb06b61ba30dad9dfc8a5eae6f61b3b06ef471f5",
-      "bytes": 2747
+      "sha256": "702582c96f8f2a321ef4d33fe9abbe98951026c641686f092631251e05b7d8d9",
+      "contentSha256": "702582c96f8f2a321ef4d33fe9abbe98951026c641686f092631251e05b7d8d9",
+      "bytes": 3020
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
