@@ -1,12 +1,10 @@
 'use strict';
 require('sucrase/register/ts');
-const { createHash } = require('node:crypto');
 const { canonical, decodeRecordKeys, DEFAULT_RECORD_BYTE_BUDGET } = require('../../../shared/play-set/protocol.ts');
 const { remapBardRecord, remapBardChat, remapBardMarkdown, remapBardMedia } = require('../../../shared/play-set/bardIdentity.ts');
-const { sourceIdentityMap } = require('./play-set-relink.cjs');
+const { sourceIdentityMap, hash } = require('./play-set-relink.cjs');
 const { decodeMemorySaveChat } = require('../../../src/ts/risubard/memorySaveCodec.ts');
 const { parseSavedFiles, SAVE_FILES } = require('../risubard-memory-save-store.ts');
-const hash = (value, encoding = 'hex') => createHash('sha256').update(value).digest(encoding);
 
 /** Local receipts use verified contents, not sender-asserted hashes, to ignore only relocated identities. */
 async function bardFingerprints(manifest, records, readBlock) {

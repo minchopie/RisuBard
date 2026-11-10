@@ -644,7 +644,7 @@ async function translateMain(text:string, arg:{from:string, to:string, host:stri
 
 
 
-    const mobileGoogle = isBardAndroid() && db.translatorType === 'google'
+    const mobileGoogle = shouldBatchPrivateMobileGoogleTranslation(isBardAndroid(), db.translatorType)
     const fallback = () => {
         arg.onFallback?.()
         const now = Date.now()

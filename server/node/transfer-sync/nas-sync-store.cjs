@@ -12,7 +12,7 @@
 const fs = require('node:fs');
 const { join } = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
-const { atomicWriteJson, atomicWriteFileChunks, resolveInside } = require('../file-store.cjs');
+const { atomicWriteJson, atomicWriteFileChunks, resolveInside, checksum } = require('../file-store.cjs');
 const { createStoredGraph, decodeRevision, encodeRevision, hashJson, makeRevision, rootKey } = require('./nas-sync-core.cjs');
 const { canonical } = require('../../../shared/play-set/protocol.ts');
 
@@ -100,7 +100,7 @@ function createSyncStore({ dataRoot, identityDir, now = Date.now, uuid = randomU
         } finally { fs.closeSync(fd); }
         return true;
     }
-    const writeBlobBytes = (hash, bytes) => { if (!hasBlob(hash)) { if (createHash('sha256').update(bytes).digest('hex') !== hash) throw new Error('Blob bytes mismatch'); atomicWriteFileChunks(root, blobPath(hash), write => write(bytes), { backup: false }); } };
+    const writeBlobBytes = (hash, bytes) => { if (!hasBlob(hash)) { if (checksum(bytes) !== hash) throw new Error('Blob bytes mismatch'); atomicWriteFileChunks(root, blobPath(hash), write => write(bytes), { backup: false }); } };
     /** Revision = header file + content blob (content-addressed by contentHash); dependencies are blobs named by hash. */
     function writeRevisionFiles(revisions) {
         for (const rev of revisions) {

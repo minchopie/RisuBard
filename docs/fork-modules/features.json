@@ -604,7 +604,8 @@
         "patchnote/0.9.92-ver5.md",
         "patchnote/0.9.92-ver6.md",
         "patchnote/0.9.92-ver7.md",
-        "patchnote/0.9.92-ver8.md"
+        "patchnote/0.9.92-ver8.md",
+        "patchnote/0.9.92-ver9.md"
       ]
     },
     {
@@ -701,7 +702,7 @@
         {
           "module": "model-compat",
           "path": "docs/fork-modules/compat/v0.9.89/model-compat.patch",
-          "sourceSha256": "e38a61c6ca507ea78a5f27ab257f7fb59bd0c7e13fdc700b8ab48cc55be9a5da"
+          "sourceSha256": "6be56fc119825094cb65df718fd70970f9047cd6c3a34cf3ad879f07ccccb384"
         },
         {
           "module": "storage-recovery",
@@ -725,7 +726,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
-          "sourceSha256": "f55681377b752c7bd7529c3e02d6183b47c5ae6854cfe5a91f015cf5ce7529fd"
+          "sourceSha256": "9eda8e4ce7f4f185fb148e300dd8a343e9e2001411f22dd0fe3ea2d07a357eb7"
         },
         {
           "module": "lore-lua",

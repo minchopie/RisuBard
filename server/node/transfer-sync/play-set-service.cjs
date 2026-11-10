@@ -38,11 +38,10 @@ async function detectPersonaBundle(path) {
     if (!await isPersonaBundle(bytes)) return null;
     return { names: (await readPersonaBundle(bytes)).personas.map(p => p.name) };
 }
-const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 /** Stable id for the i-th persona of one received file (UUID-shaped, from the file's SHA-256): a persona that file added keeps
  *  this id, so applying the same file again finds it instead of adding it twice. */
 const transferPersonaId = (fileSha, index) => {
-    const h = sha256(`risubard-persona-transfer\n${fileSha}\n${index}`);
+    const h = hash(`risubard-persona-transfer\n${fileSha}\n${index}`);
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${(8 | (parseInt(h[16], 16) & 3)).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 };
 
@@ -187,7 +186,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             await fs.writeFile(join(dir, 'export.risuplay'), bundle.bytes, { mode: 0o600, flag: 'wx' });
             const record = { id: key, direction: 'send', state: 'ready', createdAt: Date.now(), kind: 'persona', name: bundleName(bundle.names),
                 // GitHub keeps one latest file per backup key: the same set of persona names replaces its previous upload.
-                backupKey: sha256(JSON.stringify(['personas', ...[...bundle.names].sort()])), bytes: bundle.bytes.length, sha256: sha256(bundle.bytes) };
+                backupKey: hash(JSON.stringify(['personas', ...[...bundle.names].sort()])), bytes: bundle.bytes.length, sha256: hash(bundle.bytes) };
             write(record); recorded = true;
             return { ...publicState(record), personas: bundle.names, missing: [], external: [], excluded: bundle.excluded };
         } finally { await fs.rm(recorded ? work : dir, { recursive: true, force: true }); }

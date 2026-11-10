@@ -7,7 +7,7 @@
  * (slot, version, origin, epoch) so a fresh GCM nonce never looks like a change.
  */
 require('sucrase/register/ts');
-const { createHash } = require('node:crypto');
+const { checksum: sha256 } = require('../file-store.cjs');
 const { canonical } = require('../../../shared/play-set/protocol.ts');
 const { sanitizeTransferChat, selectTransferGallery, presetFields, memoryFields } = require('../../../shared/play-set/snapshot.ts');
 const { themePresetLocalFields } = require('../../../shared/play-set/protocol.ts');
@@ -82,7 +82,6 @@ for (const key of Object.keys(COLLECTIONS)) if (OWNER.has(key) || DEVICE_LOCAL.h
 const ownerOf = key => PERSONA_MIRRORS.includes(key) || DEVICE_LOCAL.has(key) || key === REFS ? 'local' : key in COLLECTIONS ? 'collection' : OWNER.get(key) ?? `settings:${key}`;
 const GROUP_KEYS = Object.fromEntries(Object.entries(SETTINGS_GROUPS).map(([g, keys]) => [`settings:${g}`, keys]));
 
-const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const clone = v => JSON.parse(JSON.stringify(v));
 const object = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;

@@ -641,7 +641,7 @@ index 4a34491..716865b 100644
      const modelInfo = getModelInfo(db.aiModel);
      const pluginTokenizer = pluginV2.providerOptions.get(db.currentPluginProvider)?.tokenizer ?? "none";
 diff --git a/src/ts/translator/translator.ts b/src/ts/translator/translator.ts
-index f62fe64..48136fe 100644
+index f62fe64..872e018 100644
 --- a/src/ts/translator/translator.ts
 +++ b/src/ts/translator/translator.ts
 @@ -26,6 +26,11 @@ import { getModuleRegexScripts } from "../process/modules"
@@ -705,7 +705,7 @@ index f62fe64..48136fe 100644
 -    const res = await f.json()
 -
 -    
-+    const mobileGoogle = isBardAndroid() && db.translatorType === 'google'
++    const mobileGoogle = shouldBatchPrivateMobileGoogleTranslation(isBardAndroid(), db.translatorType)
 +    const fallback = () => {
 +        arg.onFallback?.()
 +        const now = Date.now()

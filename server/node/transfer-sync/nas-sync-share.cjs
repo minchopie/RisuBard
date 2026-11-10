@@ -16,15 +16,14 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const { join } = require('node:path');
-const { createHash, randomBytes, generateKeyPairSync, createPublicKey, createPrivateKey, diffieHellman, hkdfSync, createCipheriv, createDecipheriv } = require('node:crypto');
+const { randomBytes, generateKeyPairSync, createPublicKey, createPrivateKey, diffieHellman, hkdfSync, createCipheriv, createDecipheriv } = require('node:crypto');
 const yauzl = require('yauzl');
 const { ZipFile } = require('yazl');
-const { atomicWriteJson } = require('../file-store.cjs');
+const { atomicWriteJson, checksum: sha256 } = require('../file-store.cjs');
 const { canonical } = require('../../../shared/play-set/protocol.ts');
 
 const REQUEST = 'risubard-nas-sync-request', GRANT = 'risubard-nas-sync-grant';
 const ENTRY_LIMIT = 16 * 1024, ENTRIES = 2;
-const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const identity = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const b64 = (value, length) => { const out = Buffer.from(typeof value === 'string' ? value : '', 'base64'); if (out.length !== length) throw new Error('Damaged sync share field'); return out; };
 // X25519 raw public key <-> SPKI DER (RFC 8410 prefix).

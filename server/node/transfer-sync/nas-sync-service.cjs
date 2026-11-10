@@ -17,14 +17,14 @@ const { join, dirname, basename, relative, isAbsolute, sep, toNamespacedPath } =
 const mkdtempLong = async prefix => join(dirname(prefix), basename(await fsp.mkdtemp(toNamespacedPath(prefix))));
 const { createHash, randomUUID } = require('node:crypto');
 const { Worker } = require('node:worker_threads');
-const { atomicWriteJson, resolveInside } = require('../file-store.cjs');
+const { atomicWriteJson, resolveInside, checksum: sha256 } = require('../file-store.cjs');
 const { canonical } = require('../../../shared/play-set/protocol.ts');
 const { createSyncStore, READER_THREAD } = require('./nas-sync-store.cjs');
 const { createVault, vaultMasterStore, REFS } = require('./nas-sync-vault.cjs');
 const { createSyncRemote, createSyncTransport } = require('./nas-sync-remote.cjs');
 const { createManifest } = require('./nas-sync-manifest.cjs');
 const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences } = require('./nas-sync-projection.cjs');
-const { makeRevision, hashJson } = require('./nas-sync-core.cjs');
+const { makeRevision, hashJson, rootKey } = require('./nas-sync-core.cjs');
 const { PERSONA_MIRRORS, personaSelection, personaMirrorsMatch, personaMirrorIssue, mergePersonaHeads } = require('./nas-sync-reconcile.cjs');
 const { deviceKeyStore, writeRequestArchive, writeGrantArchive, openGrant, readShareArchive, REQUEST, GRANT } = require('./nas-sync-share.cjs');
 const { playSetMemoryMaterials } = require('./play-set-memory.cjs');
@@ -37,7 +37,6 @@ const { resolveLegacySourceSnapshotWorkspace } = require('../risubard-source-wor
 const { saveStoreDirectory, SAVE_FILES, parseSavedFiles } = require('../risubard-memory-save-store.ts');
 const { memorySaveWorkspaceId, listMemorySaveSlots } = require('../risubard-memory-save.ts');
 
-const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const clone = v => JSON.parse(JSON.stringify(v));
 const localHash = value => sha256(canonical(value, true));
 const messageBody = revision => (revision.content?.message ?? []).map(message => {
@@ -366,7 +365,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const id of known) { const r = s.graph.get(id); for (const parent of r?.parents ?? []) parents.add(parent); }
         for (const id of known) {
             const r = s.graph.get(id); if (!r || parents.has(id)) continue;
-            const key = `${r.domain}\n${r.type}\n${r.root}`;
+            const key = rootKey(r);
             if (!nasHeads.has(key)) nasHeads.set(key, []);
             nasHeads.get(key).push(id);
         }
@@ -443,7 +442,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
      *    over old PC/other-device forks, so the whole workspace converges on it.
      *  - 'authority' (a joining device): keep the variant published by the reference device (the grant sender unless given).
      *  A root with no matching variant, or one needing individual review (persona merge), is skipped and reported, never guessed. */
-    function groupByRoot(s, ids) { const out = new Map(); for (const id of ids) { const r = s.graph.get(id); if (!r) continue; const k = `${r.domain}\n${r.type}\n${r.root}`; if (!out.has(k)) out.set(k, []); out.get(k).push(id); } return out; }
+    function groupByRoot(s, ids) { const out = new Map(); for (const id of ids) { const r = s.graph.get(id); if (!r) continue; const k = rootKey(r); if (!out.has(k)) out.set(k, []); out.get(k).push(id); } return out; }
     function adoptionMark(x) { return { lastApplied: (x.applied ?? []).at(-1)?.transaction ?? null, pulled: false }; } // hoisted: the startup grant sweep may run first
     async function resolveAll({ prefer, authorityDevice } = {}) {
         if (prefer !== 'current' && prefer !== 'authority') throw new Error("prefer must be 'current' or 'authority'");
@@ -570,7 +569,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         // last name is its tombstone base), so a rename recorded together with the chat deletion still shows the new name.
         const owners = s.graph.revisions().filter(x => x.type === 'character' && meta(x.id)?.chatIds?.includes(r.root));
         const nameAt = id => { const h = s.graph.get(id); return nameOf(meta, h?.tombstone ? s.graph.get(h.tombstone.base) : h); };
-        const ownerName = [...new Set(owners.map(x => `${x.domain}\n${x.type}\n${x.root}`))].flatMap(k => s.graph.heads(k)).map(nameAt).find(Boolean) ?? nameOf(meta, owners.at(-1));
+        const ownerName = [...new Set(owners.map(x => rootKey(x)))].flatMap(k => s.graph.heads(k)).map(nameAt).find(Boolean) ?? nameOf(meta, owners.at(-1));
         return [ownerName, name || '이름 없는 대화'].filter(Boolean).join(' · ');
     }
     async function trashList() { const s = requireEnabled(); return withMeta(meta => s.trash().map(t => { const r = s.graph.get(t.id); return { ...t, domain: r.domain, type: r.type, title: deletedTitle(s, r, meta), operation: r.tombstone.operation, cohort: s.graph.revisions().filter(x => x.tombstone?.operation === r.tombstone.operation).length }; })); }
@@ -580,7 +579,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const s = requireEnabled();
         if (!s.trash().some(t => t.id === id)) throw new Error('This deletion is no longer in the trash');
         const batch = s.graph.restore(id);
-        await commitWithIntent(s, batch, batch.map(r => `${r.domain}\n${r.type}\n${r.root}`));
+        await commitWithIntent(s, batch, batch.map(r => rootKey(r)));
         return { restored: batch.map(r => ({ root: r.root, type: r.type, revision: r.id })) };
     }
     /** The open chat kept through a remote deletion: publish its current state first, then un-delete or resolve, and keep its lineage. */
@@ -665,7 +664,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             resolutions.push(s.graph.bootstrapResolution(authority, joining));
         }
         if (!resolutions.length) return { resolved: 0 };
-        const id = randomUUID(), roots = resolutions.map(r => `${r.domain}\n${r.type}\n${r.root}`);
+        const id = randomUUID(), roots = resolutions.map(r => rootKey(r));
         atomicWriteJson(root, `recovery/bootstrap-${id}/originals.json`, { authorityDevice, at: now(), originals });
         // Durable intent before the store commit. The applied lineage is NOT advanced here: the canonical database still holds the
         // joining values until the client applies the resolution through plan → arm → finish, which records the lineage then.
@@ -879,7 +878,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const add = key => { if (roots.has(key)) return; const [domain, type, root] = key.split('\n'); const entry = { domain, type, root };
             if (domain === 'play' && type === 'chat') entry.chatIds = [root, ...Object.entries(branches).filter(([, b]) => b.root === root).map(([id]) => id)];
             roots.set(key, entry); };
-        for (const p of s.pendingApply()) for (const id of p.revisions ?? []) { const r = s.graph.get(id); if (r) add(`${r.domain}\n${r.type}\n${r.root}`); }
+        for (const p of s.pendingApply()) for (const id of p.revisions ?? []) { const r = s.graph.get(id); if (r) add(rootKey(r)); }
         for (const key of service().localApply ?? []) add(key);
         return { roots: [...roots.values()], plan: service().plan ? service().plan.transaction : null };
     }
@@ -892,7 +891,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const transaction = randomUUID(), staging = join(root, 'apply', transaction), work = join(staging, 'work');
         await fsp.mkdir(work, { recursive: true, mode: 0o700 });
         const touched = new Map();
-        for (const p of pending) for (const id of p.revisions ?? []) { const r = s.graph.get(id); if (r) touched.set(`${r.domain}\n${r.type}\n${r.root}`, true); }
+        for (const p of pending) for (const id of p.revisions ?? []) { const r = s.graph.get(id); if (r) touched.set(rootKey(r), true); }
         for (const key of service().localApply ?? []) touched.set(key, true); // local conflict resolutions / trash restores awaiting materialization
         const lineage = service().lineage, branches = service().branches;
         // A local item that differs from its recorded head carries an edit no snapshot has published yet. Such a root is never
@@ -1090,7 +1089,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         if (!planned && !result.appliedRoots.length) { await fsp.rm(staging, { recursive: true, force: true }); return { empty: true, pending: result.pending }; }
         // Only commits whose every root was planned are acknowledged at finish; the rest stay pending for a later plan.
         const appliedRoots = new Set(result.appliedRoots);
-        result.commits = pending.filter(p => (p.revisions ?? []).every(id => { const r = s.graph.get(id); return r && appliedRoots.has(`${r.domain}\n${r.type}\n${r.root}`); })).map(({ device, incarnation, sequence, commitId }) => ({ device, incarnation, sequence, commitId }));
+        result.commits = pending.filter(p => (p.revisions ?? []).every(id => { const r = s.graph.get(id); return r && appliedRoots.has(rootKey(r)); })).map(({ device, incarnation, sequence, commitId }) => ({ device, incarnation, sequence, commitId }));
         // Sealed recovery copy and sealed plan journal; media staged (immutable, hash-checked) before the client sees the plan.
         atomicWriteJson(root, `recovery/${transaction}/before.json`, await sealRecord(s, v, before, work));
         for (const item of new Map(result.media.map(i => [i.kind + ':' + (i.key ?? i.id), i])).values()) {
@@ -1147,7 +1146,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             await normalizeCaptures(captures, db, branches, work);
             const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
             const diff = diffProjection(s.graph, projection.desired.filter(d => known.includes(d.key)), lineage);
-            for (const r of diff.revisions) edited.add(`${r.domain}\n${r.type}\n${r.root}`);
+            for (const r of diff.revisions) edited.add(rootKey(r));
             for (const k of diff.diverged) edited.add(k.split('#')[0]);
         } finally { for (const cleanup of cleanups) await cleanup().catch(() => {}); await fsp.rm(work, { recursive: true, force: true }); }
         return edited;
@@ -1395,7 +1394,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const key = `${c.device}/${c.incarnation}/${c.sequence}_${c.commitId}`;
             if (current.progress.acked.includes(key)) continue;
             const pair = s.pendingApply().find(p => p.device === c.device && p.incarnation === c.incarnation && p.sequence === c.sequence && p.commitId === c.commitId);
-            if (pair && !(pair.revisions ?? []).some(id => { const r = s.graph.get(id); return r && keptRoots.has(`${r.domain}\n${r.type}\n${r.root}`); })) s.markApplied(c.device, c.incarnation, c.sequence, c.commitId);
+            if (pair && !(pair.revisions ?? []).some(id => { const r = s.graph.get(id); return r && keptRoots.has(rootKey(r)); })) s.markApplied(c.device, c.incarnation, c.sequence, c.commitId);
             await step(x => { x.progress.acked.push(key); });
         }
         const outcome = { state: 'applied', transaction, commits: current.commits.length, chats: current.chats.length, pending: current.pending, keptDeletions: current.expected?.keptDeletions ?? [] };
