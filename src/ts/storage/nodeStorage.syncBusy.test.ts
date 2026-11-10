@@ -42,7 +42,7 @@ describe('ordinary writes behind the NAS sync write gate', () => {
         await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS + 10)
         await pending
         expect(fetch).toHaveBeenCalledTimes(2)
-        expect(fetch.mock.calls.every(([path, init]: any) => path === '/api/assets/bulk-write' && init.body === fetch.mock.calls[0][1].body)).toBe(true)
+        expect(fetch.mock.calls.every(([path, init]: any) => path === '/api/assets/bulk-write' && init.body === (fetch.mock.calls[0] as any)[1].body)).toBe(true)
         const armed = vi.fn(async () => new Response(JSON.stringify({ error: 'NAS sync apply must finish before saving', code: 'NAS_SYNC_BUSY', transaction: 'tx' }), { status: 423 }))
         ;(storage as any).authFetch = armed
         await expect(storage.setItems([{ key: 'assets/b.png', value: new Uint8Array([3]) }])).rejects.toBe('setItems Error')
