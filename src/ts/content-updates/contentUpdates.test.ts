@@ -16,6 +16,7 @@ vi.mock('../pngChunk', () => ({ PngChunk: { readGenerator: vi.fn(async function*
 vi.mock('uuid', () => ({ v4: () => 'id' }))
 vi.mock('../importSession', async () => { const { writable } = await import('svelte/store'); return { importSession: writable({ phase: 'idle' }) } })
 vi.mock('../nasSync', () => ({ reportSyncNetwork: vi.fn(async () => ({})) }))
+vi.mock('../nasSyncCoordinator', async () => { const { writable } = await import('svelte/store'); return { coordinatorState: writable(null) } })
 
 const mod = await import('./contentUpdates')
 
@@ -227,5 +228,63 @@ describe('content updates: start check', () => {
             await vi.advanceTimersByTimeAsync(30_000) // asked once: no more start checks
             expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
         } finally { vi.useRealTimers(); alertStore.set({ type: 'none' }) }
+    })
+})
+
+describe('content updates: start check retries (per call)', () => {
+    const setup = async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { alertConfirmMulti } = await import('../alert') as any
+        const { alertStore } = await import('../stores.svelte') as any
+        const { coordinatorState } = await import('../nasSyncCoordinator') as any
+        const card = strToU8('card bytes'), sha = createHash('sha256').update(card).digest('hex')
+        const item = (key: string) => ({ key, kind: 'persona', title: key, version: '1', file: `${sha}.png`, fileName: 'a.png', sha256: sha, bytes: card.length, publishedAt: new Date().toISOString(), publishedBy: 'pc', decision: '' })
+        const calls: string[] = [], answered = new Set<string>()
+        let overviewHook = async () => {}
+        transferRequest.mockReset().mockImplementation(async (path: string, init: any) => {
+            calls.push(path)
+            if (path === '/content-updates/overview') { await overviewHook(); const pending = ['persona:a', 'persona:b'].filter(k => !answered.has(k)).map(item); return new Response(JSON.stringify({ configured: true, items: pending, pending })) }
+            if (path === '/content-updates/decide') { answered.add(JSON.parse(init.body).key); return new Response('{}') }
+            throw new Error('unexpected ' + path)
+        })
+        alertConfirmMulti.mockReset()
+        return { calls, alertConfirmMulti, alertStore, coordinatorState, setOverviewHook: (h: () => Promise<void>) => { overviewHook = h } }
+    }
+    test('the app becomes busy while the list is fetched: asked again once it is free', async () => {
+        vi.resetModules()
+        const m = await import('./contentUpdates')
+        const s = await setup()
+        s.alertConfirmMulti.mockResolvedValue(1)
+        vi.useFakeTimers()
+        try {
+            let first = true
+            s.setOverviewHook(async () => { if (first) { first = false; s.alertStore.set({ type: 'wait' }) } }) // e.g. the app code dialog opens meanwhile
+            m.startContentUpdates(true)
+            await vi.advanceTimersByTimeAsync(1_600)
+            expect(s.alertConfirmMulti).not.toHaveBeenCalled()
+            s.alertStore.set({ type: 'none' })
+            await vi.advanceTimersByTimeAsync(3_100)
+            expect(s.alertConfirmMulti).toHaveBeenCalledTimes(2) // both items asked
+            await vi.advanceTimersByTimeAsync(30_000)
+            expect(s.alertConfirmMulti).toHaveBeenCalledTimes(2)
+        } finally { vi.useRealTimers(); s.alertStore.set({ type: 'none' }) }
+    })
+    test('a question closed without an answer is not re-asked by the start retry; a running NAS sync cycle is waited for', async () => {
+        vi.resetModules()
+        const m = await import('./contentUpdates')
+        const s = await setup()
+        s.alertConfirmMulti.mockResolvedValue(-1)
+        vi.useFakeTimers()
+        try {
+            s.coordinatorState.set({ running: true })
+            m.startContentUpdates(true)
+            await vi.advanceTimersByTimeAsync(7_600)
+            expect(s.calls).toEqual([]) // waiting for the sync cycle, no request
+            s.coordinatorState.set({ running: false })
+            await vi.advanceTimersByTimeAsync(3_100)
+            expect(s.alertConfirmMulti).toHaveBeenCalledTimes(1)
+            await vi.advanceTimersByTimeAsync(30_000)
+            expect(s.alertConfirmMulti).toHaveBeenCalledTimes(1)
+        } finally { vi.useRealTimers(); s.coordinatorState.set(null) }
     })
 })

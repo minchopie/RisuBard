@@ -164,7 +164,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 else {
                     stage = 'apply'
                     // Large Wiki plans may take longer without blocking play. Bound client preparation after the server answers.
-                    const result = await o.apply(true, signal, { window: safe.window, interacted, planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
+                    // 0.9.92-ver5: a dialog opened while the plan was prepared (e.g. a content update question) ends the safe window like a touch does.
+                    const result = await o.apply(true, signal, { window: safe.window, interacted: () => interacted() || !!o.alerting?.(), planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
                     if (result.state === 'deferred' && signal.aborted && /deadline/i.test(String(signal.reason))) throw signal.reason
                     outcome = result.state
                     state.pendingReview = result.pending?.length ?? 0; state.keptDeletions = result.keptDeletions?.length ?? 0

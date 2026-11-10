@@ -79,6 +79,16 @@ test('manual upload only snapshots and publishes; manual download protects local
     h.c.stop()
 })
 
+test('a dialog opened while the plan is prepared (a content update question) defers the automatic apply', async () => {
+    const h = harness(); await h.c.start(); h.setPending(1)
+    h.io.apply.mockImplementation(async (_auto: boolean, _signal?: AbortSignal, guard?: any) => {
+        f.alert.type = 'confirmMulti' // the question opens during the plan wait
+        return guard?.interacted() ? { state: 'deferred', deferred: ['activity'] } : { state: 'applied' }
+    })
+    expect(await h.c.downloadNow()).toBe('deferred')
+    h.c.stop()
+})
+
 test('a slow non-blocking server plan does not consume the client preparation deadline', async () => {
     const h = harness(); await h.c.start(); h.setPending(1)
     h.io.apply.mockImplementation(async (_auto: boolean, signal?: AbortSignal, guard?: any) => {

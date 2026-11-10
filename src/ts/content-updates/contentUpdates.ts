@@ -28,7 +28,8 @@ export type ContentDecisionInput = ContentDecision | 'reset'
 
 const CHECK_INTERVAL = 10 * 60_000
 // 0.9.92-ver5: the first check runs as soon as the main screen is up; while the app is busy at start (startup NAS sync, another
-// dialog, a reply) it is tried again every START_RETRY until it runs, for START_WINDOW. Before, one check at 8 s was skipped when busy.
+// dialog, a reply, a NAS sync cycle) or becomes busy before every item was answered, it is tried again every START_RETRY, for
+// START_WINDOW. A question closed without an answer is not asked again by it. Before, one check at 8 s was skipped when busy.
 const START_DELAY = 1_500
 const START_RETRY = 3_000
 const START_WINDOW = 3 * 60_000
@@ -262,8 +263,6 @@ export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<C
 let running = false
 let lastCheck = 0
 let started = false
-/** The last check returned without asking because the app was busy (or another check was running). */
-let skippedBusy = false
 
 /** `ignoreAlert`: the caller's own dialog is the open one (app code update apply). */
 export async function busy(ignoreAlert = false): Promise<boolean> {
@@ -273,19 +272,28 @@ export async function busy(ignoreAlert = false): Promise<boolean> {
         || get(session.importSession).phase !== 'idle'
 }
 
+/** A NAS sync cycle is running (startup/foreground sync, possibly preparing an apply): a question waits for it to end. */
+async function syncCycleRunning(): Promise<boolean> {
+    try { return !!get((await import('../nasSyncCoordinator')).coordinatorState)?.running } catch { return false }
+}
+
 /** Asks about each published item this device has not answered yet. `force` ignores the interval (the settings button). */
 export async function checkContentUpdates(force = false): Promise<ContentOverview | null> {
-    skippedBusy = false
-    if (running) { skippedBusy = true; return null }
-    if (!force && Date.now() - lastCheck < CHECK_INTERVAL) return null
+    return (await runCheck(force)).overview
+}
+/** `retry`: this call stopped because the app was (or became) busy before every item was answered — the start check tries again. */
+async function runCheck(force: boolean): Promise<{ overview: ContentOverview | null; retry: boolean }> {
+    if (running) return { overview: null, retry: true }
+    if (!force && Date.now() - lastCheck < CHECK_INTERVAL) return { overview: null, retry: false }
     running = true
-    if (await busy()) { running = false; skippedBusy = true; return null }
+    if (await busy() || await syncCycleRunning()) { running = false; return { overview: null, retry: true } }
+    let retry = false
     lastCheck = Date.now()
     try {
         const { alert } = await app()
         const overview = await fetchOverview()
         for (const item of overview.pending) {
-            if (await busy()) break
+            if (await busy()) { retry = true; break }
             const choice = await alert.alertConfirmMulti(
                 `새 ${kindLabel(item.kind)}가 올라왔어요. 지금 가져올까요?`,
                 ['네, 가져오기', '아니오'],
@@ -302,7 +310,7 @@ export async function checkContentUpdates(force = false): Promise<ContentOvervie
                 const bytes = await fetchContent(item)
                 contentUpdateStatus.set('')
                 // A transfer, sync apply or reply may have started while the file was coming: leave it for the next check.
-                if (await busy()) break
+                if (await busy()) { retry = true; break }
                 await recordDecision(item, await applyItem(item, bytes))
             } catch (error) {
                 contentUpdateStatus.set('')
@@ -310,11 +318,11 @@ export async function checkContentUpdates(force = false): Promise<ContentOvervie
                 break
             }
         }
-        return overview
+        return { overview, retry }
     } catch (error) {
         // No NAS, offline or an old server: stay quiet and try again later.
         console.warn('[ContentUpdates] check skipped:', error instanceof Error ? error.message : String(error))
-        return null
+        return { overview: null, retry: false }
     } finally {
         running = false
     }
@@ -326,8 +334,7 @@ export function startContentUpdates(available: boolean = isNodeServer) {
     started = true
     const until = Date.now() + START_DELAY + START_WINDOW
     const startCheck = async () => {
-        await checkContentUpdates(true)
-        if (skippedBusy && Date.now() < until) setTimeout(() => { void startCheck() }, START_RETRY)
+        if ((await runCheck(true)).retry && Date.now() < until) setTimeout(() => { void startCheck() }, START_RETRY)
     }
     setTimeout(() => { void startCheck() }, START_DELAY)
     document.addEventListener('visibilitychange', () => {

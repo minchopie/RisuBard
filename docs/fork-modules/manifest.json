@@ -1539,9 +1539,9 @@
       "path": "src/ts/nasSyncCoordinator.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "648fe8e92891a226c278fb14205ecd91cd5de1419c3a9423b1a93d3ce484c2f5",
-      "contentSha256": "648fe8e92891a226c278fb14205ecd91cd5de1419c3a9423b1a93d3ce484c2f5",
-      "bytes": 43296
+      "sha256": "2e150fe3576e9944e5db05dca38293d73469b1c5fe9d3321586b4d2a0e976535",
+      "contentSha256": "2e150fe3576e9944e5db05dca38293d73469b1c5fe9d3321586b4d2a0e976535",
+      "bytes": 43858
     },
     {
       "path": "src/ts/nasSyncCoordinator.ts",
@@ -1627,9 +1627,9 @@
       "path": "src/ts/transfer-sync/nasSyncCoordinator.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "d581ee2dca999a1b2317ad64f347bcff773050b5db00ab03f14922e640fd79c1",
-      "contentSha256": "d581ee2dca999a1b2317ad64f347bcff773050b5db00ab03f14922e640fd79c1",
-      "bytes": 28267
+      "sha256": "a29c9b21a1311e6046a14e20e46b7bd0e07da2feb79be779f61514dd9e0754dd",
+      "contentSha256": "a29c9b21a1311e6046a14e20e46b7bd0e07da2feb79be779f61514dd9e0754dd",
+      "bytes": 28460
     },
     {
       "path": "src/ts/transfer-sync/nasSyncUi.ts",
@@ -4427,17 +4427,17 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "af3986df9b323eb0ab87d55846f79a3b3cd16aa832db90ae8e98ebc2d8a80d12",
-      "contentSha256": "af3986df9b323eb0ab87d55846f79a3b3cd16aa832db90ae8e98ebc2d8a80d12",
-      "bytes": 21067
+      "sha256": "5eb873bfe967fcfec7db245c6bb62a1f50c8d2222ef76187de80262185ac2943",
+      "contentSha256": "5eb873bfe967fcfec7db245c6bb62a1f50c8d2222ef76187de80262185ac2943",
+      "bytes": 21754
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "d785b90a1f293163c2eac088f2a00756ee263e0c0e9e75db4ad0d3d0678b7ee8",
-      "contentSha256": "d785b90a1f293163c2eac088f2a00756ee263e0c0e9e75db4ad0d3d0678b7ee8",
-      "bytes": 18733
+      "sha256": "7a4703d75bc6e95f7b95c9357f3bfee8285ce98d4f747930736100bc043c0cef",
+      "contentSha256": "7a4703d75bc6e95f7b95c9357f3bfee8285ce98d4f747930736100bc043c0cef",
+      "bytes": 22423
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
@@ -4451,9 +4451,9 @@
       "path": "docs/content-updates/README.md",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "7cfbb05ab024a69ee3b1ee26eb9dd9dfb215bdc923a4a21e3240690bc4b21675",
-      "contentSha256": "7cfbb05ab024a69ee3b1ee26eb9dd9dfb215bdc923a4a21e3240690bc4b21675",
-      "bytes": 13346
+      "sha256": "f7ff5dafc06f33e9ac0e28e58bbdc5b06d1759ed03ee1a890ab69d7cc5130639",
+      "contentSha256": "f7ff5dafc06f33e9ac0e28e58bbdc5b06d1759ed03ee1a890ab69d7cc5130639",
+      "bytes": 13714
     },
     {
       "path": "server/node/content-updates/app-code-watch.cjs",
