@@ -65,27 +65,28 @@ describe('ordinary writes behind the NAS sync write gate', () => {
         expect((storage as any).pendingSaveRequests).toBe(0)
     })
 
-    it('0.9.92-ver7: a chunked chat upload refused at its commit (423 on the last chunk) is uploaded again from the first chunk under a new upload id, never by resending the last chunk alone', async () => {
+    it('0.9.92-ver7: a chunked chat upload refused at its commit (423 on the last chunk) is uploaded again from the first chunk under a new upload id, never by resending the last chunk alone; an earlier chunk refused the same way is resent alone under the same id (Codex A7)', async () => {
         const { encodeRisuSaveLegacy } = await import('./risuSave') as any
-        encodeRisuSaveLegacy.mockReturnValue(new Uint8Array(1024 * 1024 + 1))
+        encodeRisuSaveLegacy.mockReturnValue(new Uint8Array(2 * 1024 * 1024 + 1))
         const db = await import('./database.svelte') as any, original = db.getDatabase
         const storage = new NodeStorage()
-        const posts: { id: string; index: string }[] = []; let refused = false
+        const posts: { id: string; index: string }[] = []; let refused = false, early = false
         ;(storage as any).authFetch = vi.fn(async (_url: string, init: any) => {
             if (init.method === 'DELETE') return ok()
             const index = init.headers['x-upload-index'], id = init.headers['x-upload-id']
             posts.push({ id, index })
-            if (index === '0') return new Response(JSON.stringify({ uploadId: id, nextIndex: 1 }), { status: 202 })
+            if (index === '1' && !early) { early = true; return busy() }
+            if (index !== '2') return new Response(JSON.stringify({ uploadId: id, nextIndex: Number(index) + 1 }), { status: 202 })
             if (!refused) { refused = true; return busy() }
             return ok()
         })
         vi.spyOn(db, 'getDatabase').mockReturnValue({ ...original(), chatUploadChunkMiB: 1, chatUploadChunkEnabled: true })
         try {
             const pending = storage.saveChatContent('cha', 0, 'chat', {})
-            await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS + 10)
+            await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS * 2 + 20)
             await pending
-            expect(posts.map(p => p.index)).toEqual(['0', '1', '0', '1'])
-            expect(posts[0].id).toBe(posts[1].id); expect(posts[2].id).toBe(posts[3].id); expect(posts[2].id).not.toBe(posts[0].id)
+            expect(posts.map(p => p.index)).toEqual(['0', '1', '1', '2', '0', '1', '2'])
+            expect(new Set(posts.slice(0, 4).map(p => p.id)).size).toBe(1); expect(new Set(posts.slice(4).map(p => p.id)).size).toBe(1); expect(posts[4].id).not.toBe(posts[0].id)
             expect((storage as any).pendingSaveRequests).toBe(0)
         } finally { vi.restoreAllMocks() }
     })

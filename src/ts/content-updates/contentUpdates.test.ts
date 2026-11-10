@@ -337,7 +337,7 @@ describe('content updates: NAS sync busy answer', () => {
             const outcome = expect(decided).rejects.toMatchObject({ code: 'NAS_SYNC_BUSY', transaction: 'tx-1', message: expect.stringMatching(/적용 결과를 확인/) })
             await vi.advanceTimersByTimeAsync(16_000)
             await outcome
-            expect(transferRequest.mock.calls.length).toBeLessThanOrEqual(17)
+            expect(transferRequest.mock.calls.filter(([path]: any) => path === '/content-updates/decide').length).toBeLessThanOrEqual(17) // only this request: a start check of an earlier test may still be polling
         } finally { vi.useRealTimers() }
     })
     test('a sync step longer than a minute: a clear error, nothing left in the status line', async () => {

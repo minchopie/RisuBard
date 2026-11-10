@@ -2707,9 +2707,9 @@
       "path": "src/ts/storage/nodeStorage.syncBusy.test.ts",
       "module": "storage-recovery",
       "kind": "files",
-      "sha256": "f0219b5cb700350b3590718ff5e98bbf35d1496756e9ae423c5148fc5ab35ce9",
-      "contentSha256": "f0219b5cb700350b3590718ff5e98bbf35d1496756e9ae423c5148fc5ab35ce9",
-      "bytes": 10933
+      "sha256": "00e411aa99fbdc796850a2a6c371722a029fd36a563d9a470edebc7c6b97b4c2",
+      "contentSha256": "00e411aa99fbdc796850a2a6c371722a029fd36a563d9a470edebc7c6b97b4c2",
+      "bytes": 11191
     },
     {
       "path": "src/ts/storage/nodeStorage.syncGate.test.ts",
@@ -3083,9 +3083,9 @@
       "path": "src/ts/storage/nodeStorage.ts",
       "module": "host-bridges",
       "kind": "hosts",
-      "sha256": "675ea4f6432c72a28eb5a49f715dad89f6ea3c5e3400e08f9ced3f5604a45bfe",
-      "contentSha256": "675ea4f6432c72a28eb5a49f715dad89f6ea3c5e3400e08f9ced3f5604a45bfe",
-      "bytes": 65929
+      "sha256": "e702694861400983ad05e162ccf1cf60bb727a5e47248e20583a1a8da2cafcbc",
+      "contentSha256": "e702694861400983ad05e162ccf1cf60bb727a5e47248e20583a1a8da2cafcbc",
+      "bytes": 66654
     },
     {
       "path": "vitest.config.ts",
@@ -4259,9 +4259,9 @@
       "path": "patchnote/0.9.92-ver7.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "4f2b863aa9b4ac6d5fbd90c5b85121dab42426c7ee41688c5aa7f3827777902f",
-      "contentSha256": "4f2b863aa9b4ac6d5fbd90c5b85121dab42426c7ee41688c5aa7f3827777902f",
-      "bytes": 5696
+      "sha256": "b6fb896c1a49013900392f600f2a5bd8e141618235731672eaf0c1d6c644dcc8",
+      "contentSha256": "b6fb896c1a49013900392f600f2a5bd8e141618235731672eaf0c1d6c644dcc8",
+      "bytes": 6180
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4435,9 +4435,9 @@
       "path": "server/node/content-updates/content-updates.cjs",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "70bb0ac4d79ac31f6b0f3403a27f48f52986d260cb2309e65a68c0b34076ac5b",
-      "contentSha256": "70bb0ac4d79ac31f6b0f3403a27f48f52986d260cb2309e65a68c0b34076ac5b",
-      "bytes": 22079
+      "sha256": "c8f828c2163007ea87a97d38fa98cbaa743d4e2f00f3f43eac0ca6a4b1f56d53",
+      "contentSha256": "c8f828c2163007ea87a97d38fa98cbaa743d4e2f00f3f43eac0ca6a4b1f56d53",
+      "bytes": 21973
     },
     {
       "path": "server/node/content-updates/content-updates.test.ts",
@@ -4459,9 +4459,9 @@
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "1f840468ef558469db6a8e3b831e40cd38a0f56814d1c5b134acc49c6d2fdda5",
-      "contentSha256": "1f840468ef558469db6a8e3b831e40cd38a0f56814d1c5b134acc49c6d2fdda5",
-      "bytes": 37692
+      "sha256": "d20ad3c7c0e3a1a5b71d66b980c9ff258a6c7291346a58f1de65384df1efff9a",
+      "contentSha256": "d20ad3c7c0e3a1a5b71d66b980c9ff258a6c7291346a58f1de65384df1efff9a",
+      "bytes": 37828
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
@@ -4993,7 +4993,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/host-bridges.patch",
-        "sha256": "146486798b877257379eddf78e7202f330360939f1fe6062f08d1030a24925c9"
+        "sha256": "a5340048340034646faa8e556ec4360b8a56963383ea3f01cba06c5bb52c2606"
       }
     },
     {
@@ -5238,7 +5238,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "ff1162efe0968005370f0f9ae9e79ef70824554157e025137d9f5171be401d04"
+      "sha256": "00ff06dfa34e23f664d13cf183ecb03aff5b50ed43c173e37ab716e1bc87ee6a"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5327,8 +5327,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "146486798b877257379eddf78e7202f330360939f1fe6062f08d1030a24925c9",
-          "sha256": "9f2ad93821d42ebf40f9ca8d4cd5a3148627f15a5b7877bac23eed0fe0b09e53"
+          "sourceSha256": "a5340048340034646faa8e556ec4360b8a56963383ea3f01cba06c5bb52c2606",
+          "sha256": "68335bd4c9892d135e9c6dc85338203c37524d432747c8d59841eda7a94bf4fc"
         },
         {
           "module": "file-export",

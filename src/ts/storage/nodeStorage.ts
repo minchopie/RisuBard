@@ -1337,11 +1337,14 @@ export class NodeStorage{
 
     async saveChatContent(chaId: string, chatIndex: number, chatId: string, chat: any): Promise<void> {
         const encoded = encodeRisuSaveLegacy(chat)
-        const da = await this.resendWhileSyncBusy(() => uploadChatContent(
-            (url, init) => this.authFetch(url, init), chaId, chatIndex, chatId, encoded,
-            getDatabase().chatUploadChunkMiB,
-            getDatabase().chatUploadChunkEnabled === true,
-        ), true)
+        // fork 0.9.92-ver7: with chunked uploads on, a commit (last chunk) refused by the NAS sync gate cannot be completed by resending that
+        // chunk (the server drops the upload once assembled): the whole upload is then the resent unit. Earlier chunks and the single
+        // request are resent one by one through saveRequest as before.
+        const chunked = getDatabase().chatUploadChunkEnabled === true
+        const commit = (init: RequestInit) => { const h = init.headers as Record<string, string>; return (Number(h['x-upload-index']) + 1) * Number(h['x-upload-chunk-size']) >= Number(h['x-upload-size']) }
+        const upload = (whole: boolean) => uploadChatContent((url, init) => init.method === 'DELETE' || (whole && commit(init)) ? this.authFetch(url, init) : this.saveRequest(url, init),
+            chaId, chatIndex, chatId, encoded, getDatabase().chatUploadChunkMiB, chunked)
+        const da = chunked ? await this.resendWhileSyncBusy(() => upload(true), true) : await upload(false)
         if (da.status === 409) {
             const data = await da.json()
             throw new ConflictError(

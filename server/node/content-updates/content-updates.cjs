@@ -11,6 +11,7 @@ const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { createHash, randomUUID } = require('node:crypto');
 const { createAppCodeWatch } = require('./app-code-watch.cjs');
+const { hashFile } = require('../app-update/core.cjs'); // the same streamed SHA-256 of a file
 
 const NAMESPACE = '.risubard-content-updates/';
 const RECORDS = 'items';
@@ -181,11 +182,6 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         return { configured: true, items, pending: items.filter(item => !item.decision) };
     }
 
-    async function hashFile(file) {
-        const hash = createHash('sha256');
-        for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
-        return hash.digest('hex');
-    }
     function limitStream(limit, label) {
         let bytes = 0;
         const counter = new Transform({ transform(chunk, _encoding, next) {
