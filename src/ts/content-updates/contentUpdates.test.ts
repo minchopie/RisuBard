@@ -301,6 +301,8 @@ describe('content updates: NAS sync busy answer', () => {
         const seen: string[] = []
         let refusals = 0
         transferRequest.mockReset().mockImplementation(async (path: string) => {
+            // only this test's requests: the start check / app code watch of an earlier test may still be polling the same mock
+            if (!['/content-updates/fetch', '/content-updates/decide', '/content-updates/publish'].includes(path)) return new Response('{}')
             seen.push(path)
             if (refusals > 0) { refusals--; throw busy423() }
             if (path === '/content-updates/fetch') return new Response(card as BodyInit)
