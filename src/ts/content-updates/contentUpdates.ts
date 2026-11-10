@@ -366,11 +366,20 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
                 contentUpdateStatus.set(`${itemLabel(item)} 받는 중…`)
                 const bytes = await fetchContent(item)
                 contentUpdateStatus.set('')
+                // 0.9.92-ver7: a NAS sync cycle that started while the file was coming may arm an apply, which refuses other writes (the
+                // persona image save failed with "setItem Error"): it is waited for like a busy NAS answer (BUSY_WAIT), then the item is applied.
+                for (const until = Date.now() + BUSY_WAIT; await syncCycleRunning() && Date.now() < until;) {
+                    contentUpdateStatus.set('NAS 동기화가 끝나면 이어서 받아요…')
+                    await new Promise(resolve => setTimeout(resolve, BUSY_STEP))
+                }
+                contentUpdateStatus.set('')
                 // A transfer, sync apply or reply may have started while the file was coming: leave it for the next check.
-                if (await busy()) { retry = true; break }
+                if (await busy() || await syncCycleRunning()) { retry = true; break }
                 await recordDecision(item, await applyItem(item, bytes))
             } catch (error) {
                 contentUpdateStatus.set('')
+                // 0.9.92-ver7: a write refused because a transfer or NAS sync started meanwhile is not shown as a failure: unanswered, asked again.
+                if (get(transferBusy) || await syncCycleRunning()) { retry = true; break }
                 alert.alertError(`「${itemLabel(item)}」를 가져오지 못했어요. 다음에 다시 물어볼게요.\n${error instanceof Error ? error.message : String(error)}`)
                 break
             }

@@ -435,3 +435,51 @@ describe('content updates: comparison download then busy', () => {
         } finally { alertStore.set({ type: 'none' }); PngChunk.readGenerator.mockImplementation(async function* () {}) }
     })
 })
+
+// 0.9.92-ver7 (tablet: 「함건희(…) (v1.0.35-carrier.8)」를 가져오지 못했어요 … setItem Error): a NAS sync cycle around the import.
+describe('content updates: NAS sync cycle around the import', () => {
+    const setup = async () => {
+        const { getDatabase, saveImage } = await import('../storage/database.svelte') as any
+        const { transferRequest } = await import('../playTransfer') as any
+        const { alertConfirmMulti, alertError } = await import('../alert') as any
+        const { PngChunk } = await import('../pngChunk') as any
+        const { coordinatorState } = await import('../nasSyncCoordinator') as any
+        getDatabase.mockReturnValue({ characters: [], personas: [] })
+        const bytes = strToU8('png carrier'), sha = createHash('sha256').update(bytes).digest('hex')
+        const json = btoa(unescape(encodeURIComponent(JSON.stringify({ name: '함건희(carrier)', personaPrompt: 'p', note: 'n' }))))
+        PngChunk.readGenerator.mockImplementation(async function* () { yield { key: 'persona', value: json } })
+        const item = { key: 'persona:함건희(carrier)', kind: 'persona', title: '함건희(carrier)', version: '1', file: sha + '.png', fileName: 'p.png', sha256: sha, bytes: bytes.length, publishedAt: new Date().toISOString(), publishedBy: 'pc', decision: '' }
+        const decisions: string[] = []
+        let onFetch = () => {}
+        transferRequest.mockReset().mockImplementation(async (path: string, init: any) => {
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [item], pending: [item] }))
+            if (path === '/content-updates/fetch') { onFetch(); return new Response(bytes as BodyInit) }
+            if (path === '/content-updates/decide') { decisions.push(JSON.parse(init.body).decision); return new Response('{}') }
+            throw new Error('unexpected ' + path)
+        })
+        alertConfirmMulti.mockReset().mockResolvedValue(0)
+        alertError.mockReset(); saveImage.mockClear()
+        return { saveImage, alertError, coordinatorState, decisions, setOnFetch: (f: () => void) => { onFetch = f }, cleanup: () => { coordinatorState.set(null); PngChunk.readGenerator.mockImplementation(async function* () {}) } }
+    }
+    test('a cycle that starts during the download is waited for, then the persona is applied', async () => {
+        const s = await setup()
+        let runningAtSave: boolean | undefined
+        s.saveImage.mockImplementationOnce(async () => { runningAtSave = !!get(s.coordinatorState)?.running; return 'icon' })
+        s.setOnFetch(() => { s.coordinatorState.set({ running: true }); setTimeout(() => s.coordinatorState.set({ running: false }), 1_500) })
+        try {
+            await mod.checkContentUpdates(true)
+            expect(runningAtSave).toBe(false)
+            expect(s.decisions).toEqual(['applied'])
+            expect(s.alertError).not.toHaveBeenCalled()
+        } finally { s.cleanup() }
+    }, 15_000)
+    test('a write refused because a sync cycle started during the import is not shown as an error; the item stays unanswered', async () => {
+        const s = await setup()
+        s.saveImage.mockImplementationOnce(async () => { s.coordinatorState.set({ running: true }); throw 'setItem Error' })
+        try {
+            await mod.checkContentUpdates(true)
+            expect(s.alertError).not.toHaveBeenCalled()
+            expect(s.decisions).toEqual([])
+        } finally { s.cleanup() }
+    })
+})

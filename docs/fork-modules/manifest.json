@@ -1035,9 +1035,9 @@
       "path": "server/node/nas-sync-remote.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "1fd1d670180c33433ff8ae194341d474e6c3ce0193f89d449e1f664859466446",
-      "contentSha256": "1fd1d670180c33433ff8ae194341d474e6c3ce0193f89d449e1f664859466446",
-      "bytes": 50298
+      "sha256": "488906a4a9c038b7100a4a2f483b092ca2407840cb6ed9bb986034860c8c34e8",
+      "contentSha256": "488906a4a9c038b7100a4a2f483b092ca2407840cb6ed9bb986034860c8c34e8",
+      "bytes": 49844
     },
     {
       "path": "server/node/nas-sync-service.cjs",
@@ -1267,9 +1267,9 @@
       "path": "server/node/transfer-sync/nas-sync-remote.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "13d51dd2b4aef89c641398d7eea45ed5019631cbacf50fa3652a8349fc4439b9",
-      "contentSha256": "13d51dd2b4aef89c641398d7eea45ed5019631cbacf50fa3652a8349fc4439b9",
-      "bytes": 26462
+      "sha256": "02e640b44c32750087402f72562465ccd029a3385f0a7182ca53e90b523269c0",
+      "contentSha256": "02e640b44c32750087402f72562465ccd029a3385f0a7182ca53e90b523269c0",
+      "bytes": 26028
     },
     {
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
@@ -4259,9 +4259,9 @@
       "path": "patchnote/0.9.92-ver7.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "702582c96f8f2a321ef4d33fe9abbe98951026c641686f092631251e05b7d8d9",
-      "contentSha256": "702582c96f8f2a321ef4d33fe9abbe98951026c641686f092631251e05b7d8d9",
-      "bytes": 3020
+      "sha256": "be21d845e23273f1a1fb4d0ff837c9d01ba83f124c5bd27561785aa1e642542d",
+      "contentSha256": "be21d845e23273f1a1fb4d0ff837c9d01ba83f124c5bd27561785aa1e642542d",
+      "bytes": 4247
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4451,17 +4451,17 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "d1acaf6c314cf275f33b91f2cea9dbdfd0b92efbd8adce1851872217b1abf92c",
-      "contentSha256": "d1acaf6c314cf275f33b91f2cea9dbdfd0b92efbd8adce1851872217b1abf92c",
-      "bytes": 26205
+      "sha256": "b9b0f62ac26e18a0c472d0be407afea9cfac67c213b280b82bed9e74467f92e8",
+      "contentSha256": "b9b0f62ac26e18a0c472d0be407afea9cfac67c213b280b82bed9e74467f92e8",
+      "bytes": 27108
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "499cc34d96466f764f60d0b836f379787c2aee3b145d8837f515a5e6f7360a38",
-      "contentSha256": "499cc34d96466f764f60d0b836f379787c2aee3b145d8837f515a5e6f7360a38",
-      "bytes": 33734
+      "sha256": "2ef426c05846b4a195e551e30233fbedd86f69ab520791f0ac049f3137b18699",
+      "contentSha256": "2ef426c05846b4a195e551e30233fbedd86f69ab520791f0ac049f3137b18699",
+      "bytes": 37244
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
