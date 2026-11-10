@@ -2707,9 +2707,9 @@
       "path": "src/ts/storage/nodeStorage.syncBusy.test.ts",
       "module": "storage-recovery",
       "kind": "files",
-      "sha256": "c7e90bbdbbc0fd4baa8b2657a3f8180044ff9ecea8b7f8ee7679f795f3279250",
-      "contentSha256": "c7e90bbdbbc0fd4baa8b2657a3f8180044ff9ecea8b7f8ee7679f795f3279250",
-      "bytes": 12581
+      "sha256": "d4ef27e22518144c95b029d00986062392748730fd7166b090382ee85ee23d23",
+      "contentSha256": "d4ef27e22518144c95b029d00986062392748730fd7166b090382ee85ee23d23",
+      "bytes": 12755
     },
     {
       "path": "src/ts/storage/nodeStorage.syncGate.test.ts",
@@ -3083,9 +3083,9 @@
       "path": "src/ts/storage/nodeStorage.ts",
       "module": "host-bridges",
       "kind": "hosts",
-      "sha256": "8d023845820c3104096ac161292dd693b12de1661933a6ca0e7fb878364dee70",
-      "contentSha256": "8d023845820c3104096ac161292dd693b12de1661933a6ca0e7fb878364dee70",
-      "bytes": 67158
+      "sha256": "a0b7b9f8a68254957af62f6a8f69438d375b49f8ee8374acb7560d87fa7976f2",
+      "contentSha256": "a0b7b9f8a68254957af62f6a8f69438d375b49f8ee8374acb7560d87fa7976f2",
+      "bytes": 67211
     },
     {
       "path": "vitest.config.ts",
@@ -5001,7 +5001,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/host-bridges.patch",
-        "sha256": "3efc865c09b1f2f903c91c390ed250284c1974bc6e8ada61137dd8d32bd5c3f6"
+        "sha256": "24e61ff1e4f54ad7889962b6436a54c57ccb2d633240fa36abe93c353e7d3257"
       }
     },
     {
@@ -5247,7 +5247,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "a3899cc1e9d79eda1f7f332da597d7b76d089de1619a1ad2d3d1fe8272e180db"
+      "sha256": "80b91ae657f7ecac57925e481ce3b03effa1a06554d0fb9ff5c446ac576b40f8"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5336,8 +5336,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "3efc865c09b1f2f903c91c390ed250284c1974bc6e8ada61137dd8d32bd5c3f6",
-          "sha256": "2f45d2b1400052a1cd897298ce5697e0ce698fc67003ce17a3e98a838ae351ed"
+          "sourceSha256": "24e61ff1e4f54ad7889962b6436a54c57ccb2d633240fa36abe93c353e7d3257",
+          "sha256": "5cb10b8d81ff85e5d2bfa94d6680a95d28bff1232410718153e7421fab4ffe68"
         },
         {
           "module": "file-export",

@@ -91,23 +91,23 @@ describe('ordinary writes behind the NAS sync write gate', () => {
         } finally { vi.restoreAllMocks() }
     })
 
-    it('0.9.92-ver7: a refused chunked commit whose cleanup (DELETE) is not confirmed does not start another upload (Codex A8: upload slots)', async () => {
+    it('0.9.92-ver7: a refused chunked commit whose cleanup (DELETE) is not confirmed does not start another upload — also when an earlier cleanup succeeded and this one only times out (Codex A8/A9: upload slots)', async () => {
         const { encodeRisuSaveLegacy } = await import('./risuSave') as any
         encodeRisuSaveLegacy.mockReturnValue(new Uint8Array(1024 * 1024 + 1))
         const db = await import('./database.svelte') as any, original = db.getDatabase
         const storage = new NodeStorage()
-        const ids = new Set<string>()
+        const ids = new Set<string>(); let deletes = 0
         ;(storage as any).authFetch = vi.fn(async (_url: string, init: any) => {
-            if (init.method === 'DELETE') throw new TypeError('network')
+            if (init.method === 'DELETE') return deletes++ ? new Promise<Response>(() => {}) : ok() // the second cleanup never answers (5 s bound)
             ids.add(init.headers['x-upload-id'])
             return init.headers['x-upload-index'] === '0' ? new Response(JSON.stringify({ uploadId: init.headers['x-upload-id'], nextIndex: 1 }), { status: 202 }) : busy()
         })
         vi.spyOn(db, 'getDatabase').mockReturnValue({ ...original(), chatUploadChunkMiB: 1, chatUploadChunkEnabled: true })
         try {
             const pending = expect(storage.saveChatContent('cha', 0, 'chat', {})).rejects.toThrow('saveChatContent error: 503')
-            await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS * 3)
+            await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS * 3 + 5_000)
             await pending
-            expect(ids.size).toBe(1)
+            expect(ids.size).toBe(2)
             expect((storage as any).pendingSaveRequests).toBe(0)
         } finally { vi.restoreAllMocks() }
     })

@@ -735,7 +735,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "3efc865c09b1f2f903c91c390ed250284c1974bc6e8ada61137dd8d32bd5c3f6"
+          "sourceSha256": "24e61ff1e4f54ad7889962b6436a54c57ccb2d633240fa36abe93c353e7d3257"
         },
         {
           "module": "file-export",

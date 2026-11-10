@@ -578,7 +578,7 @@ index bd439c5..27f8eb8 100644
          return true
      }
 diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
-index baa1568..ff794e3 100644
+index baa1568..5f76797 100644
 --- a/src/ts/storage/nodeStorage.ts
 +++ b/src/ts/storage/nodeStorage.ts
 @@ -18,7 +18,7 @@ import { isCanonicalFilesChangedResponse, isExternalChangesPendingResponse } fro
@@ -741,7 +741,7 @@ index baa1568..ff794e3 100644
 +        // refusals could fill the server's upload slots; the save then fails instead (503) and the app's normal save retry takes over.
 +        let cleaned = true
 +        const upload = (whole: boolean) => uploadChatContent((url, init) => init.method === 'DELETE'
-+            ? this.authFetch(url, init).then(response => { cleaned = response.ok; return response }, error => { cleaned = false; throw error })
++            ? (cleaned = false, this.authFetch(url, init).then(response => { cleaned = response.ok && !init.signal?.aborted; return response })) // unconfirmed until this DELETE answers ok in time
 +            : whole && commit(init) ? this.authFetch(url, init) : this.saveRequest(url, init),
 +            chaId, chatIndex, chatId, encoded, getDatabase().chatUploadChunkMiB, chunked)
 +        const da = chunked ? await this.resendWhileSyncBusy(async () => cleaned ? upload(true) : new Response(null, { status: 503 }), true) : await upload(false)

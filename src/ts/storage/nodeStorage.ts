@@ -1346,7 +1346,7 @@ export class NodeStorage{
         // refusals could fill the server's upload slots; the save then fails instead (503) and the app's normal save retry takes over.
         let cleaned = true
         const upload = (whole: boolean) => uploadChatContent((url, init) => init.method === 'DELETE'
-            ? this.authFetch(url, init).then(response => { cleaned = response.ok; return response }, error => { cleaned = false; throw error })
+            ? (cleaned = false, this.authFetch(url, init).then(response => { cleaned = response.ok && !init.signal?.aborted; return response })) // unconfirmed until this DELETE answers ok in time
             : whole && commit(init) ? this.authFetch(url, init) : this.saveRequest(url, init),
             chaId, chatIndex, chatId, encoded, getDatabase().chatUploadChunkMiB, chunked)
         const da = chunked ? await this.resendWhileSyncBusy(async () => cleaned ? upload(true) : new Response(null, { status: 503 }), true) : await upload(false)
