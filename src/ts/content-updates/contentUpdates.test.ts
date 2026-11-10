@@ -360,12 +360,24 @@ describe('content updates: already installed', () => {
         const { getDatabase } = await import('../storage/database.svelte') as any
         getDatabase.mockReturnValue({
             characters: [{ name: '마물소녀도감 1.2.35-argon.16 ver', characterVersion: '1.2.35-argon.16' }, { name: 'Shecubus!', characterVersion: '' }],
-            personas: [{ name: '함건희(보어)', note: '함건희(보어) v1.0.35-vore.10 · …' }],
+            personas: [{ name: '함건희(보어)', note: '함건희(보어) v1.0.33-vore.9 · …', personaPrompt: 'prompt 35' }],
         })
         expect(await mod.alreadyInstalled({ kind: 'character', title: '마물소녀도감 1.2.35-argon.16 ver', version: '1.2.35-argon.16' })).toBe(true)
         expect(await mod.alreadyInstalled({ kind: 'character', title: '마물소녀도감 1.2.35-argon.17 ver', version: '1.2.35-argon.17' })).toBe(false)
-        expect(await mod.alreadyInstalled({ kind: 'persona', title: '함건희(보어)', version: 'v1.0.35-vore.10' })).toBe(true)
-        expect(await mod.alreadyInstalled({ kind: 'persona', title: '함건희(보어·꿈각성)', version: 'v1.0.34-awakening.3' })).toBe(false)
+        // a persona is compared by its content (the real v1.0.35 PNG notes still carry v1.0.33)
+        const { PngChunk } = await import('../pngChunk') as any
+        const { transferRequest: tr } = await import('../playTransfer') as any
+        const personaPng = (prompt: string) => { const bytes = strToU8('png ' + prompt); return { bytes, sha: createHash('sha256').update(bytes).digest('hex'), json: btoa(unescape(encodeURIComponent(JSON.stringify({ name: '함건희(보어)', personaPrompt: prompt, note: '함건희(보어) v1.0.33-vore.9 · …' })))) } }
+        const same = personaPng('prompt 35'), changed = personaPng('prompt 36')
+        let serving = same
+        tr.mockReset().mockImplementation(async (path: string) => { if (path === '/content-updates/fetch') return new Response(serving.bytes as BodyInit); throw new Error('unexpected ' + path) })
+        PngChunk.readGenerator.mockImplementation(async function* () { yield { key: 'persona', value: serving.json } })
+        const personaItem = (p: any) => ({ kind: 'persona', key: 'persona:함건희(보어)', title: '함건희(보어)', version: 'v1.0.35-vore.10', sha256: p.sha, bytes: p.bytes.length, file: p.sha + '.png' })
+        expect(await mod.alreadyInstalled(personaItem(same) as any)).toBe(true)
+        serving = changed
+        expect(await mod.alreadyInstalled(personaItem(changed) as any)).toBe(false) // same name and note, new prompt: asked
+        PngChunk.readGenerator.mockImplementation(async function* () {})
+        expect(await mod.alreadyInstalled({ kind: 'persona', title: '함건희(보어·꿈각성)', version: 'v1.0.34-awakening.3' })).toBe(false) // no persona of that name: no download
         expect(await mod.alreadyInstalled({ kind: 'preset', title: '바드 프롬프트 젬', version: '0.5.2-r2' })).toBe(false)
         expect(await mod.alreadyInstalled({ kind: 'character', title: 'Shecubus!', version: '' })).toBe(false)
 

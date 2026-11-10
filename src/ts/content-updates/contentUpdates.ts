@@ -299,11 +299,12 @@ export async function busy(ignoreAlert = false): Promise<boolean> {
         || get(session.importSession).phase !== 'idle'
 }
 
-/** 0.9.92-ver6: this device already has the published version (a card or persona imported by hand, or via another route): it is
- *  recorded as applied without asking. Same version = a character with the same base name whose card version (or name) carries that
- *  version, or a persona with the same name whose note carries it. Prompt presets are always asked. A different file published under
- *  the same version number is not told apart (no download to compare). */
-export async function alreadyInstalled(item: Pick<ContentItem, 'kind' | 'title' | 'version'>): Promise<boolean> {
+/** 0.9.92-ver6: this device already has what was published (a card or persona imported by hand, or via another route): it is
+ *  recorded as applied without asking. A character: same base name and the card version (or name) carries the published version — a
+ *  different card file published under the same version number is not told apart (a card is not downloaded just to compare). A persona
+ *  (small PNG): downloaded and compared — a persona with the same name, prompt and note (the note's version token is not trusted: the
+ *  persona files keep an older one). Prompt presets are always asked. */
+export async function alreadyInstalled(item: Pick<ContentItem, 'kind' | 'title' | 'version'> & Partial<ContentItem>): Promise<boolean> {
     const plain = (value: string | undefined) => (value ?? '').trim().replace(/^v/i, '')
     const version = plain(item.version)
     if (!version) return false
@@ -311,7 +312,16 @@ export async function alreadyInstalled(item: Pick<ContentItem, 'kind' | 'title' 
     const db = database.getDatabase()
     if (item.kind === 'character') return (db.characters ?? []).some((c: any) => c && c.type !== 'group' && baseName(c.name ?? '') === baseName(item.title)
         && (plain(c.characterVersion) === version || versionIn(c.name) === version))
-    if (item.kind === 'persona') return (db.personas ?? []).some((p: any) => p?.name === item.title && versionIn(p.note) === version)
+    if (item.kind === 'persona') {
+        const named = (db.personas ?? []).filter((p: any) => p?.name === item.title)
+        if (!named.length || !item.key || !item.sha256 || !item.bytes) return false
+        try {
+            const text = await readPngText(await fetchContent(item as ContentItem), ['persona'])
+            if (!text.persona) return false
+            const data = readPersonaJson(text.persona)
+            return named.some((p: any) => p.name === data.name && (p.personaPrompt ?? '') === data.personaPrompt && (p.note ?? '') === (data.note ?? ''))
+        } catch { return false } // could not compare: ask as before
+    }
     return false
 }
 
