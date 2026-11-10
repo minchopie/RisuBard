@@ -1,5 +1,5 @@
 diff --git a/server/node/server.cjs b/server/node/server.cjs
-index 6c8b51e..68a6b96 100644
+index 6c8b51e..5a95188 100644
 --- a/server/node/server.cjs
 +++ b/server/node/server.cjs
 @@ -1,3 +1,4 @@
@@ -276,16 +276,19 @@ index 6c8b51e..68a6b96 100644
          next(error);
      }
  });
-@@ -7648,7 +7704,7 @@ app.post('/api/local-shutdown', (req, res) => {
+@@ -7648,7 +7704,10 @@ app.post('/api/local-shutdown', (req, res) => {
  app.use(expressErrorMiddleware);
  app.use((err, req, res, next) => {
      if (res.headersSent) return next(err);
 -    res.status(500).json({ error: err?.message || 'internal server error' });
-+    res.status(err?.code === 'TRANSFER_BUSY' ? 423 : 500).json({ error: err?.message || 'internal server error', ...(err?.code === 'TRANSFER_BUSY' ? { code: err.code } : {}) });
++    // 0.9.92-ver7: both write gates keep their 423 answer (as checkActiveSession sends it) when a queued write re-checks them
++    // (queueStorageOperation): a NAS sync step that started while the write waited in the queue is waited out by the client, not a 500.
++    const gate = ['TRANSFER_BUSY', 'NAS_SYNC_BUSY'].includes(err?.code);
++    res.status(gate ? 423 : 500).json({ error: err?.message || 'internal server error', ...(gate ? { code: err.code, ...(err.transaction ? { transaction: err.transaction } : {}) } : {}) });
  });
  
  // ─────────────────────────────────────────────────────────────────────────────
-@@ -7717,7 +7773,7 @@ async function startServer() {
+@@ -7717,7 +7776,7 @@ async function startServer() {
          // No time limit for receiving a request: large bot saves on a busy disk can
          // take longer than Node's 5-minute default, and waiting is not a failure.
          server.requestTimeout = 0;
@@ -294,7 +297,7 @@ index 6c8b51e..68a6b96 100644
          // Written only once bound, so a server that lost the port race keeps the owner's token intact.
          server.once('listening', () => writeFileSync(localShutdownTokenPath, localShutdownToken, { mode: 0o600 }));
          // Move BardWiki vectors out of the KV in the background once serving.
-@@ -7751,11 +7807,13 @@ async function shutdownGracefully(reason) {
+@@ -7751,11 +7810,13 @@ async function shutdownGracefully(reason) {
      console.log(`[Server] Received ${reason}, flushing pending data...`);
      try {
          try { liveFileEvents.close(); } catch (e) { logger.warn('[Server] File event cleanup error:', e); }

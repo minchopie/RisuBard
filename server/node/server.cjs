@@ -7704,7 +7704,10 @@ app.post('/api/local-shutdown', (req, res) => {
 app.use(expressErrorMiddleware);
 app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
-    res.status(err?.code === 'TRANSFER_BUSY' ? 423 : 500).json({ error: err?.message || 'internal server error', ...(err?.code === 'TRANSFER_BUSY' ? { code: err.code } : {}) });
+    // 0.9.92-ver7: both write gates keep their 423 answer (as checkActiveSession sends it) when a queued write re-checks them
+    // (queueStorageOperation): a NAS sync step that started while the write waited in the queue is waited out by the client, not a 500.
+    const gate = ['TRANSFER_BUSY', 'NAS_SYNC_BUSY'].includes(err?.code);
+    res.status(gate ? 423 : 500).json({ error: err?.message || 'internal server error', ...(gate ? { code: err.code, ...(err.transaction ? { transaction: err.transaction } : {}) } : {}) });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

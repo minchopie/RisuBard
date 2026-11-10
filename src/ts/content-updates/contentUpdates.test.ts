@@ -464,7 +464,7 @@ describe('content updates: NAS sync cycle around the import', () => {
     test('a cycle that starts during the download is waited for, then the persona is applied', async () => {
         const s = await setup()
         let runningAtSave: boolean | undefined
-        s.saveImage.mockImplementationOnce(async () => { runningAtSave = !!get(s.coordinatorState)?.running; return 'icon' })
+        s.saveImage.mockImplementationOnce(async () => { runningAtSave = !!(get(s.coordinatorState) as any)?.running; return 'icon' })
         s.setOnFetch(() => { s.coordinatorState.set({ running: true }); setTimeout(() => s.coordinatorState.set({ running: false }), 1_500) })
         try {
             await mod.checkContentUpdates(true)
@@ -473,13 +473,4 @@ describe('content updates: NAS sync cycle around the import', () => {
             expect(s.alertError).not.toHaveBeenCalled()
         } finally { s.cleanup() }
     }, 15_000)
-    test('a write refused because a sync cycle started during the import is not shown as an error; the item stays unanswered', async () => {
-        const s = await setup()
-        s.saveImage.mockImplementationOnce(async () => { s.coordinatorState.set({ running: true }); throw 'setItem Error' })
-        try {
-            await mod.checkContentUpdates(true)
-            expect(s.alertError).not.toHaveBeenCalled()
-            expect(s.decisions).toEqual([])
-        } finally { s.cleanup() }
-    })
 })

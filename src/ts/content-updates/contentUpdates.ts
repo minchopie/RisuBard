@@ -378,8 +378,6 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
                 await recordDecision(item, await applyItem(item, bytes))
             } catch (error) {
                 contentUpdateStatus.set('')
-                // 0.9.92-ver7: a write refused because a transfer or NAS sync started meanwhile is not shown as a failure: unanswered, asked again.
-                if (get(transferBusy) || await syncCycleRunning()) { retry = true; break }
                 alert.alertError(`「${itemLabel(item)}」를 가져오지 못했어요. 다음에 다시 물어볼게요.\n${error instanceof Error ? error.message : String(error)}`)
                 break
             }

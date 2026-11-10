@@ -3051,9 +3051,9 @@
       "path": "server/node/server.cjs",
       "module": "host-bridges",
       "kind": "hosts",
-      "sha256": "c5e129758235a316cd7aca6f143471bce38fdb72df9403700facb36a3d21141f",
-      "contentSha256": "5b9978fa59392dcf27e4f38686ccbb7378d45b4aad02bef798e202845a2bfbdb",
-      "bytes": 344547
+      "sha256": "ea920f9c63792b7f52a9f64b6045805fd83f4f0478d403ae72364f93ecb21aa1",
+      "contentSha256": "9e0e9c700155f6ddbd6178640f486274611be73040fc4e348c235587666415ae",
+      "bytes": 344899
     },
     {
       "path": "src/lib/ChatScreens/DefaultChatScreen.svelte",
@@ -4259,9 +4259,9 @@
       "path": "patchnote/0.9.92-ver7.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "be21d845e23273f1a1fb4d0ff837c9d01ba83f124c5bd27561785aa1e642542d",
-      "contentSha256": "be21d845e23273f1a1fb4d0ff837c9d01ba83f124c5bd27561785aa1e642542d",
-      "bytes": 4247
+      "sha256": "a14d62a72cc4765e4df1263581f7a36271286515631266c4d56f29495c9c4461",
+      "contentSha256": "a14d62a72cc4765e4df1263581f7a36271286515631266c4d56f29495c9c4461",
+      "bytes": 4735
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4451,17 +4451,17 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "b9b0f62ac26e18a0c472d0be407afea9cfac67c213b280b82bed9e74467f92e8",
-      "contentSha256": "b9b0f62ac26e18a0c472d0be407afea9cfac67c213b280b82bed9e74467f92e8",
-      "bytes": 27108
+      "sha256": "371002a4a0eb09605114a18660d36105124dc7441d3ecd3b0b5c23a12d9b2a4d",
+      "contentSha256": "371002a4a0eb09605114a18660d36105124dc7441d3ecd3b0b5c23a12d9b2a4d",
+      "bytes": 26868
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "2ef426c05846b4a195e551e30233fbedd86f69ab520791f0ac049f3137b18699",
-      "contentSha256": "2ef426c05846b4a195e551e30233fbedd86f69ab520791f0ac049f3137b18699",
-      "bytes": 37244
+      "sha256": "abeb9b7f2d624fd4450d2ee4e1f13eed2d8f59fa5671a84b8aedb9d6f4b90c5a",
+      "contentSha256": "abeb9b7f2d624fd4450d2ee4e1f13eed2d8f59fa5671a84b8aedb9d6f4b90c5a",
+      "bytes": 36752
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
@@ -4993,7 +4993,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/host-bridges.patch",
-        "sha256": "f2540fee8453e586bc3e79dfdce201d9ce6ecde71c9345b63a36da8d4c68824e"
+        "sha256": "7aa155ab270c207493fb7ed1380f32f830518ca21a313dca38a898772058a507"
       }
     },
     {
@@ -5238,7 +5238,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "5e4a270fbcf36aa39c356b23f29dba4014a6b1aea175e4d2a2284c37510351fa"
+      "sha256": "4caff2c4483956277f9d21037cfcf7158da78318ceb10b5b6eb005b938a173fc"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5327,8 +5327,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "f2540fee8453e586bc3e79dfdce201d9ce6ecde71c9345b63a36da8d4c68824e",
-          "sha256": "3fa60c711326216153867b1cf40e6d8001a3b66a446cbb3ca13bc6e758f3e0c4"
+          "sourceSha256": "7aa155ab270c207493fb7ed1380f32f830518ca21a313dca38a898772058a507",
+          "sha256": "8ea2907d38459502914f9964dad75dd0efb420a97e2b4b186bfd26d3543a2325"
         },
         {
           "module": "file-export",
