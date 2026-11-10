@@ -4235,9 +4235,9 @@
       "path": "patchnote/0.9.92-ver5.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "0bbc8417e3fe9023893f1a56bf589380b3809298217fb1676816ca6d941d88e3",
-      "contentSha256": "0bbc8417e3fe9023893f1a56bf589380b3809298217fb1676816ca6d941d88e3",
-      "bytes": 1034
+      "sha256": "c1909fe6b0c048d55791d34e4ba516a2485cfb0637a799d18266f815f78ef8e4",
+      "contentSha256": "c1909fe6b0c048d55791d34e4ba516a2485cfb0637a799d18266f815f78ef8e4",
+      "bytes": 1778
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
