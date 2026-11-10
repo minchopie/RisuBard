@@ -241,6 +241,18 @@ test('0.9.92-ver10: a generation that starts during a running automatic cycle st
     }
 })
 
+test('0.9.92-ver10: an apply that gives way to a generation started while it was preparing (returns deferred) also resumes after the generation ends, not only at the next poll (Codex C1)', async () => {
+    const generatingChanged = writable(false)
+    const h = harness({ generatingChanged }); h.setPending(1)
+    h.io.apply.mockImplementationOnce(async () => { h.calls.push('apply'); f.activity.mockReturnValue(true); generatingChanged.set(true); return { state: 'deferred' } })
+    await h.c.start(); await vi.advanceTimersByTimeAsync(1_000); await flush()
+    expect(h.calls.at(-1)).toBe('apply'); expect(h.c.state).toMatchObject({ running: false, lastOutcome: 'deferred' })
+    f.activity.mockReturnValue(false); generatingChanged.set(false)
+    h.calls.length = 0; await vi.advanceTimersByTimeAsync(5_000); await flush()
+    expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview'])
+    h.c.stop()
+})
+
 test('0.9.92-ver10: an apply already armed when a generation starts is never interrupted; it settles through its own verdict', async () => {
     const generatingChanged = writable(false)
     const h = harness({ generatingChanged }); h.setPending(1)

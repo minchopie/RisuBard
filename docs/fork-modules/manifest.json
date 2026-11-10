@@ -1547,9 +1547,9 @@
       "path": "src/ts/nasSyncCoordinator.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "8905c8a83c3220e3df8db6d7b2574c82e8ae5eaa6d79daf4935786c8970aba9a",
-      "contentSha256": "8905c8a83c3220e3df8db6d7b2574c82e8ae5eaa6d79daf4935786c8970aba9a",
-      "bytes": 47800
+      "sha256": "0ca0aa710fba8986a4b3cf920e3ac8388881249aab30867ea2899c50f64b7194",
+      "contentSha256": "0ca0aa710fba8986a4b3cf920e3ac8388881249aab30867ea2899c50f64b7194",
+      "bytes": 48740
     },
     {
       "path": "src/ts/nasSyncCoordinator.ts",
@@ -1635,9 +1635,9 @@
       "path": "src/ts/transfer-sync/nasSyncCoordinator.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "0a8a3a575cfc23d665a7402fce2876fff9eb16c3ab0c6331c9161845f37ed2cd",
-      "contentSha256": "0a8a3a575cfc23d665a7402fce2876fff9eb16c3ab0c6331c9161845f37ed2cd",
-      "bytes": 30425
+      "sha256": "bfa2c2608a468e593e3427938746f1f9bc71ade297defa68053f6555baf35a55",
+      "contentSha256": "bfa2c2608a468e593e3427938746f1f9bc71ade297defa68053f6555baf35a55",
+      "bytes": 30646
     },
     {
       "path": "src/ts/transfer-sync/nasSyncUi.ts",
@@ -4283,9 +4283,9 @@
       "path": "patchnote/0.9.92-ver10.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "9bf179cbb67919172838a792a98b5a5d84e2c2d3f5ea7db54bbcf246156fb33f",
-      "contentSha256": "9bf179cbb67919172838a792a98b5a5d84e2c2d3f5ea7db54bbcf246156fb33f",
-      "bytes": 1676
+      "sha256": "40fd73a7b4d86390524e1b0e0cd813128163c822ffd923f123b93bb0c20384c5",
+      "contentSha256": "40fd73a7b4d86390524e1b0e0cd813128163c822ffd923f123b93bb0c20384c5",
+      "bytes": 1790
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",

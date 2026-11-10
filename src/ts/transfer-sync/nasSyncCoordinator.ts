@@ -178,6 +178,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // 0.9.92-ver5: a dialog opened while the plan was prepared (e.g. a content update question) ends the safe window like a touch does.
                     const result = await o.apply(true, signal, { window: safe.window, interacted: () => interacted() || !!o.alerting?.(), planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
                     if (result.state === 'deferred' && signal.aborted && /deadline/i.test(String(signal.reason))) throw signal.reason
+                    if (result.state === 'deferred' && o.generating()) resumeAfterGeneration = true // the apply gave way to a model request that started meanwhile: resume when it ends, like a cycle stopped between steps
                     outcome = result.state
                     state.pendingReview = result.pending?.length ?? 0; state.keptDeletions = result.keptDeletions?.length ?? 0
                     if (result.state === 'deferred-active-chat') state.deferredForChat = o.activeChat() || '-'
