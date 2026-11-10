@@ -713,7 +713,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.81/host-bridges.patch",
-          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
+          "sourceSha256": "cc06f9fc384a6fd8e4cf84dc39c034bda58767e035962d48f6424eb6a3808be1"
         },
         {
           "module": "transfer-sync",
@@ -802,7 +802,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.84/host-bridges.patch",
-          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
+          "sourceSha256": "cc06f9fc384a6fd8e4cf84dc39c034bda58767e035962d48f6424eb6a3808be1"
         },
         {
           "module": "file-export",
@@ -950,7 +950,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.86/host-bridges.patch",
-          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
+          "sourceSha256": "cc06f9fc384a6fd8e4cf84dc39c034bda58767e035962d48f6424eb6a3808be1"
         },
         {
           "module": "file-export",
@@ -1115,7 +1115,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.89/host-bridges.patch",
-          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
+          "sourceSha256": "cc06f9fc384a6fd8e4cf84dc39c034bda58767e035962d48f6424eb6a3808be1"
         },
         {
           "module": "file-export",
@@ -1294,7 +1294,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
+          "sourceSha256": "cc06f9fc384a6fd8e4cf84dc39c034bda58767e035962d48f6424eb6a3808be1"
         },
         {
           "module": "file-export",
@@ -1479,7 +1479,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
+          "sourceSha256": "cc06f9fc384a6fd8e4cf84dc39c034bda58767e035962d48f6424eb6a3808be1"
         },
         {
           "module": "file-export",
@@ -1667,7 +1667,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "2191d3945c713e8310c02dd8fc5b980cdb00ef3949af7d0f30fa7d24d46e51b7"
+          "sourceSha256": "cc06f9fc384a6fd8e4cf84dc39c034bda58767e035962d48f6424eb6a3808be1"
         },
         {
           "module": "file-export",

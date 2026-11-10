@@ -38,15 +38,25 @@ export const contentUpdateStatus = writable('')
 // 0.9.92-ver6: the app server answers 423 NAS_SYNC_BUSY to these POST routes (its write gate) while a NAS sync step or an armed sync apply
 // runs. That answer comes before the route runs (nothing fetched, recorded or published yet), so the request is sent again every
 // BUSY_STEP until the sync step ends, for at most BUSY_WAIT. Before, it failed at once ("NAS sync apply must finish before saving").
+// An armed sync apply (the answer carries `transaction`) normally finishes within seconds but may instead need recovery: it is waited
+// for at most ARMED_WAIT, then reported as such, transaction kept (the same contract as nodeStorage/playTransfer: never resolved by waiting).
+// The waiting text goes to contentUpdateStatus, which the settings panel shows.
 const BUSY_WAIT = 60_000
+const ARMED_WAIT = 15_000
 const BUSY_STEP = 1_000
 async function contentRequest(path: string, init: RequestInit): Promise<Response> {
-    const until = Date.now() + BUSY_WAIT, shown = get(contentUpdateStatus)
+    const started = Date.now(), shown = get(contentUpdateStatus)
     for (;;) {
         try { const response = await transferRequest(path, init); contentUpdateStatus.set(shown); return response }
         catch (error: any) {
             if (error?.status !== 423 || error?.code !== 'NAS_SYNC_BUSY') { contentUpdateStatus.set(shown); throw error }
-            if (Date.now() >= until) { contentUpdateStatus.set(shown); throw Object.assign(new Error('NAS 동기화가 1분 넘게 진행 중이라 지금은 처리하지 못했어요(NAS sync busy).'), { status: 423, code: 'NAS_SYNC_BUSY' }) }
+            const armed = typeof error.transaction === 'string' && error.transaction !== ''
+            if (Date.now() - started >= (armed ? ARMED_WAIT : BUSY_WAIT)) {
+                contentUpdateStatus.set(shown)
+                throw Object.assign(new Error(armed
+                    ? 'NAS 동기화 적용이 끝나지 않은 상태라 처리하지 못했어요. 설정 > NAS 동기화에서 적용 결과를 확인해 주세요(NAS sync apply pending).'
+                    : 'NAS 동기화가 1분 넘게 진행 중이라 지금은 처리하지 못했어요(NAS sync busy).'), { status: 423, code: 'NAS_SYNC_BUSY', ...(armed ? { transaction: error.transaction } : {}) })
+            }
             contentUpdateStatus.set('NAS 동기화가 끝나면 이어서 받아요…')
             await new Promise(resolve => setTimeout(resolve, BUSY_STEP))
         }

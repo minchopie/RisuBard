@@ -973,7 +973,9 @@ export class NodeStorage{
                 key: e.key,
                 value: Buffer.from(e.value).toString('base64')
             }))
-            const da = await this.authFetch('/api/assets/bulk-write', {
+            // fork 0.9.92-ver6: through saveRequest like setItem, so an import's asset write waits behind an exclusive NAS sync step
+            // (423 NAS_SYNC_BUSY without transaction) instead of failing the import; the batch body is a string (re-sendable).
+            const da = await this.saveRequest('/api/assets/bulk-write', {
                 method: 'POST',
                 body: JSON.stringify(body),
                 headers: {

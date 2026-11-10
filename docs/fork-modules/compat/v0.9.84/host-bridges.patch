@@ -597,7 +597,7 @@ index bc609c4..f7c9dfc 100644
          return true
      }
 diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
-index 7e0fb94..f3a7d0a 100644
+index 7e0fb94..709aa05 100644
 --- a/src/ts/storage/nodeStorage.ts
 +++ b/src/ts/storage/nodeStorage.ts
 @@ -19,7 +19,7 @@ import { isCanonicalFilesChangedResponse, isExternalChangesPendingResponse } fro
@@ -657,7 +657,18 @@ index 7e0fb94..f3a7d0a 100644
  
      async syncRequest(path: string, init: RequestInit = {}): Promise<Response> {
          if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid sync route')
-@@ -1384,14 +1403,19 @@ export class NodeStorage{
+@@ -1031,7 +1050,9 @@ export class NodeStorage{
+                 key: e.key,
+                 value: Buffer.from(e.value).toString('base64')
+             }))
+-            const da = await this.authFetch('/api/assets/bulk-write', {
++            // fork 0.9.92-ver6: through saveRequest like setItem, so an import's asset write waits behind an exclusive NAS sync step
++            // (423 NAS_SYNC_BUSY without transaction) instead of failing the import; the batch body is a string (re-sendable).
++            const da = await this.saveRequest('/api/assets/bulk-write', {
+                 method: 'POST',
+                 body: JSON.stringify(body),
+                 headers: {
+@@ -1384,14 +1405,19 @@ export class NodeStorage{
  
      // ── Chat content (runtime lazy load) ────────────────────────────────────
  

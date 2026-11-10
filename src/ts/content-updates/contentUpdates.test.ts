@@ -328,6 +328,18 @@ describe('content updates: NAS sync busy answer', () => {
             await expect(mod.recordDecision({ key: 'character:a', sha256: sha }, 'applied')).rejects.toThrow('HTTP 500')
         } finally { vi.useRealTimers() }
     })
+    test('an armed sync apply (transaction) is waited for 15 s, then reported as pending with its transaction', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        transferRequest.mockReset().mockImplementation(async () => { throw Object.assign(busy423(), { transaction: 'tx-1' }) })
+        vi.useFakeTimers()
+        try {
+            const decided = mod.recordDecision({ key: 'character:a', sha256: 'x' }, 'applied')
+            const outcome = expect(decided).rejects.toMatchObject({ code: 'NAS_SYNC_BUSY', transaction: 'tx-1', message: expect.stringMatching(/적용 결과를 확인/) })
+            await vi.advanceTimersByTimeAsync(16_000)
+            await outcome
+            expect(transferRequest.mock.calls.length).toBeLessThanOrEqual(17)
+        } finally { vi.useRealTimers() }
+    })
     test('a sync step longer than a minute: a clear error, nothing left in the status line', async () => {
         const { transferRequest } = await import('../playTransfer') as any
         transferRequest.mockReset().mockImplementation(async () => { throw busy423() })

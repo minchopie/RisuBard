@@ -33,6 +33,22 @@ describe('ordinary writes behind the NAS sync write gate', () => {
         expect(fetch.mock.calls.every(([path, init]: any) => path === '/api/write' && init.body === bytes && init.method === 'POST')).toBe(true)
     })
 
+    it('an import asset batch (setItems → bulk-write) waits behind the gate too; an armed plan (transaction) is not waited for', async () => {
+        const storage = new NodeStorage()
+        const answers = [busy(), ok()]
+        const fetch = vi.fn(async () => answers.shift()!)
+        ;(storage as any).authFetch = fetch
+        const pending = storage.setItems([{ key: 'assets/a.png', value: new Uint8Array([1, 2]) }])
+        await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS + 10)
+        await pending
+        expect(fetch).toHaveBeenCalledTimes(2)
+        expect(fetch.mock.calls.every(([path, init]: any) => path === '/api/assets/bulk-write' && init.body === fetch.mock.calls[0][1].body)).toBe(true)
+        const armed = vi.fn(async () => new Response(JSON.stringify({ error: 'NAS sync apply must finish before saving', code: 'NAS_SYNC_BUSY', transaction: 'tx' }), { status: 423 }))
+        ;(storage as any).authFetch = armed
+        await expect(storage.setItems([{ key: 'assets/b.png', value: new Uint8Array([3]) }])).rejects.toBe('setItems Error')
+        expect(armed).toHaveBeenCalledTimes(1)
+    })
+
     it('other 423s (session takeover) and non-busy failures keep the old behaviour: no retry', async () => {
         const storage = new NodeStorage()
         const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'session', code: 'SESSION_INACTIVE' }), { status: 423 }))
