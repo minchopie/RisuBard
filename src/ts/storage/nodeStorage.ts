@@ -1342,9 +1342,14 @@ export class NodeStorage{
         // request are resent one by one through saveRequest as before.
         const chunked = getDatabase().chatUploadChunkEnabled === true
         const commit = (init: RequestInit) => { const h = init.headers as Record<string, string>; return (Number(h['x-upload-index']) + 1) * Number(h['x-upload-chunk-size']) >= Number(h['x-upload-size']) }
-        const upload = (whole: boolean) => uploadChatContent((url, init) => init.method === 'DELETE' || (whole && commit(init)) ? this.authFetch(url, init) : this.saveRequest(url, init),
+        // A new upload starts only after the refused one's staging is confirmed removed (its DELETE answered ok): otherwise repeated
+        // refusals could fill the server's upload slots; the save then fails instead (503) and the app's normal save retry takes over.
+        let cleaned = true
+        const upload = (whole: boolean) => uploadChatContent((url, init) => init.method === 'DELETE'
+            ? this.authFetch(url, init).then(response => { cleaned = response.ok; return response }, error => { cleaned = false; throw error })
+            : whole && commit(init) ? this.authFetch(url, init) : this.saveRequest(url, init),
             chaId, chatIndex, chatId, encoded, getDatabase().chatUploadChunkMiB, chunked)
-        const da = chunked ? await this.resendWhileSyncBusy(() => upload(true), true) : await upload(false)
+        const da = chunked ? await this.resendWhileSyncBusy(async () => cleaned ? upload(true) : new Response(null, { status: 503 }), true) : await upload(false)
         if (da.status === 409) {
             const data = await da.json()
             throw new ConflictError(

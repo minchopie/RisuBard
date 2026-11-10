@@ -603,7 +603,8 @@
         "patchnote/0.9.92-ver4.md",
         "patchnote/0.9.92-ver5.md",
         "patchnote/0.9.92-ver6.md",
-        "patchnote/0.9.92-ver7.md"
+        "patchnote/0.9.92-ver7.md",
+        "patchnote/0.9.92-ver8.md"
       ]
     },
     {
@@ -724,7 +725,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
-          "sourceSha256": "086d0e58005d892b4076d5a3e68590ac8059c2d631bef9495eee03db86fc3a9e"
+          "sourceSha256": "f55681377b752c7bd7529c3e02d6183b47c5ae6854cfe5a91f015cf5ce7529fd"
         },
         {
           "module": "lore-lua",
@@ -734,7 +735,7 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "a5340048340034646faa8e556ec4360b8a56963383ea3f01cba06c5bb52c2606"
+          "sourceSha256": "3efc865c09b1f2f903c91c390ed250284c1974bc6e8ada61137dd8d32bd5c3f6"
         },
         {
           "module": "file-export",

@@ -2707,9 +2707,9 @@
       "path": "src/ts/storage/nodeStorage.syncBusy.test.ts",
       "module": "storage-recovery",
       "kind": "files",
-      "sha256": "00e411aa99fbdc796850a2a6c371722a029fd36a563d9a470edebc7c6b97b4c2",
-      "contentSha256": "00e411aa99fbdc796850a2a6c371722a029fd36a563d9a470edebc7c6b97b4c2",
-      "bytes": 11191
+      "sha256": "c7e90bbdbbc0fd4baa8b2657a3f8180044ff9ecea8b7f8ee7679f795f3279250",
+      "contentSha256": "c7e90bbdbbc0fd4baa8b2657a3f8180044ff9ecea8b7f8ee7679f795f3279250",
+      "bytes": 12581
     },
     {
       "path": "src/ts/storage/nodeStorage.syncGate.test.ts",
@@ -2875,8 +2875,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "67acffdf3fe4ad4bdc29378debcd4bfbd94bd10685c89b412c647aab98529e49",
-      "contentSha256": "67acffdf3fe4ad4bdc29378debcd4bfbd94bd10685c89b412c647aab98529e49",
+      "sha256": "68e348dd9e3ec5295e705b1ba8f7df8c6f939a534ea4a66d4e3a05e01684ff76",
+      "contentSha256": "68e348dd9e3ec5295e705b1ba8f7df8c6f939a534ea4a66d4e3a05e01684ff76",
       "bytes": 6476
     },
     {
@@ -3083,9 +3083,9 @@
       "path": "src/ts/storage/nodeStorage.ts",
       "module": "host-bridges",
       "kind": "hosts",
-      "sha256": "e702694861400983ad05e162ccf1cf60bb727a5e47248e20583a1a8da2cafcbc",
-      "contentSha256": "e702694861400983ad05e162ccf1cf60bb727a5e47248e20583a1a8da2cafcbc",
-      "bytes": 66654
+      "sha256": "8d023845820c3104096ac161292dd693b12de1661933a6ca0e7fb878364dee70",
+      "contentSha256": "8d023845820c3104096ac161292dd693b12de1661933a6ca0e7fb878364dee70",
+      "bytes": 67158
     },
     {
       "path": "vitest.config.ts",
@@ -4259,9 +4259,17 @@
       "path": "patchnote/0.9.92-ver7.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "b6fb896c1a49013900392f600f2a5bd8e141618235731672eaf0c1d6c644dcc8",
-      "contentSha256": "b6fb896c1a49013900392f600f2a5bd8e141618235731672eaf0c1d6c644dcc8",
-      "bytes": 6180
+      "sha256": "2a29a02165e6f60e217b0ff2b06e2a574c5a9fa1d16a0e93654dd62a900bd3a5",
+      "contentSha256": "2a29a02165e6f60e217b0ff2b06e2a574c5a9fa1d16a0e93654dd62a900bd3a5",
+      "bytes": 4885
+    },
+    {
+      "path": "patchnote/0.9.92-ver8.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "ccd4f7199fe299ab4d3ee537b2688c71b501479c38116aea9ff0f7d559034b72",
+      "contentSha256": "ccd4f7199fe299ab4d3ee537b2688c71b501479c38116aea9ff0f7d559034b72",
+      "bytes": 3227
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4974,7 +4982,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "086d0e58005d892b4076d5a3e68590ac8059c2d631bef9495eee03db86fc3a9e"
+        "sha256": "f55681377b752c7bd7529c3e02d6183b47c5ae6854cfe5a91f015cf5ce7529fd"
       }
     },
     {
@@ -4993,7 +5001,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/host-bridges.patch",
-        "sha256": "a5340048340034646faa8e556ec4360b8a56963383ea3f01cba06c5bb52c2606"
+        "sha256": "3efc865c09b1f2f903c91c390ed250284c1974bc6e8ada61137dd8d32bd5c3f6"
       }
     },
     {
@@ -5144,7 +5152,8 @@
         "patchnote/0.9.92-ver4.md",
         "patchnote/0.9.92-ver5.md",
         "patchnote/0.9.92-ver6.md",
-        "patchnote/0.9.92-ver7.md"
+        "patchnote/0.9.92-ver7.md",
+        "patchnote/0.9.92-ver8.md"
       ],
       "patch": null
     },
@@ -5238,7 +5247,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "00ff06dfa34e23f664d13cf183ecb03aff5b50ed43c173e37ab716e1bc87ee6a"
+      "sha256": "a3899cc1e9d79eda1f7f332da597d7b76d089de1619a1ad2d3d1fe8272e180db"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5315,8 +5324,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
-          "sourceSha256": "086d0e58005d892b4076d5a3e68590ac8059c2d631bef9495eee03db86fc3a9e",
-          "sha256": "2dd58ff80c4a9f6d4a4aef0db5f3b7026898af71a04d281bfd8348709fbde37d"
+          "sourceSha256": "f55681377b752c7bd7529c3e02d6183b47c5ae6854cfe5a91f015cf5ce7529fd",
+          "sha256": "995723619bbbc382f91f689b513193787a708c6e3403e6d7c466770698360b37"
         },
         {
           "module": "lore-lua",
@@ -5327,8 +5336,8 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "a5340048340034646faa8e556ec4360b8a56963383ea3f01cba06c5bb52c2606",
-          "sha256": "68335bd4c9892d135e9c6dc85338203c37524d432747c8d59841eda7a94bf4fc"
+          "sourceSha256": "3efc865c09b1f2f903c91c390ed250284c1974bc6e8ada61137dd8d32bd5c3f6",
+          "sha256": "2f45d2b1400052a1cd897298ce5697e0ce698fc67003ce17a3e98a838ae351ed"
         },
         {
           "module": "file-export",

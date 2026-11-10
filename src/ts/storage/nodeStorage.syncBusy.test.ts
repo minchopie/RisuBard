@@ -91,6 +91,27 @@ describe('ordinary writes behind the NAS sync write gate', () => {
         } finally { vi.restoreAllMocks() }
     })
 
+    it('0.9.92-ver7: a refused chunked commit whose cleanup (DELETE) is not confirmed does not start another upload (Codex A8: upload slots)', async () => {
+        const { encodeRisuSaveLegacy } = await import('./risuSave') as any
+        encodeRisuSaveLegacy.mockReturnValue(new Uint8Array(1024 * 1024 + 1))
+        const db = await import('./database.svelte') as any, original = db.getDatabase
+        const storage = new NodeStorage()
+        const ids = new Set<string>()
+        ;(storage as any).authFetch = vi.fn(async (_url: string, init: any) => {
+            if (init.method === 'DELETE') throw new TypeError('network')
+            ids.add(init.headers['x-upload-id'])
+            return init.headers['x-upload-index'] === '0' ? new Response(JSON.stringify({ uploadId: init.headers['x-upload-id'], nextIndex: 1 }), { status: 202 }) : busy()
+        })
+        vi.spyOn(db, 'getDatabase').mockReturnValue({ ...original(), chatUploadChunkMiB: 1, chatUploadChunkEnabled: true })
+        try {
+            const pending = expect(storage.saveChatContent('cha', 0, 'chat', {})).rejects.toThrow('saveChatContent error: 503')
+            await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS * 3)
+            await pending
+            expect(ids.size).toBe(1)
+            expect((storage as any).pendingSaveRequests).toBe(0)
+        } finally { vi.restoreAllMocks() }
+    })
+
     it('other 423s (session takeover) and non-busy failures keep the old behaviour: no retry', async () => {
         const storage = new NodeStorage()
         const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'session', code: 'SESSION_INACTIVE' }), { status: 423 }))
