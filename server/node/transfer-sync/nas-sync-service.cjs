@@ -1438,6 +1438,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             } catch (error) { if (!res.headersSent) res.status(error.status ?? 400).json({ error: error.message, code: error.code, ...(error.detail ? { detail: error.detail } : {}) }); }
         });
         route('get', '/status', () => status());
+        // 0.9.92-ver7: progress of the running publish/pull (display only; null when none runs). Not in the exclusive lane: answers during it.
+        route('get', '/progress', () => transport?.progress?.() ?? null);
         // Home/external route: the client (Android native bridge) reports the live network before each cycle; Windows detects itself.
         route('get', '/network', () => nasRoute ? nasRoute.status() : { route: 'single', reason: 'no-route' });
         route('post', '/network', req => { if (!nasRoute) return { route: 'single', reason: 'no-route' }; nasRoute.report(req.body ?? {}); return nasRoute.status(); });

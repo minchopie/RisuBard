@@ -198,6 +198,7 @@
         "shared/play-set/tsconfig.json",
         "src/lib/Setting/Pages/TransferMethodSelect.svelte.test.ts",
         "src/lib/Setting/Pages/TransferPanel.svelte",
+        "src/lib/Setting/Pages/NasSyncProgress.svelte",
         "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
         "src/ts/nasSync.test.ts",
         "src/ts/nasSync.ts",
@@ -601,7 +602,8 @@
         "patchnote/0.9.92-ver3.md",
         "patchnote/0.9.92-ver4.md",
         "patchnote/0.9.92-ver5.md",
-        "patchnote/0.9.92-ver6.md"
+        "patchnote/0.9.92-ver6.md",
+        "patchnote/0.9.92-ver7.md"
       ]
     },
     {
@@ -722,7 +724,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
-          "sourceSha256": "de8db003539ef63e025d985badbfb04478dadc946ce4d2701f73909c8bed572f"
+          "sourceSha256": "086d0e58005d892b4076d5a3e68590ac8059c2d631bef9495eee03db86fc3a9e"
         },
         {
           "module": "lore-lua",
@@ -747,7 +749,7 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.92/transfer-sync.patch",
-          "sourceSha256": "9f89c823b411243dd7621433fe9ff566edfaca7d9ac1d39c1b74269607e3233b"
+          "sourceSha256": "f1df356fef17217bc2a333fcd225d718de73ddedb7296cb5b215348f4d8c3240"
         }
       ],
       "payloadTargets": {

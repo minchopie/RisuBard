@@ -89,6 +89,20 @@ test('a dialog opened while the plan is prepared (a content update question) def
     h.c.stop()
 })
 
+test('0.9.92-ver7: the running step is kept in the state for the progress display and cleared when the cycle ends', async () => {
+    const h = harness(); await h.c.start(); h.setPending(1)
+    const seen: string[] = []
+    for (const name of ['snapshot', 'pull', 'pendingRoots', 'apply'] as const) {
+        const original = (h.io as any)[name].getMockImplementation()
+        ;(h.io as any)[name].mockImplementation(async (...args: any[]) => { seen.push(String(h.c.state.stage)); return original(...args) })
+    }
+    expect(await h.c.downloadNow()).toBe('applied')
+    expect(seen).toEqual(['snapshot', 'pull', 'preview', 'apply'])
+    expect(h.c.state.stage).toBe('')
+    expect(h.c.state.running).toBe(false)
+    h.c.stop()
+})
+
 test('a slow non-blocking server plan does not consume the client preparation deadline', async () => {
     const h = harness(); await h.c.start(); h.setPending(1)
     h.io.apply.mockImplementation(async (_auto: boolean, signal?: AbortSignal, guard?: any) => {

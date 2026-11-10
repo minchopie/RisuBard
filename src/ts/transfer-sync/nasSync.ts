@@ -64,6 +64,8 @@ export const resolveAllSync = (prefer: 'authority' | 'current', authorityDevice?
 export const startAdoptionSync = () => post('/adoption/start', {})
 export const endAdoptionSync = () => post('/adoption/end', {})
 export const syncNetwork = async (signal?: AbortSignal) => (await syncRequest('/network', { signal })).json()
+/** 0.9.92-ver7: progress of the running publish/pull (display only): { phase, files, filesTotal, bytes, bytesTotal, elapsedMs } or null. */
+export const syncTransferProgress = async (signal?: AbortSignal) => (await syncRequest('/progress', { signal })).json()
 /** Home/external route input. Android: the native bridge's live Wi-Fi view (foreground location consent; unknown → external) is
  *  reported before every cycle. Windows: the server detects its own adapter, nothing is reported. */
 export async function reportSyncNetwork(signal?: AbortSignal) {

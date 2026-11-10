@@ -364,6 +364,32 @@ test('a 65 MiB media blob streams through snapshot-less commit → publish → p
     expect(second.admitted).toHaveLength(1); expect((await stat(store.blobFile(sha(big)))).size).toBe(big.length)
 }, 120_000)
 
+test('0.9.92-ver7: progress of a running publish/pull — totals known before the first blob moves, counted as blobs move, null when idle', async t => {
+    const dav = fixtureDav(), a = device(t, dav, await temp(t)), bRoot = await temp(t, 'bard-sync-b-')
+    const media = Buffer.alloc(300_000, 7), file = join(a.store.root, '..', 'p.bin'); await writeFile(file, media)
+    a.store.commit([chat('media', { message: [{ data: 'see assets/p.bin' }] }, [], { 'asset:assets/p.bin': sha(media) })], { blobs: { [sha(media)]: file } })
+    expect(a.transport.progress()).toBeNull()
+    const puts: any[] = []
+    dav.hooks.push(({ method, path }: any) => { if (method === 'PUT' && path.includes('/blobs/')) puts.push(a.transport.progress()); return undefined })
+    const published = await a.transport.publish()
+    expect(published.blobs).toBe(2)
+    expect(puts[0]).toMatchObject({ phase: 'publish', files: 0, filesTotal: 2 })
+    expect(puts[0].bytesTotal).toBeGreaterThanOrEqual(media.length)
+    expect(puts[1].files).toBe(1)
+    expect(a.transport.progress()).toBeNull()
+    dav.hooks.length = 0
+    const store = createSyncStore({ dataRoot: bRoot, now }); store.setWorkspace('ws-fixture')
+    const transport = createSyncTransport({ store, remote: createSyncRemote({ secrets: dav.secrets, fetch: dav.fetch }), now })
+    const gets: any[] = []
+    dav.hooks.push(({ method, path }: any) => { if (method === 'GET' && path.includes('/blobs/')) gets.push(transport.progress()); return undefined })
+    const pulled = await transport.pull()
+    expect(pulled.admitted).toHaveLength(1)
+    expect(gets[0]).toMatchObject({ phase: 'pull', files: 0, filesTotal: 2 })
+    expect(gets[0].bytesTotal).toBeGreaterThanOrEqual(media.length)
+    expect(gets.at(-1).files).toBe(1)
+    expect(transport.progress()).toBeNull()
+}, 60_000)
+
 test('every ignored WebDAV success response is read to its end, never destroyed unread: put/exists-same/conflict/404 paths keep the keep-alive socket (Codex: first-sync connect timeouts)', async t => {
     const dav = fixtureDav(); let responses = 0, closedUnread = 0
     const fetch = async (url: string, init?: any) => { const res: any = await dav.fetch(url, init); responses++; res.on('close', () => { if (!res.readableEnded) closedUnread++ }); return res }

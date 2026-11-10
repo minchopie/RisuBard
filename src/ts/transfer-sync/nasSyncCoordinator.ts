@@ -43,7 +43,7 @@ export interface CoordinatorOptions {
     /** "<character>/<chat>" on screen (for the deferred-chat bookkeeping). */
     activeChat?: () => string
 }
-export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number }
+export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number; stage?: string; stageAt?: number }
 export type SafeWindow = { window: SyncApplyGuard['window']; epoch: number }
 const DEFAULT_BACKOFF = [5_000, 15_000, 60_000, 300_000]
 let instance: ReturnType<typeof createSyncCoordinator> | null = null
@@ -109,6 +109,9 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         let receiveOnly = direction === 'download' && o.generating()
         state.running = true; state.direction = direction; state.lastWindow = safe?.window ?? ''; publish()
         let stage = 'status', deadline: ReturnType<typeof setTimeout> | null = null
+        // 0.9.92-ver7: the cycle's current step for the progress display (NasSyncProgress.svelte); display only.
+        const enter = (next: string) => { stage = next; state.stage = next; state.stageAt = o.now(); publish() }
+        state.stage = 'status'; state.stageAt = o.now()
         const run = (async () => {
             try {
                 // Fresh network view for the home/external route (the Wi-Fi can change while the app stays open); best effort.
@@ -122,7 +125,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 // arrived) — release it now so snapshot/preview are not wedged; `saving`/`committed` is an ARMED journal that only finish/recovery
                 // may settle — this cycle does no local work and reports it, never a rollback.
                 if (status.plan?.transaction) {
-                    if (status.plan.phase === 'prepared') { stage = 'release'; await o.release(status.plan.transaction, signal); boundary() }
+                    if (status.plan.phase === 'prepared') { enter('release'); await o.release(status.plan.transaction, signal); boundary() }
                     else { state.lastOutcome = 'recovery-pending'; state.attention = 'recovery-pending'; state.lastCycleAt = o.now(); if (generation === state.generation) schedule(o.pollMs); return state.lastOutcome }
                 }
                 receiveOnly ||= direction === 'download' && o.generating()
@@ -133,9 +136,9 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // Settled local edits become causal revisions before anything incoming is applied; the joining device waits for the shared key
                     // before publishing its own encrypted history. The snapshot is skipped (not the publish) while a generation/import runs: the
                     // next settled save schedules it; edits made meanwhile are simply part of that later snapshot.
-                    if (!receiveOnly && !o.generating()) { stage = 'snapshot'; await o.snapshot(signal); boundary() }
+                    if (!receiveOnly && !o.generating()) { enter('snapshot'); await o.snapshot(signal); boundary() }
                     if (direction !== 'download') {
-                        stage = 'publish'; const report = await o.publish(signal); boundary()
+                        enter('publish'); const report = await o.publish(signal); boundary()
                         if (report?.rotated) attention = 'rotated'
                         if (report?.failed?.length) throw Object.assign(new Error('publish failed: ' + report.failed.map((x: any) => x.error ?? x.sequence ?? x).join('; ')), { code: 'PUBLISH_FAILED', report })
                     }
@@ -148,21 +151,21 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     schedule(o.pollMs)
                     return state.lastOutcome
                 }
-                stage = 'pull'; const pulled = await o.pull(signal); boundary()
+                enter('pull'); const pulled = await o.pull(signal); boundary()
                 // A blob pinned by an admitted revision could not be re-fetched: that is lost material, not an "up to date" cycle. Like a failed
                 // publish it fails the cycle (no apply) and backs off; the next pull retries the repair.
                 if (pulled?.repairFailed?.length) throw Object.assign(new Error('blob repair failed: ' + pulled.repairFailed.map((x: any) => `${String(x.hash).slice(0, 8)} ${x.reason}`).join('; ')), { code: 'REPAIR_FAILED', report: pulled })
                 if ((pulled?.held?.length ?? 0) || (pulled?.quarantined?.length ?? 0)) attention = attention ? attention + ',incoming-review' : 'incoming-review'
                 // Received work waits (durably, in the store) for a safe window. The preview only tells whether anything waits and lets the
                 // reopen listener know; it is never the authority for the active-chat decision (the apply checks the plan's real targets).
-                stage = 'preview'; const preview = await o.pendingRoots(signal); boundary()
+                enter('preview'); const preview = await o.pendingRoots(signal); boundary()
                 state.pendingRoots = preview.roots.length + (preview.plan ? 1 : 0)
                 let outcome = 'pulled'
                 if (!state.pendingRoots) { outcome = attention.includes('incoming-review') || status.conflicts ? 'review-needed' : 'empty'; state.deferredForChat = '' }
                 else if (!safe) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' } // waits for a lifecycle window (chat open, foreground, manual)
                 else if (receiveOnly || o.generating() || o.alerting() || interacted()) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' }
                 else {
-                    stage = 'apply'
+                    enter('apply')
                     // Large Wiki plans may take longer without blocking play. Bound client preparation after the server answers.
                     // 0.9.92-ver5: a dialog opened while the plan was prepared (e.g. a content update question) ends the safe window like a touch does.
                     const result = await o.apply(true, signal, { window: safe.window, interacted: () => interacted() || !!o.alerting?.(), planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
@@ -190,7 +193,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 schedule(o.backoffMs[Math.min(state.failures, o.backoffMs.length) - 1])
                 return state.lastOutcome
             } finally {
-                if (deadline) o.clearTimer(deadline); external?.removeEventListener('abort', onExternal); if (controller === mine) controller = null; state.running = false; current = null; publish(); void reason
+                if (deadline) o.clearTimer(deadline); external?.removeEventListener('abort', onExternal); if (controller === mine) controller = null; state.running = false; state.stage = ''; current = null; publish(); void reason
                 const queued = pendingWindow; pendingWindow = null
                 if (queued && active() && generation === state.generation) void cycle(queued.window, undefined, queued) // the event that arrived mid-cycle, with its own epoch
             }

@@ -2,7 +2,8 @@
     import { DynamicGUI, settingsOpen, sideBarStore, openPresetList, openModelPresetList, openModelProfileBrowser, openPersonaList, openPersonaManager, personaSelectCallback, openHypaV3PresetList, openThemePresetList, MobileGUI, loadedStore, alertStore, LoadingStatusState, bookmarkListOpen, popupStore, popUpEditorStore, promptAssistantOpen, characterAssistantOpen } from './ts/stores.svelte';
     import Sidebar from './lib/SideBars/Sidebar.svelte';
     import { transferBusy, transferStatus, syncBusyOwned, syncApplyRecovery } from './ts/transferState';
-    import { syncCoordinator } from './ts/nasSyncCoordinator';
+    import { syncCoordinator, coordinatorState } from './ts/nasSyncCoordinator';
+import NasSyncProgress from './lib/Setting/Pages/NasSyncProgress.svelte';
     import { DBState } from './ts/stores.svelte';
     import ChatScreen from './lib/ChatScreens/ChatScreen.svelte';
     import RisuBardPromptAssistant from './lib/Others/RisuBardPromptAssistant.svelte';
@@ -343,6 +344,10 @@
     <Toaster />
     <RequestStatusToaster />
 </main>
+    {#if $coordinatorState?.running && !($transferBusy && $syncBusyOwned)}
+        <!-- 0.9.92-ver7: NAS sync progress while a cycle runs: the same in-flow status row style (nothing covered); the armed-apply row below takes over. -->
+        <NasSyncProgress compact />
+    {/if}
     {#if $transferBusy && $syncBusyOwned}
         <!-- Automatic NAS sync (armed apply / startup recovery): an in-flow, non-modal status row that reserves its own space — nothing is
              covered, not the composer, not the keyboard area. `inert` on <main> still protects the write admission for exactly as long as

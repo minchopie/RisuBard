@@ -11,9 +11,9 @@
       "path": "src/App.svelte",
       "module": "transfer-sync",
       "kind": "hosts",
-      "sha256": "157d865172567534348c97bd17599adea1b151e003294e4c3b7a906b29ea6300",
-      "contentSha256": "157d865172567534348c97bd17599adea1b151e003294e4c3b7a906b29ea6300",
-      "bytes": 18685
+      "sha256": "a6b5b48e8b2a115deacbc09e82b35a43a644f3b3eb1d286a459961e1a9c49ef8",
+      "contentSha256": "a6b5b48e8b2a115deacbc09e82b35a43a644f3b3eb1d286a459961e1a9c49ef8",
+      "bytes": 19057
     },
     {
       "path": "src/lib/Others/ChatList.svelte",
@@ -1035,9 +1035,9 @@
       "path": "server/node/nas-sync-remote.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "3b2475289ca5a20096e5785695d9e916d376a580445c6b998a3b5d632de9b5a7",
-      "contentSha256": "3b2475289ca5a20096e5785695d9e916d376a580445c6b998a3b5d632de9b5a7",
-      "bytes": 45119
+      "sha256": "68a804b9b894edf238cc1d168f84f2fa762d4d8f0dc7dd8b93ce5cfec6e47856",
+      "contentSha256": "68a804b9b894edf238cc1d168f84f2fa762d4d8f0dc7dd8b93ce5cfec6e47856",
+      "bytes": 47394
     },
     {
       "path": "server/node/nas-sync-service.cjs",
@@ -1267,17 +1267,17 @@
       "path": "server/node/transfer-sync/nas-sync-remote.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "59ac2d18b8f4a9e2faca4d4a1fd0fae604321ad5a02eb3da56f1e9096bc0c1f9",
-      "contentSha256": "59ac2d18b8f4a9e2faca4d4a1fd0fae604321ad5a02eb3da56f1e9096bc0c1f9",
-      "bytes": 21763
+      "sha256": "d96f4eb090886d779e96742d657fd9ed5d92d184ce7900658de88b829ca37a0b",
+      "contentSha256": "d96f4eb090886d779e96742d657fd9ed5d92d184ce7900658de88b829ca37a0b",
+      "bytes": 24312
     },
     {
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "5e391a531a411c733843ac23ec11eebb916a4193a9cbde3cfb5e1b912bb10f5a",
-      "contentSha256": "5e391a531a411c733843ac23ec11eebb916a4193a9cbde3cfb5e1b912bb10f5a",
-      "bytes": 152890
+      "sha256": "8050d2accbf53d7e85137ee06a0c8eba4f013588eb835dddd95ebcad6ce7c873",
+      "contentSha256": "8050d2accbf53d7e85137ee06a0c8eba4f013588eb835dddd95ebcad6ce7c873",
+      "bytes": 153110
     },
     {
       "path": "server/node/transfer-sync/nas-sync-share.cjs",
@@ -1507,9 +1507,17 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "681379fdf88e90799c46455a885aa67256c45733efcb315a41efd47f9b05dc57",
-      "contentSha256": "681379fdf88e90799c46455a885aa67256c45733efcb315a41efd47f9b05dc57",
-      "bytes": 47113
+      "sha256": "75f79c6633de65cf7736653cd971c1e95fed9a411cd9a6f228927cf498799093",
+      "contentSha256": "75f79c6633de65cf7736653cd971c1e95fed9a411cd9a6f228927cf498799093",
+      "bytes": 47206
+    },
+    {
+      "path": "src/lib/Setting/Pages/NasSyncProgress.svelte",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "eb71e4271d4ba0762543d36ed2829fc0bdcd76a4f226fef6eea4e281987b2834",
+      "contentSha256": "eb71e4271d4ba0762543d36ed2829fc0bdcd76a4f226fef6eea4e281987b2834",
+      "bytes": 3495
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -1539,9 +1547,9 @@
       "path": "src/ts/nasSyncCoordinator.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "2e150fe3576e9944e5db05dca38293d73469b1c5fe9d3321586b4d2a0e976535",
-      "contentSha256": "2e150fe3576e9944e5db05dca38293d73469b1c5fe9d3321586b4d2a0e976535",
-      "bytes": 43858
+      "sha256": "e1bd036bfc99014c672c94545e2a4e56112825cf744f68ecb0bf13de16527e2d",
+      "contentSha256": "e1bd036bfc99014c672c94545e2a4e56112825cf744f68ecb0bf13de16527e2d",
+      "bytes": 44605
     },
     {
       "path": "src/ts/nasSyncCoordinator.ts",
@@ -1619,17 +1627,17 @@
       "path": "src/ts/transfer-sync/nasSync.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "4614cf7aff58996ee46f313344cf7bb51f19d65f5cdb284549cce72d4e39f1cb",
-      "contentSha256": "4614cf7aff58996ee46f313344cf7bb51f19d65f5cdb284549cce72d4e39f1cb",
-      "bytes": 51405
+      "sha256": "551332151013788a6efb853ef0f357a53bced9d173c52648c40aa6e329bfb071",
+      "contentSha256": "551332151013788a6efb853ef0f357a53bced9d173c52648c40aa6e329bfb071",
+      "bytes": 51668
     },
     {
       "path": "src/ts/transfer-sync/nasSyncCoordinator.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "a29c9b21a1311e6046a14e20e46b7bd0e07da2feb79be779f61514dd9e0754dd",
-      "contentSha256": "a29c9b21a1311e6046a14e20e46b7bd0e07da2feb79be779f61514dd9e0754dd",
-      "bytes": 28460
+      "sha256": "d499c5ebdf1945611888436bf05ca53619b3f2c526c16422e867ed168a0a1747",
+      "contentSha256": "d499c5ebdf1945611888436bf05ca53619b3f2c526c16422e867ed168a0a1747",
+      "bytes": 28789
     },
     {
       "path": "src/ts/transfer-sync/nasSyncUi.ts",
@@ -2867,8 +2875,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "23c77b7cdac954470ed0859f0800b2c9edf186260aba79e160946d2896780ea3",
-      "contentSha256": "23c77b7cdac954470ed0859f0800b2c9edf186260aba79e160946d2896780ea3",
+      "sha256": "67acffdf3fe4ad4bdc29378debcd4bfbd94bd10685c89b412c647aab98529e49",
+      "contentSha256": "67acffdf3fe4ad4bdc29378debcd4bfbd94bd10685c89b412c647aab98529e49",
       "bytes": 6476
     },
     {
@@ -4248,6 +4256,14 @@
       "bytes": 4169
     },
     {
+      "path": "patchnote/0.9.92-ver7.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "fb5c2b22c2651c6f71abcb426ba0d5ff3b841a1b9c8c6bd070d874e4203a964d",
+      "contentSha256": "fb5c2b22c2651c6f71abcb426ba0d5ff3b841a1b9c8c6bd070d874e4203a964d",
+      "bytes": 2283
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4691,6 +4707,7 @@
         "shared/play-set/tsconfig.json",
         "src/lib/Setting/Pages/TransferMethodSelect.svelte.test.ts",
         "src/lib/Setting/Pages/TransferPanel.svelte",
+        "src/lib/Setting/Pages/NasSyncProgress.svelte",
         "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
         "src/ts/nasSync.test.ts",
         "src/ts/nasSync.ts",
@@ -4735,7 +4752,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/transfer-sync.patch",
-        "sha256": "9f89c823b411243dd7621433fe9ff566edfaca7d9ac1d39c1b74269607e3233b"
+        "sha256": "f1df356fef17217bc2a333fcd225d718de73ddedb7296cb5b215348f4d8c3240"
       }
     },
     {
@@ -4957,7 +4974,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "de8db003539ef63e025d985badbfb04478dadc946ce4d2701f73909c8bed572f"
+        "sha256": "086d0e58005d892b4076d5a3e68590ac8059c2d631bef9495eee03db86fc3a9e"
       }
     },
     {
@@ -5126,7 +5143,8 @@
         "patchnote/0.9.92-ver3.md",
         "patchnote/0.9.92-ver4.md",
         "patchnote/0.9.92-ver5.md",
-        "patchnote/0.9.92-ver6.md"
+        "patchnote/0.9.92-ver6.md",
+        "patchnote/0.9.92-ver7.md"
       ],
       "patch": null
     },
@@ -5220,7 +5238,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "938c504ca5c41881a0a8103caee14630cd8ea0b511fd55c0e4b32cc2bf2b3b8f"
+      "sha256": "da9fc1ede8592f5565d4f81e0600ef11d075d870fd892df9a604259f2eb79028"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5297,8 +5315,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
-          "sourceSha256": "de8db003539ef63e025d985badbfb04478dadc946ce4d2701f73909c8bed572f",
-          "sha256": "0f50dc7310b66f63535fd5c71a01423fa5e22841e677cf41075f497c98ab6040"
+          "sourceSha256": "086d0e58005d892b4076d5a3e68590ac8059c2d631bef9495eee03db86fc3a9e",
+          "sha256": "2dd58ff80c4a9f6d4a4aef0db5f3b7026898af71a04d281bfd8348709fbde37d"
         },
         {
           "module": "lore-lua",
@@ -5327,7 +5345,7 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.92/transfer-sync.patch",
-          "sourceSha256": "9f89c823b411243dd7621433fe9ff566edfaca7d9ac1d39c1b74269607e3233b",
+          "sourceSha256": "f1df356fef17217bc2a333fcd225d718de73ddedb7296cb5b215348f4d8c3240",
           "sha256": "ae3b46012496b92a2b2af81ac814bbbb9705e23a719e6cbdcdbe77fbb3ae745f"
         }
       ],

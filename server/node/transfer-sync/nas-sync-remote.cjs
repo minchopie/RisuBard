@@ -92,7 +92,8 @@ function createSyncRemote({ secrets, fetch = request, route = null }) {
         } finally { try { await drain(await send(b, 'DELETE', temp)); } catch {} }
     }
     const putImmutable = (segments, bytes, options) => putVerified(segments, { size: bytes.length, hash: sha256(bytes), open: () => Readable.from([bytes]) }, options);
-    const putFile = async (segments, path, hash, options) => putVerified(segments, { size: (await fsp.stat(path)).size, hash, open: () => fs.createReadStream(path) }, options);
+    // 0.9.92-ver7: `onBytes` counts the bytes read for the upload (progress display only).
+    const putFile = async (segments, path, hash, options, onBytes) => putVerified(segments, { size: (await fsp.stat(path)).size, hash, open: () => { const s = fs.createReadStream(path); if (onBytes) s.on('data', chunk => onBytes(chunk.length)); return s; } }, options);
     /** Streamed hash check of a content-addressed object: ok | missing | damaged. */
     async function verify(segments, hash) {
         const b = await base(), response = await send(b, 'GET', segments);
@@ -100,14 +101,14 @@ function createSyncRemote({ secrets, fetch = request, route = null }) {
         return (await hashStream(checked(response, [200]), Number.MAX_SAFE_INTEGER)).hash === hash ? 'ok' : 'damaged';
     }
     /** Stream a blob into a temp file next to its destination, verify the hash, then rename. Never buffers the body. */
-    async function getToFile(segments, destination, hash) {
+    async function getToFile(segments, destination, hash, onBytes) { // 0.9.92-ver7: `onBytes` = progress display only
         const b = await base(), response = await send(b, 'GET', segments);
         if (response.statusCode === 404) { await drain(response); return null; }
         checked(response, [200]);
         await fsp.mkdir(dirname(destination), { recursive: true });
         const temp = `${destination}.${randomUUID()}.part`, digest = createHash('sha256');
         try {
-            await pipeline(response, new Transform({ transform(chunk, _e, done) { digest.update(chunk); done(null, chunk); } }), fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 }));
+            await pipeline(response, new Transform({ transform(chunk, _e, done) { digest.update(chunk); onBytes?.(chunk.length); done(null, chunk); } }), fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 }));
             if (digest.digest('hex') !== hash) throw new Error('Downloaded blob hash mismatch: ' + hash);
             const fd = await fsp.open(temp, 'r+'); try { await fd.sync(); } finally { await fd.close(); }
             await fsp.rename(temp, destination);
@@ -120,6 +121,11 @@ function createSyncRemote({ secrets, fetch = request, route = null }) {
 /** Publish the outbox and pull peers' commits. Local manifest writes happen only after the remote step they record. */
 function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan = OLD_BUCKETS_PER_SCAN, statfs = path => fsp.statfs(path, { bigint: true }) }) {
     const ws = () => { const { workspaceId } = store.identity(); if (!workspaceId) throw new Error('Sync workspace is not bound'); return workspaceId; };
+    // 0.9.92-ver7: progress of the running publish/pull for the UI (GET /api/nas-sync/progress). Display only: nothing reads it back.
+    // phase publish | pull-scan (reading the NAS lists; totals not known yet) | pull; files/bytes count the blobs (content files).
+    let progress = null;
+    const track = phase => (progress = { phase, files: 0, filesTotal: 0, bytes: 0, bytesTotal: 0, startedAt: now() });
+    const sizeOf = async path => { try { return (await fsp.stat(path)).size; } catch { return 0; } };
     const devicePath = (device, incarnation) => [ws(), 'devices', device, incarnation];
     const blobSegments = hash => [ws(), 'blobs', hash.slice(0, 2), hash];
     const bucketOf = sequence => String(Math.floor(sequence / BUCKET));
@@ -128,7 +134,12 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
     async function publish({ at = now() } = {}) {
         const report = { stored: [], blobs: 0, failed: [], rotated: null, checkpoint: null, ack: null };
         const listed = new Map(), onNas = new Set(); // blobs this run already verified or uploaded: commits sharing a blob check it once
-        for (const entry of store.dueCommits(at)) {
+        const due = [...store.dueCommits(at)], p = track('publish'), counted = new Set();
+        try {
+        for (const entry of due) if (entry.incarnationId === store.identity().incarnationId) for (const hash of store.unpublishedBlobs(entry)) {
+            if (counted.has(hash)) continue; counted.add(hash); p.filesTotal++; p.bytesTotal += await sizeOf(store.blobFile(hash));
+        }
+        for (const entry of due) {
             const { deviceId, incarnationId } = store.identity();
             if (entry.incarnationId !== incarnationId) continue;
             const commitsDir = [...devicePath(deviceId, incarnationId), 'commits'];
@@ -142,8 +153,9 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                 // remote never ends up with a committed reference to absent content. Local publication records are hints only.
                 for (const hash of entry.blobs) {
                     const present = onNas.has(hash) ? 'ok' : await remote.verify(blobSegments(hash), hash);
-                    if (present === 'ok') { onNas.add(hash); if (!store.unpublishedBlobs(entry).includes(hash)) continue; store.markBlobPublished(hash); continue; }
-                    const result = await remote.putFile(blobSegments(hash), store.blobFile(hash), hash, { overwrite: present === 'damaged' });
+                    if (present === 'ok') { onNas.add(hash); if (!store.unpublishedBlobs(entry).includes(hash)) continue; store.markBlobPublished(hash); if (counted.delete(hash)) { p.files++; p.bytes += await sizeOf(store.blobFile(hash)); } continue; }
+                    const result = await remote.putFile(blobSegments(hash), store.blobFile(hash), hash, { overwrite: present === 'damaged' }, n => { p.bytes += n; });
+                    if (counted.delete(hash)) p.files++;
                     if (result.state === 'conflict') throw new Error('Remote blob differs from local content: ' + hash);
                     store.markBlobPublished(hash); report.blobs++; onNas.add(hash);
                 }
@@ -168,9 +180,10 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
             catch (error) { report.failed.push({ ack: true, error: String(error.message) }); }
         }
         return report;
+        } finally { progress = null; }
     }
     /** Download every blob a commit object lists that is missing locally; each is verified by its own hash. */
-    async function fetchBlobs(object) {
+    async function fetchBlobs(object, tick) { // `tick` (0.9.92-ver7): { onBytes, onFile } progress display only
         const missing = [];
         for (const hash of store.missingCommitBlobs(object)) {
             const size = object.sizes?.[hash];
@@ -180,7 +193,8 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                 const space = await statfs(dirname(store.blobFile(hash)));
                 if (space.bavail * space.bsize < BigInt(size) * 2n) throw Object.assign(new Error(`Not enough storage space for blob ${hash.slice(0, 8)} (${size} bytes)`), { code: 'ENOSPC' });
             }
-            const path = await remote.getToFile(blobSegments(hash), store.blobFile(hash), hash);
+            const path = await remote.getToFile(blobSegments(hash), store.blobFile(hash), hash, tick?.onBytes);
+            tick?.onFile?.(hash);
             if (!path) missing.push(hash);
         }
         return missing;
@@ -189,6 +203,10 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
     async function pull({ full = false } = {}) {
         const report = { admitted: [], waiting: [], held: [], quarantined: [], identical: 0, scanned: [] };
         const self = store.identity();
+        // 0.9.92-ver7: the commit objects are read first and their blobs fetched afterwards, in the same order, so the download total
+        // is known for the progress display (before: each object's blobs were fetched right after reading it).
+        const p = track('pull-scan'), queue = [];
+        try {
         for (const device of (await remote.list([ws(), 'devices'])).filter(e => e.collection)) {
             for (const incarnation of (await remote.list([ws(), 'devices', device.name])).filter(e => e.collection)) {
                 if (device.name === self.deviceId && incarnation.name === self.incarnationId) continue;
@@ -205,15 +223,25 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
                         if (store.isWaiting(device.name, incarnation.name, sequence, commitId)) continue; // retried below from the durable copy
                         const bytes = await remote.get([...base, String(bucket), name]);
                         if (!bytes) continue;
-                        let object;
-                        try { object = JSON.parse(bytes.toString('utf8')); if (object?.v === 1 && Array.isArray(object.blobs) && object.blobs.every(h => DIGEST.test(h))) await fetchBlobs(object); }
-                        catch (error) { object = object ?? { corrupt: bytes.toString('base64').slice(0, 4096), error: String(error.message) }; }
-                        const result = store.admitRemote(object, { device: device.name, incarnation: incarnation.name, sequence, commitId });
-                        if (result.state === 'identical') report.identical++; else report[result.state].push({ device: device.name, incarnation: incarnation.name, sequence, commitId, ...(result.reason ? { reason: result.reason } : {}) });
+                        let object, valid = false;
+                        try { object = JSON.parse(bytes.toString('utf8')); valid = object?.v === 1 && Array.isArray(object.blobs) && object.blobs.every(h => DIGEST.test(h)); }
+                        catch (error) { object = { corrupt: bytes.toString('base64').slice(0, 4096), error: String(error.message) }; }
+                        queue.push({ object, valid, at: { device: device.name, incarnation: incarnation.name, sequence, commitId } });
                     }
                     try { store.noteNasTimes(objects.filter(item => Math.floor(item.sequence / BUCKET) === bucket).map(item => ({ device: device.name, incarnation: incarnation.name, sequence: item.sequence, commitId: item.commitId, at: item.modifiedAt }))); } catch { /* display metadata must not fail a pull */ }
                 }
             }
+        }
+        const counted = new Set();
+        for (const { object, valid } of queue) if (valid) for (const hash of store.missingCommitBlobs(object)) {
+            if (counted.has(hash)) continue; counted.add(hash); p.filesTotal++; p.bytesTotal += Number.isSafeInteger(object.sizes?.[hash]) ? object.sizes[hash] : 0;
+        }
+        p.phase = 'pull';
+        const tick = { onBytes: n => { p.bytes += n; }, onFile: hash => { if (counted.delete(hash)) p.files++; } };
+        for (const { object, valid, at } of queue) {
+            try { if (valid) await fetchBlobs(object, tick); } catch { /* as before: the object stays as read; admission decides (waiting) */ }
+            const result = store.admitRemote(object, at);
+            if (result.state === 'identical') report.identical++; else report[result.state].push({ ...at, ...(result.reason ? { reason: result.reason } : {}) });
         }
         // Waiting commits: re-download blobs that were missing or damaged on an earlier pull, then retry admission.
         for (const entry of store.waitingEntries()) if (entry.object && entry.blobs.length) { try { await fetchBlobs(entry.object); } catch (error) { report.waiting.push({ ...entry, object: undefined, reason: 'blob fetch: ' + error.message }); } }
@@ -229,6 +257,7 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
             catch (error) { report.repairFailed.push({ hash, reason: String(error.message) }); }
         }
         return report;
+        } finally { progress = null; }
     }
     /** Maintenance: verify every blob pinned by already published commits and re-upload missing/damaged ones. */
     async function repair() {
@@ -245,6 +274,6 @@ function createSyncTransport({ store, remote, now = Date.now, oldBucketsPerScan 
     }
     /** Receipts distinguish NAS-committed outbox entries from peer commits the client has actually applied. */
     const status = () => ({ ...store.status(), pendingApply: store.pendingApply().length });
-    return { publish, pull, repair, status, BUCKET };
+    return { publish, pull, repair, status, BUCKET, progress: () => progress && { ...progress, elapsedMs: now() - progress.startedAt } };
 }
 module.exports = { createSyncRemote, createSyncTransport, parseListing, NAMESPACE, OBJECT, BUCKET, OLD_BUCKETS_PER_SCAN, LIST_LIMIT, METADATA_LIMIT };

@@ -11,6 +11,7 @@
     import { isNodeServer } from 'src/ts/platform'
     import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, resolveAllSync, startAdoptionSync, endAdoptionSync, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
+    import NasSyncProgress from './NasSyncProgress.svelte'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
     import { ownsServer } from 'src/ts/transfer-sync/chatDeviceLabel'
     let selected = $state<string[]>([])
@@ -165,6 +166,7 @@
                 <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '이 기기에 다운로드'}</ShButton>
                 <ShButton variant="outline" onclick={() => coordinator().pause(!($coordinatorState?.paused ?? false))}>{$coordinatorState?.paused ? '자동 동기화 재개' : '잠시 중지'}</ShButton>
             </div>
+            <NasSyncProgress />
             <p class="hint">업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기에 바로 적용. 자동 동기화는 그대로 계속돼요.</p>
             {#if working || syncActionResult}<p role="status" aria-live="polite">{working ? $transferStatus : syncActionResult}</p>{/if}
             {#if $coordinatorState?.paused}<p>전송하려면 자동 동기화를 재개해 주세요.</p>{/if}
