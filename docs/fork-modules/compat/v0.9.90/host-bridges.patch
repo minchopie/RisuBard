@@ -1,5 +1,5 @@
 diff --git a/server/node/server.cjs b/server/node/server.cjs
-index 7c9f378..10bfb4e 100644
+index 7c9f378..4631f74 100644
 --- a/server/node/server.cjs
 +++ b/server/node/server.cjs
 @@ -1,3 +1,4 @@
@@ -268,21 +268,16 @@ index 7c9f378..10bfb4e 100644
                  if (saveTimers[DB_HEX_KEY]) {
                      clearTimeout(saveTimers[DB_HEX_KEY]);
                      delete saveTimers[DB_HEX_KEY];
-@@ -6547,9 +6609,11 @@ app.post('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next) =>
-         if (!result.body) return res.status(202).json(result);
-         req.body = result.body;
+@@ -6549,7 +6611,7 @@ app.post('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next) =>
          // Recheck writer ownership and canonical conflicts at commit time.
--        return saveChatContentHandler(req, res, next);
-+        // 0.9.92-ver7: the upload record is gone once the body is assembled, so a resent last chunk cannot complete (409): a NAS sync
-+        // gate refusal from the save keeps its previous 500 answer here (the final error handler now answers it with 423 elsewhere).
-+        return saveChatContentHandler(req, res, error => next(error?.code === 'NAS_SYNC_BUSY' ? new Error(error.message) : error));
+         return saveChatContentHandler(req, res, next);
      } catch (error) {
 -        if (error.status) return res.status(error.status).json({ error: error.message });
 +        if (error.status) return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}), ...(error.transaction ? { transaction: error.transaction } : {}) }); // write-gate errors thrown inside a queued storage operation keep their code/transaction
          next(error);
      }
  });
-@@ -6559,7 +6623,7 @@ app.delete('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next)
+@@ -6559,7 +6621,7 @@ app.delete('/api/chat-content-upload/:chaId/:chatIndex', async (req, res, next)
          await chatContentUploads.abort(req);
          res.json({ success: true });
      } catch (error) {
@@ -291,7 +286,7 @@ index 7c9f378..10bfb4e 100644
          next(error);
      }
  });
-@@ -8073,10 +8137,12 @@ app.post('/api/local-shutdown', (req, res) => {
+@@ -8073,10 +8135,12 @@ app.post('/api/local-shutdown', (req, res) => {
  app.use(expressErrorMiddleware);
  app.use((err, req, res, next) => {
      if (res.headersSent) return next(err);
@@ -308,7 +303,7 @@ index 7c9f378..10bfb4e 100644
  });
  
  // ─────────────────────────────────────────────────────────────────────────────
-@@ -8145,7 +8211,7 @@ async function startServer() {
+@@ -8145,7 +8209,7 @@ async function startServer() {
          // No time limit for receiving a request: large bot saves on a busy disk can
          // take longer than Node's 5-minute default, and waiting is not a failure.
          server.requestTimeout = 0;
@@ -317,7 +312,7 @@ index 7c9f378..10bfb4e 100644
          // Written only once bound, so a server that lost the port race keeps the owner's token intact.
          server.once('listening', () => writeFileSync(localShutdownTokenPath, localShutdownToken, { mode: 0o600 }));
          // Move BardWiki vectors out of the KV in the background once serving.
-@@ -8189,11 +8255,13 @@ async function shutdownGracefully(reason) {
+@@ -8189,11 +8253,13 @@ async function shutdownGracefully(reason) {
      console.log(`[Server] Received ${reason}, flushing pending data...`);
      try {
          try { liveFileEvents.close(); } catch (e) { logger.warn('[Server] File event cleanup error:', e); }
@@ -614,7 +609,7 @@ index 590e906..edfb04e 100644
          return true
      }
 diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
-index 32bd0ea..16256e3 100644
+index 32bd0ea..5b7a06f 100644
 --- a/src/ts/storage/nodeStorage.ts
 +++ b/src/ts/storage/nodeStorage.ts
 @@ -19,7 +19,7 @@ import { isCanonicalFilesChangedResponse, isExternalChangesPendingResponse } fro
@@ -626,25 +621,43 @@ index 32bd0ea..16256e3 100644
  const CHAT_CONTENT_TRANSFER_CONCURRENCY = 4
  
  // ── User intent for the write lock ─────────────────────────────────────────
-@@ -307,7 +307,8 @@ export class NodeStorage{
+@@ -307,7 +307,13 @@ export class NodeStorage{
  
      // Saves wait for the server however long it takes. Aborting transport
      // never undoes a write, so a time limit only reported false failures.
 -    private async saveRequest(path: string, init: RequestInit) {
 +    // `retrySignal` (fork 0.9.92-ver6): stops only the waiting/resending after a 423; a request already sent is never aborted by it.
 +    private async saveRequest(path: string, init: RequestInit, retrySignal?: AbortSignal) {
++        return this.resendWhileSyncBusy(() => this.authFetch(path, init), !(init.body instanceof ReadableStream), init.signal, retrySignal)
++    }
++    // fork 0.9.92-ver7: the resent unit is `send` — one request (saveRequest), or a whole chunked chat upload (saveChatContent): the
++    // server drops a chunked upload once its last chunk is assembled, so a refused commit is uploaded again from its first chunk.
++    private async resendWhileSyncBusy(send: () => Promise<Response>, replayable: boolean, signal?: AbortSignal | null, retrySignal?: AbortSignal) {
          this.pendingSaveRequests++
          try {
              // Identity of this write: ordinary (no sync transaction) and whatever manual-transfer transaction it started under. A retry
-@@ -326,6 +327,7 @@ export class NodeStorage{
-                 if (response.status !== 423 || !ordinary || identity() !== started || Date.now() >= until || init.body instanceof ReadableStream || !await NodeStorage.isSyncBusy(response)) return response
+@@ -316,16 +322,17 @@ export class NodeStorage{
+             const identity = () => `${this.syncTransaction ?? ''}\u0000${this.transferTransaction ?? ''}`
+             const until = Date.now() + NodeStorage.SYNC_BUSY_WAIT_MS, started = identity(), ordinary = !this.syncTransaction
+             for (;;) {
+-                const response = await this.authFetch(path, init)
++                const response = await send()
+                 // 423 NAS_SYNC_BUSY: the server is inside an exclusive sync step (snapshot, bootstrap, plan, resolve…) that must not
+                 // interleave with ordinary writes. That is an ordering signal, not a failure: the write waits behind the step and is
+                 // sent again unchanged once the gate clears. Bodies here are buffers/strings (re-sendable); a stream cannot be
+                 // replayed and keeps the old behaviour. The sync apply's own writes carry x-nas-sync-id and are never answered this way.
+                 // Only a request that was ordinary at its first attempt is resent, and only while it is still ordinary: a transaction
+                 // header appearing meanwhile would let stale buffered data pass the gate as the new apply's own save.
+-                if (response.status !== 423 || !ordinary || identity() !== started || Date.now() >= until || init.body instanceof ReadableStream || !await NodeStorage.isSyncBusy(response)) return response
++                if (response.status !== 423 || !ordinary || identity() !== started || Date.now() >= until || !replayable || !await NodeStorage.isSyncBusy(response)) return response
                  await new Promise(resolve => setTimeout(resolve, NodeStorage.SYNC_BUSY_RETRY_MS))
-                 init.signal?.throwIfAborted()
+-                init.signal?.throwIfAborted()
++                signal?.throwIfAborted()
 +                retrySignal?.throwIfAborted()
                  if (identity() !== started) return response // changed during the wait: the previous 423 stands, nothing is resent
              }
          } finally {
-@@ -349,6 +351,11 @@ export class NodeStorage{
+@@ -349,6 +356,11 @@ export class NodeStorage{
              ? await this.authFetch(path, init)
              : await this.saveRequest(path, init)
          if (!response.ok) throw new Error(`Server database flush failed (${response.status})`)
@@ -656,7 +669,7 @@ index 32bd0ea..16256e3 100644
      }
  
      private renewTimer: ReturnType<typeof setTimeout> | undefined
-@@ -506,10 +513,20 @@ export class NodeStorage{
+@@ -506,10 +518,20 @@ export class NodeStorage{
          if (this.importProgressId) headers.set('x-import-id', this.importProgressId)
          if (isUserActive()) headers.set('x-user-active', '1')
  
@@ -681,7 +694,7 @@ index 32bd0ea..16256e3 100644
          init.signal?.throwIfAborted()
  
          if (response.status === 423) {
-@@ -529,6 +546,10 @@ export class NodeStorage{
+@@ -529,6 +551,10 @@ export class NodeStorage{
          return response
      }
  
@@ -692,7 +705,7 @@ index 32bd0ea..16256e3 100644
  
      async syncRequest(path: string, init: RequestInit = {}): Promise<Response> {
          if (!/^\/(?:[a-z0-9-]+\/?)*$/i.test(path) && path !== '') throw new Error('Invalid sync route')
-@@ -1034,20 +1055,23 @@ export class NodeStorage{
+@@ -1034,20 +1060,23 @@ export class NodeStorage{
          }
      }
  
@@ -719,7 +732,7 @@ index 32bd0ea..16256e3 100644
              if (da.status < 200 || da.status >= 300) throw 'setItems Error'
          }
      }
-@@ -1394,14 +1418,19 @@ export class NodeStorage{
+@@ -1394,14 +1423,19 @@ export class NodeStorage{
  
      // ── Chat content (runtime lazy load) ────────────────────────────────────
  
@@ -741,6 +754,21 @@ index 32bd0ea..16256e3 100644
      }
  
      /** Persona binding and last message only, for the chat list hover card. */
+@@ -1463,11 +1497,11 @@ export class NodeStorage{
+ 
+     async saveChatContent(chaId: string, chatIndex: number, chatId: string, chat: any): Promise<void> {
+         const encoded = encodeRisuSaveLegacy(chat)
+-        const da = await uploadChatContent(
+-            (url, init) => init.method === 'DELETE' ? this.authFetch(url, init) : this.saveRequest(url, init), chaId, chatIndex, chatId, encoded,
++        const da = await this.resendWhileSyncBusy(() => uploadChatContent(
++            (url, init) => this.authFetch(url, init), chaId, chatIndex, chatId, encoded,
+             getDatabase().chatUploadChunkMiB,
+             getDatabase().chatUploadChunkEnabled === true,
+-        )
++        ), true)
+         if (da.status === 409) {
+             const data = await da.json()
+             throw new ConflictError(
 diff --git a/vitest.config.compat.ts b/vitest.config.compat.ts
 index 2cc901b..9ad1ff2 100644
 --- a/vitest.config.compat.ts

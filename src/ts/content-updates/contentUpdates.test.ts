@@ -8,7 +8,7 @@ vi.mock('../globalApi.svelte', () => ({ checkCharOrder: vi.fn() }))
 vi.mock('../characterCards', () => ({ importCharacterProcess: vi.fn() }))
 vi.mock('../process/files/inlays', () => ({ reencodeImage: vi.fn(async (b: Uint8Array) => b) }))
 vi.mock('../alert', () => ({ alertConfirmMulti: vi.fn(), alertError: vi.fn(), notifySuccess: vi.fn() }))
-vi.mock('../playTransfer', async () => { const { writable } = await import('svelte/store'); return { transferRequest: vi.fn(), transferBusy: writable(false) } })
+vi.mock('../playTransfer', async () => { const { writable, get } = await import('svelte/store'); const transferBusy = writable(false); return { transferRequest: vi.fn(), transferBusy, transferStatus: writable(''), transferUnavailable: vi.fn(() => get(transferBusy)) } })
 vi.mock('../platform', () => ({ isNodeServer: false }))
 vi.mock('../stores.svelte', async () => { const { writable } = await import('svelte/store'); return { alertStore: writable({ type: 'none' }), loadedStore: writable(true) } })
 vi.mock('../process/generationState', async () => { const { writable } = await import('svelte/store'); return { isAnyGenerating: writable(false) } })
@@ -461,16 +461,32 @@ describe('content updates: NAS sync cycle around the import', () => {
         alertError.mockReset(); saveImage.mockClear()
         return { saveImage, alertError, coordinatorState, decisions, setOnFetch: (f: () => void) => { onFetch = f }, cleanup: () => { coordinatorState.set(null); PngChunk.readGenerator.mockImplementation(async function* () {}) } }
     }
-    test('a cycle that starts during the download is waited for, then the persona is applied', async () => {
+    test('a persona import owns the busy state while it writes (a sync apply cannot arm under it) and releases it afterwards', async () => {
         const s = await setup()
-        let runningAtSave: boolean | undefined
-        s.saveImage.mockImplementationOnce(async () => { runningAtSave = !!(get(s.coordinatorState) as any)?.running; return 'icon' })
-        s.setOnFetch(() => { s.coordinatorState.set({ running: true }); setTimeout(() => s.coordinatorState.set({ running: false }), 1_500) })
+        const { transferBusy } = await import('../playTransfer') as any
+        let heldAtSave: boolean | undefined
+        s.saveImage.mockImplementationOnce(async () => { heldAtSave = get(transferBusy) as boolean; return 'icon' })
         try {
             await mod.checkContentUpdates(true)
-            expect(runningAtSave).toBe(false)
+            expect(heldAtSave).toBe(true)
+            expect(get(transferBusy)).toBe(false)
             expect(s.decisions).toEqual(['applied'])
-            expect(s.alertError).not.toHaveBeenCalled()
         } finally { s.cleanup() }
-    }, 15_000)
+    })
+    test('something else took the app (a sync apply armed) right after the download: nothing is written, the item stays unanswered; a failed save releases the busy state', async () => {
+        const s = await setup()
+        const { transferUnavailable, transferBusy } = await import('../playTransfer') as any
+        transferUnavailable.mockReturnValueOnce(true)
+        try {
+            await mod.checkContentUpdates(true)
+            expect(s.saveImage).not.toHaveBeenCalled()
+            expect(s.decisions).toEqual([])
+            expect(s.alertError).not.toHaveBeenCalled()
+            s.saveImage.mockImplementationOnce(async () => { throw 'setItem Error' })
+            await mod.checkContentUpdates(true)
+            expect(s.alertError).toHaveBeenCalledTimes(1)
+            expect(get(transferBusy)).toBe(false)
+            expect(s.decisions).toEqual([])
+        } finally { s.cleanup() }
+    })
 })

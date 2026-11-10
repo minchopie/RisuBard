@@ -240,6 +240,11 @@ export class NodeStorage{
     // never undoes a write, so a time limit only reported false failures.
     // `retrySignal` (fork 0.9.92-ver6): stops only the waiting/resending after a 423; a request already sent is never aborted by it.
     private async saveRequest(path: string, init: RequestInit, retrySignal?: AbortSignal) {
+        return this.resendWhileSyncBusy(() => this.authFetch(path, init), !(init.body instanceof ReadableStream), init.signal, retrySignal)
+    }
+    // fork 0.9.92-ver7: the resent unit is `send` — one request (saveRequest), or a whole chunked chat upload (saveChatContent): the
+    // server drops a chunked upload once its last chunk is assembled, so a refused commit is uploaded again from its first chunk.
+    private async resendWhileSyncBusy(send: () => Promise<Response>, replayable: boolean, signal?: AbortSignal | null, retrySignal?: AbortSignal) {
         this.pendingSaveRequests++
         try {
             // Identity of this write: ordinary (no sync transaction) and whatever manual-transfer transaction it started under. A retry
@@ -248,16 +253,16 @@ export class NodeStorage{
             const identity = () => `${this.syncTransaction ?? ''}\u0000${this.transferTransaction ?? ''}`
             const until = Date.now() + NodeStorage.SYNC_BUSY_WAIT_MS, started = identity(), ordinary = !this.syncTransaction
             for (;;) {
-                const response = await this.authFetch(path, init)
+                const response = await send()
                 // 423 NAS_SYNC_BUSY: the server is inside an exclusive sync step (snapshot, bootstrap, plan, resolve…) that must not
                 // interleave with ordinary writes. That is an ordering signal, not a failure: the write waits behind the step and is
                 // sent again unchanged once the gate clears. Bodies here are buffers/strings (re-sendable); a stream cannot be
                 // replayed and keeps the old behaviour. The sync apply's own writes carry x-nas-sync-id and are never answered this way.
                 // Only a request that was ordinary at its first attempt is resent, and only while it is still ordinary: a transaction
                 // header appearing meanwhile would let stale buffered data pass the gate as the new apply's own save.
-                if (response.status !== 423 || !ordinary || identity() !== started || Date.now() >= until || init.body instanceof ReadableStream || !await NodeStorage.isSyncBusy(response)) return response
+                if (response.status !== 423 || !ordinary || identity() !== started || Date.now() >= until || !replayable || !await NodeStorage.isSyncBusy(response)) return response
                 await new Promise(resolve => setTimeout(resolve, NodeStorage.SYNC_BUSY_RETRY_MS))
-                init.signal?.throwIfAborted()
+                signal?.throwIfAborted()
                 retrySignal?.throwIfAborted()
                 if (identity() !== started) return response // changed during the wait: the previous 423 stands, nothing is resent
             }
@@ -1332,11 +1337,11 @@ export class NodeStorage{
 
     async saveChatContent(chaId: string, chatIndex: number, chatId: string, chat: any): Promise<void> {
         const encoded = encodeRisuSaveLegacy(chat)
-        const da = await uploadChatContent(
-            (url, init) => init.method === 'DELETE' ? this.authFetch(url, init) : this.saveRequest(url, init), chaId, chatIndex, chatId, encoded,
+        const da = await this.resendWhileSyncBusy(() => uploadChatContent(
+            (url, init) => this.authFetch(url, init), chaId, chatIndex, chatId, encoded,
             getDatabase().chatUploadChunkMiB,
             getDatabase().chatUploadChunkEnabled === true,
-        )
+        ), true)
         if (da.status === 409) {
             const data = await da.json()
             throw new ConflictError(

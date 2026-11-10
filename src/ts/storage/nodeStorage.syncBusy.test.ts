@@ -65,6 +65,31 @@ describe('ordinary writes behind the NAS sync write gate', () => {
         expect((storage as any).pendingSaveRequests).toBe(0)
     })
 
+    it('0.9.92-ver7: a chunked chat upload refused at its commit (423 on the last chunk) is uploaded again from the first chunk under a new upload id, never by resending the last chunk alone', async () => {
+        const { encodeRisuSaveLegacy } = await import('./risuSave') as any
+        encodeRisuSaveLegacy.mockReturnValue(new Uint8Array(1024 * 1024 + 1))
+        const db = await import('./database.svelte') as any, original = db.getDatabase
+        const storage = new NodeStorage()
+        const posts: { id: string; index: string }[] = []; let refused = false
+        ;(storage as any).authFetch = vi.fn(async (_url: string, init: any) => {
+            if (init.method === 'DELETE') return ok()
+            const index = init.headers['x-upload-index'], id = init.headers['x-upload-id']
+            posts.push({ id, index })
+            if (index === '0') return new Response(JSON.stringify({ uploadId: id, nextIndex: 1 }), { status: 202 })
+            if (!refused) { refused = true; return busy() }
+            return ok()
+        })
+        vi.spyOn(db, 'getDatabase').mockReturnValue({ ...original(), chatUploadChunkMiB: 1, chatUploadChunkEnabled: true })
+        try {
+            const pending = storage.saveChatContent('cha', 0, 'chat', {})
+            await vi.advanceTimersByTimeAsync(NodeStorage.SYNC_BUSY_RETRY_MS + 10)
+            await pending
+            expect(posts.map(p => p.index)).toEqual(['0', '1', '0', '1'])
+            expect(posts[0].id).toBe(posts[1].id); expect(posts[2].id).toBe(posts[3].id); expect(posts[2].id).not.toBe(posts[0].id)
+            expect((storage as any).pendingSaveRequests).toBe(0)
+        } finally { vi.restoreAllMocks() }
+    })
+
     it('other 423s (session takeover) and non-busy failures keep the old behaviour: no retry', async () => {
         const storage = new NodeStorage()
         const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'session', code: 'SESSION_INACTIVE' }), { status: 423 }))
