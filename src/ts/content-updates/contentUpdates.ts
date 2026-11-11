@@ -289,24 +289,29 @@ async function applyPreset(item: Pick<ContentItem, 'key' | 'fileName'>, bytes: U
  *  "update the existing plugin?" question for a same-name plugin and its safety check for an API 2.1 plugin, and adds a new plugin
  *  as a hand import does. A same-name plugin that was updated then gets back this device's on/off state and its argument values for
  *  the arguments the new script still declares, as upstream's plugin code editor does (PluginSettings applyPluginCode), and the
- *  plugins are loaded again. 'declined' when importPlugin did not import it (the user said no in its dialog, or it refused the file). */
+ *  plugins are loaded again. 'declined' when importPlugin did not import it (the user said no in its dialog, or it refused the file).
+ *  importPlugin also answers nothing when its own save failed after it had put the plugin in the list (it shows the error itself): that
+ *  plugin is in use on this device, so it is restored, loaded and saved here like an imported one (a failed save here is an error). */
 async function applyPlugin(bytes: Uint8Array): Promise<ContentDecision> {
     const { database, plugins, globalApi } = await app()
     const script = readPluginText(bytes)
     const { name } = pluginHeader(script)
     const before: any = (database.getDatabase().plugins ?? []).find((plugin: any) => plugin?.name === name)
     const original = before ? { ...before, realArg: { ...(before.realArg ?? {}) } } : null
-    if (!await plugins.importPlugin(script)) return 'declined'
-    if (!original) return 'applied'
+    const imported = await plugins.importPlugin(script)
     const db = database.getDatabase()
     const index = (db.plugins ?? []).findIndex((plugin: any) => plugin?.name === name)
-    if (index < 0) return 'applied'
-    const updated: any = db.plugins[index]
-    const realArg = { ...(updated.realArg ?? {}) }
-    for (const key of Object.keys(updated.arguments ?? {})) if (key in original.realArg) realArg[key] = original.realArg[key]
-    const list = [...db.plugins]
-    list[index] = { ...original, ...updated, enabled: original.enabled, realArg }
-    db.plugins = list
+    const placed = index >= 0 && db.plugins[index].script === script && original?.script !== script
+    if (!imported && !placed) return 'declined'
+    if (imported && (!original || index < 0)) return 'applied'
+    if (original) {
+        const updated: any = db.plugins[index]
+        const realArg = { ...(updated.realArg ?? {}) }
+        for (const key of Object.keys(updated.arguments ?? {})) if (key in original.realArg) realArg[key] = original.realArg[key]
+        const list = [...db.plugins]
+        list[index] = { ...original, ...updated, enabled: original.enabled, realArg }
+        db.plugins = list
+    }
     await plugins.loadPlugins()
     await globalApi.requestImmediateSave({ flushServer: true, rejectOnFailure: true })
     return 'applied'

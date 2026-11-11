@@ -4291,9 +4291,9 @@
       "path": "patchnote/0.9.92-ver11.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "26bba62cc80b987df323364b91ae1a455629496da52278084ce3f4041423218e",
-      "contentSha256": "26bba62cc80b987df323364b91ae1a455629496da52278084ce3f4041423218e",
-      "bytes": 1865
+      "sha256": "3e55d62fb98b69c2af276ad9c9ece071f2cf2cac56ca86d6f22db21879d87a1c",
+      "contentSha256": "3e55d62fb98b69c2af276ad9c9ece071f2cf2cac56ca86d6f22db21879d87a1c",
+      "bytes": 2259
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4483,17 +4483,17 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "e17e21b477231a4e26dac6f3a5c7e93e6466f2942336c2e5b05fc9308bc4bc4f",
-      "contentSha256": "e17e21b477231a4e26dac6f3a5c7e93e6466f2942336c2e5b05fc9308bc4bc4f",
-      "bytes": 32411
+      "sha256": "6d50df2a20c247a754e98f7a17690655faa6852c1cd5054722239c5cc507b01b",
+      "contentSha256": "6d50df2a20c247a754e98f7a17690655faa6852c1cd5054722239c5cc507b01b",
+      "bytes": 32863
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "d7b4d0995fa36c6d4a90928e41fe73bd9a27879b02b8fd54eba0e4295cdebff8",
-      "contentSha256": "d7b4d0995fa36c6d4a90928e41fe73bd9a27879b02b8fd54eba0e4295cdebff8",
-      "bytes": 47573
+      "sha256": "d2feed153ee5425fad4178e06a3add5d30e845d0fe8b40e92b3ac5d9d8252d70",
+      "contentSha256": "d2feed153ee5425fad4178e06a3add5d30e845d0fe8b40e92b3ac5d9d8252d70",
+      "bytes": 48976
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",

@@ -505,6 +505,24 @@ describe('content updates: plugins', () => {
         expect(t.decisions).toEqual(['declined'])
     })
 
+    test('the app\'s import put the plugin in the list but its own save failed (it answers nothing): the settings are still restored, and it is loaded and saved here', async () => {
+        const s = await setup([{ name: 'argon', script: 'old', arguments: { model: 'string' }, realArg: { model: 'my-model' }, version: '3.0', enabled: false }])
+        const replace = s.importPlugin.getMockImplementation()
+        s.importPlugin.mockImplementation(async (code: string) => { await replace(code); return undefined })
+        await mod.checkContentUpdates(true)
+        expect(s.db.plugins).toEqual([{ name: 'argon', script, arguments: { model: 'string', added: 'int' }, realArg: { model: 'my-model', added: 0 }, version: '3.0', enabled: false }])
+        expect(s.loadPlugins).toHaveBeenCalledTimes(1)
+        expect(s.requestImmediateSave).toHaveBeenCalledTimes(1)
+        expect(s.decisions).toEqual(['applied'])
+        const t = await setup([]) // a new plugin whose save failed inside the app's import: loaded and saved here
+        const add = t.importPlugin.getMockImplementation()
+        t.importPlugin.mockImplementation(async (code: string) => { await add(code); return undefined })
+        await mod.checkContentUpdates(true)
+        expect(t.db.plugins).toHaveLength(1)
+        expect(t.requestImmediateSave).toHaveBeenCalledTimes(1)
+        expect(t.decisions).toEqual(['applied'])
+    })
+
     test('the same script already installed → recorded as applied without asking; a different script is asked', async () => {
         const s = await setup([{ name: 'argon', script, arguments: {}, realArg: {}, enabled: true }])
         await mod.checkContentUpdates(true)
