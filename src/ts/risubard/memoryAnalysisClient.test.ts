@@ -12,6 +12,10 @@ import {
     type MemoryAnalysisModelResponse,
 } from './memoryAnalysisClient'
 import { SHARED_EVIDENCE_USER_PREFIX, sendWithStructuredOutputFallback } from '../process/request/structuredOutputFallback'
+import {
+    createMemoryAnalysisRunner,
+    type MemoryAnalysisModelRequest,
+} from '../../../server/node/risubard-memory-analysis'
 import { ModelPresetAdapterError } from '../preset/adapter'
 
 // Requests carrying confirmedMessages use the shared-evidence layout: one
@@ -19,9 +23,9 @@ import { ModelPresetAdapterError } from '../preset/adapter'
 // inside the user message.
 const requestPromptText = (call: MemoryAnalysisModelCall) =>
     call.formated.map((message) => message.content).join('\n')
-/** Writer and canonical requests whose system message also carries both static task blocks. */
+/** Writer and canonical requests whose system message also carries their own task's static block. */
 const usesTaskBlock = (call: MemoryAnalysisModelCall) =>
-    call.formated[0].content.startsWith(`${BARDWIKI_SHARED_TASK_SYSTEM}\n\n<bardwiki_task name="memory-writer">\n`)
+    call.formated[0].content.startsWith(`${BARDWIKI_SHARED_TASK_SYSTEM}\n\n`)
 /** Everything a prefix cache can reuse: system plus the evidence block. */
 const sharedPrefix = (call: MemoryAnalysisModelCall) => {
     const content = call.formated[1].content
@@ -31,6 +35,8 @@ const sharedPrefix = (call: MemoryAnalysisModelCall) => {
     expect(end).toBeGreaterThan(0)
     return `${call.formated[0].content}\u0000${content.slice(0, end)}`
 }
+/** The evidence block alone: what writer and canonical calls of one turn still share. */
+const sharedEvidence = (call: MemoryAnalysisModelCall) => sharedPrefix(call).split('\u0000')[1]
 const requestDataJson = (call: MemoryAnalysisModelCall) => {
     const content = call.formated[1].content
     const match = /\n<request_data>\n([\s\S]*)\n<\/request_data>$/.exec(content)
@@ -2017,9 +2023,12 @@ describe('stored response memory analysis', () => {
         expect(modelCalls[1].formated[1].content).toContain('confirmedMessages')
         expect(savedTitles).toEqual(['사만다', '아만다'])
         if (!longEvidence) {
-            // Writer and canonical calls of one turn share system + evidence
-            // byte-for-byte; only the trailing instructions and data differ.
-            expect(new Set(modelCalls.map(sharedPrefix)).size).toBe(1)
+            // Writer and canonical calls of one turn send the same evidence after
+            // their own task's system message; only the trailing instructions and data differ.
+            expect(new Set(modelCalls.map(sharedEvidence)).size).toBe(1)
+            if (modelCalls.every(usesTaskBlock)) {
+                expect(modelCalls[0].formated[0].content).not.toBe(modelCalls[1].formated[0].content)
+            }
             expect(modelCalls[0].formated[1].content)
                 .not.toBe(modelCalls[1].formated[1].content)
             expect(modelCalls[0].formated[1].content)
@@ -2139,9 +2148,9 @@ describe('stored response memory analysis', () => {
             onError: vi.fn(),
             nativeV2Analysis: true,
         })
-        const confirm = (turn: number, analysisTokenLimit = 65_536) => analysis.confirm({
+        const confirm = (turn: number, analysisTokenLimit = 65_536, story = '') => analysis.confirm({
             characterId: 'character', chatId: 'chat', analysisTokenLimit,
-            messages: [{ messageId: `assistant-${turn}`, role: 'assistant', content: `${turn}번째 턴: 사만다와 아만다가 도착했다.` }],
+            messages: [{ messageId: `assistant-${turn}`, role: 'assistant', content: `${turn}번째 턴: 사만다와 아만다가 도착했다.${story}` }],
         })
         return { modelCalls, confirm }
     }
@@ -2154,21 +2163,24 @@ describe('stored response memory analysis', () => {
         expect(modelCalls.map((call) => call.logPurpose)).toEqual([
             'bardwiki-analysis', 'bardwiki-canonical-update', 'bardwiki-analysis', 'bardwiki-canonical-update',
         ])
-        // Writer and canonical calls of both turns: one system message with both task blocks.
-        expect(new Set(modelCalls.map((call) => call.formated[0].content)).size).toBe(1)
-        const system = modelCalls[0].formated[0].content
-        expect(usesTaskBlock(modelCalls[0])).toBe(true)
-        expect(system).toContain('\n</bardwiki_task>\n\n<bardwiki_task name="canonical-update">\n')
-        expect(system).toContain('Return only changed H3 sections for every requested canonical narrative wiki document.')
-        expect(system.endsWith('\n</bardwiki_task>')).toBe(true)
-        // Within a turn the evidence follows that system unchanged.
-        expect(sharedPrefix(modelCalls[1])).toBe(sharedPrefix(modelCalls[0]))
-        expect(sharedPrefix(modelCalls[3])).toBe(sharedPrefix(modelCalls[2]))
+        // Each task keeps one system message across turns: writer calls 0 and 2,
+        // canonical calls 1 and 3. Neither carries the other task's text anywhere.
+        const systems = modelCalls.map((call) => call.formated[0].content)
+        expect(modelCalls.every(usesTaskBlock)).toBe(true)
+        expect(systems[2]).toBe(systems[0])
+        expect(systems[3]).toBe(systems[1])
+        expect(systems[1]).not.toBe(systems[0])
+        expect(systems[0]).toContain('Return exactly one JSON object matching the provided schema.')
+        expect(systems[1]).toContain('Return only changed H3 sections for every requested canonical narrative wiki document.')
+        expect(requestPromptText(modelCalls[0])).not.toContain('Return only changed H3 sections')
+        expect(requestPromptText(modelCalls[1])).not.toContain('Return exactly one JSON object matching the provided schema.')
+        expect(modelCalls.some((call) => requestPromptText(call).includes('bardwiki_task'))).toBe(false)
+        // Writer and canonical calls of one turn share only the fixed header.
+        expect(sharedPrefix(modelCalls[1])).not.toBe(sharedPrefix(modelCalls[0]))
         expect(sharedPrefix(modelCalls[2])).not.toBe(sharedPrefix(modelCalls[0]))
         for (const [index, call] of modelCalls.entries()) {
-            const task = call.logPurpose === 'bardwiki-analysis' ? 'memory-writer' : 'canonical-update'
             const instructions = requestInstructions(call)
-            expect(instructions.startsWith(`Task: ${task}. Follow <bardwiki_task name="${task}">`)).toBe(true)
+            expect(instructions).not.toContain('Task: ')
             expect(instructions).not.toContain('Return only changed H3 sections')
             expect(instructions).not.toContain('Return exactly one JSON object matching the provided schema.')
             expect(requestInputOf(call).confirmedMessages).toEqual([{
@@ -2183,22 +2195,33 @@ describe('stored response memory analysis', () => {
         const tokens = (call: MemoryAnalysisModelCall) =>
             tokenizer.encode(call.formated.map((message) => message.content).join('\n')).length
         try {
+            // A longer story keeps this request above the smallest allowed limit (3,072).
+            const story = ' 성문 앞에는 비가 내렸고 두 사람은 젖은 망토를 털었다.'.repeat(40)
             const roomy = taskBlockAnalysis([])
-            await roomy.confirm(1)
+            await roomy.confirm(1, 65_536, story)
             expect(roomy.modelCalls).toHaveLength(1)
             expect(usesTaskBlock(roomy.modelCalls[0])).toBe(true)
             const needed = tokens(roomy.modelCalls[0])
-            const tight = taskBlockAnalysis([])
-            await tight.confirm(1, needed - 64)
-            const [plain] = tight.modelCalls
-            expect(plain.formated[0].content).toBe(BARDWIKI_SHARED_SYSTEM)
-            expect(requestInstructions(plain)).toContain('Return exactly one JSON object matching the provided schema.')
-            expect(requestInstructions(plain)).not.toContain('Task: memory-writer.')
+            expect(needed).toBeGreaterThan(3_072 + 64)
+            // The task layout is a few header tokens larger than the previous one, so
+            // some limits fit the previous layout and not this one. The largest such
+            // limit sends the previous layout with the same data.
+            let limit = needed
+            let plain: MemoryAnalysisModelCall | undefined
+            while (!plain && limit > needed - 64) {
+                limit -= 1
+                const tight = taskBlockAnalysis([])
+                await tight.confirm(1, limit, story)
+                if (!usesTaskBlock(tight.modelCalls[0])) plain = tight.modelCalls[0]
+            }
+            expect(plain).toBeDefined()
+            expect(plain!.formated[0].content).toBe(BARDWIKI_SHARED_SYSTEM)
+            expect(requestInstructions(plain!)).toContain('Return exactly one JSON object matching the provided schema.')
             // The same data is sent: the larger layout never costs request data.
-            expect(requestInputOf(plain)).toEqual(requestInputOf(roomy.modelCalls[0]))
-            expect(tokens(plain)).toBeLessThanOrEqual(needed - 64)
+            expect(requestInputOf(plain!)).toEqual(requestInputOf(roomy.modelCalls[0]))
+            expect(tokens(plain!)).toBeLessThanOrEqual(limit)
             const exact = taskBlockAnalysis([])
-            await exact.confirm(1, needed + 64)
+            await exact.confirm(1, needed + 64, story)
             expect(usesTaskBlock(exact.modelCalls[0])).toBe(true)
             expect(tokens(exact.modelCalls[0])).toBeLessThanOrEqual(needed + 64)
         }
@@ -2210,9 +2233,9 @@ describe('stored response memory analysis', () => {
             .toEqual(buildMemoryAnalysisMessages('instructions', '{"messages":[]}'))
         const confirmedMessages = [{ messageId: 'm1', role: 'assistant', content: '문이 열렸다.' }]
         const input = JSON.stringify({ existingNotes: [], confirmedMessages })
-        const messages = buildMemoryAnalysisMessages('Task: memory-writer.', input, 'BLOCK')
+        const messages = buildMemoryAnalysisMessages('Per-request instructions.', input, 'BLOCK')
         expect(messages[0]).toEqual({ role: 'system', content: `${BARDWIKI_SHARED_TASK_SYSTEM}\n\nBLOCK` })
-        expect(messages[1]).toEqual(buildMemoryAnalysisMessages('Task: memory-writer.', input)[1])
+        expect(messages[1]).toEqual(buildMemoryAnalysisMessages('Per-request instructions.', input)[1])
         const send = vi.fn()
             .mockRejectedValueOnce(new ModelPresetAdapterError('invalid-request', 'Invalid generation_config.response_schema'))
             .mockResolvedValueOnce('ok')
@@ -2359,7 +2382,7 @@ describe('stored response memory analysis', () => {
                 firstMessageEvidence, user, { ...assistant, content: hiddenStory },
             ])
         }
-        expect(sharedPrefix(modelCalls[1])).toBe(sharedPrefix(modelCalls[0]))
+        expect(sharedEvidence(modelCalls[1])).toBe(sharedEvidence(modelCalls[0]))
         // The wiki lookup query is built from the context messages.
         const queries = fetchCalls.filter(({ url }) => url.endsWith('/inquiry'))
             .map(({ body }) => JSON.parse(body).currentInput)
@@ -2387,6 +2410,110 @@ describe('stored response memory analysis', () => {
         expect(fetchCalls.some(({ body }) => body.includes('MGE_STATE'))).toBe(false)
     })
 
+    async function runPerTaskTurn(turn: number, options: { historicalReanalysis?: boolean } = {}) {
+        const requests: MemoryAnalysisModelRequest[] = []
+        let writerCalls = 0
+        let canonicalCalls = 0
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() } as never, nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                loadDocuments: vi.fn(async () => []),
+                saveConfirmedTurn: vi.fn(async () => undefined),
+                saveCanonicalDocument: vi.fn(async (input) => input),
+            } as never,
+            onError: vi.fn(),
+            analyze: async (request) => {
+                requests.push(request)
+                if (request.format === 'memory-draft') {
+                    // The first answer fails validation: a writer repair retry follows.
+                    writerCalls += 1
+                    if (writerCalls === 1) return 'not JSON'
+                    return JSON.stringify({
+                        schemaVersion: 1, title: `Turn ${turn}`, establishedEvents: ['Ann and Ben arrived.'],
+                        stateChanges: [], characterKnowledge: [], persistentFacts: [], openContinuity: [],
+                        canonicalUpdateCandidates: ['Ann', 'Ben'].map((title) => ({
+                            type: 'character', title, reason: 'Arrived.', action: 'create',
+                            targetDocumentId: null, confidence: 0.99,
+                        })),
+                    })
+                }
+                // The two-target batch and its repair retry fail: a markdown fallback
+                // and a one-target batch follow.
+                canonicalCalls += 1
+                if (canonicalCalls <= 2) return 'not JSON'
+                if (request.format === 'markdown') return '### Overview\n\n- Arrived.'
+                return JSON.stringify({
+                    schemaVersion: 1,
+                    documents: JSON.parse(request.input).targets.map((_: unknown, candidateIndex: number) => ({
+                        candidateIndex, sections: [{ heading: 'Overview', operation: 'upsert', content: '- Arrived.' }],
+                    })),
+                })
+            },
+        })
+        await runner.run({
+            characterId: 'character', chatId: 'chat', wikiWritingLanguage: 'en',
+            messages: [
+                { messageId: `user-${turn}`, role: 'user', content: `Turn ${turn}: we reach the gate.` },
+                { messageId: `assistant-${turn}`, role: 'assistant', content: `Turn ${turn}: Ann and Ben arrived at the gate.` },
+            ],
+            wikiPromptGuide: { analysis: '## Tracking\n\nTrack arrivals.', canonicalRewrite: '## Cards\n\nKeep cards short.' },
+            ...options,
+        })
+        // The bytes each request is sent with: the previous single-text layout and the task layout.
+        return requests.map((request) => ({
+            writer: request.format === 'memory-draft',
+            writerRetry: request.sharedInstructions!.instructions.includes('This is a corrected retry.'),
+            previous: { formated: buildMemoryAnalysisMessages(request.system, request.input) } as MemoryAnalysisModelCall,
+            current: { formated: buildMemoryAnalysisMessages(
+                request.sharedInstructions!.instructions, request.input, request.sharedInstructions!.block,
+            ) } as MemoryAnalysisModelCall,
+        }))
+    }
+
+    test('gives each task one system message across turns and keeps the previous request size', async () => {
+        const turns = [await runPerTaskTurn(1), await runPerTaskTurn(2)]
+        expect(turns[0].map((call) => call.writer)).toEqual([true, true, false, false, false, false])
+        const all = turns.flat()
+        const systems = (writer: boolean) => new Set(all
+            .filter((call) => call.writer === writer)
+            .map((call) => call.current.formated[0].content))
+        // (a) one system message per task across turns, different between tasks.
+        expect(systems(true).size).toBe(1)
+        expect(systems(false).size).toBe(1)
+        const [writerSystem] = systems(true)
+        const [canonicalSystem] = systems(false)
+        expect(writerSystem).not.toBe(canonicalSystem)
+        expect(all.every((call) => usesTaskBlock(call.current))).toBe(true)
+        // (b) within a turn, calls of the same task share system and evidence; the two
+        // tasks share only the fixed header.
+        for (const turn of turns) {
+            for (const writer of [true, false]) {
+                expect(new Set(turn.filter((call) => call.writer === writer)
+                    .map((call) => sharedPrefix(call.current))).size).toBe(1)
+            }
+        }
+        let common = 0
+        while (writerSystem[common] === canonicalSystem[common]) common += 1
+        expect(writerSystem.slice(0, common)).toBe(`${BARDWIKI_SHARED_TASK_SYSTEM}\n\n`)
+        // (c) conditional pieces travel after the evidence and never change the system.
+        const historical = await runPerTaskTurn(3, { historicalReanalysis: true })
+        expect(historical.some((call) => requestPromptText(call.current).includes('This is a historical'))).toBe(true)
+        for (const call of historical) {
+            expect(call.current.formated[0].content).toBe(call.writer ? writerSystem : canonicalSystem)
+        }
+        // (e) each request is at most a fixed header (and a writer retry note) larger than before.
+        const tokenizer = get_encoding('o200k_base')
+        try {
+            const tokens = (call: MemoryAnalysisModelCall) =>
+                tokenizer.encode(call.formated.map((message) => message.content).join('\n')).length
+            for (const call of [...all, ...historical]) {
+                expect(call.previous.formated[0].content).toBe(BARDWIKI_SHARED_SYSTEM)
+                expect(tokens(call.current) - tokens(call.previous)).toBeLessThanOrEqual(call.writerRetry ? 50 : 20)
+            }
+        }
+        finally { tokenizer.free() }
+    })
     test('retries a canonical native-schema HTTP 400 with a prompt schema', async () => {
         const modelCalls: MemoryAnalysisModelCall[] = []
         const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => {

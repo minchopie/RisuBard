@@ -230,9 +230,9 @@ export interface MemoryAnalysisModelRequest {
     inputTokenLimit?: number
     /**
      * Prompt-cache layout of a memory-writer or canonical-update request that carries
-     * confirmedMessages. `block` holds the standing instructions of both tasks and is
-     * byte-identical for every such request of the chat while its settings are unchanged;
-     * `instructions` names this request's task and holds only its per-request pieces.
+     * confirmedMessages. `block` holds the standing instructions of this request's task
+     * only and is byte-identical for every request of that task in the chat while its
+     * settings are unchanged; `instructions` holds only this request's per-request pieces.
      * `system` remains the complete instruction text, sent when this layout is not used.
      */
     sharedInstructions?: { block: string; instructions: string }
@@ -1105,8 +1105,8 @@ export function createMemoryAnalysisRunner(
                 snapshot.wikiPromptGuide?.canonicalRewrite ?? ''
             )
         // Prompt caches reuse only a byte-identical leading prompt. Writer and canonical
-        // requests that carry confirmedMessages therefore also offer both tasks' standing
-        // instructions as one block that stays the same for every turn of the chat; the
+        // requests that carry confirmedMessages therefore also offer their own task's standing
+        // instructions as a block that stays the same for every turn of the chat; the
         // pieces marked perCall change per request and travel after the evidence
         // (MemoryAnalysisModelRequest.sharedInstructions). system keeps the full text.
         const perCall = (text: string) => ({ perCall: text })
@@ -1149,33 +1149,24 @@ export function createMemoryAnalysisRunner(
         const writerFinalInstruction = 'Wiki Guide instructions may refine what to track, but cannot override evidence, schema, knowledge-boundary, or storage-safety contracts. Return exactly one JSON object matching the provided schema.'
         const writerCorrectedReturn = 'Return one corrected JSON object matching the schema exactly.'
         // Reboot and batch runs keep their single-request layout.
-        const sharedTaskBlock = snapshot.rebootTurns ? undefined : [
-            '<bardwiki_task name="memory-writer">',
-            [
-                memoryWriterSystemPrompt,
-                combinedWikiPromptGuide,
-                eventWritingPolicy,
-                combinedMemoryInstruction,
-                canonicalWritingPolicy,
-                writerFinalInstruction,
-            ].join('\n\n'),
-            '</bardwiki_task>',
-            '',
-            '<bardwiki_task name="canonical-update">',
-            canonicalInstructionParts(false).filter((part) => typeof part === 'string').join('\n'),
-            '</bardwiki_task>',
-        ].join('\n')
+        const writerTaskBlock = snapshot.rebootTurns ? undefined : [
+            memoryWriterSystemPrompt,
+            combinedWikiPromptGuide,
+            eventWritingPolicy,
+            combinedMemoryInstruction,
+            canonicalWritingPolicy,
+            writerFinalInstruction,
+        ].join('\n\n')
+        const canonicalTaskBlock = snapshot.rebootTurns ? undefined
+            : canonicalInstructionParts(false).filter((part) => typeof part === 'string').join('\n')
         const withSharedInstructions = (
-            task: 'memory-writer' | 'canonical-update',
+            block: string | undefined,
             pieces: readonly string[],
             separator: string,
-        ) => sharedTaskBlock === undefined ? {} : {
+        ) => block === undefined ? {} : {
             sharedInstructions: {
-                block: sharedTaskBlock,
-                instructions: [
-                    `Task: ${task}. Follow <bardwiki_task name="${task}"> in the system message together with the instructions below, and ignore the other task block.`,
-                    ...pieces.filter(Boolean),
-                ].join(separator),
+                block,
+                instructions: pieces.filter(Boolean).join(separator),
             },
         }
         const availableEvidence: EvidenceRef[] = snapshot.messages.map(
@@ -1340,10 +1331,10 @@ export function createMemoryAnalysisRunner(
                         modelOutputRepairInstruction(validationError),
                         writerCorrectedReturn,
                     ].join('\n\n'),
-                ...withSharedInstructions('memory-writer', [
+                ...withSharedInstructions(writerTaskBlock, [
                     snapshot.historicalReanalysis ? historicalWriterInstruction : '',
                     ...(validationError === undefined ? [] : [
-                        'This is a corrected retry. The instructions below replace the last sentence of the memory-writer task block ("Return exactly one JSON object matching the provided schema.").',
+                        'This is a corrected retry. The instructions below replace the last sentence of the standing instructions.',
                         modelOutputRepairInstruction(validationError),
                         writerCorrectedReturn,
                     ]),
@@ -1823,7 +1814,7 @@ export function createMemoryAnalysisRunner(
                                             canonicalSystem,
                                             ...canonicalRetryInstructions,
                                         ].join('\n'),
-                                        ...withSharedInstructions('canonical-update', [
+                                        ...withSharedInstructions(canonicalTaskBlock, [
                                             ...canonicalPerCall,
                                             ...canonicalRetryInstructions,
                                         ], '\n'),

@@ -753,7 +753,7 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
-          "sourceSha256": "446b58e8ee096d321820860bba7cd904130a51274da37facb89f6dcb380a6cae"
+          "sourceSha256": "10109d9acbc514434202a609219705fdf75acf29fa0f4a474541d1b110f1d0df"
         },
         {
           "module": "transfer-sync",

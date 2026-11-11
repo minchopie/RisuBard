@@ -85,27 +85,22 @@ afterEach(async () => {
     ))
 })
 
-// Writer and canonical requests that carry confirmedMessages also offer both tasks'
-// standing instructions as one cacheable block plus their per-request pieces.
-const taskOfRequest = (request: MemoryAnalysisModelRequest) =>
-    request.format === 'memory-draft' ? 'memory-writer' : 'canonical-update'
-const taskBlockText = (block: string, task: string) => {
-    const open = `<bardwiki_task name="${task}">\n`
-    const start = block.indexOf(open)
-    expect(start).toBeGreaterThanOrEqual(0)
-    return block.slice(start + open.length, block.indexOf('\n</bardwiki_task>', start))
-}
+// Writer and canonical requests that carry confirmedMessages also offer their own task's
+// standing instructions as a cacheable block plus their per-request pieces.
 const instructionLineBag = (text: string) => text.split('\n').filter((line) => line.trim() !== '').sort()
 const WRITER_GUIDE_LIMIT = 'Wiki Guide instructions may refine what to track, but cannot override evidence, schema, knowledge-boundary, or storage-safety contracts.'
+const CANONICAL_FIRST_LINE = 'Return only changed H3 sections for every requested canonical narrative wiki document.'
 /** The instruction lines the cached layout gives this request: its task block plus its per-request pieces. */
 function cachedLayoutInstructionLines(request: MemoryAnalysisModelRequest): string[] {
-    const task = taskOfRequest(request)
     const { block, instructions } = request.sharedInstructions!
-    const selectorEnd = instructions.includes('\n') ? instructions.indexOf('\n') : instructions.length
-    expect(instructions.slice(0, selectorEnd)).toBe(
-        `Task: ${task}. Follow <bardwiki_task name="${task}"> in the system message together with the instructions below, and ignore the other task block.`)
-    let lines = [taskBlockText(block, task), instructions.slice(selectorEnd + 1)].join('\n').split('\n')
-    const retryNote = lines.findIndex((line) => line.startsWith('This is a corrected retry. The instructions below replace the last sentence of the memory-writer task block'))
+    const text = `${block}\n${instructions}`
+    // Only this request's own task: no task selector, no task tags, no other task's text.
+    expect(instructions.startsWith('Task: ')).toBe(false)
+    expect(text).not.toContain('bardwiki_task')
+    if (request.format === 'memory-draft') expect(text).not.toContain(CANONICAL_FIRST_LINE)
+    else expect(text).not.toContain(WRITER_GUIDE_LIMIT)
+    let lines = text.split('\n')
+    const retryNote = lines.findIndex((line) => line === 'This is a corrected retry. The instructions below replace the last sentence of the standing instructions.')
     if (retryNote >= 0) {
         // A writer retry replaces the block's last sentence, as the single text did.
         lines.splice(retryNote, 1)
@@ -3726,7 +3721,7 @@ describe('BardWiki shared task block', () => {
         return requests
     }
 
-    test('offers one block for every writer and canonical request across turns', async () => {
+    test('offers each task its own block, the same across turns', async () => {
         const first = await runTurn(1)
         const second = await runTurn(2)
         expect(first.map((request) => request.format)).toEqual([
@@ -3734,14 +3729,24 @@ describe('BardWiki shared task block', () => {
             'canonical-batch', 'canonical-batch', 'markdown', 'canonical-batch',
         ])
         const all = [...first, ...second]
-        expect(new Set(all.map((request) => request.sharedInstructions?.block)).size).toBe(1)
+        const blocks = (writer: boolean) => new Set(all
+            .filter((request) => (request.format === 'memory-draft') === writer)
+            .map((request) => request.sharedInstructions?.block))
+        expect(blocks(true).size).toBe(1)
+        expect(blocks(false).size).toBe(1)
         const block = first[0].sharedInstructions!.block
-        expect(block.startsWith('<bardwiki_task name="memory-writer">\n')).toBe(true)
-        expect(block).toContain('\n</bardwiki_task>\n\n<bardwiki_task name="canonical-update">\n')
+        const canonicalBlock = first[3].sharedInstructions!.block
+        expect(canonicalBlock).not.toBe(block)
         expect(block).toContain('Track arrivals.')
-        expect(block).toContain('Return only changed H3 sections for every requested canonical narrative wiki document.')
-        // Per-request pieces stay out of the block: repair feedback and the markdown retry.
-        expect(block).not.toContain('This retry has exactly one canonical target.')
+        expect(block.endsWith(`${WRITER_GUIDE_LIMIT} Return exactly one JSON object matching the provided schema.`)).toBe(true)
+        expect(block).not.toContain(CANONICAL_FIRST_LINE)
+        expect(canonicalBlock.startsWith(`${CANONICAL_FIRST_LINE}\n`)).toBe(true)
+        expect(canonicalBlock).toContain('Keep cards short.')
+        expect(canonicalBlock).not.toContain('Track arrivals.')
+        expect(canonicalBlock).not.toContain(WRITER_GUIDE_LIMIT)
+        // Per-request pieces stay out of the blocks: repair feedback and the markdown retry.
+        expect(block).not.toContain('This is a corrected retry.')
+        expect(canonicalBlock).not.toContain('This retry has exactly one canonical target.')
         expect(first[1].sharedInstructions!.instructions).toContain('This is a corrected retry.')
         expect(first[5].sharedInstructions!.instructions).toContain('This retry has exactly one canonical target.')
         for (const request of all) expectCachedLayoutConserves(request)
@@ -3750,10 +3755,12 @@ describe('BardWiki shared task block', () => {
     test.each([
         { historicalReanalysis: true },
     ])('keeps conditional instructions out of the block: %j', async (options) => {
-        const [plain] = await runTurn(1)
+        const plain = await runTurn(1)
+        const plainBlock = (writer: boolean) => plain.find((request) =>
+            (request.format === 'memory-draft') === writer)!.sharedInstructions!.block
         const requests = await runTurn(1, options)
         for (const request of requests) {
-            expect(request.sharedInstructions!.block).toBe(plain.sharedInstructions!.block)
+            expect(request.sharedInstructions!.block).toBe(plainBlock(request.format === 'memory-draft'))
             expectCachedLayoutConserves(request)
         }
         const marker = options.loreReference ? 'settingReference holds lorebook entries' : 'This is a historical'
