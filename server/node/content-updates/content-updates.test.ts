@@ -5,7 +5,7 @@ import os from 'node:os'
 import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { fixtureDav } from '../nas-sync-dav-fixture'
-const { createContentUpdates, validItem, recordName, recordNames, NAMESPACE, MAX_ITEMS } = require('./content-updates.cjs')
+const { createContentUpdates, validItem, recordName, recordNames, NAMESPACE, MAX_ITEMS, PLUGIN_LIMIT } = require('./content-updates.cjs')
 
 const roots: string[] = []
 function root() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'risubard-content-updates-')); roots.push(dir); return dir }
@@ -182,6 +182,59 @@ describe('content updates', () => {
         expect((await tablet.updates.overview()).items.map((x: any) => x.key)).toEqual([meta.key])
         dav.hooks.push(({ method, path }) => method === 'GET' && path.includes('/items/') ? Object.assign(Readable.from([Buffer.from('')]), { statusCode: 500, headers: {} }) : undefined)
         await expect(tablet.updates.overview()).rejects.toThrow(/HTTP 500/)
+    })
+})
+
+// 0.9.92-ver11: a plugin script (.js) is a fourth kind; a client that does not list the kinds it imports (ver10 and older) never sees it.
+describe('content updates: plugins', () => {
+    const plugin = Buffer.from('//@name argon\n//@display-name Argon\n//@version 1.0.3\n//@api 3.0\nRisuai.log("argon")\n')
+    const pluginMeta = { key: 'plugin:argon', kind: 'plugin', title: 'argon', version: '1.0.3', fileName: 'argon_1.0.3.js' }
+    const ALL = ['character', 'persona', 'preset', 'plugin']
+
+    test('a .js plugin is published under its SHA-256, listed to a client that imports plugins and downloaded with its hash check', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
+        const item = await pc.updates.publish(Readable.from([plugin]), pluginMeta)
+        expect(item).toMatchObject({ key: 'plugin:argon', kind: 'plugin', title: 'argon', version: '1.0.3', file: `${sha(plugin)}.js`, sha256: sha(plugin), bytes: plugin.length, publishedBy: 'pc' })
+        expect(dav.paths()).toEqual([`${NAMESPACE}${sha(plugin)}.js`, `${NAMESPACE}items/${recordName(pluginMeta.key)}`].sort())
+        expect((await tablet.updates.overview(ALL)).pending.map((x: any) => x.key)).toEqual(['plugin:argon'])
+        const { file } = await tablet.updates.download(pluginMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(plugin)
+        fs.rmSync(file)
+        tablet.updates.decide(pluginMeta.key, item.sha256, 'applied')
+        expect((await tablet.updates.overview(ALL)).pending).toEqual([])
+    })
+
+    test('a plugin must be a .js file under the plugin size limit, published under a plugin: name', async () => {
+        const { updates } = device()
+        await expect(updates.publish(Readable.from([plugin]), { ...pluginMeta, fileName: 'argon.ts' })).rejects.toThrow(/형식/)
+        await expect(updates.publish(Readable.from([plugin]), { ...pluginMeta, fileName: 'argon.charx' })).rejects.toThrow(/형식/)
+        await expect(updates.publish(Readable.from([plugin]), { ...pluginMeta, key: 'character:argon' })).rejects.toThrow(/배포 이름/)
+        await expect(updates.publish(Readable.from([plugin]), { ...meta, kind: 'character', key: 'character:argon', fileName: 'argon.js' })).rejects.toThrow(/형식/)
+        await expect(updates.publish(Readable.from([Buffer.alloc(PLUGIN_LIMIT + 1, 32)]), pluginMeta)).rejects.toThrow(/size/)
+        const good = { key: 'plugin:argon', kind: 'plugin', title: 'argon', version: '', file: `${'a'.repeat(64)}.js`, fileName: 'a.js', sha256: 'a'.repeat(64), bytes: 3, publishedAt: new Date().toISOString() }
+        expect(validItem(good)).toMatchObject({ kind: 'plugin' })
+        expect(() => validItem({ ...good, file: `${'a'.repeat(64)}.png`, fileName: 'a.png' })).toThrow()
+        expect(() => validItem({ ...good, bytes: PLUGIN_LIMIT + 1 })).toThrow()
+        expect(() => validItem({ ...good, kind: 'character' })).toThrow()
+    })
+
+    test('a client that sends no kinds (0.9.92-ver10 and older) is not shown plugin items, also through the HTTP route', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
+        await pc.updates.publish(Readable.from([plugin]), pluginMeta)
+        await pc.updates.publish(Readable.from([card]), meta)
+        expect((await tablet.updates.overview()).items.map((x: any) => x.kind)).toEqual(['character'])
+        expect((await tablet.updates.overview(['character', 'plugin', 'unknown'])).items.map((x: any) => x.kind).sort()).toEqual(['character', 'plugin'])
+        const handlers: Record<string, Function> = {}
+        const server = createContentUpdates({ dataRoot: root(), secrets: dav.secrets, route, fetch: dav.fetch, appCode: { enabled: false } })
+        server.registerRoutes({ post: (p: string, h: Function) => { handlers[p] = h } }, { auth: async () => true })
+        const overviewOf = async (body: any) => {
+            let sent: any
+            const res: any = { headersSent: false, json: (value: any) => { sent = value }, status: () => res }
+            await handlers['/api/play-transfer/content-updates/overview']({ body }, res)
+            return sent
+        }
+        expect((await overviewOf({})).pending.map((x: any) => x.kind)).toEqual(['character']) // the ver10 client's request body
+        expect((await overviewOf({ kinds: ALL })).pending.map((x: any) => x.kind).sort()).toEqual(['character', 'plugin'])
     })
 })
 

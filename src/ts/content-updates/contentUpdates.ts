@@ -1,7 +1,9 @@
 // Content updates (client): asks "a new character/persona/prompt preset was published on the NAS — import it?" and imports it with
 // the app's own import. A character goes through upstream importCharacterProcess, which offers to update the installed
 // bot (upstream "update an installed bot" dialog, chats kept, a backup copy in the trash). A persona with the same name
-// is updated in place (same id, so chats bound to it keep it); otherwise it is added.
+// is updated in place (same id, so chats bound to it keep it); otherwise it is added. A plugin (0.9.92-ver11) goes through upstream
+// importPlugin with the script text, as a file picked by hand: its own dialogs ("update the existing plugin?", the API 2.1 safety check)
+// are shown as they are, and an update keeps this device's argument values and on/off state (as upstream's plugin code editor does).
 import { get, writable } from 'svelte/store'
 import { unzipSync, strFromU8 } from 'fflate'
 import type { RisuPersona } from '../storage/database.svelte'
@@ -13,10 +15,13 @@ import { isNodeServer } from '../platform'
 const app = () => Promise.all([
     import('../storage/database.svelte'), import('../globalApi.svelte'), import('../characterCards'), import('../storage/importTransaction'),
     import('../process/files/inlays'), import('../alert'), import('../stores.svelte'), import('../process/generationState'), import('uuid'),
-    import('../importSession'),
-]).then(([database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session]) => ({ database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session }))
+    import('../importSession'), import('../plugins/plugins.svelte'),
+]).then(([database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session, plugins]) => ({ database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session, plugins }))
 
-export type ContentKind = 'character' | 'persona' | 'preset'
+export type ContentKind = 'character' | 'persona' | 'preset' | 'plugin'
+/** 0.9.92-ver11: the kinds this client can import, sent with the overview request. The server lists only these; a client that sends
+ *  none (0.9.92-ver10 and older) gets character, persona and preset only — it would import any other kind as a character card. */
+export const CONTENT_KINDS: ContentKind[] = ['character', 'persona', 'preset', 'plugin']
 export interface ContentItem {
     key: string; kind: ContentKind; title: string; version: string; file: string; fileName: string
     sha256: string; bytes: number; publishedAt: string; publishedBy: string; decision: '' | 'applied' | 'declined' | 'published'
@@ -82,7 +87,7 @@ async function freshRoute() {
     } catch { /* the server decides as before */ } finally { clearTimeout(timer); controller.abort() }
 }
 
-export const fetchOverview = async () => { await freshRoute(); return post<ContentOverview>('/overview', {}) }
+export const fetchOverview = async () => { await freshRoute(); return post<ContentOverview>('/overview', { kinds: CONTENT_KINDS }) }
 export const recordDecision = (item: Pick<ContentItem, 'key' | 'sha256'>, decision: ContentDecisionInput) => post('/decide', { key: item.key, sha256: item.sha256, decision })
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -100,7 +105,7 @@ export async function fetchContent(item: ContentItem): Promise<Uint8Array> {
     return bytes
 }
 
-export const kindLabel = (kind: ContentKind) => kind === 'character' ? '캐릭터 카드' : kind === 'preset' ? '프롬프트 프리셋' : '페르소나'
+export const kindLabel = (kind: ContentKind) => kind === 'character' ? '캐릭터 카드' : kind === 'preset' ? '프롬프트 프리셋' : kind === 'plugin' ? '플러그인' : '페르소나'
 export const itemLabel = (item: Pick<ContentItem, 'title' | 'version'>) =>
     item.version && !item.title.includes(item.version) ? `${item.title} (${item.version})` : item.title
 
@@ -152,9 +157,30 @@ export function jsonKind(data: any): 'character' | 'preset' | null {
     return null
 }
 
-/** What a picked file is: a character card (.charx/.json/.png with a card), a persona PNG or a prompt preset (.risup/.risupreset/.preset.json). */
+/** A plugin file's text as upstream importPlugin reads a picked file (UTF-8, byte order marks removed). */
+export function readPluginText(bytes: Uint8Array): string {
+    return new TextDecoder().decode(bytes).replace(/^﻿/gm, '')
+}
+/** The `//@name` and `//@version` header lines, read the way upstream importPlugin reads them (the last one of each counts). The script
+ *  itself is checked by importPlugin when it is imported. */
+export function pluginHeader(script: string): { name: string; version: string } {
+    let name = '', version = ''
+    for (const line of script.split('\n')) {
+        if (line.startsWith('//@name')) name = line.slice(7).trim()
+        if (line.startsWith('//@version')) version = line.split(' ').slice(1).join(' ').trim()
+    }
+    return { name, version }
+}
+
+/** What a picked file is: a character card (.charx/.json/.png with a card), a persona PNG, a prompt preset (.risup/.risupreset/.preset.json)
+ *  or a plugin (.js). */
 export async function describeFile(name: string, bytes: Uint8Array): Promise<Described> {
     const lower = name.toLowerCase()
+    if (lower.endsWith('.js')) {
+        const header = pluginHeader(readPluginText(bytes))
+        if (!header.name) throw new Error('플러그인 이름(//@name)이 없는 파일이에요.')
+        return { kind: 'plugin', title: header.name, version: header.version }
+    }
     if (lower.endsWith('.risup') || lower.endsWith('.risupreset')) {
         const title = presetTitle(name)
         if (!title) throw new Error('프리셋 이름이 없어요.')
@@ -185,7 +211,7 @@ export async function describeFile(name: string, bytes: Uint8Array): Promise<Des
         if (card) return fromCard(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(card), c => c.charCodeAt(0)))))
         throw new Error('캐릭터 카드나 페르소나 정보가 없는 PNG예요.')
     }
-    throw new Error('charx, json, png, risup 파일만 올릴 수 있어요.')
+    throw new Error('charx, json, png, risup, js 파일만 올릴 수 있어요.')
 }
 
 function fromCard(card: any): Described {
@@ -259,9 +285,41 @@ async function applyPreset(item: Pick<ContentItem, 'key' | 'fileName'>, bytes: U
     return added.name
 }
 
+/** Imports a plugin with upstream importPlugin, given the script text as its file picker does (no isUpdate): upstream shows its own
+ *  "update the existing plugin?" question for a same-name plugin and its safety check for an API 2.1 plugin, and adds a new plugin
+ *  as a hand import does. A same-name plugin that was updated then gets back this device's on/off state and its argument values for
+ *  the arguments the new script still declares, as upstream's plugin code editor does (PluginSettings applyPluginCode), and the
+ *  plugins are loaded again. 'declined' when importPlugin did not import it (the user said no in its dialog, or it refused the file). */
+async function applyPlugin(bytes: Uint8Array): Promise<ContentDecision> {
+    const { database, plugins, globalApi } = await app()
+    const script = readPluginText(bytes)
+    const { name } = pluginHeader(script)
+    const before: any = (database.getDatabase().plugins ?? []).find((plugin: any) => plugin?.name === name)
+    const original = before ? { ...before, realArg: { ...(before.realArg ?? {}) } } : null
+    if (!await plugins.importPlugin(script)) return 'declined'
+    if (!original) return 'applied'
+    const db = database.getDatabase()
+    const index = (db.plugins ?? []).findIndex((plugin: any) => plugin?.name === name)
+    if (index < 0) return 'applied'
+    const updated: any = db.plugins[index]
+    const realArg = { ...(updated.realArg ?? {}) }
+    for (const key of Object.keys(updated.arguments ?? {})) if (key in original.realArg) realArg[key] = original.realArg[key]
+    const list = [...db.plugins]
+    list[index] = { ...original, ...updated, enabled: original.enabled, realArg }
+    db.plugins = list
+    await plugins.loadPlugins()
+    await globalApi.requestImmediateSave({ flushServer: true, rejectOnFailure: true })
+    return 'applied'
+}
+
 /** Imports one published item; resolves to the decision to record (declined when the user cancelled the import). */
 export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<ContentDecision> {
     const { cards, globalApi, importTransaction, alert, session } = await app()
+    if (item.kind === 'plugin') {
+        const decision = await applyPlugin(bytes)
+        if (decision === 'applied') alert.notifySuccess(`플러그인 「${item.title}」을 가져왔어요.`)
+        return decision
+    }
     if (item.kind === 'preset') {
         const name = await applyPreset(item, bytes)
         alert.notifySuccess(`프롬프트 프리셋 「${name}」를 가져왔어요.`)
@@ -303,8 +361,10 @@ export async function busy(ignoreAlert = false): Promise<boolean> {
  *  recorded as applied without asking. A character: same base name and the card version (or name) carries the published version — a
  *  different card file published under the same version number is not told apart (a card is not downloaded just to compare). A persona
  *  (small PNG): downloaded and compared — a persona with the same name, prompt and note (the note's version token is not trusted: the
- *  persona files keep an older one). Prompt presets are always asked. */
+ *  persona files keep an older one). Prompt presets are always asked. A plugin (0.9.92-ver11, a small script): downloaded and
+ *  compared — a plugin with the same name and the same script text; its version line is not needed. */
 export async function alreadyInstalled(item: Pick<ContentItem, 'kind' | 'title' | 'version'> & Partial<ContentItem>): Promise<boolean> {
+    if (item.kind === 'plugin') return pluginInstalled(item)
     const plain = (value: string | undefined) => (value ?? '').trim().replace(/^v/i, '')
     const version = plain(item.version)
     if (!version) return false
@@ -324,6 +384,17 @@ export async function alreadyInstalled(item: Pick<ContentItem, 'kind' | 'title' 
         } catch { return false } // could not compare: ask as before
     }
     return false
+}
+
+async function pluginInstalled(item: Pick<ContentItem, 'kind' | 'title' | 'version'> & Partial<ContentItem>): Promise<boolean> {
+    const { database } = await app()
+    if (!(database.getDatabase().plugins ?? []).some((plugin: any) => plugin?.name === item.title) || !item.key || !item.sha256 || !item.bytes) return false
+    try {
+        const script = readPluginText(await fetchContent(item as ContentItem))
+        if (pluginHeader(script).name !== item.title) return false
+        // The list as it is now (a plugin removed or changed during the download no longer counts).
+        return (database.getDatabase().plugins ?? []).some((plugin: any) => plugin?.name === item.title && plugin.script === script)
+    } catch { return false } // could not compare: ask as before
 }
 
 /** A NAS sync cycle is running (startup/foreground sync, possibly preparing an apply): a question waits for it to end. */
@@ -352,11 +423,12 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
             if (await busy()) { retry = true; break } // the comparison download took a while: another dialog/activity may have started
             if (installed) { await recordDecision(item, 'applied'); continue }
             const choice = await alert.alertConfirmMulti(
-                `새 ${kindLabel(item.kind)}가 올라왔어요. 지금 가져올까요?`,
+                `새 ${kindLabel(item.kind)}${item.kind === 'plugin' ? '이' : '가'} 올라왔어요. 지금 가져올까요?`,
                 ['네, 가져오기', '아니오'],
                 `${itemLabel(item)}\n${(item.bytes / 1_000_000).toFixed(1)} MB · ${new Date(item.publishedAt).toLocaleString()}${item.publishedBy ? ` · ${item.publishedBy}` : ''}`
                 + (item.kind === 'character' ? '\n\n이미 있는 같은 캐릭터를 고르면 대화는 그대로 두고 카드만 새 판으로 바꿔요.'
                     : item.kind === 'preset' ? '\n\n같은 이름의 프롬프트 프리셋이 있으면 그 프리셋을 새 내용으로 바꿔요(이 기기의 API 키·주소는 그대로). 이름이 다르면 새로 추가해요.'
+                    : item.kind === 'plugin' ? '\n\n같은 이름의 플러그인이 있으면 새 내용으로 바꾸고 이 기기의 플러그인 설정값과 켜짐/꺼짐 상태는 그대로 둬요(새 판에서 없어진 설정 항목은 빠져요). 없으면 새로 추가해요. 앱의 플러그인 확인 창이 이어서 나오면 거기서도 답해 주세요.'
                     : '\n\n같은 이름의 페르소나가 있으면 그 페르소나를 새 내용으로 바꿔요.'),
             )
             // -1 is the dialog's own cancel/close: no answer yet, so it is asked again at the next check.
@@ -372,7 +444,7 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
                 // 0.9.92-ver7 (tablet "setItem Error"): a persona/preset import owns the busy state while it writes, like the manual persona
                 // import (playTransfer): a NAS sync apply never arms under it (its foreign-busy check), and one already armed is not entered.
                 if (transferUnavailable()) { retry = true; break }
-                transferBusy.set(true); transferStatus.set(`${kindLabel(item.kind)}를 가져오는 중…`)
+                transferBusy.set(true); transferStatus.set(`${kindLabel(item.kind)}${item.kind === 'plugin' ? '을' : '를'} 가져오는 중…`)
                 let decision: ContentDecision
                 try { decision = await applyItem(item, bytes) } finally { transferBusy.set(false); transferStatus.set('') }
                 await recordDecision(item, decision)

@@ -4,7 +4,8 @@ import { zipSync, strToU8 } from 'fflate'
 import { createHash } from 'node:crypto'
 
 vi.mock('../storage/database.svelte', () => ({ getDatabase: vi.fn(), saveImage: vi.fn(async () => 'new-icon'), importPreset: vi.fn(), changeToPreset: vi.fn() }))
-vi.mock('../globalApi.svelte', () => ({ checkCharOrder: vi.fn() }))
+vi.mock('../globalApi.svelte', () => ({ checkCharOrder: vi.fn(), requestImmediateSave: vi.fn(async () => {}) }))
+vi.mock('../plugins/plugins.svelte', () => ({ importPlugin: vi.fn(), loadPlugins: vi.fn(async () => {}) }))
 vi.mock('../characterCards', () => ({ importCharacterProcess: vi.fn() }))
 vi.mock('../process/files/inlays', () => ({ reencodeImage: vi.fn(async (b: Uint8Array) => b) }))
 vi.mock('../alert', () => ({ alertConfirmMulti: vi.fn(), alertError: vi.fn(), notifySuccess: vi.fn() }))
@@ -407,6 +408,128 @@ describe('content updates: already installed', () => {
         await mod.checkContentUpdates(true)
         expect(decisions).toEqual([['character:마물소녀도감', 'applied'], ['persona:함건희(보어·꿈각성)', 'declined']])
         expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+    })
+})
+
+// 0.9.92-ver11: a plugin (.js) is published, asked about and imported with the app's own importPlugin.
+describe('content updates: plugins', () => {
+    const script = '//@name argon\r\n//@display-name Argon\r\n//@version 1.0.3\r\n//@api 3.0\r\n//@arg model string\r\n//@arg added int\r\nRisuai.log("argon 1.0.3")\r\n'
+    const fileBytes = strToU8('﻿' + script) // a BOM, as a file saved by some editors: removed as upstream importPlugin does
+    const sha = createHash('sha256').update(fileBytes).digest('hex')
+    const pending = { key: 'plugin:argon', kind: 'plugin', title: 'argon', version: '1.0.3', file: `${sha}.js`, fileName: 'argon_1.0.3.js', sha256: sha, bytes: fileBytes.length, publishedAt: new Date().toISOString(), publishedBy: 'pc', decision: '' }
+    const setup = async (plugins: any[]) => {
+        const { getDatabase } = await import('../storage/database.svelte') as any
+        const { transferRequest, transferBusy } = await import('../playTransfer') as any
+        const { alertConfirmMulti, alertError } = await import('../alert') as any
+        const { importPlugin, loadPlugins } = await import('../plugins/plugins.svelte') as any
+        const { requestImmediateSave } = await import('../globalApi.svelte') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        reportSyncNetwork.mockReset().mockResolvedValue({})
+        const db: any = { characters: [], personas: [], plugins }
+        getDatabase.mockReturnValue(db)
+        const calls: string[] = [], decisions: string[] = []
+        let onFetch = () => {}
+        transferRequest.mockReset().mockImplementation(async (path: string, init: any) => {
+            calls.push(path)
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [pending], pending: [pending] }))
+            if (path === '/content-updates/fetch') { onFetch(); return new Response(fileBytes as BodyInit) }
+            if (path === '/content-updates/decide') { decisions.push(JSON.parse(init.body).decision); return new Response('{}') }
+            return new Response('{}')
+        })
+        // As upstream importPlugin: a same-name plugin is replaced by a fresh entry (enabled, default argument values); a new one is added.
+        let heldDuringImport: boolean | undefined
+        importPlugin.mockReset().mockImplementation(async (code: string) => {
+            heldDuringImport = get(transferBusy) as boolean
+            const fresh = { name: 'argon', script: code, arguments: { model: 'string', added: 'int' }, realArg: { model: '', added: 0 }, version: '3.0', enabled: true }
+            const index = db.plugins.findIndex((p: any) => p.name === 'argon')
+            if (index >= 0) db.plugins[index] = fresh; else db.plugins.push(fresh)
+            return true
+        })
+        loadPlugins.mockClear(); requestImmediateSave.mockClear()
+        alertConfirmMulti.mockReset().mockResolvedValue(0); alertError.mockReset()
+        return { db, calls, decisions, importPlugin, loadPlugins, requestImmediateSave, alertConfirmMulti, alertError, held: () => heldDuringImport, setOnFetch: (f: () => void) => { onFetch = f } }
+    }
+
+    test('a .js file is described as a plugin from its //@name and //@version lines', async () => {
+        expect(await mod.describeFile('argon_1.0.3.js', fileBytes)).toEqual({ kind: 'plugin', title: 'argon', version: '1.0.3' })
+        expect(await mod.describeFile('x.js', strToU8('//@name x\nconsole.log(1)'))).toEqual({ kind: 'plugin', title: 'x', version: '' })
+        await expect(mod.describeFile('x.js', strToU8('console.log(1)'))).rejects.toThrow(/@name/)
+        expect(mod.kindLabel('plugin')).toBe('플러그인')
+    })
+
+    test('publishing sends the plugin kind; the overview request lists the kinds this client imports', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const seen: any[] = []
+        transferRequest.mockReset().mockImplementation(async (path: string, init: any) => {
+            seen.push([path, init])
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [], pending: [] }))
+            return new Response('{}')
+        })
+        await mod.publishContent({ key: 'plugin:argon', kind: 'plugin', title: 'argon', version: '1.0.3', fileName: 'argon_1.0.3.js', bytes: fileBytes })
+        const publish = seen.find(([path]) => path === '/content-updates/publish')
+        expect(JSON.parse(decodeURIComponent(publish[1].headers['x-content-meta']))).toEqual({ key: 'plugin:argon', kind: 'plugin', title: 'argon', version: '1.0.3', fileName: 'argon_1.0.3.js' })
+        expect(publish[1].body).toBe(fileBytes)
+        await mod.fetchOverview()
+        const overview = seen.find(([path]) => path === '/content-updates/overview')
+        expect(JSON.parse(overview[1].body)).toEqual({ kinds: ['character', 'persona', 'preset', 'plugin'] })
+    })
+
+    test('yes → the app\'s importPlugin gets the script text as a hand import (no update flag); a same-name plugin keeps this device\'s argument values and on/off state', async () => {
+        const s = await setup([{ name: 'argon', script: 'old', arguments: { model: 'string', gone: 'string' }, realArg: { model: 'my-model', gone: 'g' }, version: '3.0', enabled: false, customLink: [] }])
+        const { transferBusy } = await import('../playTransfer') as any
+        await mod.checkContentUpdates(true)
+        expect(s.alertConfirmMulti).toHaveBeenCalledTimes(1)
+        expect(s.alertConfirmMulti.mock.calls[0][0]).toBe('새 플러그인이 올라왔어요. 지금 가져올까요?')
+        expect(s.alertConfirmMulti.mock.calls[0][2]).toMatch(/설정값과 켜짐\/꺼짐 상태는 그대로/)
+        expect(s.importPlugin).toHaveBeenCalledTimes(1)
+        expect(s.importPlugin.mock.calls[0]).toEqual([script]) // the text without the BOM, and no { isUpdate }: upstream's own "update?" dialog is shown
+        expect(s.held()).toBe(true) // the import owns the busy state, like a persona or preset import
+        expect(get(transferBusy)).toBe(false)
+        expect(s.db.plugins).toEqual([{ name: 'argon', script, arguments: { model: 'string', added: 'int' }, realArg: { model: 'my-model', added: 0 }, version: '3.0', enabled: false, customLink: [] }])
+        expect(s.loadPlugins).toHaveBeenCalledTimes(1) // loaded again with the restored on/off state
+        expect(s.requestImmediateSave).toHaveBeenCalledTimes(1)
+        expect(s.decisions).toEqual(['applied'])
+        expect(s.alertError).not.toHaveBeenCalled()
+    })
+
+    test('a new plugin is added as the app\'s import adds it; "no" in the app\'s own dialog is recorded as declined', async () => {
+        const s = await setup([])
+        await mod.checkContentUpdates(true)
+        expect(s.db.plugins).toEqual([{ name: 'argon', script, arguments: { model: 'string', added: 'int' }, realArg: { model: '', added: 0 }, version: '3.0', enabled: true }])
+        expect(s.loadPlugins).not.toHaveBeenCalled() // importPlugin loads the plugins itself
+        expect(s.decisions).toEqual(['applied'])
+        const t = await setup([{ name: 'argon', script: 'old', arguments: {}, realArg: {}, enabled: true }])
+        t.importPlugin.mockResolvedValueOnce(undefined) // the user answered no to "update the existing plugin?"
+        await mod.checkContentUpdates(true)
+        expect(t.db.plugins[0].script).toBe('old')
+        expect(t.decisions).toEqual(['declined'])
+    })
+
+    test('the same script already installed → recorded as applied without asking; a different script is asked', async () => {
+        const s = await setup([{ name: 'argon', script, arguments: {}, realArg: {}, enabled: true }])
+        await mod.checkContentUpdates(true)
+        expect(s.alertConfirmMulti).not.toHaveBeenCalled()
+        expect(s.importPlugin).not.toHaveBeenCalled()
+        expect(s.decisions).toEqual(['applied'])
+        expect(await mod.alreadyInstalled({ ...pending, kind: 'plugin' } as any)).toBe(true)
+        s.db.plugins = [{ name: 'argon', script: script.replace('1.0.3")', '1.0.2")'), arguments: {}, realArg: {}, enabled: true }]
+        expect(await mod.alreadyInstalled({ ...pending, kind: 'plugin' } as any)).toBe(false)
+        s.db.plugins = [{ name: 'other', script, arguments: {}, realArg: {}, enabled: true }]
+        const fetches = s.calls.filter(p => p === '/content-updates/fetch').length
+        expect(await mod.alreadyInstalled({ ...pending, kind: 'plugin' } as any)).toBe(false)
+        expect(s.calls.filter(p => p === '/content-updates/fetch').length).toBe(fetches) // no plugin of that name: no download
+    })
+
+    test('another dialog opened during the plugin comparison download: no question over it', async () => {
+        const s = await setup([{ name: 'argon', script: 'old', arguments: {}, realArg: {}, enabled: true }])
+        const { alertStore } = await import('../stores.svelte') as any
+        s.setOnFetch(() => alertStore.set({ type: 'confirm' }))
+        try {
+            await mod.checkContentUpdates(true)
+            expect(s.alertConfirmMulti).not.toHaveBeenCalled()
+            expect(s.importPlugin).not.toHaveBeenCalled()
+            expect(s.decisions).toEqual([])
+        } finally { alertStore.set({ type: 'none' }) }
     })
 })
 

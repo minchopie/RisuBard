@@ -1,5 +1,5 @@
 'use strict';
-// Content updates: one NAS folder where a character card, persona card or prompt preset is published once; every device
+// Content updates: one NAS folder where a character card, persona card, prompt preset or plugin is published once; every device
 // that uses the same NAS asks "a new one was published — import it? yes/no" and imports it through the
 // app's own import (a character goes through the upstream "update an installed bot" flow, chats kept).
 // On the NAS: the files (named by their SHA-256) and one small record per published name (items/<sha256(name)>.json),
@@ -31,9 +31,15 @@ const retryable = error => error?.retry === true || RETRY_CODES.has(error?.code)
 /** First byte of a 206 answer: "bytes <start>-<end>/<total>". */
 const rangeStart = value => { const m = /^bytes (\d+)-\d+\/(?:\d+|\*)$/.exec(String(value ?? '').trim()); return m ? Number(m[1]) : -1; };
 const READ_CONCURRENCY = 8;
-const KINDS = new Set(['character', 'persona', 'preset']);
+const KINDS = new Set(['character', 'persona', 'preset', 'plugin']);
 // preset (0.9.92-ver1): a prompt preset as exported by the app (.risup / .risupreset) or its JSON form.
-const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']), preset: new Set(['risup', 'risupreset', 'json']) };
+// plugin (0.9.92-ver11): a plugin script (.js), at most PLUGIN_LIMIT.
+const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']), preset: new Set(['risup', 'risupreset', 'json']), plugin: new Set(['js']) };
+const PLUGIN_LIMIT = 8 * 1024 * 1024;
+const sizeLimit = kind => kind === 'plugin' ? PLUGIN_LIMIT : FILE_LIMIT;
+// The kinds a client that does not list its own (`kinds` in the overview request; 0.9.92-ver10 and older) can import: those clients
+// would ask about any other kind as a persona and import it as a character card, so it is not listed to them.
+const LEGACY_KINDS = new Set(['character', 'persona', 'preset']);
 const DECISIONS = new Set(['applied', 'declined', 'published']);
 const SHA = /^[a-f0-9]{64}$/;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
@@ -42,14 +48,14 @@ function text(value, max) {
     return typeof value === 'string' && value.trim() && value.length <= max && !CONTROL.test(value) ? value.trim() : null;
 }
 function validKey(value) {
-    const match = typeof value === 'string' && /^(character|persona|preset):(.+)$/.exec(value);
+    const match = typeof value === 'string' && /^(character|persona|preset|plugin):(.+)$/.exec(value);
     return !!match && !!text(match[2], 120) && match[2] === match[2].trim();
 }
 function validItem(value) {
     if (!value || typeof value !== 'object' || !validKey(value.key) || !KINDS.has(value.kind) || !value.key.startsWith(value.kind + ':')) throw new Error('Invalid content update item');
     const ext = typeof value.file === 'string' && /^([a-f0-9]{64})\.([a-z]+)$/.exec(value.file);
     if (!ext || ext[1] !== value.sha256 || !EXTENSIONS[value.kind].has(ext[2])) throw new Error('Invalid content update file');
-    if (!SHA.test(value.sha256) || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || value.bytes > FILE_LIMIT) throw new Error('Invalid content update size');
+    if (!SHA.test(value.sha256) || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || value.bytes > sizeLimit(value.kind)) throw new Error('Invalid content update size');
     if (!text(value.title, 200) || !text(value.fileName, 200) || /[\\/]/.test(value.fileName)) throw new Error('Invalid content update name');
     if (value.version !== undefined && value.version !== '' && !text(value.version, 80)) throw new Error('Invalid content update version');
     if (!text(value.publishedAt, 40) || Number.isNaN(Date.parse(value.publishedAt))) throw new Error('Invalid content update time');
@@ -169,11 +175,13 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         return items.sort((a, b) => a.publishedAt < b.publishedAt ? -1 : a.publishedAt > b.publishedAt ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
     }
 
-    /** Every published item, with this device's decision; `pending` are the ones to ask about. */
-    async function overview() {
+    /** Every published item of the kinds the client can import (`kinds`; absent: LEGACY_KINDS), with this device's decision; `pending`
+     *  are the ones to ask about. */
+    async function overview(kinds) {
         const remote = await nas();
         if (!remote) return { configured: false, items: [], pending: [] };
-        const list = await listItems(remote);
+        const known = Array.isArray(kinds) ? new Set(kinds.filter(kind => KINDS.has(kind))) : LEGACY_KINDS;
+        const list = (await listItems(remote)).filter(item => known.has(item.kind));
         const decisions = readState().decisions;
         const items = list.map(item => {
             const local = decisions[item.key];
@@ -246,7 +254,7 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         if (!remote) throw new Error('NAS가 설정되지 않았어요. 먼저 NAS 연결 설정을 해 주세요.');
         const staged = tempFile(ext);
         try {
-            const { counter, bytes } = limitStream(FILE_LIMIT, 'Upload');
+            const { counter, bytes } = limitStream(sizeLimit(meta.kind), 'Upload');
             await pipeline(stream, counter, fs.createWriteStream(staged, { flags: 'wx', mode: 0o600 }));
             const sha256 = await hashFile(staged), size = bytes();
             if (!size) throw new Error('빈 파일이에요.');
@@ -293,7 +301,7 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
                 await handler(req, res);
             } catch (error) { if (!res.headersSent) res.status(400).json({ error: error.message }); else res.destroy(error); }
         });
-        routeOf('post', '/overview', async (_req, res) => res.json(await overview()));
+        routeOf('post', '/overview', async (req, res) => res.json(await overview(req.body?.kinds)));
         routeOf('post', '/decide', async (req, res) => res.json(await exclusive(() => decide(req.body?.key, req.body?.sha256, req.body?.decision))));
         routeOf('post', '/fetch', async (req, res) => {
             const { file, item } = await download(req.body?.key, req.body?.sha256);
@@ -314,4 +322,4 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
     return { overview, decide, download, publish, registerRoutes, readState, appCode };
 }
 
-module.exports = { createContentUpdates, validItem, validKey, recordName, recordNames, NAMESPACE, MAX_ITEMS, READ_ITEMS };
+module.exports = { createContentUpdates, validItem, validKey, recordName, recordNames, NAMESPACE, MAX_ITEMS, READ_ITEMS, PLUGIN_LIMIT };

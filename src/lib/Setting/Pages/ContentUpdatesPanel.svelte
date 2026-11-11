@@ -31,11 +31,11 @@
     function pick() {
         return run(async () => {
             const { selectSingleFile } = await import('src/ts/util')
-            const file = await selectSingleFile(['charx', 'png', 'json', 'risup', 'risupreset'])
+            const file = await selectSingleFile(['charx', 'png', 'json', 'risup', 'risupreset', 'js'])
             if (!file) return
             const described = await describeFile(file.name, file.data)
             picked = { fileName: file.name, bytes: file.data, ...described }
-            publishName = described.kind === 'persona' ? described.title : baseName(described.title)
+            publishName = described.kind === 'persona' || described.kind === 'plugin' ? described.title : baseName(described.title)
         })
     }
     function publish() {
@@ -65,12 +65,12 @@
 
 <fieldset disabled={working} aria-label="캐릭터·페르소나 배포">
     <legend>캐릭터·페르소나 배포 (NAS)</legend>
-    <p>한 기기에서 카드나 페르소나 PNG를 올리면, 같은 NAS를 쓰는 다른 기기가 앱을 열 때 「가져올까요? 네/아니오」로 물어봐요. 캐릭터는 이미 있는 캐릭터를 고르면 대화는 그대로 두고 카드만 새 판으로 바꿔요.</p>
+    <p>한 기기에서 카드나 페르소나 PNG를 올리면, 같은 NAS를 쓰는 다른 기기가 앱을 열 때 「가져올까요? 네/아니오」로 물어봐요. 캐릭터는 이미 있는 캐릭터를 고르면 대화는 그대로 두고 카드만 새 판으로 바꿔요. 플러그인(.js)도 올릴 수 있어요.</p>
     {#if !configured}
         <p class="hint">NAS 연결이 아직 설정되지 않았어요. 위의 「NAS 연결 설정」을 먼저 해 주세요.</p>
     {/if}
     <div class="transfer-actions">
-        <ShButton variant="outline" onclick={pick}>파일 골라서 올리기 (charx · json · png · risup)</ShButton>
+        <ShButton variant="outline" onclick={pick}>파일 골라서 올리기 (charx · json · png · risup · js)</ShButton>
         <ShButton variant="outline" onclick={() => run(async () => { await checkContentUpdates(true); await refresh() })}>지금 새 배포 확인</ShButton>
     </div>
     {#if picked}
