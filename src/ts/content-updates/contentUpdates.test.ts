@@ -521,6 +521,13 @@ describe('content updates: plugins', () => {
         expect(t.db.plugins).toHaveLength(1)
         expect(t.requestImmediateSave).toHaveBeenCalledTimes(1)
         expect(t.decisions).toEqual(['applied'])
+        // the same script was already installed (its comparison download had failed, so it was asked): the settings are restored as well
+        const u = await setup([{ name: 'argon', script, arguments: { model: 'string', added: 'int' }, realArg: { model: 'my-model', added: 3 }, version: '3.0', enabled: false }])
+        const again = u.importPlugin.getMockImplementation()
+        u.importPlugin.mockImplementation(async (code: string) => { await again(code); return undefined })
+        expect(await mod.applyItem(pending as any, fileBytes)).toBe('applied')
+        expect(u.db.plugins).toEqual([{ name: 'argon', script, arguments: { model: 'string', added: 'int' }, realArg: { model: 'my-model', added: 3 }, version: '3.0', enabled: false }])
+        expect(u.requestImmediateSave).toHaveBeenCalledTimes(1)
     })
 
     test('the same script already installed → recorded as applied without asking; a different script is asked', async () => {

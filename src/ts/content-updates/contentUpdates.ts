@@ -301,7 +301,7 @@ async function applyPlugin(bytes: Uint8Array): Promise<ContentDecision> {
     const imported = await plugins.importPlugin(script)
     const db = database.getDatabase()
     const index = (db.plugins ?? []).findIndex((plugin: any) => plugin?.name === name)
-    const placed = index >= 0 && db.plugins[index].script === script && original?.script !== script
+    const placed = index >= 0 && db.plugins[index].script === script
     if (!imported && !placed) return 'declined'
     if (imported && (!original || index < 0)) return 'applied'
     if (original) {
