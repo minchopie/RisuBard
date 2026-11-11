@@ -7,6 +7,7 @@ import {
     buildMemoryAnalysisMessages,
     createStoredResponseMemoryAnalysis,
     projectRecentMemoryMessages,
+    withoutHiddenComments,
     type MemoryAnalysisModelCall,
     type MemoryAnalysisModelResponse,
 } from './memoryAnalysisClient'
@@ -2223,6 +2224,169 @@ describe('stored response memory analysis', () => {
         expect(retried[1].content.startsWith(`${messages[1].content}\n\nReturn exactly one JSON value`)).toBe(true)
         expect(messages[1].content.endsWith('</request_data>')).toBe(true)
     })
+    // Cards such as MGE append a hidden record to every response and strip it from the
+    // main request with an editprocess regex; BardWiki evidence leaves it out the same way.
+    const hiddenStory = '문이 열렸다.\n사만다와 아만다가 도착했다.'
+    const hiddenRecord = `\n<!--MGE_STATE v2\nlore: 사만다\ndata: ${'QUJDRA=='.repeat(400)}\nMGE_STATE-->`
+    const firstMessageEvidence = {
+        messageId: 'first-message:chat:-1', role: 'assistant' as const, content: '첫 인사.\n<!--카드 첫 메시지 주석-->',
+    }
+    function hiddenRecordAnalysis(candidates: string[]) {
+        const modelCalls: MemoryAnalysisModelCall[] = []
+        const fetchCalls: Array<{ url: string, body: string }> = []
+        const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => {
+            modelCalls.push(request)
+            if (JSON.parse(request.schema ?? '{}').properties?.turns) {
+                return {
+                    type: 'success' as const,
+                    result: JSON.stringify({
+                        schemaVersion: 1, turns: [{ title: '도착', establishedEvents: [] }], stateChanges: [],
+                        characterKnowledge: [], persistentFacts: [], openContinuity: [], canonicalUpdateCandidates: [],
+                    }),
+                }
+            }
+            if (request.logPurpose === 'bardwiki-analysis') {
+                return {
+                    type: 'success' as const,
+                    result: JSON.stringify({
+                        schemaVersion: 1, title: '도착', establishedEvents: ['두 사람이 도착했다.'],
+                        stateChanges: [], characterKnowledge: [], persistentFacts: [], openContinuity: [],
+                        canonicalUpdateCandidates: candidates.map((title) => ({
+                            type: 'character', title, reason: '지속 정보', action: 'create',
+                            targetDocumentId: null, confidence: 0.9,
+                        })),
+                    }),
+                }
+            }
+            return {
+                type: 'success' as const,
+                result: JSON.stringify({
+                    schemaVersion: 1,
+                    documents: requestDataJson(request).targets.map(
+                        ({ candidateIndex, target }: { candidateIndex: number, target: { title: string } }) => ({
+                            candidateIndex,
+                            sections: [{ heading: '현재 상태', operation: 'upsert', content: `- ${target.title}의 정보.` }],
+                        })
+                    ),
+                }),
+            }
+        })
+        const analysis = createStoredResponseMemoryAnalysis({
+            requestModel,
+            fetchImpl: vi.fn(async (input, init) => {
+                const url = String(input)
+                fetchCalls.push({ url, body: String(init?.body ?? '') })
+                if (url.endsWith('/view')) {
+                    return new Response(JSON.stringify({
+                        mode: 'markdown', wikiPath: 'wiki', documents: [],
+                        health: { danglingLinks: [], unlinkedDocumentIds: [] },
+                    }))
+                }
+                if (url.endsWith('/inquiry')) {
+                    return new Response(JSON.stringify({
+                        mode: 'v2-current', graphRevision: 0, indexRevision: 0,
+                        cacheStatus: 'current', sources: [], metrics: {
+                            candidateCount: 0, inspectedNodeCount: 0, inspectedEdgeCount: 0,
+                            selectedNodeCount: 0, selectedTokens: 0, hopCount: 0, auxiliaryModelCalls: 0,
+                        },
+                    }))
+                }
+                if (url.endsWith('/wiki/reboot/begin')) {
+                    return new Response(JSON.stringify({ canonicalCount: 0 }))
+                }
+                if (url.endsWith('/wiki/reboot/record')) {
+                    return new Response(JSON.stringify(JSON.parse(String(init?.body)).receipt))
+                }
+                if (url.endsWith('/document/save')) {
+                    const body = JSON.parse(String(init?.body))
+                    return new Response(JSON.stringify({
+                        id: `character.${body.title}`, type: 'character', status: 'active', title: body.title,
+                        relativePath: `characters/${body.title}.md`, sourceMessageIds: ['a1'],
+                        updated: '2026-11-11T00:00:00.000Z', content: body.markdown, links: [],
+                        contextMode: 'auto', contentHash: `hash-${body.title}`, reviewStatus: 'reviewed',
+                    }))
+                }
+                return new Response(JSON.stringify({ id: 'event-1', title: '도착', retrievalMetadata: {} }))
+            }) as unknown as typeof fetch,
+            createAuth: async () => 'test-jwt',
+            onError: vi.fn(),
+            nativeV2Analysis: true,
+        })
+        return { modelCalls, fetchCalls, analysis }
+    }
+
+    test('leaves hidden HTML-comment records out of evidence and keeps everything else', () => {
+        const plain = { messageId: 'a0', role: 'assistant' as const, content: '숨김 없는 응답.' }
+        const user = { messageId: 'u1', role: 'user' as const, content: '문을 연다.' }
+        const messages = [
+            firstMessageEvidence,
+            plain,
+            user,
+            { messageId: 'a1', role: 'assistant' as const, content: hiddenStory + hiddenRecord },
+            { messageId: 'a2', role: 'assistant' as const, content: '앞\r\n<!--MGE_ART x-->\n뒤<!-- 끝나지 않은 기록\n...' },
+        ]
+        const projected = withoutHiddenComments(messages)
+        expect(projected.map(({ messageId, role }) => [messageId, role]))
+            .toEqual(messages.map(({ messageId, role }) => [messageId, role]))
+        // The first message was already processed by editprocess; text without a comment is the same object.
+        expect(projected[0]).toBe(firstMessageEvidence)
+        expect(projected[1]).toBe(plain)
+        expect(projected[2]).toBe(user)
+        expect(projected[3].content).toBe(hiddenStory)
+        expect(projected[4].content).toBe('앞\n뒤')
+        expect(messages[3].content).toBe(hiddenStory + hiddenRecord)
+        expect(withoutHiddenComments(projected)).toEqual(projected)
+    })
+
+    test('sends every BardWiki request of a turn the same evidence without hidden records', async () => {
+        const { modelCalls, fetchCalls, analysis } = hiddenRecordAnalysis(['사만다'])
+        const user = { messageId: 'u1', role: 'user' as const, content: '문을 연다.' }
+        const assistant = { messageId: 'a1', role: 'assistant' as const, content: hiddenStory + hiddenRecord }
+        const earlier = { messageId: 'a0', role: 'assistant' as const, content: `이전 응답.${hiddenRecord}` }
+        const input = {
+            characterId: 'character', chatId: 'chat', analysisTokenLimit: 65_536,
+            messages: [firstMessageEvidence, user, assistant],
+            contextMessages: [firstMessageEvidence, earlier, user, assistant],
+        }
+        const before = JSON.stringify(input)
+        await analysis.confirm(input)
+        // The caller's messages, which mirror the stored chat, are not changed.
+        expect(JSON.stringify(input)).toBe(before)
+        expect(modelCalls.map((call) => call.logPurpose)).toEqual(['bardwiki-analysis', 'bardwiki-canonical-update'])
+        for (const call of modelCalls) {
+            expect(requestPromptText(call)).not.toContain('MGE_STATE')
+            expect(requestInputOf(call).confirmedMessages).toEqual([
+                firstMessageEvidence, user, { ...assistant, content: hiddenStory },
+            ])
+        }
+        expect(sharedPrefix(modelCalls[1])).toBe(sharedPrefix(modelCalls[0]))
+        // The wiki lookup query is built from the context messages.
+        const queries = fetchCalls.filter(({ url }) => url.endsWith('/inquiry'))
+            .map(({ body }) => JSON.parse(body).currentInput)
+        expect(queries.length).toBeGreaterThan(0)
+        for (const query of queries) {
+            expect(query.endsWith(hiddenStory)).toBe(true)
+            expect(query).toContain('이전 응답.\n문을 연다.')
+        }
+        expect(fetchCalls.some(({ body }) => body.includes('MGE_STATE'))).toBe(false)
+    })
+
+    test('sends reboot batches without hidden records', async () => {
+        const { modelCalls, fetchCalls, analysis } = hiddenRecordAnalysis([])
+        await analysis.confirm({
+            characterId: 'character', chatId: 'reboot-job',
+            messages: [
+                { messageId: 'u1', role: 'user', content: '문을 연다.' },
+                { messageId: 'a1', role: 'assistant', content: hiddenStory + hiddenRecord },
+            ],
+            rebootTurns: [{ assistantMessageId: 'a1', sourceMessageIds: ['u1', 'a1'] }],
+        })
+        expect(modelCalls).toHaveLength(1)
+        expect(requestPromptText(modelCalls[0])).not.toContain('MGE_STATE')
+        expect(requestPromptText(modelCalls[0])).toContain(JSON.stringify(hiddenStory).slice(1, -1))
+        expect(fetchCalls.some(({ body }) => body.includes('MGE_STATE'))).toBe(false)
+    })
+
     test('retries a canonical native-schema HTTP 400 with a prompt schema', async () => {
         const modelCalls: MemoryAnalysisModelCall[] = []
         const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => {

@@ -4315,9 +4315,9 @@
       "path": "patchnote/0.9.96-ver3.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "8be67d4582c7cd2a7f1554c947f65fab63e560ff33f33674843eb3359357695b",
-      "contentSha256": "8be67d4582c7cd2a7f1554c947f65fab63e560ff33f33674843eb3359357695b",
-      "bytes": 2218
+      "sha256": "13da54b2062fb9cf816c191e459a02e8ff112fe4dc82782baa36f1d55fb4f12c",
+      "contentSha256": "13da54b2062fb9cf816c191e459a02e8ff112fe4dc82782baa36f1d55fb4f12c",
+      "bytes": 4484
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4491,17 +4491,17 @@
       "path": "src/ts/risubard/memoryAnalysisClient.test.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
-      "sha256": "c42718b44a68cb4b06a1f631ab9c970759dfaef5ffcd282ad64ff237b37440c4",
-      "contentSha256": "c42718b44a68cb4b06a1f631ab9c970759dfaef5ffcd282ad64ff237b37440c4",
-      "bytes": 103769
+      "sha256": "53a18786b4dc9ce724d6cea8bf6b45e16b570d07effd6c9706d15bedc8b15c92",
+      "contentSha256": "53a18786b4dc9ce724d6cea8bf6b45e16b570d07effd6c9706d15bedc8b15c92",
+      "bytes": 113032
     },
     {
       "path": "src/ts/risubard/memoryAnalysisClient.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
-      "sha256": "9315b3af22a6750496a1bdd74498245c1ac0cd935a84950c095c0aaecedbb2ab",
-      "contentSha256": "9315b3af22a6750496a1bdd74498245c1ac0cd935a84950c095c0aaecedbb2ab",
-      "bytes": 55538
+      "sha256": "1d6dee8a9117f0b785ec8cd7eeb4e076d431008be116b1f4d2407b8a5f8f6144",
+      "contentSha256": "1d6dee8a9117f0b785ec8cd7eeb4e076d431008be116b1f4d2407b8a5f8f6144",
+      "bytes": 56922
     },
     {
       "path": "server/node/content-updates/content-updates.cjs",
@@ -5278,7 +5278,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/bardwiki-cache-prefix.patch",
-        "sha256": "680402e158121db7eb49f357ec80f51c7389162c0904d3adc37027d40b729021"
+        "sha256": "446b58e8ee096d321820860bba7cd904130a51274da37facb89f6dcb380a6cae"
       }
     },
     {
@@ -5319,7 +5319,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "315e8b03f3ddb465c0f330e39af88be3e0196a2b219eb1c4fc06b570539c20b4"
+      "sha256": "c17eb3ebcbb42787a565a722f835841df9af23681629d9eb3438827cc60b27dc"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5420,8 +5420,8 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
-          "sourceSha256": "680402e158121db7eb49f357ec80f51c7389162c0904d3adc37027d40b729021",
-          "sha256": "8faf46e19cfb7d3569038204128d5931209e8bc49a42ed01f5f0bd342ca8f03a"
+          "sourceSha256": "446b58e8ee096d321820860bba7cd904130a51274da37facb89f6dcb380a6cae",
+          "sha256": "23f676642a208105edc3e5193725d3368677ada9c2816a7bfa1559a4896733bf"
         },
         {
           "module": "transfer-sync",

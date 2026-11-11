@@ -803,6 +803,35 @@ export function projectMemoryAnalysisEvidence(
     return [firstMessage, ...confirmedMessages]
 }
 
+// Some cards keep a hidden record in an HTML comment at the end of every response
+// (for example `<!--MGE_STATE … -->`) and strip it from the main request with an
+// editprocess regex, so the main model never reads it. BardWiki evidence leaves such
+// comments out the same way, with a pure function of the text: every sub-request of a
+// turn and every retry get the same bytes. Stored messages are not changed. The first
+// message is kept as it is: it was already processed by editprocess.
+const HIDDEN_COMMENT_PATTERN = /(?:\r?\n)?<!--[\s\S]*?(?:-->|$)/g
+const FIRST_MESSAGE_EVIDENCE_ID = /^first-message:.+:-?\d+$/
+
+export function withoutHiddenComments(
+    messages: readonly MemoryAnalysisMessage[],
+): MemoryAnalysisMessage[] {
+    return messages.map((message) =>
+        FIRST_MESSAGE_EVIDENCE_ID.test(message.messageId)
+            || !message.content.includes('<!--')
+            ? message
+            : { ...message, content: message.content.replace(HIDDEN_COMMENT_PATTERN, '') })
+}
+
+function withoutHiddenEvidenceComments(input: MemoryAnalysisInput): MemoryAnalysisInput {
+    return {
+        ...input,
+        messages: withoutHiddenComments(input.messages),
+        ...(input.contextMessages
+            ? { contextMessages: withoutHiddenComments(input.contextMessages) }
+            : {}),
+    }
+}
+
 export function projectConfirmedMemoryTurn(
     storedMessages: readonly StoredMessage[],
     targetMessageId?: string,
@@ -1274,7 +1303,7 @@ export function createStoredResponseMemoryAnalysis(
             try {
                 operation.signal.throwIfAborted()
                 const result = await abortable(
-                    runner.run(input, operation.signal),
+                    runner.run(withoutHiddenEvidenceComments(input), operation.signal),
                     operation.signal
                 )
                 announceRisuBardMemoryUpdated({
@@ -1446,7 +1475,7 @@ export function createStoredResponseMemoryAnalysis(
                 characterId: input.characterId,
                 chatId: input.chatId,
             }
-            runner.schedule(input, () => {
+            runner.schedule(withoutHiddenEvidenceComments(input), () => {
                 announceRisuBardMemoryUpdated(completedScope)
             })
         },
