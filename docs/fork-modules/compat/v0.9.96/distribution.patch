@@ -91,15 +91,14 @@ index f62d88a..216d141 100644
 +included in the packaged runtime. Model weights are selected by the user and
 +are not included in the APK; their own licenses apply.
 diff --git a/package.json b/package.json
-index c11a434..536fb29 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,7 +1,7 @@
  {
    "name": "risubard",
    "private": true,
--  "version": "0.9.92",
-+  "version": "0.9.92-ver11",
+-  "version": "0.9.96",
++  "version": "0.9.96-ver2",
    "license": "GPL-3.0-only",
    "packageManager": "pnpm@10.34.1",
    "engines": {

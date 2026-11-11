@@ -4296,6 +4296,22 @@
       "bytes": 2259
     },
     {
+      "path": "patchnote/0.9.96-ver1.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "6afe4e58c15d7513935d1470ad848c860d82a4bc9cbe70e7dd80b91b3b7149cc",
+      "contentSha256": "6afe4e58c15d7513935d1470ad848c860d82a4bc9cbe70e7dd80b91b3b7149cc",
+      "bytes": 2184
+    },
+    {
+      "path": "patchnote/0.9.96-ver2.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "1fb705c54584a1194746a41177d86e33db278fd588df7db399663c2e20591888",
+      "contentSha256": "1fb705c54584a1194746a41177d86e33db278fd588df7db399663c2e20591888",
+      "bytes": 487
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -5180,7 +5196,9 @@
         "patchnote/0.9.92-ver8.md",
         "patchnote/0.9.92-ver9.md",
         "patchnote/0.9.92-ver10.md",
-        "patchnote/0.9.92-ver11.md"
+        "patchnote/0.9.92-ver11.md",
+        "patchnote/0.9.96-ver1.md",
+        "patchnote/0.9.96-ver2.md"
       ],
       "patch": null
     },
@@ -5274,7 +5292,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "eb3067cdd5a455848dbe517c140badf8359e12fc86b9ce785b1485e9be6561d9"
+      "sha256": "0ae8ee9d52ba70da07c854e4fdfaf451906b8d36104a439d536db6aebdb76be6"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5307,8 +5325,8 @@
   ],
   "compatibility": [
     {
-      "tag": "v0.9.92",
-      "targetSha": "d704513d09e15359b349a31702e53ef39999f38c",
+      "tag": "v0.9.96",
+      "targetSha": "97ea0351120b2a6decba8985e6c8c3cef6517ddf",
       "patches": [
         {
           "module": "transfer-integration",
@@ -5350,9 +5368,9 @@
         },
         {
           "module": "distribution",
-          "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
+          "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "4129e7239fc223fc23ab37a8e7e9a99c52ab0ae735d09e54e774ab96d8b84c3b"
+          "sha256": "1c817f39e9f542581fb51a098ab4536b860cece053821ae401e44b754d037d40"
         },
         {
           "module": "lore-lua",
@@ -5407,7 +5425,11 @@
         "patchnote/0.9.89.md": "docs/fork-modules/history/patchnote/0.9.89.md",
         "patchnote/0.9.90.md": "docs/fork-modules/history/patchnote/0.9.90.md",
         "patchnote/0.9.91.md": "docs/fork-modules/history/patchnote/0.9.91.md",
-        "patchnote/0.9.92.md": "docs/fork-modules/history/patchnote/0.9.92.md"
+        "patchnote/0.9.92.md": "docs/fork-modules/history/patchnote/0.9.92.md",
+        "patchnote/0.9.93.md": "docs/fork-modules/history/patchnote/0.9.93.md",
+        "patchnote/0.9.94.md": "docs/fork-modules/history/patchnote/0.9.94.md",
+        "patchnote/0.9.95.md": "docs/fork-modules/history/patchnote/0.9.95.md",
+        "patchnote/0.9.96.md": "docs/fork-modules/history/patchnote/0.9.96.md"
       },
       "probes": {
         "server/node/server.cjs": [
@@ -5426,7 +5448,8 @@
           "trackChatForSave",
           "trackCharacterForSaveImpl",
           "export function trackCharacterForSave",
-          "if (chat && !chat.id) chat.id = v4()"
+          "if (chat && !chat.id) chat.id = v4()",
+          "db.uiSoundClickSound = replaceData(db.uiSoundClickSound)"
         ],
         "src/ts/storage/nodeStorage.ts": [
           "risu-session-deactivated",
@@ -5465,7 +5488,9 @@
           "mobileMessageActionsInline",
           "data.risuBardSourceRerank = data.risuBardSourceRerank === true",
           "risuBardAssistantPrompts?: AssistantPromptOverrides",
-          "${char?.customModuleToggle ?? ''}"
+          "${char?.customModuleToggle ?? ''}",
+          "data.sidebarMinimalMode ??= false",
+          "customUiSounds?:{ id:string, name:string, path:string }[]"
         ],
         "src/ts/process/index.svelte.ts": [
           "selectAnalysisLoreReference",
@@ -5507,6 +5532,19 @@
         ],
         "src/ts/process/request/modelPresetBinding.ts": [
           "subUseModelPreset"
+        ],
+        "src/main.ts": [
+          "installUiSounds()"
+        ],
+        "src/ts/process/request/request.ts": [
+          "targ.modelInfo.format === LLMFormat.Plugin"
+        ],
+        "src/lib/SideBars/SideChatList.svelte": [
+          "<ModelBind minimal={DBState.db.sidebarMinimalMode} />",
+          "<Toggles bind:chara={chara} noContainer minimal>"
+        ],
+        "src/lib/Setting/Pages/PluginSettings.svelte": [
+          ":global([data-collection-organizer-list=\"plugins\"])"
         ]
       }
     }

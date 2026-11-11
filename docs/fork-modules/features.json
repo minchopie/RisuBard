@@ -607,7 +607,9 @@
         "patchnote/0.9.92-ver8.md",
         "patchnote/0.9.92-ver9.md",
         "patchnote/0.9.92-ver10.md",
-        "patchnote/0.9.92-ver11.md"
+        "patchnote/0.9.92-ver11.md",
+        "patchnote/0.9.96-ver1.md",
+        "patchnote/0.9.96-ver2.md"
       ]
     },
     {
@@ -688,8 +690,8 @@
   "notes": "All modules assemble together; shared host bridges depend on the feature layers. No runtime toggle or automatic deployment.",
   "compatibility": [
     {
-      "tag": "v0.9.92",
-      "targetSha": "d704513d09e15359b349a31702e53ef39999f38c",
+      "tag": "v0.9.96",
+      "targetSha": "97ea0351120b2a6decba8985e6c8c3cef6517ddf",
       "patches": [
         {
           "module": "transfer-integration",
@@ -727,7 +729,7 @@
         },
         {
           "module": "distribution",
-          "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
+          "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0"
         },
         {
@@ -778,7 +780,11 @@
         "patchnote/0.9.89.md": "docs/fork-modules/history/patchnote/0.9.89.md",
         "patchnote/0.9.90.md": "docs/fork-modules/history/patchnote/0.9.90.md",
         "patchnote/0.9.91.md": "docs/fork-modules/history/patchnote/0.9.91.md",
-        "patchnote/0.9.92.md": "docs/fork-modules/history/patchnote/0.9.92.md"
+        "patchnote/0.9.92.md": "docs/fork-modules/history/patchnote/0.9.92.md",
+        "patchnote/0.9.93.md": "docs/fork-modules/history/patchnote/0.9.93.md",
+        "patchnote/0.9.94.md": "docs/fork-modules/history/patchnote/0.9.94.md",
+        "patchnote/0.9.95.md": "docs/fork-modules/history/patchnote/0.9.95.md",
+        "patchnote/0.9.96.md": "docs/fork-modules/history/patchnote/0.9.96.md"
       },
       "probes": {
         "server/node/server.cjs": [
@@ -797,7 +803,8 @@
           "trackChatForSave",
           "trackCharacterForSaveImpl",
           "export function trackCharacterForSave",
-          "if (chat && !chat.id) chat.id = v4()"
+          "if (chat && !chat.id) chat.id = v4()",
+          "db.uiSoundClickSound = replaceData(db.uiSoundClickSound)"
         ],
         "src/ts/storage/nodeStorage.ts": [
           "risu-session-deactivated",
@@ -836,7 +843,9 @@
           "mobileMessageActionsInline",
           "data.risuBardSourceRerank = data.risuBardSourceRerank === true",
           "risuBardAssistantPrompts?: AssistantPromptOverrides",
-          "${char?.customModuleToggle ?? ''}"
+          "${char?.customModuleToggle ?? ''}",
+          "data.sidebarMinimalMode ??= false",
+          "customUiSounds?:{ id:string, name:string, path:string }[]"
         ],
         "src/ts/process/index.svelte.ts": [
           "selectAnalysisLoreReference",
@@ -878,6 +887,19 @@
         ],
         "src/ts/process/request/modelPresetBinding.ts": [
           "subUseModelPreset"
+        ],
+        "src/main.ts": [
+          "installUiSounds()"
+        ],
+        "src/ts/process/request/request.ts": [
+          "targ.modelInfo.format === LLMFormat.Plugin"
+        ],
+        "src/lib/SideBars/SideChatList.svelte": [
+          "<ModelBind minimal={DBState.db.sidebarMinimalMode} />",
+          "<Toggles bind:chara={chara} noContainer minimal>"
+        ],
+        "src/lib/Setting/Pages/PluginSettings.svelte": [
+          ":global([data-collection-organizer-list=\"plugins\"])"
         ]
       }
     }
