@@ -2875,8 +2875,8 @@
       "path": "package.json",
       "module": "distribution",
       "kind": "hosts",
-      "sha256": "902518f080fd255fa0e4e30ca5de8470955838576701b254a8711ec83de238ac",
-      "contentSha256": "902518f080fd255fa0e4e30ca5de8470955838576701b254a8711ec83de238ac",
+      "sha256": "b7309e4099c944720e10de206a0b286343411379916ac487d3fd409607d43b81",
+      "contentSha256": "b7309e4099c944720e10de206a0b286343411379916ac487d3fd409607d43b81",
       "bytes": 6477
     },
     {
@@ -4288,6 +4288,14 @@
       "bytes": 1790
     },
     {
+      "path": "patchnote/0.9.92-ver11.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "26bba62cc80b987df323364b91ae1a455629496da52278084ce3f4041423218e",
+      "contentSha256": "26bba62cc80b987df323364b91ae1a455629496da52278084ce3f4041423218e",
+      "bytes": 1865
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4998,7 +5006,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/distribution.patch",
-        "sha256": "adb049e5491fc413784a1e865f2e24f1b5738e1d9196f16b16571849e21e4848"
+        "sha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0"
       }
     },
     {
@@ -5171,7 +5179,8 @@
         "patchnote/0.9.92-ver7.md",
         "patchnote/0.9.92-ver8.md",
         "patchnote/0.9.92-ver9.md",
-        "patchnote/0.9.92-ver10.md"
+        "patchnote/0.9.92-ver10.md",
+        "patchnote/0.9.92-ver11.md"
       ],
       "patch": null
     },
@@ -5265,7 +5274,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "2ab98f1d32b29a75e6201ad17b4e203bd81eb4cbe8559e32eb4d62df4b83fb30"
+      "sha256": "eb3067cdd5a455848dbe517c140badf8359e12fc86b9ce785b1485e9be6561d9"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5342,8 +5351,8 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
-          "sourceSha256": "adb049e5491fc413784a1e865f2e24f1b5738e1d9196f16b16571849e21e4848",
-          "sha256": "88f4233d85ea7d76d91cde3cacad955143414979ba038a02bbd2ac3bab19385b"
+          "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
+          "sha256": "4129e7239fc223fc23ab37a8e7e9a99c52ab0ae735d09e54e774ab96d8b84c3b"
         },
         {
           "module": "lore-lua",

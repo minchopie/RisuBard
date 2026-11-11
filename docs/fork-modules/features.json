@@ -606,7 +606,8 @@
         "patchnote/0.9.92-ver7.md",
         "patchnote/0.9.92-ver8.md",
         "patchnote/0.9.92-ver9.md",
-        "patchnote/0.9.92-ver10.md"
+        "patchnote/0.9.92-ver10.md",
+        "patchnote/0.9.92-ver11.md"
       ]
     },
     {
@@ -727,7 +728,7 @@
         {
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.92/distribution.patch",
-          "sourceSha256": "adb049e5491fc413784a1e865f2e24f1b5738e1d9196f16b16571849e21e4848"
+          "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0"
         },
         {
           "module": "lore-lua",
