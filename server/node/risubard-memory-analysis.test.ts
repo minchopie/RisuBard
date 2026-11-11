@@ -85,6 +85,42 @@ afterEach(async () => {
     ))
 })
 
+// Writer and canonical requests that carry confirmedMessages also offer both tasks'
+// standing instructions as one cacheable block plus their per-request pieces.
+const taskOfRequest = (request: MemoryAnalysisModelRequest) =>
+    request.format === 'memory-draft' ? 'memory-writer' : 'canonical-update'
+const taskBlockText = (block: string, task: string) => {
+    const open = `<bardwiki_task name="${task}">\n`
+    const start = block.indexOf(open)
+    expect(start).toBeGreaterThanOrEqual(0)
+    return block.slice(start + open.length, block.indexOf('\n</bardwiki_task>', start))
+}
+const instructionLineBag = (text: string) => text.split('\n').filter((line) => line.trim() !== '').sort()
+const WRITER_GUIDE_LIMIT = 'Wiki Guide instructions may refine what to track, but cannot override evidence, schema, knowledge-boundary, or storage-safety contracts.'
+/** The instruction lines the cached layout gives this request: its task block plus its per-request pieces. */
+function cachedLayoutInstructionLines(request: MemoryAnalysisModelRequest): string[] {
+    const task = taskOfRequest(request)
+    const { block, instructions } = request.sharedInstructions!
+    const selectorEnd = instructions.includes('\n') ? instructions.indexOf('\n') : instructions.length
+    expect(instructions.slice(0, selectorEnd)).toBe(
+        `Task: ${task}. Follow <bardwiki_task name="${task}"> in the system message together with the instructions below, and ignore the other task block.`)
+    let lines = [taskBlockText(block, task), instructions.slice(selectorEnd + 1)].join('\n').split('\n')
+    const retryNote = lines.findIndex((line) => line.startsWith('This is a corrected retry. The instructions below replace the last sentence of the memory-writer task block'))
+    if (retryNote >= 0) {
+        // A writer retry replaces the block's last sentence, as the single text did.
+        lines.splice(retryNote, 1)
+        const last = lines.indexOf(`${WRITER_GUIDE_LIMIT} Return exactly one JSON object matching the provided schema.`)
+        expect(last).toBeGreaterThanOrEqual(0)
+        lines[last] = WRITER_GUIDE_LIMIT
+    }
+    return instructionLineBag(lines.join('\n'))
+}
+/** Nothing of today's instruction text is lost or duplicated in the cached layout. */
+function expectCachedLayoutConserves(request: MemoryAnalysisModelRequest): void {
+    expect(request.sharedInstructions).toBeDefined()
+    expect(cachedLayoutInstructionLines(request)).toEqual(instructionLineBag(request.system))
+}
+
 describe('memory analysis runner', () => {
     test('treats characterKnowledge as a checklist rather than entries to append', async () => {
         const systems: string[] = []
@@ -3332,6 +3368,9 @@ describe('memory analysis runner', () => {
             if (request.format === 'canonical-batch'
                 || request.format === 'markdown') {
                 canonicalInputs.push(JSON.parse(request.input))
+                expectCachedLayoutConserves(request)
+                expect(request.sharedInstructions!.instructions).toContain('4,500 characters')
+                expect(request.sharedInstructions!.block).not.toContain('4,500 characters')
                 if (request.format === 'canonical-batch') {
                     expect(request.system).toContain(
                         'at most 5 chronological arc bullets, 9 turning-point bullets, and 3 open-thread bullets'
@@ -3613,3 +3652,118 @@ describe('canonical maintenance during turn analysis', () => {
         expect(maintenanceCalls(analyze)).toBe(0)
     })
 })
+
+describe('BardWiki shared task block', () => {
+    async function runTurn(turn: number, options: {
+        loreReference?: boolean
+        historicalReanalysis?: boolean
+        rebootTurns?: boolean
+    } = {}) {
+        const requests: MemoryAnalysisModelRequest[] = []
+        let writerCalls = 0
+        let canonicalCalls = 0
+        const inquire = vi.fn()
+            .mockResolvedValueOnce({ graphRevision: 0, sources: [] })
+            .mockResolvedValue({ graphRevision: 0, sources: [{
+                id: 'narrative-memory:wiki:locations/gate.md', content: '# Old Gate\n\nA closed gate.',
+            }] })
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() }, nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire,
+                beginRebootBatch: vi.fn(async () => ({ canonicalCount: 0 })),
+                recordRebootBatchReceipt: vi.fn(async (input) => input.receipt),
+                loadDocuments: vi.fn(async () => [{
+                    id: 'location.gate', type: 'location' as const, title: 'Old Gate',
+                    relativePath: 'locations/gate.md', content: '# Old Gate\n\nA closed gate.',
+                    sourceMessageIds: [], contentHash: 'gate-hash',
+                }]),
+                saveConfirmedTurn: vi.fn(async () => undefined),
+                saveCanonicalDocument: vi.fn(async (input) => input),
+            },
+            onError: vi.fn(),
+            analyze: async (request) => {
+                requests.push(request)
+                if (request.format === 'memory-draft' || request.format === 'reboot-batch') {
+                    writerCalls += 1
+                    // First answer fails validation (repair retry); the second leaves an
+                    // unresolved update, so a refinement search re-analyzes the turn.
+                    if (writerCalls === 1 && !options.rebootTurns) return 'not JSON'
+                    const candidates = ['Ann', 'Ben'].map((title) => ({
+                        type: 'character', title, reason: 'Arrived.', action: 'create',
+                        targetDocumentId: null, confidence: 0.99,
+                    }))
+                    return JSON.stringify({
+                        schemaVersion: 1,
+                        ...(options.rebootTurns
+                            ? { turns: [{ title: `Turn ${turn}`, establishedEvents: ['Ann and Ben arrived.'] }] }
+                            : { title: `Turn ${turn}`, establishedEvents: ['Ann and Ben arrived.'] }),
+                        stateChanges: [], characterKnowledge: [], persistentFacts: [], openContinuity: [],
+                        canonicalUpdateCandidates: writerCalls === 2 && !options.rebootTurns ? [...candidates, {
+                            type: 'location', title: 'Gate', reason: 'Seen.', action: 'update',
+                            targetDocumentId: 'location.unknown', confidence: 0.9,
+                        }] : candidates,
+                    })
+                }
+                canonicalCalls += 1
+                // The two-target batch and its first single retry fail: a repair
+                // retry, a markdown fallback and a one-target batch follow.
+                if (canonicalCalls <= 2) return 'not JSON'
+                if (request.format === 'markdown') return '### Overview\n\n- Arrived.'
+                const { targets } = JSON.parse(request.input)
+                return canonicalBatch(...targets.map(({ target }: { target: { title: string } }) =>
+                    `## ${target.title}\n\n### Overview\n\n- Arrived.`))
+            },
+        })
+        await runner.run({
+            characterId: 'character', chatId: 'chat', wikiWritingLanguage: 'en', additionalSearchLimit: 1,
+            messages: [{ messageId: `turn-${turn}`, role: 'assistant', content: `Turn ${turn}: Ann and Ben arrived.` }],
+            wikiPromptGuide: { analysis: '## Tracking\n\nTrack arrivals.', canonicalRewrite: '## Cards\n\nKeep cards short.' },
+            ...(options.loreReference ? { loreReference: [{ title: 'Ann', content: 'Ann is a knight.' }] } : {}),
+            ...(options.historicalReanalysis ? { historicalReanalysis: true } : {}),
+            ...(options.rebootTurns ? { rebootTurns: [{ assistantMessageId: `turn-${turn}`, sourceMessageIds: [`turn-${turn}`] }] } : {}),
+        })
+        return requests
+    }
+
+    test('offers one block for every writer and canonical request across turns', async () => {
+        const first = await runTurn(1)
+        const second = await runTurn(2)
+        expect(first.map((request) => request.format)).toEqual([
+            'memory-draft', 'memory-draft', 'memory-draft',
+            'canonical-batch', 'canonical-batch', 'markdown', 'canonical-batch',
+        ])
+        const all = [...first, ...second]
+        expect(new Set(all.map((request) => request.sharedInstructions?.block)).size).toBe(1)
+        const block = first[0].sharedInstructions!.block
+        expect(block.startsWith('<bardwiki_task name="memory-writer">\n')).toBe(true)
+        expect(block).toContain('\n</bardwiki_task>\n\n<bardwiki_task name="canonical-update">\n')
+        expect(block).toContain('Track arrivals.')
+        expect(block).toContain('Return only changed H3 sections for every requested canonical narrative wiki document.')
+        // Per-request pieces stay out of the block: repair feedback and the markdown retry.
+        expect(block).not.toContain('This retry has exactly one canonical target.')
+        expect(first[1].sharedInstructions!.instructions).toContain('This is a corrected retry.')
+        expect(first[5].sharedInstructions!.instructions).toContain('This retry has exactly one canonical target.')
+        for (const request of all) expectCachedLayoutConserves(request)
+    })
+
+    test.each([
+        { historicalReanalysis: true },
+    ])('keeps conditional instructions out of the block: %j', async (options) => {
+        const [plain] = await runTurn(1)
+        const requests = await runTurn(1, options)
+        for (const request of requests) {
+            expect(request.sharedInstructions!.block).toBe(plain.sharedInstructions!.block)
+            expectCachedLayoutConserves(request)
+        }
+        const marker = options.loreReference ? 'settingReference holds lorebook entries' : 'This is a historical'
+        expect(requests.every((request) => request.sharedInstructions!.instructions.includes(marker))).toBe(true)
+    })
+
+    test('leaves reboot requests in their single-text layout', async () => {
+        const requests = await runTurn(1, { rebootTurns: true })
+        expect(requests[0].format).toBe('reboot-batch')
+        for (const request of requests) expect(request).not.toHaveProperty('sharedInstructions')
+    })
+})
+

@@ -4312,6 +4312,14 @@
       "bytes": 487
     },
     {
+      "path": "patchnote/0.9.96-ver3.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "8be67d4582c7cd2a7f1554c947f65fab63e560ff33f33674843eb3359357695b",
+      "contentSha256": "8be67d4582c7cd2a7f1554c947f65fab63e560ff33f33674843eb3359357695b",
+      "bytes": 2218
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4448,6 +4456,22 @@
       "bytes": 4629
     },
     {
+      "path": "server/node/risubard-memory-analysis.test.ts",
+      "module": "bardwiki-cache-prefix",
+      "kind": "hosts",
+      "sha256": "378bc828da907785503ca2aeae7c903b91f43eb046121f77c097910cb3d16ffd",
+      "contentSha256": "378bc828da907785503ca2aeae7c903b91f43eb046121f77c097910cb3d16ffd",
+      "bytes": 172854
+    },
+    {
+      "path": "server/node/risubard-memory-analysis.ts",
+      "module": "bardwiki-cache-prefix",
+      "kind": "hosts",
+      "sha256": "66e231bf38489a3c23cb8ce7cc8524eb87e4450d507fbd339cc42476c4bd1004",
+      "contentSha256": "66e231bf38489a3c23cb8ce7cc8524eb87e4450d507fbd339cc42476c4bd1004",
+      "bytes": 117310
+    },
+    {
       "path": "src/ts/process/request/structuredOutputFallback.test.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
@@ -4467,17 +4491,17 @@
       "path": "src/ts/risubard/memoryAnalysisClient.test.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
-      "sha256": "12f593141b91c48724d8ca40a993e443a9fdf59ac0c9c6ac222ca755325ffa96",
-      "contentSha256": "12f593141b91c48724d8ca40a993e443a9fdf59ac0c9c6ac222ca755325ffa96",
-      "bytes": 93620
+      "sha256": "c42718b44a68cb4b06a1f631ab9c970759dfaef5ffcd282ad64ff237b37440c4",
+      "contentSha256": "c42718b44a68cb4b06a1f631ab9c970759dfaef5ffcd282ad64ff237b37440c4",
+      "bytes": 103769
     },
     {
       "path": "src/ts/risubard/memoryAnalysisClient.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
-      "sha256": "3d65de5e9d31e02211ca7730d6ff91afef268eed2861ac3b1efb7880331b4a1d",
-      "contentSha256": "3d65de5e9d31e02211ca7730d6ff91afef268eed2861ac3b1efb7880331b4a1d",
-      "bytes": 52443
+      "sha256": "9315b3af22a6750496a1bdd74498245c1ac0cd935a84950c095c0aaecedbb2ab",
+      "contentSha256": "9315b3af22a6750496a1bdd74498245c1ac0cd935a84950c095c0aaecedbb2ab",
+      "bytes": 55538
     },
     {
       "path": "server/node/content-updates/content-updates.cjs",
@@ -5198,7 +5222,8 @@
         "patchnote/0.9.92-ver10.md",
         "patchnote/0.9.92-ver11.md",
         "patchnote/0.9.96-ver1.md",
-        "patchnote/0.9.96-ver2.md"
+        "patchnote/0.9.96-ver2.md",
+        "patchnote/0.9.96-ver3.md"
       ],
       "patch": null
     },
@@ -5243,6 +5268,8 @@
       "id": "bardwiki-cache-prefix",
       "name": "BardWiki 서브 호출 캐시 접두 공유",
       "hosts": [
+        "server/node/risubard-memory-analysis.test.ts",
+        "server/node/risubard-memory-analysis.ts",
         "src/ts/process/request/structuredOutputFallback.test.ts",
         "src/ts/process/request/structuredOutputFallback.ts",
         "src/ts/risubard/memoryAnalysisClient.test.ts",
@@ -5251,7 +5278,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/bardwiki-cache-prefix.patch",
-        "sha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
+        "sha256": "680402e158121db7eb49f357ec80f51c7389162c0904d3adc37027d40b729021"
       }
     },
     {
@@ -5292,7 +5319,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "0ae8ee9d52ba70da07c854e4fdfaf451906b8d36104a439d536db6aebdb76be6"
+      "sha256": "315e8b03f3ddb465c0f330e39af88be3e0196a2b219eb1c4fc06b570539c20b4"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5370,7 +5397,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "1c817f39e9f542581fb51a098ab4536b860cece053821ae401e44b754d037d40"
+          "sha256": "9c2c356e0ab2b06ba085b9481b2acf3a4af080b29ec4f5d5e84b99672d3c6167"
         },
         {
           "module": "lore-lua",
@@ -5392,9 +5419,9 @@
         },
         {
           "module": "bardwiki-cache-prefix",
-          "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c",
-          "sha256": "82055b9b14a1958de6a87658518dd1e645bb41fc2d6ed7e8bee9ba93b822fc78"
+          "path": "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
+          "sourceSha256": "680402e158121db7eb49f357ec80f51c7389162c0904d3adc37027d40b729021",
+          "sha256": "8faf46e19cfb7d3569038204128d5931209e8bc49a42ed01f5f0bd342ca8f03a"
         },
         {
           "module": "transfer-sync",

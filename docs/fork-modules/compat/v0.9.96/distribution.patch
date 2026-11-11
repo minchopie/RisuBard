@@ -98,7 +98,7 @@ diff --git a/package.json b/package.json
    "name": "risubard",
    "private": true,
 -  "version": "0.9.96",
-+  "version": "0.9.96-ver2",
++  "version": "0.9.96-ver3",
    "license": "GPL-3.0-only",
    "packageManager": "pnpm@10.34.1",
    "engines": {

@@ -609,7 +609,8 @@
         "patchnote/0.9.92-ver10.md",
         "patchnote/0.9.92-ver11.md",
         "patchnote/0.9.96-ver1.md",
-        "patchnote/0.9.96-ver2.md"
+        "patchnote/0.9.96-ver2.md",
+        "patchnote/0.9.96-ver3.md"
       ]
     },
     {
@@ -648,6 +649,8 @@
       "id": "bardwiki-cache-prefix",
       "name": "BardWiki 서브 호출 캐시 접두 공유",
       "hosts": [
+        "server/node/risubard-memory-analysis.test.ts",
+        "server/node/risubard-memory-analysis.ts",
         "src/ts/process/request/structuredOutputFallback.test.ts",
         "src/ts/process/request/structuredOutputFallback.ts",
         "src/ts/risubard/memoryAnalysisClient.test.ts",
@@ -749,8 +752,8 @@
         },
         {
           "module": "bardwiki-cache-prefix",
-          "path": "docs/fork-modules/compat/v0.9.84/bardwiki-cache-prefix.patch",
-          "sourceSha256": "4fbb4e95f711c195a98f1f35df007403a249b5b1f8b8174cd660171a332c011c"
+          "path": "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
+          "sourceSha256": "680402e158121db7eb49f357ec80f51c7389162c0904d3adc37027d40b729021"
         },
         {
           "module": "transfer-sync",
