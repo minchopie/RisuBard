@@ -52,7 +52,6 @@ const SETTINGS_GROUPS = {
     lorebook: group(`loreBook loreBookPage loreBookDepth loreBookToken localActivationInGlobalLorebook`),
     memory: group(`hypaV3Presets hypaV3PresetId hypaV3Settings hypaCustomSettings hypaModel supaMemoryKey showMemoryLimit memoryLimitThickness risuBardEmbeddingSettings`),
     translator: group(`translatorPresets translatorPresetId translator translatorType translatorInputLanguage translatorPrompt translatorMaxResponse deeplOptions deeplXOptions autoTranslate useAutoTranslateInput translateBeforeHTMLFormatting autoTranslateCachedOnly noWaitForTranslate legacyTranslation combineTranslation htmlTranslation useExperimentalGoogleTranslator showTranslationLoading playMessageOnTranslateEnd novellistAPI`),
-    theme: group(`themePresets themePresetsId theme textTheme textThemeAutoContrast customTextTheme colorScheme colorSchemeName customCSS customBackground font customFont lineHeight textAreaTextSize textScreenColor textBorder textScreenRounded textScreenBorder roundIcons classicMaxWidth`),
     toggles: group(`togglePresets customFlags enableCustomFlags`),
     'prompt-overlays': group(`promptBlockOverlay promptBlockOverlayProfiles promptBlockOverlayApplicationPresets promptTemplate customPromptTemplateToggle templateDefaultVariables instructChatTemplate JinjaTemplate useInstructPrompt promptSettings promptDiffPrefs`),
     'image-gen': group(`sdProvider webUiUrl sdSteps sdCFG sdConfig NAIImgUrl NAIApiKey NAIImgModel NAII2I NAIREF NAIImgConfig dallEQuality stabilityModel stabilityKey stabllityStyle comfyUiUrl comfyConfig falToken falModel falLora falLoraName falLoraScale ImagenModel ImagenImageSize ImagenAspectRatio ImagenPersonGeneration openaiCompatImage wavespeedImage newImageHandlingBeta outputImageModal inlayImageLossless inlayImagePriority imageCompression inlayErrorResponse`),
@@ -64,6 +63,13 @@ const SETTINGS_GROUPS = {
 };
 /** Never synchronized: UI/layout/navigation/transient/cache/transport (NAS-SYNC-FIELD-INVENTORY §4 last row). */
 const DEVICE_LOCAL = new Set(split(`account characterVault textAreaSize sideBarSize characterSidebarWidth characterListSidebarWidth chatListHeight risuBardMemoryDialogSize risuBardMemoryDockRatio risuBardMemoryWorkspaceHeight risuBardArcaChatDialogSize risuBardSaveLoadShortcutPlacement showRisuBardSaveLoadShortcuts settingsCloseButtonSize fullScreen zoomsize iconsize assetWidth waifuWidth waifuWidth2 heightMode fixedChatTextarea longPressToPopupEditor showInputActionBar mobileMessageActionsInline hamburgerButtonBottom hideLeftBarCollapseButton showMenuChatList showMenuHypaMemoryModal showFolderName showModelInSidebar showPresetInSidebar showPersonaInSidebar sideMenuRerollButton enableScrollToActiveChar autoScrollToNewMessage alwaysScrollToNewMessage preserveChatScrollPosition pinChatScrollNavigator chatScrollNavigatorOffset newMessageButtonStyle hideMessagePageCount showFirstMessagePages enableBookmark hideAllImages disableMobileDragDrop disableToggleBinding clickToEdit enableBlockPartialEdit enableDragPartialEdit animationSpeed botSettingAtStart auxModelUnderModelSettings promptInfoInsideChat promptTextInfoInsideChat requestInfoInsideChat showPromptComparison showSavingIcon pluginFabPlacements requestLogEnabled requestLogStreamUsage showRequestStatus requestStatusCollapsed requestStatusPosition requestStatusOpacity requestStatusHoverOpaque saveTime lastPatchNoteCheckVersion didFirstSetup modelProfileRegistryCache modelProfileRegistryLastFetched modelRegistrySeen modelProfileVisibilityLevel useCustomModelRegistry modelProfileRegistryBaseUrl dynamicModelRegistry legacyMediaFindings genTime nanogptSubscriptionState externalChangeReview notification keepSessionAlive enableRemoteSaving chatUploadChunkMiB chatUploadChunkEnabled chatLoadInitialPages chatLoadAdditionalPages chatPageSize streamingDisplayOptimizationMode risuBardAutosaveInterval risuBardAutosaveRetention nodeOnlyStandardChatWidth nodeOnlyScrollButtonType nodeOnlyHideRecentChats nodeOnlyAutoCleanAssets nodeOnlyServerSideRequests risuPlaySets formatversion`));
+/** RisuBard 0.9.96-ver5 (user, 2026-11-13: phone, tablet and PC screens differ, so each device keeps its own theme): the former
+ *  'theme' group and the active app skin (upstream 0.9.92 appSkinId) are never synchronized. The skin library (appSkins) still syncs
+ *  as its own root. Kept apart from DEVICE_LOCAL so the theme-preset layout parity (mirror reads ∩ DEVICE_LOCAL) stays exact. */
+const DEVICE_THEME = new Set([...group(`themePresets themePresetsId theme textTheme textThemeAutoContrast customTextTheme colorScheme colorSchemeName customCSS customBackground font customFont lineHeight textAreaTextSize textScreenColor textBorder textScreenRounded textScreenBorder roundIcons classicMaxWidth`), 'appSkinId']);
+/** Their roots already on the NAS (published by this device before, or by older versions that still publish them): kept in history,
+ *  never applied, listed, resolved or restored here, like the legacy userNote root. */
+const DEVICE_LOCAL_ROOTS = new Set(['settings\ngroup\ntheme', 'settings\ngroup\nappSkinId']);
 /** Library collections are projected per item, not as settings keys. */
 const COLLECTIONS = { characters: 'character', modules: 'module', plugins: 'plugin' };
 const CHARACTER_LOCAL = new Set(split(`chatPage viewScreen inlayViewScreen lastInteraction trashTime`));
@@ -76,10 +82,10 @@ const syncedThemePresets = value => Array.isArray(value) ? value.map(entry => en
 const CHAT_DISPLAY = new Set(split(`activeStreamingDisplayOptimizationMode risuSyncDeleted`));
 const OWNER = new Map();
 for (const [name, keys] of Object.entries(SETTINGS_GROUPS)) for (const key of keys) { if (OWNER.has(key)) throw new Error('Settings key owned twice: ' + key); OWNER.set(key, 'settings:' + name); }
-for (const key of DEVICE_LOCAL) if (OWNER.has(key)) throw new Error('Device-local key also grouped: ' + key);
+for (const key of [...DEVICE_LOCAL, ...DEVICE_THEME]) if (OWNER.has(key)) throw new Error('Device-local key also grouped: ' + key);
 for (const key of Object.keys(COLLECTIONS)) if (OWNER.has(key) || DEVICE_LOCAL.has(key)) throw new Error('Collection key also owned: ' + key);
 /** group root | 'local' | 'collection' | settings:<key> for every other key (unknown keys are preserved as their own root). */
-const ownerOf = key => PERSONA_MIRRORS.includes(key) || DEVICE_LOCAL.has(key) || key === REFS ? 'local' : key in COLLECTIONS ? 'collection' : OWNER.get(key) ?? `settings:${key}`;
+const ownerOf = key => PERSONA_MIRRORS.includes(key) || DEVICE_LOCAL.has(key) || DEVICE_THEME.has(key) || key === REFS ? 'local' : key in COLLECTIONS ? 'collection' : OWNER.get(key) ?? `settings:${key}`;
 const GROUP_KEYS = Object.fromEntries(Object.entries(SETTINGS_GROUPS).map(([g, keys]) => [`settings:${g}`, keys]));
 
 const clone = v => JSON.parse(JSON.stringify(v));
@@ -319,4 +325,4 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false } = 
     }
     return out;
 }
-module.exports = { SETTINGS_GROUPS, GROUP_KEYS, DEVICE_LOCAL, COLLECTIONS, CHARACTER_LOCAL, THEME_PRESET_LOCAL, syncedThemePresets, CHAT_DISPLAY, MIRROR, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity, pinsFor, localPins, characterPinContent };
+module.exports = { SETTINGS_GROUPS, GROUP_KEYS, DEVICE_LOCAL, DEVICE_THEME, DEVICE_LOCAL_ROOTS, COLLECTIONS, CHARACTER_LOCAL, THEME_PRESET_LOCAL, syncedThemePresets, CHAT_DISPLAY, MIRROR, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity, pinsFor, localPins, characterPinContent };

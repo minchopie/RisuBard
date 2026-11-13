@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createMemorySaveSlot, memorySaveWorkspaceId } from './risubard-memory-save'
 import { encodeMemorySaveChat } from '../../src/ts/risubard/memorySaveCodec'
-const { SETTINGS_GROUPS, DEVICE_LOCAL, COLLECTIONS, MIRROR, THEME_PRESET_LOCAL, syncedThemePresets, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity } = require('./nas-sync-projection.cjs')
+const { SETTINGS_GROUPS, DEVICE_LOCAL, DEVICE_THEME, DEVICE_LOCAL_ROOTS, COLLECTIONS, MIRROR, THEME_PRESET_LOCAL, syncedThemePresets, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity } = require('./nas-sync-projection.cjs')
 const { createVault } = require('./nas-sync-vault.cjs')
 const { createGraph } = require('./nas-sync-core.cjs')
 const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs')
@@ -26,6 +26,7 @@ test('ownership is disjoint and total over the real Database interface; the pres
     const owners = new Map<string, string>()
     for (const [groupName, groupKeys] of Object.entries(SETTINGS_GROUPS) as [string, string[]][]) for (const key of groupKeys) { expect(owners.has(key), `${key} owned twice`).toBe(false); owners.set(key, groupName) }
     for (const key of DEVICE_LOCAL) expect(owners.has(key), `${key} grouped and local`).toBe(false)
+    for (const key of DEVICE_THEME) expect(owners.has(key) || DEVICE_LOCAL.has(key), `${key} grouped and theme-local`).toBe(false)
     for (const key of Object.keys(COLLECTIONS)) expect(owners.has(key) || DEVICE_LOCAL.has(key)).toBe(false)
     for (const key of ['ooba', 'ainconfig', 'promptTemplate', 'customFlags', 'NAIadventure', 'outputImageModal', 'seperateParameters', 'memoryAlgorithmType']) expect(ownerOf(key)).toBe('settings:prompt-presets')
     for (const key of MIRROR) expect(ownerOf(key)).toBe('settings:prompt-presets')
@@ -241,8 +242,8 @@ test('dependency pins follow runtime semantics and carry stable secret refs: sam
     const none = f.database(); none.defaultModelBinding = locked.defaultModelBinding; none.modelPresets = locked.modelPresets; none.characters[0].chats[0].useModelPreset = true
     expect(Object.keys(pinsFor(pub(none), charOf(pub(none)), chatOf(pub(none))))).not.toContain('pin:model-preset:mp-default')
     // Upstream 0.9.92 keys stay their own settings roots, as on every earlier version (grouping them would make old and new devices
-    // project the theme / model-presets groups differently).
-    expect([ownerOf('appSkins'), ownerOf('appSkinId'), ownerOf('subUseModelPresetByDefault')]).toEqual(['settings:appSkins', 'settings:appSkinId', 'settings:subUseModelPresetByDefault'])
+    // project the theme / model-presets groups differently). 0.9.96-ver5: the active skin (appSkinId) is device-local with the theme.
+    expect([ownerOf('appSkins'), ownerOf('appSkinId'), ownerOf('subUseModelPresetByDefault')]).toEqual(['settings:appSkins', 'local', 'settings:subUseModelPresetByDefault'])
     // Upstream 0.9.92: main and sub regimes are chosen separately; each used regime is pinned, an unmixed chat keeps its old pins.
     const presets = [{ id: 'mp-main', name: 'm', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://m.example' } }, userValues: {} }, { id: 's', name: 's', profileSnapshot: { schema: [], auth: { fields: [] }, endpoint: { kind: 'static', url: 'https://s.example' } }, userValues: {} }]
     const mixed = (main: boolean, sub: boolean | undefined) => { const d = f.database(); Object.assign(d.characters[0].chats[0], { useModelPreset: main, subUseModelPreset: sub, modelBinding: { main: 'mp-main', sub: 's', separateAux: false, aux: {} } }); d.modelPresets = structuredClone(presets); return d }
@@ -305,6 +306,26 @@ test('theme-preset entries are projected without the device-local layout fields 
     expect(sha(JSON.stringify(syncedThemePresets(a)))).toBe(sha(JSON.stringify(syncedThemePresets(b)))) // every local field changed: same projected entry
     expect(syncedThemePresets(undefined)).toBeUndefined()
     expect(a[0]).toHaveProperty('zoomsize') // never mutates the database
+})
+
+test('0.9.96-ver5: the theme (the former settings group of 20 keys) and the active app skin are device-local; the 16 other groups, DEVICE_LOCAL and the skin library are unchanged', async () => {
+    const THEME = ['themePresets', 'themePresetsId', 'theme', 'textTheme', 'textThemeAutoContrast', 'customTextTheme', 'colorScheme', 'colorSchemeName', 'customCSS', 'customBackground', 'font', 'customFont', 'lineHeight', 'textAreaTextSize', 'textScreenColor', 'textBorder', 'textScreenRounded', 'textScreenBorder', 'roundIcons', 'classicMaxWidth']
+    expect([...DEVICE_THEME]).toEqual([...THEME, 'appSkinId'])
+    for (const key of DEVICE_THEME) expect(ownerOf(key), key).toBe('local')
+    expect([...DEVICE_LOCAL_ROOTS]).toEqual([rootKeyOf('settings', 'group', 'theme'), rootKeyOf('settings', 'group', 'appSkinId')])
+    expect(Object.keys(SETTINGS_GROUPS)).toEqual(['provider-main', 'model-presets', 'prompt-presets', 'activation', 'personas', 'lorebook', 'memory', 'translator', 'toggles', 'prompt-overlays', 'image-gen', 'tts-voice', 'novelai', 'horde', 'bard-painter', 'risubard-wiki'])
+    // Byte-identical key lists of the 16 other groups and of DEVICE_LOCAL as in 0.9.96-ver4 (d5fd334).
+    expect(sha(JSON.stringify(SETTINGS_GROUPS))).toBe('924a84c6106bea7ac3815d0a9faa2a469e388f9d1ae8f0b4d55f4ae616b4a764')
+    expect(sha(JSON.stringify([...DEVICE_LOCAL]))).toBe('245fa5efe2af1f1b45263fe045a9f61d7e4bbf5f8540166c0e531d25727bb64b')
+    expect(ownerOf('appSkins')).toBe('settings:appSkins')
+    const vault = createVault(master), base: any = { characters: [], loreBook: [{ key: 'k', content: 'c' }], appSkins: [{ id: 's' }], appSkinId: 's', themePresets: [{ name: 't', font: 'f' }], themePresetsId: 0, theme: 'waifu', customCSS: '.a{}', colorSchemeName: 'dark', lineHeight: 1.2 }
+    const project = async (db: any) => (await projectDatabase({ database: db, vault, readAsset: async () => null, readInlay: async () => null })).desired
+    const first = await project(base)
+    expect(first.map((d: any) => d.root).sort()).toEqual(['appSkins', 'lorebook'])
+    const graph = createGraph(), initial = diffProjection(graph, first); graph.addAll(initial.revisions)
+    const lineage = Object.fromEntries(first.map((d: any, i: number) => [d.lineageKey, initial.revisions[i].id]))
+    const changed = { ...structuredClone(base), appSkinId: 'other', themePresets: [{ name: 'u', font: 'g' }], themePresetsId: 1, theme: 'classic', customCSS: '.b{}', colorSchemeName: 'light', lineHeight: 2, textAreaTextSize: 3, roundIcons: true }
+    expect(diffProjection(graph, await project(changed), lineage)).toMatchObject({ revisions: [], diverged: [] })
 })
 
 test('a root this device never applied (no lineage, one received frontier head) forks as a genesis sibling instead of continuing that head: differing content → diverged root for bootstrap/resolution; equal content → matched; lineage present → linear as before (live .78: joining phone\'s presets promoted over the tablet\'s)', async t => {

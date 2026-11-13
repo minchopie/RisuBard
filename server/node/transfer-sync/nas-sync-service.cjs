@@ -23,7 +23,7 @@ const { createSyncStore, READER_THREAD } = require('./nas-sync-store.cjs');
 const { createVault, vaultMasterStore, REFS } = require('./nas-sync-vault.cjs');
 const { createSyncRemote, createSyncTransport } = require('./nas-sync-remote.cjs');
 const { createManifest } = require('./nas-sync-manifest.cjs');
-const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences } = require('./nas-sync-projection.cjs');
+const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences, DEVICE_LOCAL_ROOTS, DEVICE_THEME } = require('./nas-sync-projection.cjs');
 const { makeRevision, hashJson, rootKey } = require('./nas-sync-core.cjs');
 const { PERSONA_MIRRORS, personaSelection, personaMirrorsMatch, personaMirrorIssue, mergePersonaHeads } = require('./nas-sync-reconcile.cjs');
 const { deviceKeyStore, writeRequestArchive, writeGrantArchive, openGrant, readShareArchive, REQUEST, GRANT } = require('./nas-sync-share.cjs');
@@ -118,7 +118,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     const requireEnabled = () => { if (!service().enabled) throw new Error('NAS 동기화가 꺼져 있어요.'); return openStore(); };
     const planPath = txn => `apply/${txn}.json`;
     const LINEAGE_FILE = 'risubard/nas-sync/lineage.json'; // declared before the open-time recovery below uses recordLineage()
-    const readPlan = txn => JSON.parse(fs.readFileSync(file(planPath(txn)), 'utf8'));
+    // 0.9.96-ver5: a journal an older version wrote may still plan theme values (DEVICE_THEME). They are dropped on every read, from the
+    // planned settings and from the prepared/baseline/expected hashes alike, so no apply, retry or startup recovery writes them and finish
+    // verifies only the rest. Journals of this version never carry them.
+    const withoutDeviceTheme = plan => { for (const part of [plan?.settings, plan?.prepared?.settings, plan?.baseline?.settings, plan?.expected?.settings]) if (part && typeof part === 'object') for (const k of Object.keys(part)) if (DEVICE_THEME.has(k)) delete part[k]; return plan; };
+    const readPlan = txn => withoutDeviceTheme(JSON.parse(fs.readFileSync(file(planPath(txn)), 'utf8')));
     const writePlan = plan => atomicWriteJson(root, planPath(plan.transaction), plan);
     // The journal is always written before the pointer, so on open the journal's phase is authoritative for the write gate.
     // Orphan journals (crash between journal and pointer writes) are adopted unless they belong to a finished or held plan.
@@ -194,7 +198,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     }
     const nameOf = (meta, rev) => rev ? meta(rev.id)?.name : undefined;
     const branchesPreserved = (s, key, c) => key.startsWith('play\nchat\n') && c.state === 'diverged' && !chatDifference(c.liveHeads.map(id => s.graph.get(id))).sameMessages && c.variants.every(ids => ids.some(id => Object.values(service().lineage).includes(id)));
-    const conflictCount = s => s.graph.rootKeys().filter(k => { if (k === 'settings\ngroup\nuserNote') return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
+    /** Roots kept in history but never applied, listed, resolved or restored: the legacy userNote mirror and, since 0.9.96-ver5, the
+     *  per-device theme roots (DEVICE_LOCAL_ROOTS). Their commits are still acknowledged, so other devices' records never wait on them. */
+    const historyOnly = key => key === 'settings\ngroup\nuserNote' || DEVICE_LOCAL_ROOTS.has(key);
+    const conflictCount = s => s.graph.rootKeys().filter(k => { if (historyOnly(k)) return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
     // `workspaceId`/`role` are reported even while disabled so a reopened panel resumes the saved setup instead of defaults.
     const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], enabled: service().enabled, role: service().role ?? null, adopting: !!service().adopting, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
         vault: { origin: service().vaultOrigin ?? null, sharedFrom: service().vaultSharedFrom ?? null, missing: !fs.existsSync(masterFile()) && (service().vaultOrigin === 'shared' || (service().enabled && (Object.keys(service().lineage).length > 0))), pendingGrant: service().pendingGrant ? { from: service().pendingGrant.from, reason: service().pendingGrant.reason } : null }, shares: (service().shares ?? []).map(({ id, kind, to, via, at }) => ({ id, kind, to, via, at })),
@@ -318,10 +325,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     }
     async function conflicts() {
         const s = openStore();
-        await withMeta(meta => { for (const key of s.graph.rootKeys()) if (key !== 'settings\ngroup\nuserNote' && s.graph.classify(key).state === 'diverged') rootTitle(s, key, meta); }); // titles first, so the listing below normally runs once
+        await withMeta(meta => { for (const key of s.graph.rootKeys()) if (!historyOnly(key) && s.graph.classify(key).state === 'diverged') rootTitle(s, key, meta); }); // titles first, so the listing below normally runs once
         return withMeta(meta => { const out = [];
         for (const key of s.graph.rootKeys()) {
-            if (key === 'settings\ngroup\nuserNote') continue; // legacy selected-persona mirror remains in history, never a user-facing library conflict
+            if (historyOnly(key)) continue; // legacy selected-persona mirror / per-device theme remain in history, never a user-facing conflict
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
             if (c.state === 'diverged') {
                 const versions = c.variants.map(ids => s.graph.get(ids[0]));
@@ -340,7 +347,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const s = requireEnabled(), db = await readDatabase();
         // Titles of roots without a local chat row are read first (off-thread), so the listing below normally runs once.
         const chatRoots = new Set((db?.characters ?? []).flatMap(c => (c.chats ?? []).map(ch => `play\nchat\n${service().branches[ch.id]?.root ?? ch.id}`)));
-        await withMeta(meta => { for (const key of s.graph.rootKeys()) if (key !== 'settings\ngroup\nuserNote' && !chatRoots.has(key)) rootTitle(s, key, meta); });
+        await withMeta(meta => { for (const key of s.graph.rootKeys()) if (!historyOnly(key) && !chatRoots.has(key)) rootTitle(s, key, meta); });
         return withMeta(meta => { const state = s.state(), lineage = service().lineage;
         const rows = [], commitsByRevision = new Map();
         for (const commit of state.commits) for (const id of commit.revisions ?? []) { if (!commitsByRevision.has(id)) commitsByRevision.set(id, []); commitsByRevision.get(id).push(commit); }
@@ -371,7 +378,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         }
         const chatRows = new Map();
         for (const row of rows) { if (!chatRows.has(row.root)) chatRows.set(row.root, []); chatRows.get(row.root).push(row); }
-        const items = [...new Set([...s.graph.rootKeys(), ...chatRows.keys()])].filter(key => key !== 'settings\ngroup\nuserNote').flatMap(key => {
+        const items = [...new Set([...s.graph.rootKeys(), ...chatRows.keys()])].filter(key => !historyOnly(key)).flatMap(key => {
             const [, type, id] = key.split('\n'), c = s.graph.classify(key), heads = nasHeads.get(key) ?? [];
             const dates = heads.map(id => state.nasTimes?.[id] ? { at: state.nasTimes[id], kind: 'modified' } : times.get(id));
             const dated = dates.length && dates.every(x => Number.isSafeInteger(x?.at) && x.at > 0) ? dates.reduce((a, b) => a.at >= b.at ? a : b) : null;
@@ -426,6 +433,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     /** Resolution parents every head (core resolve) with the kept head's content; the plan then materializes it locally. */
     async function resolveConflict({ root, keep }) {
         if (root === 'settings\ngroup\nuserNote') throw new Error('The selected persona owns its note; this legacy mirror is read-only');
+        if (DEVICE_LOCAL_ROOTS.has(root)) throw new Error('The theme stays on each device and is not synchronized');
         const s = requireEnabled(), c = s.graph.classify(root), kept = s.graph.get(keep);
         if (!kept || !c.heads.includes(keep) || kept.tombstone) throw new Error('Choose one of the live heads to keep');
         const [domain, type, rootId] = root.split('\n');
@@ -457,7 +465,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const published = new Set(Object.entries(state.peers).filter(([k]) => k.startsWith(authority + '/')).flatMap(([, p]) => Object.values(p.admittedRevisions ?? {}).flat()));
         let publishedByRoot = null; // root key -> the reference's published revision ids, built on first need
         for (const key of s.graph.rootKeys()) {
-            if (key === 'settings\ngroup\nuserNote') continue;
+            if (historyOnly(key)) continue;
             const [domain, , rootId] = key.split('\n'), c = s.graph.classify(key);
             if (domain === 'play') continue;
             if (c.state === 'delete-pending') { skipped.push({ root: key, title: rootId, reason: 'delete-pending' }); continue; } // reported, decided one by one
@@ -526,6 +534,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const s = requireEnabled(); if (service().plan) throw new Error('Finish the pending sync apply first');
         const [domain, type, rootId] = String(root ?? '').split('\n');
         if (root === 'settings\ngroup\nuserNote') throw new Error('Restore the persona note through its persona record');
+        if (DEVICE_LOCAL_ROOTS.has(root)) throw new Error('The theme stays on each device and is not synchronized');
         if (domain !== 'settings' || type !== 'group' || !rootId) throw new Error('Only a settings group can be restored this way');
         const past = typeof revision === 'string' ? s.graph.get(revision) : null;
         if (!past || past.domain !== domain || past.type !== type || past.root !== rootId) throw new Error('Revision does not belong to this root');
@@ -654,7 +663,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const resolutions = [], originals = []; // joining originals, already in public form (secret version refs, no values) with their envelope ids
         for (const key of s.graph.rootKeys()) {
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
-            if (key === 'settings\ngroup\nuserNote' || key === 'settings\ngroup\npersonas') continue;
+            if (historyOnly(key) || key === 'settings\ngroup\npersonas') continue;
             if (domain === 'play' || c.state !== 'diverged' || c.variants.length !== 2) continue;
             const authority = c.variants.map(variant => variant.find(id => peerRevisions.has(id))).find(Boolean);
             const joining = c.variants.flat().find(id => ownRevisions.has(id) && s.graph.get(id).parents.length === 0);
@@ -940,7 +949,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const key of touched.keys()) {
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
             if (domain === 'play') continue;
-            if (key === 'settings\ngroup\nuserNote') { applyRoot(key); continue; }
+            if (historyOnly(key)) { applyRoot(key); continue; }
             if (localEdits.has(key)) { result.pending.push({ root: key, reason: 'local-edit' }); continue; }
             if (c.state === 'diverged') { result.pending.push({ root: key, reason: 'diverged', variants: c.variants.length }); continue; }
             if (c.state === 'deleted') {

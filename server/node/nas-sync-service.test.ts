@@ -748,7 +748,7 @@ test('publish and pull are single-flight on the server: a concurrent call joins 
     expect((await tablet.service.publish()).stored).toEqual([]) // nothing left over, no duplicate
 })
 
-test('re-mirroring device-local layout into the active theme preset after an apply is not a local edit (no phantom revision), and a joining device receives theme presets without layout fields', async t => {
+test('0.9.96-ver5: theme presets stay on each device — re-mirroring layout or editing a theme field commits nothing, and a joining device receives no theme presets', async t => {
     const dav = fixtureDav()
     const themed = (zoom: number, icon: number) => baseDb({ themePresets: [{ name: '테마', font: 'f', lineHeight: 1.4, zoomsize: zoom, iconsize: icon }], themePresetsId: 0 })
     const tablet = await device(t, dav, 'tablet', themed(100, 50))
@@ -759,14 +759,14 @@ test('re-mirroring device-local layout into the active theme preset after an app
     // The device's own mirror rewrites layout fields of the active entry (zoom 100 → 70, icon 50 → 60): nothing to sync.
     tablet.save(themed(70, 60)); clock += 1000
     expect((await tablet.service.snapshot()).committed).toBeNull()
-    // A real change to a synced field of the entry still commits.
+    // A change to a field that synced before 0.9.96-ver5 commits nothing either.
     const db = themed(70, 60); db.themePresets[0].lineHeight = 1.6; tablet.save(db); clock += 1000
-    expect((await tablet.service.snapshot()).committed).toMatchObject({ sequence: 2 }); expect((await tablet.service.publish()).failed).toEqual([])
+    expect((await tablet.service.snapshot()).committed).toBeNull(); expect((await tablet.service.publish()).failed).toEqual([])
     const phone = await device(t, dav, 'phone', baseDb({ themePresets: undefined, themePresetsId: undefined }))
     phone.service.enable({ workspaceId: 'ws-fixture' }); await phone.service.pull(); clock += 1000
     const plan = await phone.service.plan()
-    const theme = plan.settings?.themePresets
-    expect(theme).toEqual([{ name: '테마', font: 'f', lineHeight: 1.6 }]) // layout fields never travel; the client keeps its own
+    expect(plan.settings ?? {}).not.toHaveProperty('themePresets'); expect(plan.settings ?? {}).not.toHaveProperty('themePresetsId')
+    expect(phone.service.store().graph.rootKeys()).not.toContain('settings\ngroup\ntheme')
 })
 
 test('the sync service pins the NAS route for a whole publish and a whole pull: a network flip mid-publish never moves a request to the other endpoint; the next run follows the new network; one credential, one namespace', async t => {
@@ -994,6 +994,85 @@ test('legacy userNote revisions are acknowledged without overwriting the selecte
     expect(d.service.store().graph.get(legacy.id)).toBeTruthy();
 })
 
+// 0.9.96-ver5 (user, 2026-11-13): phone, tablet and PC screens differ, so the theme (the former 'theme' group) and the active app skin
+// (appSkinId) stay on each device. The skin library (appSkins) still syncs. Records older versions keep publishing are history only.
+const themeDb = (extra: any = {}) => ({ characters: [], personas: [], modules: [], plugins: [], botPresets: [], themePresets: [{ name: '내 테마', font: 'f', lineHeight: 1.4 }], themePresetsId: 0, theme: 'waifu', colorSchemeName: 'dark', customCSS: '.mine{}', textAreaTextSize: 2, classicMaxWidth: true, appSkins: [{ id: 'skin-a', name: 'A' }], appSkinId: 'skin-a', loreBook: [], ...extra })
+const THEME_ROOT = 'settings\ngroup\ntheme', SKIN_ROOT = 'settings\ngroup\nappSkinId'
+test('the theme and the active app skin are never published: theme edits commit nothing, no theme/appSkinId root exists, the skin library still syncs', async t => {
+    const dav = fixtureDav(), d = await device(t, dav, 'theme-local', themeDb())
+    d.service.enable({ workspaceId: 'theme-local' })
+    expect((await d.service.snapshot()).committed).not.toBeNull()
+    const roots = () => d.service.store().graph.rootKeys()
+    expect(roots()).not.toContain(THEME_ROOT); expect(roots()).not.toContain(SKIN_ROOT); expect(roots()).toContain('settings\ngroup\nappSkins')
+    expect(roots().some((k: string) => d.service.store().graph.heads(k).some((id: string) => JSON.stringify(d.service.store().graph.get(id).content ?? {}).includes('.mine{}')))).toBe(false)
+    const changed = d.db(); Object.assign(changed, { theme: 'classic', colorSchemeName: 'light', customCSS: '.other{}', textAreaTextSize: 4, classicMaxWidth: false, appSkinId: 'skin-b', themePresets: [{ name: '바꾼 테마', font: 'g', lineHeight: 2 }] }); d.save(changed); clock += 1000
+    expect((await d.service.snapshot()).committed).toBeNull()
+    const skins = d.db(); skins.appSkins = [...skins.appSkins, { id: 'skin-b', name: 'B' }]; d.save(skins); clock += 1000
+    expect((await d.service.snapshot()).committed).toMatchObject({ revisions: 1 })
+    expect(roots()).not.toContain(THEME_ROOT); expect(roots()).not.toContain(SKIN_ROOT)
+})
+
+test('theme records older versions published (a diverged theme root too) are acknowledged without applying, are no conflict, list item or pending root, never block other roots of the same commit, and are never resolved, restored, bootstrapped or re-published', async t => {
+    const { makeRevision } = require('./nas-sync-core.cjs'); const dav = fixtureDav()
+    // An older-version device: its theme, active skin and an ordinary settings root travel in ONE commit.
+    const old = await device(t, dav, 'theme-old', themeDb({ theme: 'classic', customCSS: '.old{}' })); old.service.enable({ workspaceId: 'theme-mixed' })
+    const themeA = makeRevision({ domain: 'settings', type: 'group', root: 'theme', content: { theme: 'classic', customCSS: '.old{}', themePresets: [{ name: '옛 테마' }] } })
+    const skinA = makeRevision({ domain: 'settings', type: 'group', root: 'appSkinId', content: { appSkinId: 'skin-old' } })
+    const future = makeRevision({ domain: 'settings', type: 'group', root: 'someFutureKey', content: { someFutureKey: 'from-old' } })
+    old.service.store().commit([themeA, skinA, future]); await old.service.publish()
+    // This device before the update published its own theme (a second genesis head → diverged theme root on every device).
+    const neo = await device(t, dav, 'theme-new', themeDb()); neo.service.enable({ workspaceId: 'theme-mixed' })
+    const themeB = makeRevision({ domain: 'settings', type: 'group', root: 'theme', content: { theme: 'waifu', customCSS: '.mine{}' } })
+    neo.service.store().commit([themeB]); await neo.service.publish()
+    await neo.service.pull(); await old.service.pull()
+    expect(neo.service.store().graph.classify(THEME_ROOT).state).toBe('diverged')
+    const plan = await settle(neo)
+    expect(plan.settings).toEqual({ someFutureKey: 'from-old' }) // the other root of the same commit applies; nothing of the theme
+    expect(neo.db()).toMatchObject({ theme: 'waifu', customCSS: '.mine{}', colorSchemeName: 'dark', appSkinId: 'skin-a', someFutureKey: 'from-old' })
+    expect(neo.db().themePresets).toEqual([{ name: '내 테마', font: 'f', lineHeight: 1.4 }])
+    expect(neo.service.store().pendingApply()).toEqual([]); expect(neo.service.pendingRoots().roots).toEqual([]) // commit acknowledged, nothing waits
+    expect((await neo.service.plan()).empty).toBe(true)
+    expect((await neo.service.conflicts()).map((c: any) => c.root)).toEqual([]); expect(neo.service.status().conflicts).toBe(0)
+    expect((await neo.service.overview()).items.map((i: any) => i.root)).not.toEqual(expect.arrayContaining([THEME_ROOT]))
+    expect((await neo.service.overview()).items.map((i: any) => i.root)).not.toContain(SKIN_ROOT)
+    await expect(neo.service.resolveConflict({ root: THEME_ROOT, keep: themeA.id })).rejects.toThrow(/theme stays on each device/)
+    await expect(neo.service.restoreRevision({ root: THEME_ROOT, revision: themeB.id, expectedHeads: neo.service.store().graph.classify(THEME_ROOT).heads, confirmed: true })).rejects.toThrow(/theme stays on each device/)
+    await expect(neo.service.restoreRevision({ root: SKIN_ROOT, revision: skinA.id, expectedHeads: [skinA.id], confirmed: true })).rejects.toThrow(/theme stays on each device/)
+    const oldId = old.service.store().identity().deviceId
+    for (const result of [await neo.service.resolveAll({ prefer: 'current' }), await neo.service.resolveAll({ prefer: 'authority', authorityDevice: oldId })]) {
+        expect(result.roots).not.toContain(THEME_ROOT); expect(result.skipped.map((x: any) => x.root)).not.toContain(THEME_ROOT)
+    }
+    expect((await neo.service.bootstrap({ authorityDevice: oldId })).resolved).toBe(0) // the joining-device bootstrap leaves the theme root alone
+    // A restored backup whose recorded lineage still names the theme root: no theme revision, no error.
+    neo.service.markRestore({ source: 'backup-import', restoreId: 'theme-backup', lineage: { [THEME_ROOT + '#theme']: themeB.id } })
+    await neo.service.snapshot(); expect(neo.service.status().pendingRestore).toBeNull()
+    await neo.service.publish(); await old.service.pull()
+    // Nothing new about the theme ever left this device: the older device sees exactly the two heads it already had.
+    for (const store of [neo.service.store(), old.service.store()]) {
+        expect(store.graph.revisions().filter((x: any) => x.root === 'theme' || x.root === 'appSkinId').map((x: any) => x.id).sort()).toEqual([themeA.id, themeB.id, skinA.id].sort())
+        expect(store.graph.classify(THEME_ROOT).heads.sort()).toEqual([themeA.id, themeB.id].sort())
+    }
+})
+
+test('a plan journal an older version wrote with theme values never writes them: a prepared plan is returned without them (same transaction); a saving plan whose other values were saved and whose theme was not finishes, leaving the theme as it is', async t => {
+    const { makeRevision } = require('./nas-sync-core.cjs'); const dav = fixtureDav()
+    const old = await device(t, dav, 'theme-plan-old', themeDb()); old.service.enable({ workspaceId: 'theme-plan' })
+    old.service.store().commit([makeRevision({ domain: 'settings', type: 'group', root: 'someFutureKey', content: { someFutureKey: 'v1' } })]); await old.service.publish()
+    const neo = await device(t, dav, 'theme-plan-new', themeDb()); neo.service.enable({ workspaceId: 'theme-plan' }); await neo.service.pull()
+    const first = await neo.service.plan()
+    const planFile = join(neo.dataRoot, 'nas-sync', 'apply', first.transaction + '.json')
+    const inject = async (mutate: (journal: any) => void) => { const journal = JSON.parse(await readFile(planFile, 'utf8')); mutate(journal); await writeFile(planFile, JSON.stringify(journal)) }
+    // What an older version left behind: the prepared journal also plans a theme value (and hashed it in its prepared state).
+    await inject(j => { expect(j.phase).toBe('prepared'); j.settings.customCSS = '.from-old-plan{}'; j.prepared.settings.customCSS = 'f'.repeat(64) })
+    const again = await neo.service.plan()
+    expect(again.transaction).toBe(first.transaction); expect(again.settings).toEqual({ someFutureKey: 'v1' })
+    // The client arms it; then (as if the older version had armed a theme value too) the journal expects and baselines a theme value.
+    const db = applyPlanToDb(neo.db(), again); await neo.service.arm(again.transaction, echoOf(again, db))
+    await inject(j => { expect(j.phase).toBe('saving'); j.settings.customCSS = '.from-old-plan{}'; j.expected.settings.customCSS = 'e'.repeat(64); j.baseline.settings.customCSS = 'b'.repeat(64) })
+    neo.save(db) // the other value was saved; the theme was not
+    expect((await neo.service.finish(again.transaction, true)).state).toBe('applied')
+    expect(neo.db()).toMatchObject({ customCSS: '.mine{}', someFutureKey: 'v1' }); expect(neo.service.store().pendingApply()).toEqual([])
+})
 test('receipt-only message differences are state conflicts, not new conversation branches', async t => {
     const dav = fixtureDav(), left = await seedTablet(t, dav)
     const right = await device(t, dav, 'receipt-right', { characters: [], personas: [], modules: [], plugins: [], botPresets: [] })
