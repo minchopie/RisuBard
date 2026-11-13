@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createMemorySaveSlot, memorySaveWorkspaceId } from './risubard-memory-save'
 import { encodeMemorySaveChat } from '../../src/ts/risubard/memorySaveCodec'
-const { SETTINGS_GROUPS, DEVICE_LOCAL, DEVICE_THEME, DEVICE_LOCAL_ROOTS, COLLECTIONS, MIRROR, THEME_PRESET_LOCAL, syncedThemePresets, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity } = require('./nas-sync-projection.cjs')
+const { SETTINGS_GROUPS, DEVICE_LOCAL, DEVICE_THEME, DEVICE_LOCAL_ROOTS, DEVICE_GROUP_FIELDS, sharedContentHash, COLLECTIONS, MIRROR, THEME_PRESET_LOCAL, syncedThemePresets, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity } = require('./nas-sync-projection.cjs')
 const { createVault } = require('./nas-sync-vault.cjs')
-const { createGraph } = require('./nas-sync-core.cjs')
+const { createGraph, makeRevision } = require('./nas-sync-core.cjs')
 const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs')
 const { playSetMemoryMaterials } = require('./play-set-memory.cjs')
 
@@ -308,14 +308,20 @@ test('theme-preset entries are projected without the device-local layout fields 
     expect(a[0]).toHaveProperty('zoomsize') // never mutates the database
 })
 
-test('0.9.96-ver5: the theme (the former settings group of 20 keys) and the active app skin are device-local; the 16 other groups, DEVICE_LOCAL and the skin library are unchanged', async () => {
+test('0.9.96-ver5: the theme (the former settings group of 20 keys), the active app skin and every other synced value of the Display settings page is device-local; the other groups (memory less its two device fields), DEVICE_LOCAL and the skin library are unchanged', async () => {
     const THEME = ['themePresets', 'themePresetsId', 'theme', 'textTheme', 'textThemeAutoContrast', 'customTextTheme', 'colorScheme', 'colorSchemeName', 'customCSS', 'customBackground', 'font', 'customFont', 'lineHeight', 'textAreaTextSize', 'textScreenColor', 'textBorder', 'textScreenRounded', 'textScreenBorder', 'roundIcons', 'classicMaxWidth']
-    expect([...DEVICE_THEME]).toEqual([...THEME, 'appSkinId'])
+    const WIKI_FIELDS = ['showMemoryLimit', 'memoryLimitThickness']
+    const SCREEN = ['guiHTML', 'hideRealm', 'useAdditionalAssetsPreview', 'unformatQuotes', 'blockquoteStyling', 'customQuotes', 'customQuotesData', 'hideApiKey', 'menuSideBar', 'betaMobileGUI', 'useChatSticker', 'tagAutocomplete', 'useChatCopy', 'useLegacyGUI']
+    expect([...DEVICE_THEME]).toEqual([...THEME, 'appSkinId', ...SCREEN, ...WIKI_FIELDS])
     for (const key of DEVICE_THEME) expect(ownerOf(key), key).toBe('local')
-    expect([...DEVICE_LOCAL_ROOTS]).toEqual([rootKeyOf('settings', 'group', 'theme'), rootKeyOf('settings', 'group', 'appSkinId')])
+    expect([...DEVICE_LOCAL_ROOTS]).toEqual([rootKeyOf('settings', 'group', 'theme'), rootKeyOf('settings', 'group', 'appSkinId'), ...SCREEN.map(key => rootKeyOf('settings', 'group', key))])
+    expect(DEVICE_GROUP_FIELDS).toEqual({ memory: WIKI_FIELDS })
     expect(Object.keys(SETTINGS_GROUPS)).toEqual(['provider-main', 'model-presets', 'prompt-presets', 'activation', 'personas', 'lorebook', 'memory', 'translator', 'toggles', 'prompt-overlays', 'image-gen', 'tts-voice', 'novelai', 'horde', 'bard-painter', 'risubard-wiki'])
-    // Byte-identical key lists of the 16 other groups and of DEVICE_LOCAL as in 0.9.96-ver4 (d5fd334).
-    expect(sha(JSON.stringify(SETTINGS_GROUPS))).toBe('924a84c6106bea7ac3815d0a9faa2a469e388f9d1ae8f0b4d55f4ae616b4a764')
+    // Byte-identical key lists of the 16 other groups and of DEVICE_LOCAL as in 0.9.96-ver4 (d5fd334): putting the two device fields
+    // back where they were gives the 0.9.96-ver4 groups exactly.
+    const ver4 = structuredClone(SETTINGS_GROUPS), memory = ver4.memory
+    memory.splice(memory.indexOf('risuBardEmbeddingSettings'), 0, 'showMemoryLimit', 'memoryLimitThickness')
+    expect(sha(JSON.stringify(ver4))).toBe('924a84c6106bea7ac3815d0a9faa2a469e388f9d1ae8f0b4d55f4ae616b4a764')
     expect(sha(JSON.stringify([...DEVICE_LOCAL]))).toBe('245fa5efe2af1f1b45263fe045a9f61d7e4bbf5f8540166c0e531d25727bb64b')
     expect(ownerOf('appSkins')).toBe('settings:appSkins')
     const vault = createVault(master), base: any = { characters: [], loreBook: [{ key: 'k', content: 'c' }], appSkins: [{ id: 's' }], appSkinId: 's', themePresets: [{ name: 't', font: 'f' }], themePresetsId: 0, theme: 'waifu', customCSS: '.a{}', colorSchemeName: 'dark', lineHeight: 1.2 }
@@ -326,6 +332,47 @@ test('0.9.96-ver5: the theme (the former settings group of 20 keys) and the acti
     const lineage = Object.fromEntries(first.map((d: any, i: number) => [d.lineageKey, initial.revisions[i].id]))
     const changed = { ...structuredClone(base), appSkinId: 'other', themePresets: [{ name: 'u', font: 'g' }], themePresetsId: 1, theme: 'classic', customCSS: '.b{}', colorSchemeName: 'light', lineHeight: 2, textAreaTextSize: 3, roundIcons: true }
     expect(diffProjection(graph, await project(changed), lineage)).toMatchObject({ revisions: [], diverged: [] })
+})
+
+test('0.9.96-ver5: the two memory-group device fields carry the base revision\'s values (lineage head, else the single frontier head or heads that differ only there; this device\'s own values only in the first revision of a root new on the NAS), so edits of them here never make a revision and older devices never see them change', async () => {
+    const vault = createVault(master), key = rootKeyOf('settings', 'group', 'memory'), lk = key + '#memory'
+    const F = { showMemoryLimit: true, memoryLimitThickness: 50 }
+    const local = { showMemoryLimit: false, memoryLimitThickness: 90 }
+    const project = async (db: any) => (await projectDatabase({ database: { characters: [], ...db }, vault, readAsset: async () => null, readInlay: async () => null })).desired.filter((d: any) => d.root === 'memory')
+    // A root new on the NAS: its first revision carries this device's values (what an older device received before; leaving them out would
+    // make an older device without lineage reset them). The fields never make a group on their own.
+    expect(diffProjection(createGraph(), await project({ hypaV3PresetId: 10, ...local })).revisions[0].content).toEqual({ hypaV3PresetId: 10, ...local })
+    expect(await project({ ...local })).toEqual([])
+    // Before a completed pull such a root is held: no revision, no LINEAGE_LOST.
+    expect(diffProjection(createGraph(), await project({ hypaV3PresetId: 10, ...local }), {}, { received: false })).toMatchObject({ revisions: [], diverged: [], skipped: [] })
+    // An older device's head with the fields: equal synced keys → nothing, whatever this device's fields are (no lineage: the single head).
+    const X = makeRevision({ domain: 'settings', type: 'group', root: 'memory', content: { hypaV3PresetId: 10, ...F } }), graph = createGraph(); graph.addAll([X])
+    expect(diffProjection(graph, await project({ hypaV3PresetId: 10, ...local }), {})).toMatchObject({ revisions: [], matched: { [lk]: X.id } })
+    expect(diffProjection(graph, await project({ hypaV3PresetId: 10, ...local }), { [lk]: X.id })).toMatchObject({ revisions: [], matched: { [lk]: X.id } })
+    // An edit of a synced key continues X with X's fields, never this device's.
+    const desired = await project({ hypaV3PresetId: 11, ...local }), edit = diffProjection(graph, desired, { [lk]: X.id })
+    expect(edit.revisions[0]).toMatchObject({ parents: [X.id], content: { hypaV3PresetId: 11, ...F } })
+    expect(desired[0].contentHash).toBe(edit.revisions[0].contentHash) // updated in place for the caller's lineage bookkeeping
+    // A restore continues the recorded base with that base's fields.
+    expect(diffProjection(graph, await project({ hypaV3PresetId: 12, ...local }), { [lk]: X.id }, { restore: true }).revisions[0]?.content ?? null).toEqual({ hypaV3PresetId: 12, ...F })
+    // Heads that differ only in the fields share one content identity; a synced key or another group does not.
+    const Y = makeRevision({ domain: 'settings', type: 'group', root: 'memory', parents: [X.id], content: { hypaV3PresetId: 10, ...local } })
+    expect(sharedContentHash(Y)).toBe(sharedContentHash(X)); expect(Y.contentHash).not.toBe(X.contentHash)
+    expect(sharedContentHash(edit.revisions[0])).not.toBe(sharedContentHash(X))
+    // Without lineage, heads that differ only in the fields are one value: equal synced keys match one of them (no LINEAGE_LOST).
+    const Y2 = makeRevision({ domain: 'settings', type: 'group', root: 'memory', parents: [X.id], content: { hypaV3PresetId: 10, ...F, memoryLimitThickness: 30 } }); graph.addAll([Y, Y2])
+    const blind = diffProjection(graph, await project({ hypaV3PresetId: 10, ...local }), {})
+    expect(blind).toMatchObject({ revisions: [], diverged: [] }); expect([Y.id, Y2.id]).toContain(blind.matched[lk])
+    expect(diffProjection(graph, await project({ hypaV3PresetId: 11, ...local }), {}).diverged).toEqual([lk]) // a real difference stays unguessed, as before
+    // Never this device's values while the root has history: a restore without lineage over a real conflict starts its genesis with a
+    // frontier head's fields; a restore over a deletion continues it with the deleted base's fields.
+    const Y3 = makeRevision({ domain: 'settings', type: 'group', root: 'memory', parents: [Y.id], content: { hypaV3PresetId: 20, ...F } }); graph.addAll([Y3])
+    const genesis = diffProjection(graph, await project({ hypaV3PresetId: 11, ...local }), {}, { restore: true }).revisions[0]
+    expect(genesis.parents).toEqual([]); expect(Object.values(local).some(v => Object.values(genesis.content).includes(v))).toBe(false)
+    const T = makeRevision({ domain: 'settings', type: 'group', root: 'memory', parents: [X.id], content: null, tombstone: { operation: 'op-1', base: X.id } }), deleted = createGraph(); deleted.addAll([X, T])
+    expect(diffProjection(deleted, await project({ hypaV3PresetId: 11, ...local }), { [lk]: T.id }, { restore: true }).revisions[0]).toMatchObject({ parents: [T.id], content: { hypaV3PresetId: 11, ...F } })
+    const other = makeRevision({ domain: 'settings', type: 'group', root: 'lorebook', content: { loreBook: [], memoryLimitThickness: 1 } })
+    expect(sharedContentHash(other)).toBe(other.contentHash)
 })
 
 test('a root this device never applied (no lineage, one received frontier head) forks as a genesis sibling instead of continuing that head: differing content → diverged root for bootstrap/resolution; equal content → matched; lineage present → linear as before (live .78: joining phone\'s presets promoted over the tablet\'s)', async t => {

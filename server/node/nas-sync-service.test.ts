@@ -1063,15 +1063,166 @@ test('a plan journal an older version wrote with theme values never writes them:
     const planFile = join(neo.dataRoot, 'nas-sync', 'apply', first.transaction + '.json')
     const inject = async (mutate: (journal: any) => void) => { const journal = JSON.parse(await readFile(planFile, 'utf8')); mutate(journal); await writeFile(planFile, JSON.stringify(journal)) }
     // What an older version left behind: the prepared journal also plans a theme value (and hashed it in its prepared state).
-    await inject(j => { expect(j.phase).toBe('prepared'); j.settings.customCSS = '.from-old-plan{}'; j.prepared.settings.customCSS = 'f'.repeat(64) })
+    await inject(j => { expect(j.phase).toBe('prepared'); j.settings.customCSS = '.from-old-plan{}'; j.prepared.settings.customCSS = 'f'.repeat(64); j.settings.menuSideBar = true; j.settings.memoryLimitThickness = 99; j.prepared.settings.memoryLimitThickness = 'f'.repeat(64) })
     const again = await neo.service.plan()
     expect(again.transaction).toBe(first.transaction); expect(again.settings).toEqual({ someFutureKey: 'v1' })
     // The client arms it; then (as if the older version had armed a theme value too) the journal expects and baselines a theme value.
     const db = applyPlanToDb(neo.db(), again); await neo.service.arm(again.transaction, echoOf(again, db))
-    await inject(j => { expect(j.phase).toBe('saving'); j.settings.customCSS = '.from-old-plan{}'; j.expected.settings.customCSS = 'e'.repeat(64); j.baseline.settings.customCSS = 'b'.repeat(64) })
+    await inject(j => { expect(j.phase).toBe('saving'); j.settings.customCSS = '.from-old-plan{}'; j.expected.settings.customCSS = 'e'.repeat(64); j.baseline.settings.customCSS = 'b'.repeat(64); j.settings.memoryLimitThickness = 99; j.expected.settings.memoryLimitThickness = 'e'.repeat(64) })
     neo.save(db) // the other value was saved; the theme was not
     expect((await neo.service.finish(again.transaction, true)).state).toBe('applied')
     expect(neo.db()).toMatchObject({ customCSS: '.mine{}', someFutureKey: 'v1' }); expect(neo.service.store().pendingApply()).toEqual([])
+    expect(neo.db()).not.toHaveProperty('menuSideBar'); expect(neo.db()).not.toHaveProperty('memoryLimitThickness')
+})
+
+// 0.9.96-ver5 (user, 2026-11-13 16:20/16:50): every value of the Display settings page stays on each device — besides the theme and the
+// active skin, fourteen keys that were their own roots and two fields of the memory group (showMemoryLimit, memoryLimitThickness). The
+// group's other keys keep syncing; its wire content keeps the fields of the revision it continues, so older devices (which clear a group
+// key a received revision lacks) keep their own values.
+const WIKI_ROOT = 'settings\ngroup\nmemory'
+const SCREEN_KEYS = ['guiHTML', 'hideRealm', 'useAdditionalAssetsPreview', 'unformatQuotes', 'blockquoteStyling', 'customQuotes', 'customQuotesData', 'hideApiKey', 'menuSideBar', 'betaMobileGUI', 'useChatSticker', 'tagAutocomplete', 'useChatCopy', 'useLegacyGUI']
+const WIKI_FIELDS = ['showMemoryLimit', 'memoryLimitThickness']
+const screenOf = (n: number): any => ({ guiHTML: `<div>${n}</div>`, hideRealm: n % 2 === 0, useAdditionalAssetsPreview: n % 2 === 1, unformatQuotes: n % 2 === 0, blockquoteStyling: n % 2 === 1, customQuotes: n % 2 === 0, customQuotesData: [`«${n}`, '»', '‹', '›'], hideApiKey: n % 2 === 1, menuSideBar: n % 2 === 0, betaMobileGUI: n % 2 === 1, useChatSticker: n % 2 === 0, tagAutocomplete: { enabled: n % 2 === 0, n }, useChatCopy: n % 2 === 1, useLegacyGUI: n % 2 === 0 })
+const fieldsOf = (n: number) => ({ showMemoryLimit: n % 2 === 0, memoryLimitThickness: 10 + n })
+const restOf = (v: string, count = 10) => ({ hypaV3PresetId: count, hypaModel: v })
+const screenDb = (n: number, rest: any = restOf('a')) => ({ characters: [], personas: [], modules: [], plugins: [], botPresets: [], loreBook: [], ...screenOf(n), ...fieldsOf(n), ...rest })
+const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter(k => k in o).map(k => [k, o[k]]))
+const wikiHeads = (d: any) => d.service.store().graph.classify(WIKI_ROOT).liveHeads.map((id: string) => d.service.store().graph.get(id))
+const wikiRev = (content: any, parents: string[] = []) => require('./nas-sync-core.cjs').makeRevision({ domain: 'settings', type: 'group', root: 'memory', parents, content })
+
+test('screen settings are never published: no root for the fourteen keys; the memory group carries its two device fields only as its first values on the NAS, edits to them commit nothing and later revisions keep those values, while its other keys still sync', async t => {
+    const dav = fixtureDav(), d = await device(t, dav, 'screen-local', screenDb(1)); d.service.enable({ workspaceId: 'screen-local' })
+    expect((await d.service.snapshot()).committed).not.toBeNull()
+    expect(d.service.store().graph.rootKeys()).not.toContain(WIKI_ROOT) // held until a pull shows the root is new on the NAS
+    await d.service.pull(); expect((await d.service.snapshot()).committed).toMatchObject({ revisions: 1 })
+    for (const k of SCREEN_KEYS) expect(d.service.store().graph.rootKeys()).not.toContain('settings\ngroup\n' + k)
+    expect(wikiHeads(d).map((x: any) => x.content)).toEqual([{ ...restOf('a'), ...fieldsOf(1) }]) // a root new on the NAS: as an older device would have published it
+    d.save({ ...d.db(), ...screenOf(2), ...fieldsOf(2) }); clock += 1000
+    expect((await d.service.snapshot()).committed).toBeNull()
+    d.save({ ...d.db(), hypaV3PresetId: 30 }); clock += 1000
+    expect((await d.service.snapshot()).committed).toMatchObject({ revisions: 1 })
+    expect(wikiHeads(d).map((x: any) => x.content)).toEqual([{ ...restOf('a', 30), ...fieldsOf(1) }]) // never this device's later values
+    for (const k of SCREEN_KEYS) expect(d.service.store().graph.rootKeys()).not.toContain('settings\ngroup\n' + k)
+})
+test('a memory group without history here is held until a pull of this workspace and store left nothing waiting; disabling or re-enabling clears that mark', async t => {
+    const dav = fixtureDav(), d = await device(t, dav, 'screen-mark', screenDb(1)); d.service.enable({ workspaceId: 'screen-mark' })
+    await d.service.pull(); d.service.disable(); d.service.enable({ workspaceId: 'screen-mark' })
+    await d.service.snapshot(); expect(d.service.store().graph.rootKeys()).not.toContain(WIKI_ROOT)
+    await d.service.pull(); await d.service.snapshot(); expect(wikiHeads(d).map((x: any) => x.content)).toEqual([{ ...restOf('a'), ...fieldsOf(1) }])
+})
+
+test('a pull that fails midway clears the received mark: the memory group stays held until a pull completes', async t => {
+    const dav = fixtureDav(); let down = false
+    const d = await device(t, dav, 'screen-mark-fail', screenDb(1), MASTER, { fetch: (...a: any[]) => down ? Promise.reject(new Error('NAS unreachable')) : (dav.fetch as any)(...a) })
+    d.service.enable({ workspaceId: 'screen-mark-fail' }); await d.service.pull()
+    down = true; await expect(d.service.pull()).rejects.toThrow(); down = false
+    await d.service.snapshot(); expect(d.service.store().graph.rootKeys()).not.toContain(WIKI_ROOT)
+    await d.service.pull(); await d.service.snapshot(); expect(wikiHeads(d).map((x: any) => x.content)).toEqual([{ ...restOf('a'), ...fieldsOf(1) }])
+})
+
+test('older-version screen records: the fourteen roots and the two group fields are acknowledged without applying, the group\'s other keys apply, this device\'s group revisions carry the fields of the revision they continue (an older device keeps its own), a change of only those fields upstream applies as nothing and is never echoed; a restored backup adds nothing', async t => {
+    const dav = fixtureDav()
+    const old = await device(t, dav, 'screen-old', screenDb(1)); old.service.enable({ workspaceId: 'screen-mixed' })
+    const X = wikiRev({ ...restOf('a'), ...fieldsOf(1) })
+    const roots = SCREEN_KEYS.map(k => require('./nas-sync-core.cjs').makeRevision({ domain: 'settings', type: 'group', root: k, content: { [k]: screenOf(1)[k] } }))
+    old.service.store().commit([X, ...roots]); await old.service.publish()
+    const neo = await device(t, dav, 'screen-new', screenDb(2, {})); neo.service.enable({ workspaceId: 'screen-mixed' }); await neo.service.pull()
+    const plan = await settle(neo)
+    expect(plan.settings).toEqual(restOf('a')) // (b) the group's other keys apply; no device field, no screen root
+    expect(pick(neo.db(), [...SCREEN_KEYS, ...WIKI_FIELDS])).toEqual({ ...screenOf(2), ...fieldsOf(2) })
+    expect(neo.service.store().pendingApply()).toEqual([]); expect(neo.service.pendingRoots().roots).toEqual([])
+    expect(await neo.service.conflicts()).toEqual([]); expect(neo.service.status().conflicts).toBe(0)
+    const items = (await neo.service.overview()).items
+    for (const k of SCREEN_KEYS) expect(items.map((i: any) => i.root)).not.toContain('settings\ngroup\n' + k)
+    expect(items.find((i: any) => i.root === WIKI_ROOT)?.state).toBe('recorded')
+    await neo.service.snapshot(); expect(wikiHeads(neo).map((x: any) => x.id)).toEqual([X.id]) // the fields here differ from X's: still nothing of the group to publish (the other groups of this device are published now)
+    // (a)/(d) An edit of a synced key continues X with X's fields: every field present, with the values the older device already has.
+    neo.save({ ...neo.db(), hypaV3PresetId: 40 }); clock += 1000
+    expect((await neo.service.snapshot()).committed).toMatchObject({ revisions: 1 }); await neo.service.publish()
+    const [Z] = wikiHeads(neo)
+    expect(Z.parents).toEqual([X.id]); expect(Z.content).toEqual({ ...restOf('a', 40), ...fieldsOf(1) })
+    // (b) An older device changes only its own memory-limit display: applied here as nothing, never echoed back.
+    await old.service.pull()
+    const Y = wikiRev({ ...restOf('a', 40), ...fieldsOf(3) }, [Z.id]); old.service.store().commit([Y]); await old.service.publish(); await neo.service.pull()
+    const next = await settle(neo)
+    for (const k of WIKI_FIELDS) expect(next.settings ?? {}).not.toHaveProperty(k)
+    expect(pick(neo.db(), WIKI_FIELDS)).toEqual(fieldsOf(2)); expect(neo.service.store().pendingApply()).toEqual([])
+    expect((await neo.service.snapshot()).committed).toBeNull()
+    neo.save({ ...neo.db(), ...fieldsOf(4), ...screenOf(4) }); clock += 1000
+    expect((await neo.service.snapshot()).committed).toBeNull()
+    // The fourteen roots are never resolved or restored here.
+    await expect(neo.service.restoreRevision({ root: 'settings\ngroup\nmenuSideBar', revision: roots[8].id, expectedHeads: [roots[8].id], confirmed: true })).rejects.toThrow(/stays on each device/)
+    await expect(neo.service.resolveConflict({ root: 'settings\ngroup\nhideRealm', keep: roots[1].id })).rejects.toThrow(/stays on each device/)
+    // A restored backup whose recorded lineage names the fourteen roots and the group's current head: no revision, no error.
+    neo.service.markRestore({ source: 'backup-import', restoreId: 'screen-backup', lineage: { ...Object.fromEntries(SCREEN_KEYS.map((k, i) => [`settings\ngroup\n${k}#${k}`, roots[i].id])), [WIKI_ROOT + '#memory']: Y.id } })
+    expect((await neo.service.snapshot()).committed).toBeNull(); expect(neo.service.status().pendingRestore).toBeNull()
+    await neo.service.publish(); await old.service.pull()
+    for (const store of [neo.service.store(), old.service.store()]) {
+        expect(store.graph.revisions().filter((x: any) => SCREEN_KEYS.includes(x.root)).map((x: any) => x.id).sort()).toEqual(roots.map((x: any) => x.id).sort())
+        expect(store.graph.classify(WIKI_ROOT).liveHeads).toEqual([Y.id])
+    }
+})
+test('(c) memory heads that differ only in the two device fields are no conflict here: applied and acknowledged, no review item, left to the older devices by resolve-all and bootstrap; a real difference still is a conflict', async t => {
+    const dav = fixtureDav()
+    const old = await device(t, dav, 'screen-c-old', screenDb(1)); old.service.enable({ workspaceId: 'screen-c' })
+    const X = wikiRev({ ...restOf('a'), ...fieldsOf(1) }), Y1 = wikiRev({ ...restOf('a'), ...fieldsOf(5) }, [X.id]), Y2 = wikiRev({ ...restOf('a'), ...fieldsOf(6) }, [X.id])
+    old.service.store().commit([X]); old.service.store().commit([Y1]); old.service.store().commit([Y2]); await old.service.publish()
+    const neo = await device(t, dav, 'screen-c-new', screenDb(2)); neo.service.enable({ workspaceId: 'screen-c' }); await neo.service.pull()
+    expect(neo.service.store().graph.classify(WIKI_ROOT).state).toBe('diverged')
+    // Before any apply (no lineage): equal synced keys match those heads — no LINEAGE_LOST, nothing of the group published.
+    await neo.service.snapshot(); expect(wikiHeads(neo).map((x: any) => x.id).sort()).toEqual([Y1.id, Y2.id].sort())
+    await expect(neo.service.resolveConflict({ root: WIKI_ROOT, keep: Y1.id })).rejects.toThrow(/differ only in screen settings/)
+    await expect(neo.service.restoreRevision({ root: WIKI_ROOT, revision: X.id, expectedHeads: [Y1.id, Y2.id], confirmed: true })).rejects.toThrow(/already has this content/)
+    expect(wikiHeads(neo).map((x: any) => x.id).sort()).toEqual([Y1.id, Y2.id].sort())
+    const plan = await settle(neo)
+    expect(plan.settings ?? {}).toEqual(pick(plan.settings ?? {}, Object.keys(restOf('a')))); expect(neo.db()).toMatchObject(restOf('a')); expect(pick(neo.db(), WIKI_FIELDS)).toEqual(fieldsOf(2))
+    expect(neo.service.store().pendingApply()).toEqual([]); expect(neo.service.pendingRoots().roots).toEqual([])
+    expect(await neo.service.conflicts()).toEqual([]); expect(neo.service.status().conflicts).toBe(0)
+    expect((await neo.service.overview()).items.find((i: any) => i.root === WIKI_ROOT)?.state).not.toBe('review')
+    const oldId = old.service.store().identity().deviceId
+    for (const result of [await neo.service.resolveAll({ prefer: 'current' }), await neo.service.resolveAll({ prefer: 'authority', authorityDevice: oldId })]) {
+        expect(result.roots).not.toContain(WIKI_ROOT); expect(result.skipped.map((x: any) => x.root)).not.toContain(WIKI_ROOT)
+    }
+    expect((await neo.service.bootstrap({ authorityDevice: oldId })).resolved).toBe(0)
+    await neo.service.snapshot(); expect(wikiHeads(neo).map((x: any) => x.id).sort()).toEqual([Y1.id, Y2.id].sort()) // nothing of the group (the other groups of this device are published now)
+    await neo.service.publish(); await old.service.pull()
+    expect(old.service.store().graph.classify(WIKI_ROOT).liveHeads.sort()).toEqual([Y1.id, Y2.id].sort()) // nothing decided for the older devices
+    // A synced key differs as well: an ordinary conflict, as before.
+    const Y3 = wikiRev({ ...restOf('b'), ...fieldsOf(5) }, [Y1.id]); old.service.store().commit([Y3]); await old.service.publish(); await neo.service.pull()
+    expect((await neo.service.conflicts()).map((c: any) => c.root)).toEqual([WIKI_ROOT]); expect(neo.service.status().conflicts).toBe(1)
+    expect((await neo.service.plan()).pending ?? []).toEqual(expect.arrayContaining([expect.objectContaining({ root: WIKI_ROOT, reason: 'diverged' })]))
+})
+
+test('restoring a past memory revision brings back its synced keys and keeps the device fields of the revision this device continues; a past revision that differs only there is already current', async t => {
+    const dav = fixtureDav()
+    const old = await device(t, dav, 'screen-r-old', screenDb(1)); old.service.enable({ workspaceId: 'screen-r' })
+    const X = wikiRev({ ...restOf('a'), ...fieldsOf(1) }); old.service.store().commit([X]); await old.service.publish()
+    const neo = await device(t, dav, 'screen-r-new', screenDb(2, {})); neo.service.enable({ workspaceId: 'screen-r' }); await neo.service.pull(); await settle(neo)
+    neo.save({ ...neo.db(), hypaV3PresetId: 40 }); clock += 1000; await neo.service.snapshot(); await neo.service.publish()
+    const [Z] = wikiHeads(neo); await old.service.pull()
+    const W = wikiRev({ ...restOf('a', 40), ...fieldsOf(7) }, [Z.id]); old.service.store().commit([W]); await old.service.publish(); await neo.service.pull(); await settle(neo)
+    await expect(neo.service.restoreRevision({ root: WIKI_ROOT, revision: Z.id, expectedHeads: [W.id], confirmed: true })).rejects.toThrow(/already has this content/)
+    const restored = await neo.service.restoreRevision({ root: WIKI_ROOT, revision: X.id, expectedHeads: [W.id], confirmed: true })
+    expect(neo.service.store().graph.get(restored.restored).content).toEqual({ ...restOf('a'), ...fieldsOf(7) })
+    await settle(neo)
+    expect(neo.db()).toMatchObject({ ...restOf('a'), ...fieldsOf(2) })
+})
+
+test('a joining device of this version: equal synced keys match the single NAS head (no fork, whatever its own fields); different ones fork a genesis carrying that head\'s fields, and the bootstrap resolution applies without touching its fields', async t => {
+    const dav = fixtureDav()
+    const old = await device(t, dav, 'screen-j-old', screenDb(1)); old.service.enable({ workspaceId: 'screen-j' })
+    const X = wikiRev({ ...restOf('a'), ...fieldsOf(1) }); old.service.store().commit([X]); await old.service.publish()
+    const same = await device(t, dav, 'screen-j-same', screenDb(2)); same.service.enable({ workspaceId: 'screen-j' }); await same.service.pull()
+    await same.service.snapshot(); expect(wikiHeads(same).map((x: any) => x.id)).toEqual([X.id])
+    const join = await device(t, dav, 'screen-j-new', screenDb(3, restOf('b'))); join.service.enable({ workspaceId: 'screen-j' }); await join.service.pull()
+    await join.service.snapshot()
+    const genesis = wikiHeads(join).find((x: any) => x.id !== X.id)
+    expect(genesis.parents).toEqual([]); expect(genesis.content).toEqual({ ...restOf('b'), ...fieldsOf(1) })
+    const oldId = old.service.store().identity().deviceId
+    expect((await join.service.bootstrap({ authorityDevice: oldId })).resolved).toBe(1)
+    await settle(join)
+    expect(join.db()).toMatchObject({ ...restOf('a'), ...fieldsOf(3), ...screenOf(3) })
+    expect(join.service.store().graph.classify(WIKI_ROOT).state).toBe('live'); expect((await join.service.snapshot()).committed).toBeNull()
 })
 test('receipt-only message differences are state conflicts, not new conversation branches', async t => {
     const dav = fixtureDav(), left = await seedTablet(t, dav)

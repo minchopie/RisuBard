@@ -50,7 +50,7 @@ const SETTINGS_GROUPS = {
     activation: group(`enabledModules moduleIntergration personaEnabledModules allowV2Plugin pluginV2 pluginDevelopMode`),
     personas: group(`personas selectedPersona personaPrompt personaNote username userIcon pinPersonaOnNewChat`),
     lorebook: group(`loreBook loreBookPage loreBookDepth loreBookToken localActivationInGlobalLorebook`),
-    memory: group(`hypaV3Presets hypaV3PresetId hypaV3Settings hypaCustomSettings hypaModel supaMemoryKey showMemoryLimit memoryLimitThickness risuBardEmbeddingSettings`),
+    memory: group(`hypaV3Presets hypaV3PresetId hypaV3Settings hypaCustomSettings hypaModel supaMemoryKey risuBardEmbeddingSettings`),
     translator: group(`translatorPresets translatorPresetId translator translatorType translatorInputLanguage translatorPrompt translatorMaxResponse deeplOptions deeplXOptions autoTranslate useAutoTranslateInput translateBeforeHTMLFormatting autoTranslateCachedOnly noWaitForTranslate legacyTranslation combineTranslation htmlTranslation useExperimentalGoogleTranslator showTranslationLoading playMessageOnTranslateEnd novellistAPI`),
     toggles: group(`togglePresets customFlags enableCustomFlags`),
     'prompt-overlays': group(`promptBlockOverlay promptBlockOverlayProfiles promptBlockOverlayApplicationPresets promptTemplate customPromptTemplateToggle templateDefaultVariables instructChatTemplate JinjaTemplate useInstructPrompt promptSettings promptDiffPrefs`),
@@ -66,10 +66,21 @@ const DEVICE_LOCAL = new Set(split(`account characterVault textAreaSize sideBarS
 /** RisuBard 0.9.96-ver5 (user, 2026-11-13: phone, tablet and PC screens differ, so each device keeps its own theme): the former
  *  'theme' group and the active app skin (upstream 0.9.92 appSkinId) are never synchronized. The skin library (appSkins) still syncs
  *  as its own root. Kept apart from DEVICE_LOCAL so the theme-preset layout parity (mirror reads ∩ DEVICE_LOCAL) stays exact. */
-const DEVICE_THEME = new Set([...group(`themePresets themePresetsId theme textTheme textThemeAutoContrast customTextTheme colorScheme colorSchemeName customCSS customBackground font customFont lineHeight textAreaTextSize textScreenColor textBorder textScreenRounded textScreenBorder roundIcons classicMaxWidth`), 'appSkinId']);
+const DEVICE_THEME = new Set([...group(`themePresets themePresetsId theme textTheme textThemeAutoContrast customTextTheme colorScheme colorSchemeName customCSS customBackground font customFont lineHeight textAreaTextSize textScreenColor textBorder textScreenRounded textScreenBorder roundIcons classicMaxWidth`), 'appSkinId',
+    // (user, 2026-11-13 16:50: the whole display settings category stays on each device) every other synced value the Display settings page
+    // (src/ts/setting/displaySettingsData.svelte.ts, its custom components and TagAutocompleteSettings) binds or its theme-preset selection writes (changeToThemePreset): fourteen keys that were their own roots
+    // and two fields of the memory group (DEVICE_GROUP_FIELDS). The skin library (appSkins) it manages still syncs.
+    ...split(`guiHTML hideRealm useAdditionalAssetsPreview unformatQuotes blockquoteStyling customQuotes customQuotesData hideApiKey menuSideBar betaMobileGUI useChatSticker tagAutocomplete useChatCopy useLegacyGUI`), 'showMemoryLimit', 'memoryLimitThickness']);
 /** Their roots already on the NAS (published by this device before, or by older versions that still publish them): kept in history,
  *  never applied, listed, resolved or restored here, like the legacy userNote root. */
-const DEVICE_LOCAL_ROOTS = new Set(['settings\ngroup\ntheme', 'settings\ngroup\nappSkinId']);
+const DEVICE_LOCAL_ROOTS = new Set(['settings\ngroup\ntheme', 'settings\ngroup\nappSkinId', ...split(`guiHTML hideRealm useAdditionalAssetsPreview unformatQuotes blockquoteStyling customQuotes customQuotesData hideApiKey menuSideBar betaMobileGUI useChatSticker tagAutocomplete useChatCopy useLegacyGUI`).map(key => 'settings\ngroup\n' + key)]);
+/** Device fields of a group that still syncs (in DEVICE_THEME, so never projected from or applied to this device). Older devices still
+ *  sync them INSIDE the group and clear a group key a received revision lacks, so the group's wire content keeps the values of the
+ *  revision this device continues (its lineage head, else the single frontier head or heads that differ only there): an older device never
+ *  sees them change, vanish or reset because of this device. Only the first revision of a group root new on the NAS carries this device's own
+ *  values, exactly what an older device received before (leaving them out would make an older device without lineage reset them); no
+ *  device on this version ever applies them. "New on the NAS" needs a completed pull: before it such a root is held (not published). */
+const DEVICE_GROUP_FIELDS = { memory: split(`showMemoryLimit memoryLimitThickness`) };
 /** Library collections are projected per item, not as settings keys. */
 const COLLECTIONS = { characters: 'character', modules: 'module', plugins: 'plugin' };
 const CHARACTER_LOCAL = new Set(split(`chatPage viewScreen inlayViewScreen lastInteraction trashTime`));
@@ -89,6 +100,23 @@ const ownerOf = key => PERSONA_MIRRORS.includes(key) || DEVICE_LOCAL.has(key) ||
 const GROUP_KEYS = Object.fromEntries(Object.entries(SETTINGS_GROUPS).map(([g, keys]) => [`settings:${g}`, keys]));
 
 const clone = v => JSON.parse(JSON.stringify(v));
+const withoutDeviceFields = (root, content) => { const out = { ...content }; for (const k of DEVICE_GROUP_FIELDS[root] ?? []) delete out[k]; return out; };
+/** Content identity without the device fields: equal for group revisions that differ only there (any other revision: its contentHash). */
+const sharedContentHash = rev => rev && !rev.tombstone && rev.domain === 'settings' && rev.type === 'group' && DEVICE_GROUP_FIELDS[rev.root] ? hashJson(withoutDeviceFields(rev.root, rev.content ?? {})) : rev?.contentHash;
+/** Live heads of a diverged root that differ only in device fields (same dependencies, same content without them). */
+const fieldsOnlyHeads = (graph, c) => c.state === 'diverged' && c.liveHeads.every(id => { const a = graph.get(id), b = graph.get(c.liveHeads[0]); return a.dependencyHash === b.dependencyHash && sharedContentHash(a) === sharedContentHash(b); });
+/** The revision whose device fields a group's content carries — never this device's values while the root has any history: the recorded
+ *  lineage head (a deletion: its recorded base), else the single frontier head, else the first live head (heads that differ only in device
+ *  fields, or an undecided conflict), else the base of a deletion. Null only for a root with no history here. */
+function deviceFieldsBase(graph, key, lineageHead) {
+    const baseOf = rev => rev?.tombstone ? graph.get(rev.tombstone.base) ?? null : rev ?? null;
+    const known = lineageHead ? graph.get(lineageHead) : null;
+    if (known) return baseOf(known);
+    const c = graph.classify(key);
+    return c.variants.length === 1 ? graph.get(c.variants[0][0]) : c.liveHeads.length ? graph.get(c.liveHeads[0]) : c.tombstoneHeads.length ? baseOf(graph.get(c.tombstoneHeads[0])) : null;
+}
+/** The content with the device fields of the base (absent there → absent here); without a base the content stays as projected. */
+const carryDeviceFields = (root, content, base) => { if (!base) return content; const out = withoutDeviceFields(root, content); for (const k of DEVICE_GROUP_FIELDS[root] ?? []) if (base?.content && Object.hasOwn(base.content, k)) out[k] = clone(base.content[k]); return out; };
 const object = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 /** Declared asset/inlay references, same rules as shared/play-set/snapshot.ts scan(): whole asset fields, `assets/…` substrings, inlay tokens, painter pointers. */
@@ -271,6 +299,8 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
         if (!groups.has(owner)) groups.set(owner, {});
         groups.get(owner)[key] = key === 'themePresets' ? syncedThemePresets(pub[key]) : pub[key];
     }
+    // A group's device fields are projected with it (never alone); diffProjection replaces them with the base revision's values.
+    for (const [name, fields] of Object.entries(DEVICE_GROUP_FIELDS)) { const content = groups.get('settings:' + name); if (content) for (const k of fields) if (k in pub) content[k] = pub[k]; }
     if (pub.plugins?.length) { if (!groups.has('settings:activation')) groups.set('settings:activation', {}); groups.get('settings:activation').pluginEnabled = Object.fromEntries(pub.plugins.map(p => [p.name, p.enabled ?? false])); }
     for (const [owner, content] of groups) {
         const name = owner.slice('settings:'.length);
@@ -286,9 +316,19 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
  * this install's current frontier, so a newer head (local or remote) survives as a sibling instead of becoming the parent of
  * older content. `matched` maps every skipped item to the revision it equals, so a restore can point the lineage back there.
  */
-function diffProjection(graph, desiredList, lineage = {}, { restore = false } = {}) {
+function diffProjection(graph, desiredList, lineage = {}, { restore = false, received = true } = {}) {
     const out = { revisions: [], skipped: [], diverged: [], matched: {} };
+    // Device fields of a synced group (DEVICE_GROUP_FIELDS) take the base revision's values, in place so the caller's lineage
+    // bookkeeping (matched by contentHash) sees the content that is committed.
+    // received = a pull completed for this workspace; until then a root without history here may exist on the NAS and is held.
+    const held = new Set();
+    for (const d of desiredList) if (d.domain === 'settings' && d.type === 'group' && DEVICE_GROUP_FIELDS[d.root]) {
+        const base = deviceFieldsBase(graph, d.key, lineage[d.lineageKey]);
+        if (!base && !received) { held.add(d); continue; }
+        d.content = carryDeviceFields(d.root, d.content, base); d.contentHash = hashJson(d.content);
+    }
     for (const d of desiredList) {
+        if (held.has(d)) continue;
         const c = graph.classify(d.key);
         const same = id => { const r = graph.get(id); return r.contentHash === d.contentHash && r.dependencyHash === d.dependencyHash; };
         const matched = id => { out.skipped.push(d.lineageKey); out.matched[d.lineageKey] = id; };
@@ -308,7 +348,7 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false } = 
         // Unchanged since the recorded head's equal-content variant, or (without lineage) equal to the single frontier head: nothing to
         // publish, even when that head has since gained children (a pulled but unapplied peer edit, a bootstrap resolution awaiting
         // apply) — re-emitting equal content would fork it.
-        const equalHead = known ? variantOf(known)?.find(same) : (c.variants.length === 1 ? c.variants[0].find(same) : undefined);
+        const equalHead = known ? variantOf(known)?.find(same) : (c.variants.length === 1 ? c.variants[0].find(same) : fieldsOnlyHeads(graph, c) ? c.liveHeads.find(same) : undefined);
         if (equalHead) { matched(equalHead); continue; }
         // A restore knows only the bases recorded with the restored state: an item without one is of unknown origin and starts a new
         // genesis root rather than continuing whatever this install's frontier holds now.
@@ -325,4 +365,4 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false } = 
     }
     return out;
 }
-module.exports = { SETTINGS_GROUPS, GROUP_KEYS, DEVICE_LOCAL, DEVICE_THEME, DEVICE_LOCAL_ROOTS, COLLECTIONS, CHARACTER_LOCAL, THEME_PRESET_LOCAL, syncedThemePresets, CHAT_DISPLAY, MIRROR, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity, pinsFor, localPins, characterPinContent };
+module.exports = { SETTINGS_GROUPS, GROUP_KEYS, DEVICE_LOCAL, DEVICE_THEME, DEVICE_LOCAL_ROOTS, DEVICE_GROUP_FIELDS, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields, COLLECTIONS, CHARACTER_LOCAL, THEME_PRESET_LOCAL, syncedThemePresets, CHAT_DISPLAY, MIRROR, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity, pinsFor, localPins, characterPinContent };

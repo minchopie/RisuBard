@@ -23,7 +23,7 @@ const { createSyncStore, READER_THREAD } = require('./nas-sync-store.cjs');
 const { createVault, vaultMasterStore, REFS } = require('./nas-sync-vault.cjs');
 const { createSyncRemote, createSyncTransport } = require('./nas-sync-remote.cjs');
 const { createManifest } = require('./nas-sync-manifest.cjs');
-const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences, DEVICE_LOCAL_ROOTS, DEVICE_THEME } = require('./nas-sync-projection.cjs');
+const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences, DEVICE_LOCAL_ROOTS, DEVICE_THEME, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields } = require('./nas-sync-projection.cjs');
 const { makeRevision, hashJson, rootKey } = require('./nas-sync-core.cjs');
 const { PERSONA_MIRRORS, personaSelection, personaMirrorsMatch, personaMirrorIssue, mergePersonaHeads } = require('./nas-sync-reconcile.cjs');
 const { deviceKeyStore, writeRequestArchive, writeGrantArchive, openGrant, readShareArchive, REQUEST, GRANT } = require('./nas-sync-share.cjs');
@@ -201,7 +201,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     /** Roots kept in history but never applied, listed, resolved or restored: the legacy userNote mirror and, since 0.9.96-ver5, the
      *  per-device theme roots (DEVICE_LOCAL_ROOTS). Their commits are still acknowledged, so other devices' records never wait on them. */
     const historyOnly = key => key === 'settings\ngroup\nuserNote' || DEVICE_LOCAL_ROOTS.has(key);
-    const conflictCount = s => s.graph.rootKeys().filter(k => { if (historyOnly(k)) return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
+    /** 0.9.96-ver5: a group whose live heads differ only in its device fields (DEVICE_GROUP_FIELDS; e.g. two older devices each changed
+     *  their own text size) is no conflict here: this device applies none of those fields, the rest is one value. */
+    const deviceFieldsOnly = (s, c) => fieldsOnlyHeads(s.graph, c);
+    const conflictCount = s => s.graph.rootKeys().filter(k => { if (historyOnly(k)) return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && !deviceFieldsOnly(s, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
     // `workspaceId`/`role` are reported even while disabled so a reopened panel resumes the saved setup instead of defaults.
     const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], enabled: service().enabled, role: service().role ?? null, adopting: !!service().adopting, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
         vault: { origin: service().vaultOrigin ?? null, sharedFrom: service().vaultSharedFrom ?? null, missing: !fs.existsSync(masterFile()) && (service().vaultOrigin === 'shared' || (service().enabled && (Object.keys(service().lineage).length > 0))), pendingGrant: service().pendingGrant ? { from: service().pendingGrant.from, reason: service().pendingGrant.reason } : null }, shares: (service().shares ?? []).map(({ id, kind, to, via, at }) => ({ id, kind, to, via, at })),
@@ -330,7 +333,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const key of s.graph.rootKeys()) {
             if (historyOnly(key)) continue; // legacy selected-persona mirror / per-device theme remain in history, never a user-facing conflict
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
-            if (c.state === 'diverged') {
+            if (c.state === 'diverged' && !deviceFieldsOnly(s, c)) {
                 const versions = c.variants.map(ids => s.graph.get(ids[0]));
                 out.push({ root: key, domain, type, id: rootId, title: rootTitle(s, key, meta), state: branchesPreserved(s, key, c) ? 'branches-preserved' : c.state,
                     ...(type === 'chat' ? chatDifference(versions) : {}),
@@ -384,7 +387,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const dated = dates.length && dates.every(x => Number.isSafeInteger(x?.at) && x.at > 0) ? dates.reduce((a, b) => a.at >= b.at ? a : b) : null;
             return (chatRows.get(key) ?? [null]).map(chat => ({ root: key, type, id, title: chat ? `${chat.character} · ${chat.name}` : rootTitle(s, key, meta),
                 nasAt: dated?.at ?? null, nasTimeKind: dated?.kind ?? null,
-                state: chat?.state ?? (c.state === 'diverged' || c.state === 'delete-pending' ? 'review' : c.state === 'deleted' ? 'deleted' : !heads.length ? 'upload-pending' : c.heads.some(id => !known.has(id)) ? 'upload-pending' : 'recorded'),
+                state: chat?.state ?? ((c.state === 'diverged' && !deviceFieldsOnly(s, c)) || c.state === 'delete-pending' ? 'review' : c.state === 'deleted' ? 'deleted' : !heads.length ? 'upload-pending' : c.heads.some(id => !known.has(id)) ? 'upload-pending' : 'recorded'),
                 ...(chat ? { wikiFiles: chat.wikiFiles, slots: chat.slots, pages: chat.pages } : {}) }));
         });
         return { chats: rows, items, personas: (db?.personas ?? []).map(p => ({ name: p.name || '이름 없는 페르소나' })), localIssues: [personaMirrorIssue(db ?? {})].filter(Boolean), peerApplied: 'unconfirmed' }; });
@@ -435,6 +438,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         if (root === 'settings\ngroup\nuserNote') throw new Error('The selected persona owns its note; this legacy mirror is read-only');
         if (DEVICE_LOCAL_ROOTS.has(root)) throw new Error('The theme stays on each device and is not synchronized');
         const s = requireEnabled(), c = s.graph.classify(root), kept = s.graph.get(keep);
+        if (deviceFieldsOnly(s, c)) throw new Error('These versions differ only in screen settings that stay on each device');
         if (!kept || !c.heads.includes(keep) || kept.tombstone) throw new Error('Choose one of the live heads to keep');
         const [domain, type, rootId] = root.split('\n');
         const merged = root === 'settings\ngroup\npersonas' ? mergePersonaHeads(s.graph, c.liveHeads.map(id => s.graph.get(id)), keep, collectReferences) : null;
@@ -469,7 +473,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const [domain, , rootId] = key.split('\n'), c = s.graph.classify(key);
             if (domain === 'play') continue;
             if (c.state === 'delete-pending') { skipped.push({ root: key, title: rootId, reason: 'delete-pending' }); continue; } // reported, decided one by one
-            if (c.state !== 'diverged') continue;
+            if (c.state !== 'diverged' || deviceFieldsOnly(s, c)) continue;
             let keep = null, reason = '';
             if (prefer === 'current') {
                 const mine = s.graph.get(lineage[key + '#' + rootId]);
@@ -550,10 +554,14 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const want = new Set(Array.isArray(expectedHeads) ? expectedHeads.filter(h => typeof h === 'string') : []);
         if (!Array.isArray(expectedHeads) || want.size !== expectedHeads.length || want.size !== c.heads.length || !c.heads.every(h => want.has(h))) throw Object.assign(new Error('The root\'s heads changed since they were inspected; re-check and pass the current heads'), { code: 'HEADS_CHANGED', heads: c.heads });
         if (!c.heads.some(h => h === revision || s.graph.isAncestor(revision, h))) throw new Error('Revision is not in this root\'s history');
-        if (c.variants.length === 1 && c.variants[0].some(id => { const r = s.graph.get(id); return r.contentHash === past.contentHash && r.dependencyHash === past.dependencyHash; })) throw new Error('The current head already has this content');
+        // 0.9.96-ver5: the group's device fields keep the values of the revision this device continues, not the past ones (older devices
+        // still sync them; this device never decides them). Unchanged for every other group.
+        const content = carryDeviceFields(rootId, past.content, deviceFieldsBase(s.graph, root, service().lineage[root + '#' + rootId]) ?? past), contentHash = hashJson(content);
+        if (c.variants.length === 1 && c.variants[0].some(id => { const r = s.graph.get(id); return r.contentHash === contentHash && r.dependencyHash === past.dependencyHash; })) throw new Error('The current head already has this content');
+        if (deviceFieldsOnly(s, c) && c.liveHeads.every(id => { const r = s.graph.get(id); return r.dependencyHash === past.dependencyHash && sharedContentHash(r) === sharedContentHash(past); })) throw new Error('The current head already has this content');
         const missing = Object.entries(past.dependencies).filter(([k, h]) => k.startsWith('pin:') ? false : k.startsWith('envelope:') ? !s.envelopePhysical(h).length : !s.hasBlob(h)).map(([k]) => k); // same test as plan()'s missingMaterial
         if (missing.length) throw Object.assign(new Error('Material of that revision is not in the sync store: ' + missing.join(', ')), { code: 'MISSING_MATERIAL', missing });
-        const rev = makeRevision({ domain, type, root: rootId, parents: c.heads, content: past.content, dependencies: past.dependencies });
+        const rev = makeRevision({ domain, type, root: rootId, parents: c.heads, content, dependencies: past.dependencies });
         await commitWithIntent(s, [rev], [root]);
         return { restored: rev.id, root, from: revision, parents: c.heads };
     }
@@ -648,7 +656,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     function enable({ workspaceId, role }) {
         const s = openStore(); if (s.identity().workspaceId !== workspaceId) s.setWorkspace(workspaceId);
         if (role !== undefined && role !== 'authority' && role !== 'joining') throw new Error('Role must be authority or joining');
-        manifest.transact(x => { x.enabled = true; x.role = role ?? x.role ?? 'authority'; x.workspaceId = s.identity().workspaceId; x.incarnation ??= s.identity().incarnationId; });
+        manifest.transact(x => { x.enabled = true; x.role = role ?? x.role ?? 'authority'; x.workspaceId = s.identity().workspaceId; x.incarnation ??= s.identity().incarnationId; x.pulledMark = null; });
         return status();
     }
     /** Joining-device bootstrap: for every library/settings root where this device's own genesis revision diverges from the
@@ -664,7 +672,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const key of s.graph.rootKeys()) {
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
             if (historyOnly(key) || key === 'settings\ngroup\npersonas') continue;
-            if (domain === 'play' || c.state !== 'diverged' || c.variants.length !== 2) continue;
+            if (domain === 'play' || c.state !== 'diverged' || c.variants.length !== 2 || deviceFieldsOnly(s, c)) continue;
             const authority = c.variants.map(variant => variant.find(id => peerRevisions.has(id))).find(Boolean);
             const joining = c.variants.flat().find(id => ownRevisions.has(id) && s.graph.get(id).parents.length === 0);
             if (!authority || !joining || authority === joining) continue;
@@ -685,7 +693,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         manifest.transact(x => { x.bootstraps.push({ id, authorityDevice, at: now(), roots, commit: entry?.commitId ?? null }); x.pendingBootstrap = null; });
         return { resolved: resolutions.length, archive: `recovery/bootstrap-${id}/originals.json`, commit: entry ? { sequence: entry.sequence, commitId: entry.commitId } : null };
     }
-    function disable() { manifest.transact(x => { x.enabled = false; }); return status(); }
+    function disable() { manifest.transact(x => { x.enabled = false; x.pulledMark = null; }); return status(); }
+    /** 0.9.96-ver5: the last pull of this workspace and store incarnation left nothing waiting (see pull()). */
+    const receivedFresh = s => { const mark = service().pulledMark; return !!mark && mark.workspaceId === service().workspaceId && mark.incarnation === s.identity().incarnationId && !s.waitingEntries().length; };
 
     const readAsset = work => async path => {
         if (storage.kvGetUpdatedAt(path) === null) return null;
@@ -798,7 +808,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
             // A restored state continues the bases recorded with it (or starts genesis roots), never this install's newest heads: a copied
             // data root carries its own lineage in this manifest; an in-place restore carries it in the mark.
-            const diff = diffProjection(s.graph, projection.desired, restoreMark ? (restoreMark.bases ?? {}) : lineage, { restore: restored });
+            const diff = diffProjection(s.graph, projection.desired, restoreMark ? (restoreMark.bases ?? {}) : lineage, { restore: restored, received: receivedFresh(s) });
             // Items this device knew that vanished locally become causal tombstones in one operation; a deleted character takes
             // the chats it owned (its last known membership) with it as the same deletion cohort.
             // Deletions are causal against what THIS device observed: the tombstone's base is the device's lineage head, never a
@@ -951,7 +961,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             if (domain === 'play') continue;
             if (historyOnly(key)) { applyRoot(key); continue; }
             if (localEdits.has(key)) { result.pending.push({ root: key, reason: 'local-edit' }); continue; }
-            if (c.state === 'diverged') { result.pending.push({ root: key, reason: 'diverged', variants: c.variants.length }); continue; }
+            if (c.state === 'diverged' && !deviceFieldsOnly(s, c)) { result.pending.push({ root: key, reason: 'diverged', variants: c.variants.length }); continue; }
             if (c.state === 'deleted') {
                 if (type === 'character') {
                     // A container is removed only when no child it owned survived the deletion cohort (unseen concurrent child edits keep it delete-pending).
@@ -972,6 +982,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                     result.pending.push({ root: key, reason: 'local-edit' }); continue;
                 }
                 if (rootId === 'personas') for (const key of PERSONA_MIRRORS) delete content[key];
+                for (const k of Object.keys(content)) if (DEVICE_THEME.has(k)) delete content[k]; // 0.9.96-ver5: device fields of a synced group stay as they are here
                 const current = Object.fromEntries(Object.keys(content).filter(k => k !== REFS && k !== 'pluginEnabled').map(k => [k, db[k]]));
                 const m = materialize(v, 'settings', content, envelopesFor(s, v, head), current);
                 if (!m.applied) { result.pending.push({ root: key, reason: 'vault', pending: m.pending }); continue; }
@@ -1430,7 +1441,12 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     // new conflicts on the reference device). Receive, plan and apply continue; only the user's endAdoption() ends it.
     const publish = () => { requireEnabled(); if (service().role === 'joining' && service().adopting) return Promise.resolve({ stored: [], blobs: 0, failed: [], rotated: null, checkpoint: null, ack: null, adopting: true }); return singleFlight('publish', () => pinned(() => openTransport().publish())); };
     const pull = () => { requireEnabled(); return singleFlight('pull', () => pinned(async () => {
+        if (service().pulledMark) manifest.transact(x => { x.pulledMark = null; }); // 0.9.96-ver5: a pull that fails midway leaves no mark
         const report = await openTransport().pull();
+        // 0.9.96-ver5: a pull that left nothing waiting marks this workspace and store incarnation as received (diffProjection: a group root
+        // without history here is then new on the NAS); anything still waiting clears the mark.
+        { const s = openStore(), mark = s.waitingEntries().length ? null : { workspaceId: service().workspaceId, incarnation: s.identity().incarnationId };
+          if (JSON.stringify(service().pulledMark ?? null) !== JSON.stringify(mark)) manifest.transact(x => { x.pulledMark = mark; }); }
         if (service().role === 'joining' && service().adopting) {
             // Receipt (not completion): nothing of what was listed waits or is held in the persistent queues. Only the user ends adoption.
             if (!openStore().waitingEntries().length) manifest.transact(x => { if (x.adopting) x.adoptionMark = { ...(x.adoptionMark ?? adoptionMark(x)), pulled: true }; });
