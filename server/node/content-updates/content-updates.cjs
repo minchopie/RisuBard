@@ -1,5 +1,5 @@
 'use strict';
-// Content updates: one NAS folder where a character card, persona card, prompt preset or plugin is published once; every device
+// Content updates: one NAS folder where a character card, persona card, prompt preset, plugin or module is published once; every device
 // that uses the same NAS asks "a new one was published — import it? yes/no" and imports it through the
 // app's own import (a character goes through the upstream "update an installed bot" flow, chats kept).
 // On the NAS: the files (named by their SHA-256) and one small record per published name (items/<sha256(name)>.json),
@@ -31,14 +31,17 @@ const retryable = error => error?.retry === true || RETRY_CODES.has(error?.code)
 /** First byte of a 206 answer: "bytes <start>-<end>/<total>". */
 const rangeStart = value => { const m = /^bytes (\d+)-\d+\/(?:\d+|\*)$/.exec(String(value ?? '').trim()); return m ? Number(m[1]) : -1; };
 const READ_CONCURRENCY = 8;
-const KINDS = new Set(['character', 'persona', 'preset', 'plugin']);
+const KINDS = new Set(['character', 'persona', 'preset', 'plugin', 'module']);
 // preset (0.9.92-ver1): a prompt preset as exported by the app (.risup / .risupreset) or its JSON form.
 // plugin (0.9.92-ver11): a plugin script (.js), at most PLUGIN_LIMIT.
-const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']), preset: new Set(['risup', 'risupreset', 'json']), plugin: new Set(['js']) };
+// module (0.9.96-ver4): a module file (.risum) with its assets, at most MODULE_LIMIT (the client reads it whole into memory).
+const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']), preset: new Set(['risup', 'risupreset', 'json']), plugin: new Set(['js']), module: new Set(['risum']) };
 const PLUGIN_LIMIT = 8 * 1024 * 1024;
-const sizeLimit = kind => kind === 'plugin' ? PLUGIN_LIMIT : FILE_LIMIT;
+const MODULE_LIMIT = 64 * 1024 * 1024;
+const sizeLimit = kind => kind === 'plugin' ? PLUGIN_LIMIT : kind === 'module' ? MODULE_LIMIT : FILE_LIMIT;
 // The kinds a client that does not list its own (`kinds` in the overview request; 0.9.92-ver10 and older) can import: those clients
-// would ask about any other kind as a persona and import it as a character card, so it is not listed to them.
+// would ask about any other kind as a persona and import it as a character card, so it is not listed to them. A client that lists its
+// kinds gets only those (0.9.92-ver11 … 0.9.96-ver3 list four and are not shown modules).
 const LEGACY_KINDS = new Set(['character', 'persona', 'preset']);
 const DECISIONS = new Set(['applied', 'declined', 'published']);
 const SHA = /^[a-f0-9]{64}$/;
@@ -48,7 +51,7 @@ function text(value, max) {
     return typeof value === 'string' && value.trim() && value.length <= max && !CONTROL.test(value) ? value.trim() : null;
 }
 function validKey(value) {
-    const match = typeof value === 'string' && /^(character|persona|preset|plugin):(.+)$/.exec(value);
+    const match = typeof value === 'string' && /^(character|persona|preset|plugin|module):(.+)$/.exec(value);
     return !!match && !!text(match[2], 120) && match[2] === match[2].trim();
 }
 function validItem(value) {
@@ -322,4 +325,4 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
     return { overview, decide, download, publish, registerRoutes, readState, appCode };
 }
 
-module.exports = { createContentUpdates, validItem, validKey, recordName, recordNames, NAMESPACE, MAX_ITEMS, READ_ITEMS, PLUGIN_LIMIT };
+module.exports = { createContentUpdates, validItem, validKey, recordName, recordNames, NAMESPACE, MAX_ITEMS, READ_ITEMS, PLUGIN_LIMIT, MODULE_LIMIT };

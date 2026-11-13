@@ -16,7 +16,9 @@ vi.mock('../process/generationState', async () => { const { writable } = await i
 vi.mock('../storage/importTransaction', () => ({ ImportCancelled: class ImportCancelled extends Error {} }))
 vi.mock('../pngChunk', () => ({ PngChunk: { readGenerator: vi.fn(async function* () {}) } }))
 vi.mock('uuid', () => ({ v4: () => 'id' }))
-vi.mock('../importSession', async () => { const { writable } = await import('svelte/store'); return { importSession: writable({ phase: 'idle' }) } })
+vi.mock('../importSession', async () => { const { writable } = await import('svelte/store'); return { importSession: writable({ phase: 'idle' }), runImport: vi.fn() } })
+vi.mock('../process/modules', () => ({ readModule: vi.fn() }))
+vi.mock('../rpack/rpack_js', () => ({ decodeRPack: vi.fn(async (data: Uint8Array) => data) })) // identity: the tests write plain JSON
 vi.mock('../nasSync', () => ({ reportSyncNetwork: vi.fn(async () => ({})) }))
 vi.mock('../nasSyncCoordinator', async () => { const { writable } = await import('svelte/store'); return { coordinatorState: writable(null) } })
 
@@ -471,7 +473,7 @@ describe('content updates: plugins', () => {
         expect(publish[1].body).toBe(fileBytes)
         await mod.fetchOverview()
         const overview = seen.find(([path]) => path === '/content-updates/overview')
-        expect(JSON.parse(overview[1].body)).toEqual({ kinds: ['character', 'persona', 'preset', 'plugin'] })
+        expect(JSON.parse(overview[1].body)).toEqual({ kinds: ['character', 'persona', 'preset', 'plugin', 'module'] })
     })
 
     test('yes → the app\'s importPlugin gets the script text as a hand import (no update flag); a same-name plugin keeps this device\'s argument values and on/off state', async () => {
@@ -638,5 +640,358 @@ describe('content updates: NAS sync cycle around the import', () => {
             expect(get(transferBusy)).toBe(false)
             expect(s.decisions).toEqual([])
         } finally { s.cleanup() }
+    })
+})
+
+// 0.9.96-ver4: a module (.risum) as a fifth kind.
+describe('content updates: modules', () => {
+    const fileBytes = strToU8('risum file bytes 7.2-mge.1')
+    const sha = createHash('sha256').update(fileBytes).digest('hex')
+    const pending = { key: 'module:삶은계란', kind: 'module', title: '라이프 모듈 v.7.2-mge.1', version: '7.2-mge.1', file: `${sha}.risum`, fileName: '라이프 모듈 v.7.2-mge.1.risum', sha256: sha, bytes: fileBytes.length, publishedAt: new Date().toISOString(), publishedBy: 'pc', decision: '' }
+    const risum = (module: unknown) => {
+        const json = strToU8(JSON.stringify({ type: 'risuModule', module }))
+        const out = new Uint8Array(6 + json.length + 1)
+        out[0] = 111; out[1] = 0; new DataView(out.buffer).setUint32(2, json.length, true); out.set(json, 6); out[6 + json.length] = 0
+        return out
+    }
+    /** Which modules upstream getModules turns on for one character/chat/persona (ids or namespaces in any list). */
+    const active = (db: any, character: any, chat: any, personaId?: string) => {
+        const ids = new Set<string>([...(db.enabledModules ?? []), ...((personaId && db.personaEnabledModules?.[personaId]) ?? []), ...(chat?.modules ?? []), ...(character?.modules ?? []),
+            ...String(db.moduleIntergration ?? '').split(',').map((x: string) => x.trim()).filter(Boolean)])
+        return db.modules.filter((m: any) => ids.has(m.id) || (m.namespace && ids.has(m.namespace))).map((m: any) => m.id)
+    }
+    const setup = async (db: any, opts: { failSave?: (call: any) => boolean } = {}) => {
+        const { getDatabase } = await import('../storage/database.svelte') as any
+        const { transferRequest, transferBusy } = await import('../playTransfer') as any
+        const { alertConfirmMulti, alertError, notifySuccess } = await import('../alert') as any
+        const { requestImmediateSave } = await import('../globalApi.svelte') as any
+        const { runImport, importSession } = await import('../importSession') as any
+        const { readModule } = await import('../process/modules') as any
+        importSession.set({ phase: 'idle' })
+        getDatabase.mockReturnValue(db)
+        const decisions: string[] = [], calls: string[] = [], saves: any[] = []
+        transferRequest.mockReset().mockImplementation(async (path: string, init: any) => {
+            calls.push(path)
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [pending], pending: [pending] }))
+            if (path === '/content-updates/fetch') return new Response(fileBytes as BodyInit)
+            if (path === '/content-updates/decide') { decisions.push(JSON.parse(init.body).decision); return new Response('{}') }
+            return new Response('{}')
+        })
+        // Every save is checked: no saved state may turn on two modules of the namespace for any character/chat/persona.
+        requestImmediateSave.mockReset().mockImplementation(async (options: any) => {
+            const both: string[] = []
+            for (const character of db.characters ?? []) for (const chat of [...(character.chats ?? []), null]) for (const persona of [undefined, ...Object.keys(db.personaEnabledModules ?? {})]) {
+                const on = active(db, character, chat, persona).filter((id: string) => db.modules.find((m: any) => m.id === id)?.namespace === '삶은계란')
+                if (on.length > 1) both.push(`${character.chaId}/${chat?.id}/${persona}: ${on}`)
+            }
+            saves.push({ options, both, held: get(transferBusy) })
+            if (opts.failSave?.(options)) throw new Error('save failed')
+        })
+        const transaction = { check: vi.fn(), register: vi.fn() }
+        runImport.mockReset().mockImplementation(async (work: any) => {
+            try { const result = await work(transaction); await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true }); return result }
+            catch (error) { db.modules = db.modules.filter((m: any) => !transaction.register.mock.calls.some((c: any) => c[1] === m.id)); throw error } // rollback: the registered module out
+        })
+        readModule.mockReset().mockImplementation(async () => ({ name: '라이프 모듈 v.7.2-mge.1', namespace: '삶은계란', lowLevelAccess: true, id: 'random-v4', trigger: Array(12).fill({}), assets: [['a', 'assets/h1.png', 'png']] }))
+        alertConfirmMulti.mockReset().mockResolvedValue(0); alertError.mockReset(); notifySuccess.mockReset()
+        return { db, decisions, calls, saves, transaction, runImport, readModule, alertConfirmMulti, alertError, notifySuccess, requestImmediateSave }
+    }
+    const deviceDb = () => ({
+        modules: [{ id: 'life-611', name: '라이프 모듈 v.6.11', namespace: '삶은계란' }, { id: 'other', name: 'Other', namespace: 'Nureong' }],
+        enabledModules: ['other', 'life-611'], personaEnabledModules: { p1: ['life-611'], p2: ['other'] },
+        characters: [
+            { chaId: 'c1', modules: ['life-611'], chats: [{ id: 'h1', modules: ['life-611', 'other'], message: [] }, { id: 'ph', modules: ['life-611'], _placeholder: true, message: [] }, { id: 'none', message: [] }] },
+            { chaId: 'c2', modules: ['other'], chats: [{ id: 'x', modules: ['other'], message: [] }] },
+        ],
+        moduleIntergration: 'Nureong, 삶은계란', botPresetsId: 0,
+        botPresets: [{ id: 'b0', moduleIntergration: 'Nureong, 삶은계란' }, { id: 'b1', moduleIntergration: '-Nureong' }, { id: 'b2' }],
+        moduleModelBindings: { 'life-611': 'preset-a' },
+    })
+
+    test('a .risum is described from its module record (namespace = default publish name); other bytes are refused', async () => {
+        expect(await mod.describeFile('라이프 모듈 v.7.2-mge.1.risum', risum({ name: '라이프 모듈 v.7.2-mge.1', namespace: '삶은계란', id: 'f78' })))
+            .toEqual({ kind: 'module', title: '라이프 모듈 v.7.2-mge.1', version: '7.2-mge.1', series: '삶은계란' })
+        expect(await mod.describeFile('m.risum', risum({ name: 'Plain' }))).toEqual({ kind: 'module', title: 'Plain', version: '' })
+        await expect(mod.describeFile('m.risum', strToU8('not a module'))).rejects.toThrow(/모듈/)
+        await expect(mod.describeFile('m.risum', risum({ namespace: 'x' }))).rejects.toThrow(/이름/)
+        const cut = risum({ name: 'x' }); await expect(mod.describeFile('m.risum', cut.subarray(0, 10))).rejects.toThrow(/잘렸/)
+        expect(mod.kindLabel('module')).toBe('모듈')
+    })
+
+    test('the module id is decided by the file: the same on every device, uuid-shaped, another file another id', async () => {
+        const id = await mod.publishedModuleId(sha)
+        expect(id).toBe(await mod.publishedModuleId(sha))
+        expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+        expect(await mod.publishedModuleId('0'.repeat(64))).not.toBe(id)
+    })
+
+    test('yes → imported under the file id and turned on everywhere the earlier one was on, in the same save; the earlier one stays, off', async () => {
+        const start: any = deviceDb()
+        start.characters.push({ chaId: 'c3', modules: ['삶은계란'], chats: [{ id: 'p3', modules: ['삶은계란'], _placeholder: true, message: [] }] }) // a character not open, on by namespace
+        const s = await setup(start)
+        await mod.checkContentUpdates(true)
+        const id = await mod.publishedModuleId(sha)
+        expect(s.alertConfirmMulti.mock.calls[0][0]).toBe('새 모듈이 올라왔어요. 지금 가져올까요?')
+        expect(s.alertConfirmMulti.mock.calls[0][2]).toMatch(/꺼진 채 목록에 남겨요/)
+        expect(s.readModule).toHaveBeenCalledTimes(1)
+        expect(Buffer.isBuffer(s.readModule.mock.calls[0][0])).toBe(true)
+        expect(s.transaction.register).toHaveBeenCalledWith('module', id)
+        const db = s.db
+        expect(db.modules.map((m: any) => m.id)).toEqual(['life-611', 'other', id]) // the earlier module is kept
+        expect(db.modules[2]).toMatchObject({ id, name: '라이프 모듈 v.7.2-mge.1', namespace: '삶은계란' })
+        expect(db.enabledModules).toEqual(['other', id])
+        expect(db.personaEnabledModules).toEqual({ p1: [id], p2: ['other'] })
+        expect(db.characters[0].modules).toEqual([id])
+        expect(db.characters[0].chats.map((c: any) => c.modules)).toEqual([[id, 'other'], [id], undefined])
+        expect(db.characters[1]).toEqual(deviceDb().characters[1])
+        expect([db.characters[2].modules, db.characters[2].chats[0].modules]).toEqual([[id], [id]])
+        // A namespace in module integration turns on every module of it: replaced too, so the earlier one is off there as well.
+        expect(db.moduleIntergration).toBe(`Nureong,${id}`)
+        expect(db.botPresets.map((p: any) => p.moduleIntergration)).toEqual([`Nureong,${id}`, '-Nureong', undefined])
+        expect(db.moduleModelBindings).toEqual({ 'life-611': 'preset-a', [id]: 'preset-a' })
+        // The import's own save (the namespace entry written out as the earlier id, the new module off), then one switch save with the
+        // changed characters and the loaded chats (a placeholder's list lives in the stub), under the busy hold.
+        // (a character whose list was pinned is named in that first save: an immediate save diffs only the characters it is given).
+        expect(s.saves.map((x: any) => x.options)).toEqual([
+            { characters: ['c3'], chats: [], flushServer: true, rejectOnFailure: true },
+            { flushServer: 'canonical', rejectOnFailure: true },
+            { characters: ['c1', 'c3'], chats: [['c1', 'h1']], flushServer: true, rejectOnFailure: true }])
+        expect(s.saves.map((x: any) => x.held)).toEqual([false, false, true])
+        expect(s.saves.every((x: any) => x.both.length === 0)).toBe(true)
+        for (const character of db.characters) for (const chat of character.chats) for (const persona of ['p1', 'p2', undefined])
+            expect(active(db, character, chat, persona).filter((m: string) => m === 'life-611')).toEqual([])
+        expect(active(db, db.characters[0], db.characters[0].chats[0], 'p1')).toContain(id)
+        expect(s.decisions).toEqual(['applied'])
+        expect(s.notifySuccess.mock.calls.at(-1)[0]).toMatch(/옛 모듈 대신 켰어요/)
+        expect(s.alertError).not.toHaveBeenCalled()
+    })
+
+    test('no earlier module turned on anywhere: added only, nothing switched; a module of another namespace is never touched', async () => {
+        const db: any = { modules: [{ id: 'life-611', name: 'L', namespace: '삶은계란' }, { id: 'other', name: 'O', namespace: 'Nureong' }], enabledModules: ['other'], personaEnabledModules: {},
+            characters: [{ chaId: 'c1', modules: ['other'], chats: [{ id: 'h', modules: ['Nureong'], message: [] }] }], moduleIntergration: '', botPresets: [], moduleModelBindings: {} }
+        const s = await setup(db)
+        expect(await mod.applyItem(pending as any, fileBytes)).toBe('applied')
+        const id = await mod.publishedModuleId(sha)
+        expect(db.modules.map((m: any) => m.id)).toEqual(['life-611', 'other', id])
+        expect([db.enabledModules, db.characters[0].modules, db.characters[0].chats[0].modules]).toEqual([['other'], ['other'], ['Nureong']])
+        expect(db.moduleModelBindings).toEqual({})
+        expect(s.saves.map((x: any) => x.options)).toEqual([{ flushServer: 'canonical', rejectOnFailure: true }]) // only the import's save
+        expect(s.notifySuccess.mock.calls.at(-1)[0]).toMatch(/켜지는 않았어요/)
+    })
+
+    test('a module without a namespace follows an earlier module of the same name', () => {
+        const db: any = { modules: [{ id: 'a', name: 'M' }, { id: 'b', name: 'N' }, { id: 'new', name: 'M' }], enabledModules: ['a', 'b'], characters: [] }
+        const change = mod.switchModuleOn(db, db.modules[2])
+        expect(change.changed).toBe(true)
+        expect(db.enabledModules).toEqual(['new', 'b'])
+        change.undo()
+        expect(db.enabledModules).toEqual(['a', 'b'])
+        expect(mod.switchModuleOn(db, db.modules[2], true).changed).toBe(true)
+        expect(db.enabledModules).toEqual(['a', 'b']) // dry run changes nothing
+    })
+
+    test('the new id is listed once: a list that held both the earlier and the new id keeps one', () => {
+        const db: any = { modules: [{ id: 'old', name: 'L', namespace: 'ns' }, { id: 'new', name: 'L2', namespace: 'ns' }], enabledModules: ['new', 'x', 'old', 'ns'], characters: [] }
+        mod.switchModuleOn(db, db.modules[1])
+        expect(db.enabledModules).toEqual(['new', 'x'])
+    })
+
+    test('NAS sync brought the module and its switched places first: recorded as applied without asking or downloading', async () => {
+        const id = await mod.publishedModuleId(sha)
+        const db: any = { ...deviceDb() }
+        db.modules = [...db.modules, { id, name: '라이프 모듈 v.7.2-mge.1', namespace: '삶은계란' }]
+        db.enabledModules = ['other', id]; db.personaEnabledModules = { p1: [id] }; db.moduleIntergration = 'Nureong'; db.botPresets = []
+        db.characters = [{ chaId: 'c1', modules: [id], chats: [{ id: 'h1', modules: [id], message: [] }] }]
+        const s = await setup(db)
+        await mod.checkContentUpdates(true)
+        expect(s.alertConfirmMulti).not.toHaveBeenCalled()
+        expect(s.calls).not.toContain('/content-updates/fetch')
+        expect(s.readModule).not.toHaveBeenCalled()
+        expect(s.decisions).toEqual(['applied'])
+    })
+
+    test('the module is here (synced, or an earlier try could not switch) but the earlier one is still on: asked; yes switches without importing again, under the busy hold', async () => {
+        const id = await mod.publishedModuleId(sha)
+        const db: any = deviceDb()
+        db.modules.push({ id, name: '라이프 모듈 v.7.2-mge.1', namespace: '삶은계란' })
+        const s = await setup(db)
+        expect(await mod.alreadyInstalled(pending as any)).toBe(false)
+        await mod.checkContentUpdates(true)
+        expect(s.alertConfirmMulti).toHaveBeenCalledTimes(1)
+        expect(s.runImport).not.toHaveBeenCalled()
+        expect(s.readModule).not.toHaveBeenCalled()
+        expect(db.modules.filter((m: any) => m.id === id)).toHaveLength(1)
+        expect(db.enabledModules).toEqual(['other', id])
+        expect(s.saves).toHaveLength(1)
+        expect(s.saves[0].held).toBe(true)
+        expect(s.saves[0].both).toEqual([])
+        const { transferBusy } = await import('../playTransfer') as any
+        expect(get(transferBusy)).toBe(false)
+        expect(s.decisions).toEqual(['applied'])
+        expect(await mod.alreadyInstalled(pending as any)).toBe(true)
+    })
+
+    test('the switch save fails: the earlier module\'s places are put back, nothing recorded, the error shown; asked again later', async () => {
+        const id = await mod.publishedModuleId(sha)
+        const db: any = deviceDb()
+        db.modules.push({ id, name: '라이프 모듈 v.7.2-mge.1', namespace: '삶은계란' })
+        const s = await setup(db, { failSave: options => options.rejectOnFailure === true })
+        const before = JSON.parse(JSON.stringify(db))
+        await mod.checkContentUpdates(true)
+        expect(JSON.parse(JSON.stringify(db))).toEqual(before)
+        expect(s.saves.at(-1).options).toMatchObject({ flushServer: true }) // the put-back state is saved (best effort)
+        expect(s.decisions).toEqual([])
+        expect(s.alertError).toHaveBeenCalledTimes(1)
+        const { transferBusy } = await import('../playTransfer') as any
+        expect(get(transferBusy)).toBe(false)
+    })
+
+    test('the import\'s own save fails: its rollback takes only the new module out; the earlier module stays on everywhere (never none, never both)', async () => {
+        const db: any = deviceDb()
+        const s = await setup(db, { failSave: options => options.flushServer === 'canonical' })
+        await expect(mod.applyItem(pending as any, fileBytes)).rejects.toThrow(/save failed/)
+        const before = deviceDb()
+        expect(db.modules).toEqual(before.modules)
+        // Only the namespace entry is written out as the id it turned on (the same module on); everything else as before.
+        expect(db.moduleIntergration).toBe('Nureong,life-611')
+        expect(db.botPresets.map((p: any) => p.moduleIntergration)).toEqual(['Nureong,life-611', '-Nureong', undefined])
+        expect({ ...db, moduleIntergration: before.moduleIntergration, botPresets: before.botPresets }).toEqual(before)
+        expect(s.saves.every((x: any) => x.both.length === 0)).toBe(true)
+        for (const character of db.characters) for (const chat of character.chats) expect(active(db, character, chat, 'p1')).toContain('life-611')
+        expect(active(db, db.characters[1], db.characters[1].chats[0])).toEqual(['life-611', 'other']) // on through integration as before
+    })
+
+    test('the import is cancelled (no answer) → declined, the earlier module still on; a rollback left in recovery → an error', async () => {
+        const db: any = deviceDb()
+        const s = await setup(db)
+        const id = await mod.publishedModuleId(sha)
+        // As runImport after the user's cancel: the work ran, its rollback took the registered module out, no answer.
+        s.runImport.mockImplementationOnce(async (work: any) => { await work(s.transaction); db.modules = db.modules.filter((m: any) => m.id !== id); return null })
+        expect(await mod.applyItem(pending as any, fileBytes)).toBe('declined')
+        expect(db.modules).toEqual(deviceDb().modules)
+        expect(db.enabledModules).toEqual(['other', 'life-611'])
+        const { importSession } = await import('../importSession') as any
+        s.runImport.mockImplementationOnce(async () => { importSession.set({ phase: 'recovery' }); return null })
+        await expect(mod.applyItem(pending as any, fileBytes)).rejects.toThrow(/복구/)
+        importSession.set({ phase: 'idle' })
+    })
+
+    test('undo puts the lists back on the app\'s reactive (Svelte state) database too', async () => {
+        const { proxy } = await import('svelte/internal/client') as any
+        const db: any = proxy({ modules: [{ id: 'old', name: 'L', namespace: 'ns' }, { id: 'new', name: 'L2', namespace: 'ns' }], enabledModules: ['old'], personaEnabledModules: { p: ['old'] },
+            characters: [{ chaId: 'c', modules: ['old'], chats: [{ id: 'h', modules: ['ns'], message: [] }] }], moduleIntergration: 'ns', botPresets: [{ moduleIntergration: 'old' }], moduleModelBindings: { old: 'x' } })
+        const before = JSON.parse(JSON.stringify(db))
+        const change = mod.switchModuleOn(db, db.modules[1])
+        expect(change.changed).toBe(true)
+        expect(db.enabledModules).toEqual(['new'])
+        expect(db.moduleModelBindings).toEqual({ old: 'x', new: 'x' })
+        change.undo()
+        expect(JSON.parse(JSON.stringify(db))).toEqual(before)
+    })
+
+    test('a namespace entry is written out as the earlier ids before the new module is added (same modules on); nothing without a namespace entry', () => {
+        const db: any = { modules: [{ id: 'a', name: 'L', namespace: 'ns' }, { id: 'b', name: 'L', namespace: 'ns' }, { id: 'z', name: 'Z', namespace: 'other' }], enabledModules: ['ns', 'a', 'z'],
+            characters: [{ chaId: 'c', modules: ['z'], chats: [] }], moduleIntergration: 'x, ns', botPresets: [{ moduleIntergration: 'ns' }, { moduleIntergration: 'other' }] }
+        const added = { id: 'new', name: 'L2', namespace: 'ns' }
+        expect(mod.pinNamespace(db, added, true).changed).toBe(true)
+        expect(db.enabledModules).toEqual(['ns', 'a', 'z'])
+        const change = mod.pinNamespace(db, added)
+        expect(db.enabledModules).toEqual(['a', 'b', 'z'])
+        expect(db.moduleIntergration).toBe('x,a,b')
+        expect(db.botPresets.map((p: any) => p.moduleIntergration)).toEqual(['a,b', 'other'])
+        expect(change.characters).toEqual([])
+        expect(mod.pinNamespace(db, added).changed).toBe(false)
+        // No earlier module: the namespace entry turns on nothing now and would turn on the new one, so it goes; so does a stray new id.
+        const empty: any = { modules: [], enabledModules: ['ns', 'new', 'q'] }
+        expect(mod.pinNamespace(empty, added).changed).toBe(true)
+        expect(empty.enabledModules).toEqual(['q'])
+    })
+
+    test('the namespace is matched exactly as upstream matches it (no trimming)', () => {
+        const db: any = { modules: [{ id: 'old', name: 'L', namespace: ' ns ' }, { id: 'trim', name: 'T', namespace: 'ns' }, { id: 'new', name: 'L2', namespace: ' ns ' }],
+            enabledModules: [' ns '], characters: [{ chaId: 'c', modules: ['old', 'trim'], chats: [] }] }
+        mod.switchModuleOn(db, db.modules[2])
+        expect(db.enabledModules).toEqual(['new'])
+        expect(db.characters[0].modules).toEqual(['new', 'trim']) // 'ns' is another namespace for upstream
+        expect(mod.switchModuleOn(db, db.modules[2], true).changed).toBe(false)
+    })
+
+    test('an entry that the new module would also match (an earlier id that is the namespace text) stops the apply before anything changes', async () => {
+        const db: any = deviceDb()
+        db.modules[0] = { id: '삶은계란', name: '라이프 모듈 v.6.11', namespace: '삶은계란' }
+        db.enabledModules = ['삶은계란']; db.personaEnabledModules = {}; db.characters = []; db.moduleIntergration = ''; db.botPresets = []
+        const s = await setup(db)
+        const before = JSON.parse(JSON.stringify(db))
+        await mod.checkContentUpdates(true)
+        expect(s.alertError.mock.calls[0][0]).toMatch(/보장할 수 없어요/)
+        expect(s.decisions).toEqual([])
+        expect(JSON.parse(JSON.stringify(db))).toEqual(before)
+        expect(s.saves).toEqual([])
+    })
+
+    test('a persona\'s embedded module id that the new module\'s namespace would match, or a switch that would turn another module off: unsafe, nothing changed', () => {
+        const db: any = { modules: [{ id: 'old', name: 'L', namespace: 'ns' }], enabledModules: [], characters: [], personas: [{ name: 'P', embeddedModule: { id: 'ns', namespace: 'different' } }] }
+        const added = { id: 'new', name: 'L2', namespace: 'ns' }
+        expect(mod.pinNamespace(db, added).unsafe).toBe(true)
+        db.modules.push(added)
+        expect(mod.switchModuleOn(db, added, true).unsafe).toBe(true) // the embedded id keeps the earlier one on
+        const other: any = { modules: [{ id: 'old', name: 'L', namespace: 'ns' }, { id: 'other', name: 'O', namespace: 'old' }, added], enabledModules: ['old'], characters: [] }
+        const change = mod.switchModuleOn(other, added)
+        expect(change.unsafe).toBe(true) // 'old' also turns on the module of namespace 'old'
+        expect(other.enabledModules).toEqual(['old'])
+        // the normal case stays safe: ids in lists, the namespace in integration, another module in the same lists
+        const normal: any = { modules: [{ id: 'old', name: 'L', namespace: 'ns' }, { id: 'z', name: 'Z', namespace: 'zz' }, added], enabledModules: ['z', 'old'], moduleIntergration: 'zz,ns', characters: [] }
+        const ok = mod.switchModuleOn(normal, added)
+        expect(ok.unsafe).toBeUndefined()
+        expect([normal.enabledModules, normal.moduleIntergration]).toEqual([['z', 'new'], 'zz,new'])
+    })
+
+    test('no earlier module, only the namespace text listed: the new module is added turned off (the entry goes), and said so', async () => {
+        const db: any = { modules: [], enabledModules: ['삶은계란'], personaEnabledModules: {}, characters: [], moduleIntergration: '', botPresets: [{ moduleIntergration: '삶은계란' }], moduleModelBindings: {} }
+        const s = await setup(db)
+        expect(await mod.applyItem(pending as any, fileBytes)).toBe('applied')
+        expect(db.modules).toHaveLength(1)
+        expect(db.enabledModules).toEqual([])
+        expect(db.botPresets[0].moduleIntergration).toBe('')
+        expect(active(db, null, null)).toEqual([])
+        expect(s.notifySuccess.mock.calls.at(-1)[0]).toMatch(/켜지는 않았어요/)
+        expect(await mod.alreadyInstalled(pending as any)).toBe(true)
+    })
+
+    test('a persona\'s embedded module of the same series stops the apply before anything changes, and the item is not counted as installed', async () => {
+        const db: any = deviceDb()
+        db.personas = [{ name: '함건희', id: 'p1', embeddedModule: { id: 'life-611', name: '라이프 모듈 v.6.11', namespace: '삶은계란' } }]
+        const s = await setup(db)
+        const before = JSON.parse(JSON.stringify(db))
+        await mod.checkContentUpdates(true)
+        expect(s.alertError).toHaveBeenCalledTimes(1)
+        expect(s.alertError.mock.calls[0][0]).toMatch(/페르소나 「함건희」/)
+        expect(s.decisions).toEqual([])
+        expect(JSON.parse(JSON.stringify(db))).toEqual(before)
+        const id = await mod.publishedModuleId(sha)
+        db.modules.push({ id, name: 'N', namespace: '삶은계란' }); db.enabledModules = [id]; db.personaEnabledModules = {}; db.characters = []; db.moduleIntergration = ''; db.botPresets = []
+        expect(await mod.alreadyInstalled(pending as any)).toBe(false)
+        db.personas = []
+        expect(await mod.alreadyInstalled(pending as any)).toBe(true)
+    })
+
+    test('NAS sync brought the same module while the file was being read: not added twice, switched in its place', async () => {
+        const db: any = deviceDb()
+        const s = await setup(db)
+        const id = await mod.publishedModuleId(sha)
+        s.readModule.mockImplementationOnce(async () => { db.modules.push({ id, name: '라이프 모듈 v.7.2-mge.1', namespace: '삶은계란' }); return { name: '라이프 모듈 v.7.2-mge.1', namespace: '삶은계란', id: 'random' } })
+        expect(await mod.applyItem(pending as any, fileBytes)).toBe('applied')
+        expect(db.modules.filter((m: any) => m.namespace === '삶은계란').map((m: any) => m.id)).toEqual(['life-611', id])
+        expect(s.transaction.register).not.toHaveBeenCalled()
+        expect(db.enabledModules).toEqual(['other', id])
+    })
+
+    test('an unreadable module file is an error, nothing added or switched', async () => {
+        const db: any = deviceDb()
+        const s = await setup(db)
+        const before = JSON.parse(JSON.stringify(db))
+        s.readModule.mockResolvedValueOnce(undefined)
+        await expect(mod.applyItem(pending as any, fileBytes)).rejects.toThrow(/모듈을 읽지/)
+        expect(JSON.parse(JSON.stringify(db))).toEqual(before)
     })
 })

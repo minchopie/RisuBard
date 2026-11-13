@@ -4,6 +4,9 @@
 // is updated in place (same id, so chats bound to it keep it); otherwise it is added. A plugin (0.9.92-ver11) goes through upstream
 // importPlugin with the script text, as a file picked by hand: its own dialogs ("update the existing plugin?", the API 2.1 safety check)
 // are shown as they are, and an update keeps this device's argument values and on/off state (as upstream's plugin code editor does).
+// A module (0.9.96-ver4, .risum) is read with upstream readModule inside an import session (assets content-addressed, rolled back on
+// failure) under an id derived from the file, so every device that imports it has the same module; where an earlier module of the same
+// namespace was turned on, the new one is turned on in its place in the same save (the earlier one stays in the list, off).
 import { get, writable } from 'svelte/store'
 import { unzipSync, strFromU8 } from 'fflate'
 import type { RisuPersona } from '../storage/database.svelte'
@@ -15,13 +18,14 @@ import { isNodeServer } from '../platform'
 const app = () => Promise.all([
     import('../storage/database.svelte'), import('../globalApi.svelte'), import('../characterCards'), import('../storage/importTransaction'),
     import('../process/files/inlays'), import('../alert'), import('../stores.svelte'), import('../process/generationState'), import('uuid'),
-    import('../importSession'), import('../plugins/plugins.svelte'),
-]).then(([database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session, plugins]) => ({ database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session, plugins }))
+    import('../importSession'), import('../plugins/plugins.svelte'), import('../process/modules'),
+]).then(([database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session, plugins, modules]) => ({ database, globalApi, cards, importTransaction, inlays, alert, stores, generation, uuid, session, plugins, modules }))
 
-export type ContentKind = 'character' | 'persona' | 'preset' | 'plugin'
+export type ContentKind = 'character' | 'persona' | 'preset' | 'plugin' | 'module'
 /** 0.9.92-ver11: the kinds this client can import, sent with the overview request. The server lists only these; a client that sends
- *  none (0.9.92-ver10 and older) gets character, persona and preset only — it would import any other kind as a character card. */
-export const CONTENT_KINDS: ContentKind[] = ['character', 'persona', 'preset', 'plugin']
+ *  none (0.9.92-ver10 and older) gets character, persona and preset only — it would import any other kind as a character card.
+ *  0.9.96-ver4 adds 'module'; 0.9.92-ver11 … 0.9.96-ver3 send the first four and are not shown modules. */
+export const CONTENT_KINDS: ContentKind[] = ['character', 'persona', 'preset', 'plugin', 'module']
 export interface ContentItem {
     key: string; kind: ContentKind; title: string; version: string; file: string; fileName: string
     sha256: string; bytes: number; publishedAt: string; publishedBy: string; decision: '' | 'applied' | 'declined' | 'published'
@@ -105,7 +109,9 @@ export async function fetchContent(item: ContentItem): Promise<Uint8Array> {
     return bytes
 }
 
-export const kindLabel = (kind: ContentKind) => kind === 'character' ? '캐릭터 카드' : kind === 'preset' ? '프롬프트 프리셋' : kind === 'plugin' ? '플러그인' : '페르소나'
+export const kindLabel = (kind: ContentKind) => kind === 'character' ? '캐릭터 카드' : kind === 'preset' ? '프롬프트 프리셋' : kind === 'plugin' ? '플러그인' : kind === 'module' ? '모듈' : '페르소나'
+/** 이/가 and 을/를 after the kind label (플러그인·모듈 end in a consonant). */
+const consonantKind = (kind: ContentKind) => kind === 'plugin' || kind === 'module'
 export const itemLabel = (item: Pick<ContentItem, 'title' | 'version'>) =>
     item.version && !item.title.includes(item.version) ? `${item.title} (${item.version})` : item.title
 
@@ -143,7 +149,7 @@ export function baseName(title: string): string {
     return stripped || title.trim()
 }
 
-export interface Described { kind: ContentKind; title: string; version: string }
+export interface Described { kind: ContentKind; title: string; version: string; series?: string }
 
 /** A prompt preset's display name from its file name (".risup", ".risupreset", ".json", a trailing "_preset" / ".preset"). */
 export function presetTitle(fileName: string): string {
@@ -172,10 +178,27 @@ export function pluginHeader(script: string): { name: string; version: string } 
     return { name, version }
 }
 
-/** What a picked file is: a character card (.charx/.json/.png with a card), a persona PNG, a prompt preset (.risup/.risupreset/.preset.json)
- *  or a plugin (.js). */
+/** The module record of a .risum file without its assets, read as upstream readModule reads it: byte 111, version 0, a 32-bit
+ *  little-endian length, then that many rpack-encoded bytes of JSON `{ type: 'risuModule', module }`. */
+export async function readRisumModule(bytes: Uint8Array): Promise<{ name: string; namespace?: string; lowLevelAccess?: boolean; trigger?: unknown[]; assets?: unknown[] }> {
+    if (bytes.length < 6 || bytes[0] !== 111 || bytes[1] !== 0) throw new Error('모듈(.risum) 파일이 아니에요.')
+    const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(2, true)
+    if (6 + length > bytes.length) throw new Error('모듈 파일이 잘렸어요.')
+    const { decodeRPack } = await import('../rpack/rpack_js')
+    const main = JSON.parse(new TextDecoder().decode(await decodeRPack(bytes.subarray(6, 6 + length))))
+    if (main?.type !== 'risuModule' || typeof main.module?.name !== 'string' || !main.module.name.trim()) throw new Error('모듈 이름이 없는 파일이에요.')
+    return main.module
+}
+
+/** What a picked file is: a character card (.charx/.json/.png with a card), a persona PNG, a prompt preset (.risup/.risupreset/.preset.json),
+ *  a plugin (.js) or a module (.risum; `series` is its namespace, the default publish name). */
 export async function describeFile(name: string, bytes: Uint8Array): Promise<Described> {
     const lower = name.toLowerCase()
+    if (lower.endsWith('.risum')) {
+        const module = await readRisumModule(bytes)
+        const title = module.name.trim(), series = typeof module.namespace === 'string' ? module.namespace.trim() : ''
+        return { kind: 'module', title, version: versionIn(title), ...(series ? { series } : {}) }
+    }
     if (lower.endsWith('.js')) {
         const header = pluginHeader(readPluginText(bytes))
         if (!header.name) throw new Error('플러그인 이름(//@name)이 없는 파일이에요.')
@@ -211,7 +234,7 @@ export async function describeFile(name: string, bytes: Uint8Array): Promise<Des
         if (card) return fromCard(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(card), c => c.charCodeAt(0)))))
         throw new Error('캐릭터 카드나 페르소나 정보가 없는 PNG예요.')
     }
-    throw new Error('charx, json, png, risup, js 파일만 올릴 수 있어요.')
+    throw new Error('charx, json, png, risup, js, risum 파일만 올릴 수 있어요.')
 }
 
 function fromCard(card: any): Described {
@@ -317,9 +340,236 @@ async function applyPlugin(bytes: Uint8Array): Promise<ContentDecision> {
     return 'applied'
 }
 
+/** Id of a module added from a published item: the same on every device (sha256 of the file's SHA-256, uuid-shaped), so devices that
+ *  each import the same file hold one module for NAS sync, never one copy per device. */
+export async function publishedModuleId(sha256: string): Promise<string> {
+    const hex = await sha256Hex(new TextEncoder().encode('module\n' + sha256))
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}
+
+/** A module's namespace as upstream getModules matches it (exact text; empty = none). */
+const namespaceOf = (module: any): string => typeof module?.namespace === 'string' ? module.namespace : ''
+/** Same series: the same namespace (exactly as upstream compares it); a module without one: the same name. */
+const sameSeries = (a: any, b: any) => !!a && !!b && (namespaceOf(b) ? namespaceOf(a) === namespaceOf(b) : !namespaceOf(a) && a.name === b.name)
+/** Earlier modules of the same series in the module list (any other id). */
+function earlierModules(db: any, module: { id: string; name?: string; namespace?: string }): any[] {
+    return (db.modules ?? []).filter((m: any) => m && m.id !== module.id && sameSeries(m, module))
+}
+
+/** The modules a list of entries turns on, as upstream getModuleByIds reads it: a module whose id or namespace is listed. */
+const turnedOn = (entries: string[], modules: any[]): string[] =>
+    modules.filter(m => m && (entries.includes(m.id) || (namespaceOf(m) && entries.includes(namespaceOf(m))))).map(m => m.id)
+
+export interface ModuleSwitch { changed: boolean; characters: string[]; chats: [string, string][]; undo: () => void
+    /** A list where the rewrite would not give the intended modules (see pinNamespace/switchModuleOn); nothing was changed. */
+    unsafe?: boolean }
+/** Rewrites every place a module is turned on: the global list (enabledModules), the per-persona lists (personaEnabledModules), each
+ *  character's and chat's list (modules; placeholders included: their list lives in the chat stub) and the comma lists of module
+ *  integration (moduleIntergration on the database and on every prompt preset). `swap` maps one listed entry to its replacement ids
+ *  (null: kept); a replacement id already listed earlier in that list is not listed twice. */
+function rewriteModuleLists(db: any, swap: (id: string) => string[] | null, dryRun: boolean, inspect?: (before: string[], after: string[]) => void): ModuleSwitch & { set: (owner: any, key: string, value: unknown) => void } {
+    const writes: [any, string, unknown, unknown][] = []
+    const result = {
+        changed: false, characters: [] as string[], chats: [] as [string, string][],
+        // Puts back every value this rewrite replaced that is still the one it wrote (read back after writing: the database is a
+        // Svelte state proxy, which hands out its own proxy for an assigned array or object).
+        undo: () => { for (const [owner, key, before, written] of writes.reverse()) if (owner[key] === written) owner[key] = before },
+        set: (owner: any, key: string, value: unknown) => {
+            result.changed = true
+            if (dryRun) return
+            const before = owner[key]
+            owner[key] = value
+            writes.push([owner, key, before, owner[key]])
+        },
+    }
+    const replaced = (ids: unknown): string[] | null => {
+        if (!Array.isArray(ids)) return null
+        let hit = false
+        const out: string[] = []
+        for (const id of ids) {
+            const next = typeof id === 'string' ? swap(id) : null
+            if (!next) { out.push(id); continue }
+            if (next.length !== 1 || next[0] !== id) hit = true // an entry kept as it is is no change
+            for (const value of next) if (!out.includes(value)) out.push(value)
+        }
+        inspect?.(ids.filter((id): id is string => typeof id === 'string'), (hit ? out : ids).filter((id): id is string => typeof id === 'string'))
+        return hit ? out : null
+    }
+    const list = (owner: any, key: string) => { const next = owner ? replaced(owner[key]) : null; if (next) result.set(owner, key, next); return !!next }
+    const commaList = (owner: any, key: string) => {
+        if (!owner || typeof owner[key] !== 'string') return
+        const next = replaced(owner[key].split(',').map((id: string) => id.trim()).filter(Boolean))
+        if (next) result.set(owner, key, next.join(','))
+    }
+    list(db, 'enabledModules')
+    if (db.personaEnabledModules && typeof db.personaEnabledModules === 'object') {
+        const next: Record<string, unknown> = {}
+        let hit = false
+        for (const [persona, ids] of Object.entries(db.personaEnabledModules)) { const ids2 = replaced(ids); next[persona] = ids2 ?? ids; if (ids2) hit = true }
+        if (hit) result.set(db, 'personaEnabledModules', next)
+    }
+    for (const character of db.characters ?? []) {
+        if (!character) continue
+        let touched = list(character, 'modules')
+        for (const chat of character.chats ?? []) {
+            if (!chat || !list(chat, 'modules')) continue
+            touched = true
+            if (!chat._placeholder && chat.id && character.chaId) result.chats.push([character.chaId, chat.id])
+        }
+        if (touched && character.chaId) result.characters.push(character.chaId)
+    }
+    commaList(db, 'moduleIntergration')
+    for (const preset of db.botPresets ?? []) commaList(preset, 'moduleIntergration')
+    // A persona's embedded module id is one more entry of that persona's list (upstream resolveModuleIds), never rewritten here.
+    if (inspect) for (const persona of db.personas ?? []) {
+        const embedded = persona?.embeddedModule?.id
+        if (typeof embedded === 'string' && embedded) inspect([embedded], [embedded])
+    }
+    return result
+}
+
+/** Before the new module is added (absent path): a namespace written in an on-list turns on every module of that namespace (upstream
+ *  getModules), so the new module would be on at once. Such an entry is written out as the ids of the modules it turns on now (the
+ *  earlier ones; none: the entry goes), and an entry of the new module's id (it turns on nothing yet) goes — the same modules stay on.
+ *  Every list (and every persona's embedded module id) is checked with upstream's id-or-namespace rule: what it turns on with the new
+ *  module added must be what it turns on now; otherwise `unsafe` and nothing is changed (an id that is also a namespace, …). Applied in the same synchronous step as the push, and saved with it. */
+export function pinNamespace(db: any, module: { id: string; name?: string; namespace?: string }, dryRun = false): ModuleSwitch {
+    const namespace = namespaceOf(module), earlier = earlierModules(db, module).map(m => m.id)
+    const before = (db.modules ?? []).filter((m: any) => m && m.id !== module.id), after = [...before, module]
+    const swap = (id: string) => namespace && id === namespace ? earlier : id === module.id ? [] : earlier.includes(id) ? [id] : null
+    let unsafe = false
+    const check = rewriteModuleLists(db, swap, true, (from, to) => {
+        const was = turnedOn(from, before), now = turnedOn(to, after)
+        if (was.length !== now.length || was.some(id => !now.includes(id))) unsafe = true
+    })
+    if (unsafe) return { changed: false, characters: [], chats: [], undo: () => {}, unsafe: true }
+    if (dryRun || !check.changed) return { changed: check.changed, characters: check.characters, chats: check.chats, undo: () => {} }
+    const result = rewriteModuleLists(db, swap, false)
+    return { changed: result.changed, characters: result.characters, chats: result.chats, undo: result.undo }
+}
+
+/** Turns `module` (in the module list) on wherever an earlier module of its series is on (the earlier ids and the namespace text, in
+ *  every list of rewriteModuleLists), and those off there: the new id takes the place of the first entry it replaces. The earlier
+ *  modules stay in the module list; nothing is changed when none of them is listed. A model binding of an earlier module
+ *  (moduleModelBindings, keyed by module id) is given to the new one when it has none. Every list (and every persona's embedded module
+ *  id) is checked with upstream's id-or-namespace rule: afterwards it must turn on exactly what it turned on before, with the earlier
+ *  modules of the series replaced by the new one — anything else (an earlier one still on, another module turned on or off) makes it
+ *  `unsafe` and nothing is changed. `dryRun` only reports. */
+export function switchModuleOn(db: any, module: { id: string; name?: string; namespace?: string }, dryRun = false): ModuleSwitch {
+    const earlier = earlierModules(db, module)
+    if (!earlier.length) return { changed: false, characters: [], chats: [], undo: () => {} }
+    const namespace = namespaceOf(module)
+    const earlierIds = earlier.map(m => m.id)
+    const old = new Set<string>(earlierIds.filter((id: unknown) => typeof id === 'string' && id))
+    if (namespace) old.add(namespace)
+    const swap = (id: string) => old.has(id) || id === module.id ? [module.id] : null
+    const modules = (db.modules ?? []).filter(Boolean)
+    let unsafe = false
+    const check = rewriteModuleLists(db, swap, true, (from, to) => {
+        const was = turnedOn(from, modules), now = turnedOn(to, modules)
+        const expected = new Set(was.filter(id => !earlierIds.includes(id)))
+        if (was.some(id => earlierIds.includes(id) || id === module.id)) expected.add(module.id)
+        if (now.length !== expected.size || now.some(id => !expected.has(id))) unsafe = true
+    })
+    if (unsafe) return { changed: false, characters: [], chats: [], undo: () => {}, unsafe: true }
+    if (dryRun || !check.changed) return { changed: check.changed, characters: check.characters, chats: check.chats, undo: () => {} }
+    const result = rewriteModuleLists(db, swap, false)
+    const bindings = db.moduleModelBindings
+    if (bindings && typeof bindings === 'object' && !bindings[module.id]) {
+        const from = earlier.find(m => typeof bindings[m.id] === 'string' && bindings[m.id])
+        if (from) result.set(db, 'moduleModelBindings', { ...bindings, [module.id]: bindings[from.id] })
+    }
+    return { changed: result.changed, characters: result.characters, chats: result.chats, undo: result.undo }
+}
+
+/** Whether any on-list turns `module` on now. */
+function listedOn(db: any, module: { id: string }): boolean {
+    let on = false
+    rewriteModuleLists(db, () => null, true, from => { if (turnedOn(from, [module]).length) on = true })
+    return on
+}
+
+/** A persona's embedded module runs next to the listed ones (upstream getModules adds it, telling modules apart by id only): one of
+ *  this series there would stay on next to the new module. Its name, or ''. */
+function embeddedConflict(db: any, module: { id: string; name?: string; namespace?: string }): string {
+    const earlier = new Set(earlierModules(db, module).map(m => m.id))
+    const persona = (db.personas ?? []).find((p: any) => p?.embeddedModule && p.embeddedModule.id !== module.id && (earlier.has(p.embeddedModule.id) || sameSeries(p.embeddedModule, module)))
+    return persona ? String(persona.name ?? '') || '(이름 없음)' : ''
+}
+
+const saveSwitch = (globalApi: any, change: ModuleSwitch) =>
+    globalApi.requestImmediateSave({ characters: change.characters, chats: change.chats, flushServer: true, rejectOnFailure: true })
+
+const UNSAFE = '모듈 목록에 이 모듈의 id나 이름표와 겹치는 항목이 있어, 옛 모듈을 끄고 새 모듈만 켜는 것을 보장할 수 없어요. 모듈 설정을 확인해 주세요.'
+/** Imports a published module (see the header). 'declined' when the import was cancelled.
+ *  1. The module of this file's id is not here: upstream readModule runs inside the import session (asset writes, rollback; the NAS
+ *     sync waits for it). In one synchronous step the on-lists are pinned (pinNamespace: the same modules on) and the module is added,
+ *     turned off, then saved with the changed characters/chats (earlier ones still on); the import's own save follows. A rollback takes
+ *     only the new module out. A list that cannot be pinned safely stops it before anything changes.
+ *  2. Under the transfer busy hold, the new module is turned on in the earlier ones' places and saved once (switchModuleOn); a failed
+ *     save puts the places back. A module already here (NAS sync brought it, or an earlier try added it) goes to this step directly.
+ *  A persona's embedded module of the same series stops it before anything changes. Like a hand import of a .risum, no low-level-access
+ *  question is asked. */
+async function applyModule(item: Pick<ContentItem, 'sha256'>, bytes: Uint8Array): Promise<{ decision: ContentDecision; switched: boolean; on?: boolean }> {
+    const { database, modules, session, globalApi } = await app()
+    const id = await publishedModuleId(item.sha256)
+    const present = () => (database.getDatabase().modules ?? []).find((m: any) => m?.id === id)
+    const stopForEmbedded = (module: any) => {
+        const persona = embeddedConflict(database.getDatabase(), module)
+        if (persona) throw new Error(`페르소나 「${persona}」에 같은 계열 모듈이 들어 있어(페르소나 내장 모듈) 새 모듈과 함께 켜지게 돼요. 그 페르소나의 내장 모듈을 정리한 뒤 다시 받아 주세요.`)
+    }
+    if (!present()) {
+        const result = await session.runImport(async transaction => {
+            const module = await modules.readModule(Buffer.from(bytes), transaction)
+            if (!module?.name) throw new Error('모듈을 읽지 못했어요.')
+            transaction.check()
+            if (present()) return 'present' as const // NAS sync brought it while it was being read
+            module.id = id
+            const db = database.getDatabase()
+            stopForEmbedded(module)
+            const pin = pinNamespace(db, module, true)
+            if (pin.unsafe) throw new Error(UNSAFE)
+            transaction.register('module', id)
+            // One synchronous step, then one save with the changed characters/chats: the import's own save does not diff them.
+            const pinned = pinNamespace(db, module)
+            db.modules.push(module)
+            if (pinned.changed) await globalApi.requestImmediateSave({ characters: pinned.characters, chats: pinned.chats, flushServer: true, rejectOnFailure: true })
+            return 'added' as const
+        })
+        if (result === null) {
+            if (get(session.importSession).phase === 'recovery') throw new Error('가져오기를 되돌리는 중 문제가 생겼어요. 가져오기 복구를 먼저 끝내 주세요.')
+            return { decision: 'declined', switched: false }
+        }
+    }
+    const module = present()
+    if (!module) throw new Error('모듈을 넣지 못했어요.')
+    stopForEmbedded(module)
+    if (transferUnavailable()) throw new Error('NAS 동기화나 전송이 진행 중이라 모듈을 켜는 자리를 바꾸지 못했어요. 다음에 다시 물어볼게요.')
+    transferBusy.set(true); transferStatus.set('모듈을 켜는 중…')
+    try {
+        const change = switchModuleOn(database.getDatabase(), module)
+        if (change.unsafe) throw new Error(UNSAFE)
+        if (!change.changed) return { decision: 'applied', switched: false, on: listedOn(database.getDatabase(), module) }
+        try { await saveSwitch(globalApi, change) } catch (error) {
+            change.undo()
+            try { await globalApi.requestImmediateSave({ characters: change.characters, chats: change.chats, flushServer: true }) } catch { /* the error below is shown */ }
+            throw error
+        }
+        return { decision: 'applied', switched: true }
+    } finally { transferBusy.set(false); transferStatus.set('') }
+}
+
 /** Imports one published item; resolves to the decision to record (declined when the user cancelled the import). */
 export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<ContentDecision> {
     const { cards, globalApi, importTransaction, alert, session } = await app()
+    if (item.kind === 'module') {
+        const { decision, switched, on } = await applyModule(item, bytes)
+        if (decision === 'applied') alert.notifySuccess(switched
+            ? `모듈 「${item.title}」을 가져와 옛 모듈 대신 켰어요. 옛 모듈은 꺼진 채 목록에 남아 있어요.`
+            : on ? `모듈 「${item.title}」을 가져왔어요.`
+            : `모듈 「${item.title}」을 가져왔어요. 켜 둔 같은 계열 모듈이 없어 켜지는 않았어요(모듈 설정에서 켤 수 있어요).`)
+        return decision
+    }
     if (item.kind === 'plugin') {
         const decision = await applyPlugin(bytes)
         if (decision === 'applied') alert.notifySuccess(`플러그인 「${item.title}」을 가져왔어요.`)
@@ -370,6 +620,7 @@ export async function busy(ignoreAlert = false): Promise<boolean> {
  *  compared — a plugin with the same name and the same script text; its version line is not needed. */
 export async function alreadyInstalled(item: Pick<ContentItem, 'kind' | 'title' | 'version'> & Partial<ContentItem>): Promise<boolean> {
     if (item.kind === 'plugin') return pluginInstalled(item)
+    if (item.kind === 'module') return moduleInstalled(item)
     const plain = (value: string | undefined) => (value ?? '').trim().replace(/^v/i, '')
     const version = plain(item.version)
     if (!version) return false
@@ -402,6 +653,20 @@ async function pluginInstalled(item: Pick<ContentItem, 'kind' | 'title' | 'versi
     } catch { return false } // could not compare: ask as before
 }
 
+/** 0.9.96-ver4: a module is installed when the module of this file's id is on this device (imported here, or brought by NAS sync from a
+ *  device that imported it) and no earlier module of its series is still turned on anywhere (otherwise it is asked, and the answer turns
+ *  the new one on in its place). No download. */
+async function moduleInstalled(item: Partial<ContentItem>): Promise<boolean> {
+    if (!item.sha256) return false
+    const { database } = await app()
+    const id = await publishedModuleId(item.sha256)
+    const db = database.getDatabase()
+    const module = (db.modules ?? []).find((m: any) => m?.id === id)
+    if (!module) return false
+    const change = switchModuleOn(db, module, true)
+    return !change.changed && !change.unsafe && !embeddedConflict(db, module)
+}
+
 /** A NAS sync cycle is running (startup/foreground sync, possibly preparing an apply): a question waits for it to end. */
 async function syncCycleRunning(): Promise<boolean> {
     try { return !!get((await import('../nasSyncCoordinator')).coordinatorState)?.running } catch { return false }
@@ -428,11 +693,12 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
             if (await busy()) { retry = true; break } // the comparison download took a while: another dialog/activity may have started
             if (installed) { await recordDecision(item, 'applied'); continue }
             const choice = await alert.alertConfirmMulti(
-                `새 ${kindLabel(item.kind)}${item.kind === 'plugin' ? '이' : '가'} 올라왔어요. 지금 가져올까요?`,
+                `새 ${kindLabel(item.kind)}${consonantKind(item.kind) ? '이' : '가'} 올라왔어요. 지금 가져올까요?`,
                 ['네, 가져오기', '아니오'],
                 `${itemLabel(item)}\n${(item.bytes / 1_000_000).toFixed(1)} MB · ${new Date(item.publishedAt).toLocaleString()}${item.publishedBy ? ` · ${item.publishedBy}` : ''}`
                 + (item.kind === 'character' ? '\n\n이미 있는 같은 캐릭터를 고르면 대화는 그대로 두고 카드만 새 판으로 바꿔요.'
                     : item.kind === 'preset' ? '\n\n같은 이름의 프롬프트 프리셋이 있으면 그 프리셋을 새 내용으로 바꿔요(이 기기의 API 키·주소는 그대로). 이름이 다르면 새로 추가해요.'
+                    : item.kind === 'module' ? '\n\n같은 이름표(namespace)의 옛 모듈이 켜져 있던 곳(전역·페르소나·캐릭터·채팅·프롬프트 프리셋의 모듈 통합)에서는 새 모듈로 바꿔 켜요. 옛 모듈은 지우지 않고 꺼진 채 목록에 남겨요. 켜 둔 옛 모듈이 없으면 추가만 해요. 앱을 다시 켤 필요는 없어요.'
                     : item.kind === 'plugin' ? '\n\n같은 이름의 플러그인이 있으면 새 내용으로 바꾸고 이 기기의 플러그인 설정값과 켜짐/꺼짐 상태는 그대로 둬요(새 판에서 없어진 설정 항목은 빠져요). 없으면 새로 추가해요. 앱의 플러그인 확인 창이 이어서 나오면 거기서도 답해 주세요.'
                     : '\n\n같은 이름의 페르소나가 있으면 그 페르소나를 새 내용으로 바꿔요.'),
             )
@@ -445,11 +711,12 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
                 contentUpdateStatus.set('')
                 // A transfer, sync apply or reply may have started while the file was coming: leave it for the next check.
                 if (await busy()) { retry = true; break }
-                if (item.kind === 'character') { await recordDecision(item, await applyItem(item, bytes)); continue } // the import session guards it
+                // A character or module import: the import session guards it (a module's switch step takes the busy state itself).
+                if (item.kind === 'character' || item.kind === 'module') { await recordDecision(item, await applyItem(item, bytes)); continue }
                 // 0.9.92-ver7 (tablet "setItem Error"): a persona/preset import owns the busy state while it writes, like the manual persona
                 // import (playTransfer): a NAS sync apply never arms under it (its foreign-busy check), and one already armed is not entered.
                 if (transferUnavailable()) { retry = true; break }
-                transferBusy.set(true); transferStatus.set(`${kindLabel(item.kind)}${item.kind === 'plugin' ? '을' : '를'} 가져오는 중…`)
+                transferBusy.set(true); transferStatus.set(`${kindLabel(item.kind)}${consonantKind(item.kind) ? '을' : '를'} 가져오는 중…`)
                 let decision: ContentDecision
                 try { decision = await applyItem(item, bytes) } finally { transferBusy.set(false); transferStatus.set('') }
                 await recordDecision(item, decision)

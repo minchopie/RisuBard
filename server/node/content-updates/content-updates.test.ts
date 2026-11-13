@@ -5,7 +5,7 @@ import os from 'node:os'
 import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { fixtureDav } from '../nas-sync-dav-fixture'
-const { createContentUpdates, validItem, recordName, recordNames, NAMESPACE, MAX_ITEMS, PLUGIN_LIMIT } = require('./content-updates.cjs')
+const { createContentUpdates, validItem, recordName, recordNames, NAMESPACE, MAX_ITEMS, PLUGIN_LIMIT, MODULE_LIMIT } = require('./content-updates.cjs')
 
 const roots: string[] = []
 function root() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'risubard-content-updates-')); roots.push(dir); return dir }
@@ -235,6 +235,64 @@ describe('content updates: plugins', () => {
         }
         expect((await overviewOf({})).pending.map((x: any) => x.kind)).toEqual(['character']) // the ver10 client's request body
         expect((await overviewOf({ kinds: ALL })).pending.map((x: any) => x.kind).sort()).toEqual(['character', 'plugin'])
+    })
+})
+
+// 0.9.96-ver4: a module (.risum, assets included) is a fifth kind; clients that list four kinds (0.9.92-ver11 … 0.9.96-ver3) or none never see it.
+describe('content updates: modules', () => {
+    const risum = Buffer.concat([Buffer.from([111, 0]), Buffer.alloc(4), Buffer.alloc(300 * 1024, 7), Buffer.from([0])])
+    const moduleMeta = { key: 'module:삶은계란', kind: 'module', title: '라이프 모듈 v.7.2-mge.1', version: '7.2-mge.1', fileName: '라이프 모듈 v.7.2-mge.1.risum' }
+    const FOUR = ['character', 'persona', 'preset', 'plugin'], FIVE = [...FOUR, 'module']
+
+    test('a .risum module is published under its SHA-256, listed to a client that imports modules and downloaded with its hash check', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
+        const item = await pc.updates.publish(Readable.from([risum]), moduleMeta)
+        expect(item).toMatchObject({ ...moduleMeta, file: `${sha(risum)}.risum`, sha256: sha(risum), bytes: risum.length, publishedBy: 'pc' })
+        expect(dav.paths()).toEqual([`${NAMESPACE}${sha(risum)}.risum`, `${NAMESPACE}items/${recordName(moduleMeta.key)}`].sort())
+        expect((await tablet.updates.overview(FIVE)).pending.map((x: any) => x.key)).toEqual(['module:삶은계란'])
+        const { file } = await tablet.updates.download(moduleMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(risum)
+        fs.rmSync(file)
+        tablet.updates.decide(moduleMeta.key, item.sha256, 'applied')
+        expect((await tablet.updates.overview(FIVE)).pending).toEqual([])
+    })
+
+    test('a module must be a .risum file under the module size limit (above the plugin limit), published under a module: name', async () => {
+        const { updates } = device()
+        expect(MODULE_LIMIT).toBe(64 * 1024 * 1024)
+        expect(MODULE_LIMIT).toBeGreaterThan(PLUGIN_LIMIT)
+        await expect(updates.publish(Readable.from([risum]), { ...moduleMeta, fileName: 'life.json' })).rejects.toThrow(/형식/)
+        await expect(updates.publish(Readable.from([risum]), { ...moduleMeta, key: 'plugin:삶은계란' })).rejects.toThrow(/배포 이름/)
+        await expect(updates.publish(Readable.from([risum]), { ...pluginLike(), fileName: 'x.risum' })).rejects.toThrow(/형식/)
+        await expect(updates.publish(Readable.from([Buffer.alloc(MODULE_LIMIT + 1, 1)]), moduleMeta)).rejects.toThrow(/size/)
+        const good = { key: 'module:삶은계란', kind: 'module', title: 'L', version: '', file: `${'a'.repeat(64)}.risum`, fileName: 'a.risum', sha256: 'a'.repeat(64), bytes: PLUGIN_LIMIT + 1, publishedAt: new Date().toISOString() }
+        expect(validItem(good)).toMatchObject({ kind: 'module', bytes: PLUGIN_LIMIT + 1 })
+        expect(() => validItem({ ...good, bytes: MODULE_LIMIT + 1 })).toThrow()
+        expect(() => validItem({ ...good, file: `${'a'.repeat(64)}.js`, fileName: 'a.js' })).toThrow()
+        expect(() => validItem({ ...good, kind: 'plugin' })).toThrow()
+    })
+    const pluginLike = () => ({ key: 'plugin:x', kind: 'plugin', title: 'x', version: '', fileName: 'x.js' })
+
+    test('older clients — none (0.9.92-ver10 and older) or four kinds (0.9.92-ver11 … 0.9.96-ver3) — are not shown module items, also through the HTTP route', async () => {
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
+        await pc.updates.publish(Readable.from([risum]), moduleMeta)
+        await pc.updates.publish(Readable.from([Buffer.from('//@name argon\nx')]), { key: 'plugin:argon', kind: 'plugin', title: 'argon', version: '', fileName: 'a.js' })
+        await pc.updates.publish(Readable.from([card]), meta)
+        expect((await tablet.updates.overview()).items.map((x: any) => x.kind)).toEqual(['character'])
+        expect((await tablet.updates.overview(FOUR)).items.map((x: any) => x.kind).sort()).toEqual(['character', 'plugin'])
+        expect((await tablet.updates.overview(FIVE)).items.map((x: any) => x.kind).sort()).toEqual(['character', 'module', 'plugin'])
+        const handlers: Record<string, Function> = {}
+        const server = createContentUpdates({ dataRoot: root(), secrets: dav.secrets, route, fetch: dav.fetch, appCode: { enabled: false } })
+        server.registerRoutes({ post: (p: string, h: Function) => { handlers[p] = h } }, { auth: async () => true })
+        const overviewOf = async (body: any) => {
+            let sent: any
+            const res: any = { headersSent: false, json: (value: any) => { sent = value }, status: () => res }
+            await handlers['/api/play-transfer/content-updates/overview']({ body }, res)
+            return sent
+        }
+        expect((await overviewOf({})).pending.map((x: any) => x.kind)).toEqual(['character'])
+        expect((await overviewOf({ kinds: FOUR })).pending.map((x: any) => x.kind).sort()).toEqual(['character', 'plugin'])
+        expect((await overviewOf({ kinds: FIVE })).pending.map((x: any) => x.kind).sort()).toEqual(['character', 'module', 'plugin'])
     })
 })
 
