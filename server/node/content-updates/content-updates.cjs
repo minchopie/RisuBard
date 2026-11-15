@@ -219,6 +219,7 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
         const target = tempFile(item.file.split('.').pop());
         try {
             fs.writeFileSync(target, '', { flag: 'wx', mode: 0o600 });
+            let stalls = 0; // 0.9.96-ver5: drops in a row that brought no new bytes
             for (let attempt = 1; ; attempt++) {
                 const have = fs.statSync(target).size;
                 if (have >= item.bytes) { if (have === item.bytes) break; fs.truncateSync(target, 0); continue; } // all bytes arrived before the drop (the hash check decides)
@@ -238,9 +239,12 @@ function createContentUpdates({ dataRoot, secrets, route, fetch, deviceName = ()
                 } catch (error) {
                     // Every byte arrived before the drop: the size and hash check below decides (also on the last attempt).
                     if (retryable(error) && fs.statSync(target).size === item.bytes) break;
-                    if (!retryable(error) || attempt >= DOWNLOAD_ATTEMPTS) throw error;
+                    // 0.9.96-ver5: an attempt that brought new bytes starts the count again, so a slow line that keeps dropping a large
+                    // file still finishes; DOWNLOAD_ATTEMPTS counts drops in a row without progress.
+                    stalls = retryable(error) && fs.statSync(target).size > have ? 0 : stalls + 1;
+                    if (!retryable(error) || stalls >= DOWNLOAD_ATTEMPTS) throw error;
                     console.warn('[ContentUpdates] download interrupted, resuming:', attempt, String(error?.code ?? error?.message ?? error));
-                    await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
+                    await new Promise(resolve => setTimeout(resolve, retryDelayMs * Math.max(1, stalls)));
                 }
             }
             if (fs.statSync(target).size !== item.bytes || await hashFile(target) !== item.sha256) throw new Error('받은 파일이 배포본과 달라요(크기·해시 불일치).');

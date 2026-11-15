@@ -611,7 +611,8 @@
         "patchnote/0.9.96-ver1.md",
         "patchnote/0.9.96-ver2.md",
         "patchnote/0.9.96-ver3.md",
-        "patchnote/0.9.96-ver4.md"
+        "patchnote/0.9.96-ver4.md",
+        "patchnote/0.9.96-ver5.md"
       ]
     },
     {
@@ -652,6 +653,8 @@
       "hosts": [
         "server/node/risubard-memory-analysis.test.ts",
         "server/node/risubard-memory-analysis.ts",
+        "server/node/risubard-canonical-maintenance.test.ts",
+        "server/node/risubard-canonical-maintenance.ts",
         "src/ts/process/request/structuredOutputFallback.test.ts",
         "src/ts/process/request/structuredOutputFallback.ts",
         "src/ts/risubard/memoryAnalysisClient.test.ts",
@@ -754,7 +757,7 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
-          "sourceSha256": "10109d9acbc514434202a609219705fdf75acf29fa0f4a474541d1b110f1d0df"
+          "sourceSha256": "04577c8b96987125dc060a7d7def4c766c5bd4b687034f076600b67b3a8f1108"
         },
         {
           "module": "transfer-sync",

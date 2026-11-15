@@ -170,9 +170,26 @@ describe('canonical maintenance', () => {
         expect(system).toContain('Equipment and Possessions')
         const parsed = JSON.parse(schema)
         expect(parsed.properties.sections.maxItems).toBe(4)
-        expect(parsed.properties.dispositions.maxItems).toBe(128 * 4)
+        // RisuBard 0.9.96-ver5: Google AI Studio rejects the schema with these; the result is bounded after the answer instead.
+        expect(parsed.properties.dispositions.maxItems).toBeUndefined()
+        expect(parsed.properties.sections.items.properties.units.maxItems).toBeUndefined()
         expect(parsed.properties.sections.items.properties.role.enum)
             .toEqual(['knowledge', 'relationships', 'transitions', 'equipment'])
+    })
+
+    test('takes no more proposed units than the old ones and never an unreferenced one when the answer lists extra units and dispositions (no maxItems in the schema)', () => {
+        const result = apply({
+            sections: [
+                { role: 'knowledge', units: ['[[하루]]에게 마을 규칙 1~14를 들었다.', ...Array.from({ length: 200 }, (_, index) => `덧붙인 항목 ${index}`)] },
+            ],
+            dispositions: [
+                ...knowledgeUnits.map((_, old) => disposition('knowledge', old, 'merged', { newIndex: 0 })),
+                ...Array.from({ length: 600 }, (_, index) => disposition('knowledge', 100 + index, 'kept', { newIndex: 1 + (index % 200) })),
+            ],
+        })
+        expect(result.counts).toEqual([{ role: 'knowledge', heading: '지식과 비밀', before: 14, after: 1 }])
+        expect(result.markdown).toContain('### 지식과 비밀\n\n- [[하루]]에게 마을 규칙 1~14를 들었다.')
+        expect(result.markdown).not.toContain('덧붙인 항목')
     })
 
     test('keeps a section as it was when its rewrite is not shorter, dropping its moves too', () => {

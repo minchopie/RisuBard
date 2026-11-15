@@ -947,9 +947,9 @@
       "path": "server/node/nas-route.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "7bcb2c3dd4f4322e741af006588ec81154096b1da7621d8726863ce5a26cad79",
-      "contentSha256": "7bcb2c3dd4f4322e741af006588ec81154096b1da7621d8726863ce5a26cad79",
-      "bytes": 14357
+      "sha256": "6e80f4a5fd3097f63c4748d678cbc474828becfa5e15f879791cb928ebb6d471",
+      "contentSha256": "6e80f4a5fd3097f63c4748d678cbc474828becfa5e15f879791cb928ebb6d471",
+      "bytes": 17959
     },
     {
       "path": "server/node/nas-sync-core.cjs",
@@ -1227,9 +1227,9 @@
       "path": "server/node/transfer-sync/nas-route.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "20ad926be9b4224ef14555fa6e8a023e5822c4f75cf2f63594aa3a302f1970b7",
-      "contentSha256": "20ad926be9b4224ef14555fa6e8a023e5822c4f75cf2f63594aa3a302f1970b7",
-      "bytes": 9479
+      "sha256": "bd835ef90a7c0fc14e3d1efe78401321ab83362355f82a03149c0ea4aecd6a76",
+      "contentSha256": "bd835ef90a7c0fc14e3d1efe78401321ab83362355f82a03149c0ea4aecd6a76",
+      "bytes": 10815
     },
     {
       "path": "server/node/transfer-sync/nas-sync-core.cjs",
@@ -1563,9 +1563,9 @@
       "path": "src/ts/nasSyncUi.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "f15a6126cbbbca1b14d481f2c5761b9cba1e2c8dfaf772fddd44770084bb0c2f",
-      "contentSha256": "f15a6126cbbbca1b14d481f2c5761b9cba1e2c8dfaf772fddd44770084bb0c2f",
-      "bytes": 18004
+      "sha256": "4bb27bcc1ab7c45f89704e1a9d192910f4cd97a5b4d54bf1b5a0855fb13dab30",
+      "contentSha256": "4bb27bcc1ab7c45f89704e1a9d192910f4cd97a5b4d54bf1b5a0855fb13dab30",
+      "bytes": 18348
     },
     {
       "path": "src/ts/nasSyncUi.ts",
@@ -1643,9 +1643,9 @@
       "path": "src/ts/transfer-sync/nasSyncUi.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "bb6a24a8b8a70398d1a1bd405a4f708dbc35300c26fed0fb9f31e043aee7f85f",
-      "contentSha256": "bb6a24a8b8a70398d1a1bd405a4f708dbc35300c26fed0fb9f31e043aee7f85f",
-      "bytes": 21233
+      "sha256": "8acd80c966d9cffb208c8a20e460fdcd1c1a3852af7637b2542cb0271dc381bd",
+      "contentSha256": "8acd80c966d9cffb208c8a20e460fdcd1c1a3852af7637b2542cb0271dc381bd",
+      "bytes": 21664
     },
     {
       "path": "src/ts/transfer-sync/playTransfer.ts",
@@ -4328,6 +4328,14 @@
       "bytes": 2616
     },
     {
+      "path": "patchnote/0.9.96-ver5.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "5e7aa23fffd708246d6afa9cd5a7488f0d05a70f737b284ebc1871d91f797422",
+      "contentSha256": "5e7aa23fffd708246d6afa9cd5a7488f0d05a70f737b284ebc1871d91f797422",
+      "bytes": 5984
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4480,6 +4488,22 @@
       "bytes": 116809
     },
     {
+      "path": "server/node/risubard-canonical-maintenance.test.ts",
+      "module": "bardwiki-cache-prefix",
+      "kind": "hosts",
+      "sha256": "9f3d611afd81109ccb507f05ee2cb3e1077e74c45931cb17e1a6426504dbb050",
+      "contentSha256": "9f3d611afd81109ccb507f05ee2cb3e1077e74c45931cb17e1a6426504dbb050",
+      "bytes": 23851
+    },
+    {
+      "path": "server/node/risubard-canonical-maintenance.ts",
+      "module": "bardwiki-cache-prefix",
+      "kind": "hosts",
+      "sha256": "ff8c2b5c578e507e02c8518d26705e01ba923b2a9540a46cabf71b0fe53a3e01",
+      "contentSha256": "ff8c2b5c578e507e02c8518d26705e01ba923b2a9540a46cabf71b0fe53a3e01",
+      "bytes": 18324
+    },
+    {
       "path": "src/ts/process/request/structuredOutputFallback.test.ts",
       "module": "bardwiki-cache-prefix",
       "kind": "hosts",
@@ -4515,41 +4539,41 @@
       "path": "server/node/content-updates/content-updates.cjs",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "edb29723fc4db6d196adddbe82487d526286b2b6ba5d4b466d171e63a115fae1",
-      "contentSha256": "edb29723fc4db6d196adddbe82487d526286b2b6ba5d4b466d171e63a115fae1",
-      "bytes": 23176
+      "sha256": "71e092c29cfed601b0e3a70a708fc0b13b054e327b67682ceb2965a4d2fa9d01",
+      "contentSha256": "71e092c29cfed601b0e3a70a708fc0b13b054e327b67682ceb2965a4d2fa9d01",
+      "bytes": 23610
     },
     {
       "path": "server/node/content-updates/content-updates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "8fb2f320ed71a7d88a9a98e5939b1e849e31befac118b3e482fd74f0ad17bcf1",
-      "contentSha256": "8fb2f320ed71a7d88a9a98e5939b1e849e31befac118b3e482fd74f0ad17bcf1",
-      "bytes": 32353
+      "sha256": "e46c1ee9cd73af17430568c53b13eb07b8ac8e53528dd79139a3fc9163a434a1",
+      "contentSha256": "e46c1ee9cd73af17430568c53b13eb07b8ac8e53528dd79139a3fc9163a434a1",
+      "bytes": 34338
     },
     {
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "a10aa694aa1516656e3117498def55aeaaa414eddf2f2f92e9ab6fab959ef40b",
-      "contentSha256": "a10aa694aa1516656e3117498def55aeaaa414eddf2f2f92e9ab6fab959ef40b",
-      "bytes": 52915
+      "sha256": "5f466a701477fd3dcf80aa50332e77d23550b70582d9986a9ab4b09a4b76031f",
+      "contentSha256": "5f466a701477fd3dcf80aa50332e77d23550b70582d9986a9ab4b09a4b76031f",
+      "bytes": 60999
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "662469ba5880cb7284c0d39cd0cd8a9b594caedf7654a242ad0c339642d27c4a",
-      "contentSha256": "662469ba5880cb7284c0d39cd0cd8a9b594caedf7654a242ad0c339642d27c4a",
-      "bytes": 76678
+      "sha256": "d7734bc50e4c286556ee5fdb14e8b584b3e29b42830a76734295f3c7146b6965",
+      "contentSha256": "d7734bc50e4c286556ee5fdb14e8b584b3e29b42830a76734295f3c7146b6965",
+      "bytes": 87460
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "6c6015e6a5d6947f03e8f3724953322a85af9b7f06c39926ef49146b0c25c06e",
-      "contentSha256": "6c6015e6a5d6947f03e8f3724953322a85af9b7f06c39926ef49146b0c25c06e",
-      "bytes": 7640
+      "sha256": "7fa02e8c1306c0096d0e03c6ed13525ce30bfc90dee86557b02ce9a03e034afa",
+      "contentSha256": "7fa02e8c1306c0096d0e03c6ed13525ce30bfc90dee86557b02ce9a03e034afa",
+      "bytes": 7711
     },
     {
       "path": "docs/content-updates/README.md",
@@ -5232,7 +5256,8 @@
         "patchnote/0.9.96-ver1.md",
         "patchnote/0.9.96-ver2.md",
         "patchnote/0.9.96-ver3.md",
-        "patchnote/0.9.96-ver4.md"
+        "patchnote/0.9.96-ver4.md",
+        "patchnote/0.9.96-ver5.md"
       ],
       "patch": null
     },
@@ -5279,6 +5304,8 @@
       "hosts": [
         "server/node/risubard-memory-analysis.test.ts",
         "server/node/risubard-memory-analysis.ts",
+        "server/node/risubard-canonical-maintenance.test.ts",
+        "server/node/risubard-canonical-maintenance.ts",
         "src/ts/process/request/structuredOutputFallback.test.ts",
         "src/ts/process/request/structuredOutputFallback.ts",
         "src/ts/risubard/memoryAnalysisClient.test.ts",
@@ -5287,7 +5314,7 @@
       "files": [],
       "patch": {
         "path": "docs/fork-modules/patches/bardwiki-cache-prefix.patch",
-        "sha256": "10109d9acbc514434202a609219705fdf75acf29fa0f4a474541d1b110f1d0df"
+        "sha256": "04577c8b96987125dc060a7d7def4c766c5bd4b687034f076600b67b3a8f1108"
       }
     },
     {
@@ -5328,7 +5355,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "0a44e6bcba45b74f54d2ae0791f9327cee3b2a9ee8dcab1f2ced73cd45f70427"
+      "sha256": "112e6b41abcfd774b6ca0d87dc4c60ba435d422efc0b5e7abe039f7d085ffbbb"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5406,7 +5433,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "d30c988994ead16ba5bf1b9358623130856acf3518a9b40da2ebf791f38fc8ac"
+          "sha256": "8af0c357ab993f6daf682110af1b5b385a92d25504a9ee24b937a9204e747f44"
         },
         {
           "module": "lore-lua",
@@ -5429,8 +5456,8 @@
         {
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
-          "sourceSha256": "10109d9acbc514434202a609219705fdf75acf29fa0f4a474541d1b110f1d0df",
-          "sha256": "aa7e69c9a459c2ffc722af8bad7b5e6bd87a37fc6c9eae1dba8c2bd3d1cb7e98"
+          "sourceSha256": "04577c8b96987125dc060a7d7def4c766c5bd4b687034f076600b67b3a8f1108",
+          "sha256": "5a67dd7eeb3a41bd78d07db54cb1dfcbbffcf8058e84668161886b4d829f3526"
         },
         {
           "module": "transfer-sync",

@@ -3,7 +3,10 @@
  * Home / external NAS route. One account, one vault, one sync namespace, reached through the internal HTTPS URL on the registered
  * home Wi-Fi networks (or on a PC whose *verified* wired adapter reaches the internal endpoint within a bounded probe) and through
  * the external URL anywhere else. An unknown or redacted SSID, an unknown transport, a stale client report or a failed adapter
- * detection all resolve to external — never "home" by default. The decision is taken once per run (a publish, a pull, a manual
+ * detection all resolve to external — never "home" by default. 0.9.96-ver5: in those cases (and on a Wi-Fi with another name) the
+ * internal URL gets the same bounded probe as a wired PC (no credentials, strict TLS, cached); only an answer makes it "home". A
+ * tablet on the home Wi-Fi whose report aged (app in the background, a slow native bridge) or whose SSID read failed for a moment
+ * went to the external URL, which from inside the home drops large transfers (socket hang up). Cellular and no network never probe. The decision is taken once per run (a publish, a pull, a manual
  * upload) and carried in an async context, so concurrent runs are isolated and one run never mixes endpoints. Strict TLS
  * throughout: both URLs pass the same `folder()` validation and request helper. Nothing here logs an SSID, a URL or a credential.
  */
@@ -14,7 +17,8 @@ const { folder, request, validateHomeSsids } = require('./transfer-remote.cjs');
 const TRANSPORTS = new Set(['wifi', 'ethernet', 'cellular', 'none', 'unknown']);
 const cleanSsid = value => typeof value === 'string' && value.length > 0 && value.length <= 64 && !/[\x00-\x1f\x7f]/.test(value) ? value : null;
 
-/** Pure decision. `probeOk`: outcome of probing the internal URL on a verified wired transport (true/false), else undefined. */
+/** Pure decision. `probeOk`: outcome of probing the internal URL (true/false), else undefined. A wired transport always probes;
+ *  0.9.96-ver5: so does a Wi-Fi not confirmed as home and an unknown transport (see needsProbe). */
 function decide(config, network, probeOk) {
     const url = config?.url || '', homeUrl = config?.homeUrl || '';
     if (!homeUrl) return { url, route: 'single', reason: 'single-url' };
@@ -22,12 +26,20 @@ function decide(config, network, probeOk) {
     const ssid = cleanSsid(network?.ssid);
     if (transport === 'wifi') {
         if (ssid && (config.homeSsids ?? []).includes(ssid)) return { url: homeUrl, route: 'home', reason: 'home-ssid' };
+        if (probeOk === true) return { url: homeUrl, route: 'home', reason: ssid ? 'other-ssid-probe-ok' : 'unknown-ssid-probe-ok' };
         return { url, route: 'external', reason: ssid ? 'other-ssid' : 'unknown-ssid' };
     }
     if (transport === 'ethernet') return probeOk === true ? { url: homeUrl, route: 'home', reason: 'probe-ok' } : { url, route: 'external', reason: probeOk === false ? 'probe-failed' : 'probe-pending' };
+    if (transport === 'unknown' && probeOk === true) return { url: homeUrl, route: 'home', reason: 'unknown-transport-probe-ok' };
     return { url, route: 'external', reason: transport === 'unknown' ? 'unknown-transport' : 'no-lan' };
 }
-const needsProbe = (config, network) => !!config?.homeUrl && network?.transport === 'ethernet';
+/** Whether the internal URL is probed: a wired transport; 0.9.96-ver5 also a Wi-Fi whose name is not a registered home name (or is
+ *  unreadable) and an unknown transport (including a stale client report). Cellular and no network are never probed. */
+const needsProbe = (config, network) => {
+    if (!config?.homeUrl) return false;
+    const transport = TRANSPORTS.has(network?.transport) ? network.transport : 'unknown', ssid = cleanSsid(network?.ssid);
+    return transport === 'ethernet' || transport === 'unknown' || (transport === 'wifi' && !(ssid && (config.homeSsids ?? []).includes(ssid)));
+};
 
 /** `netsh wlan show interfaces`: the SSID line of a connected adapter (BSSID lines never match), any locale; null when absent/redacted. */
 function parseNetsh(text) { const m = String(text ?? '').match(/^[ \t]*SSID[ \t]*:[ \t]*(.+?)[ \t]*$/m); return m ? cleanSsid(m[1]) : null; }

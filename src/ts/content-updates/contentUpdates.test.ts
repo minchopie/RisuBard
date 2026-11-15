@@ -8,7 +8,7 @@ vi.mock('../globalApi.svelte', () => ({ checkCharOrder: vi.fn(), requestImmediat
 vi.mock('../plugins/plugins.svelte', () => ({ importPlugin: vi.fn(), loadPlugins: vi.fn(async () => {}) }))
 vi.mock('../characterCards', () => ({ importCharacterProcess: vi.fn() }))
 vi.mock('../process/files/inlays', () => ({ reencodeImage: vi.fn(async (b: Uint8Array) => b) }))
-vi.mock('../alert', () => ({ alertConfirmMulti: vi.fn(), alertError: vi.fn(), notifySuccess: vi.fn() }))
+vi.mock('../alert', () => ({ alertConfirmMulti: vi.fn(), alertError: vi.fn(), notifySuccess: vi.fn(), notifyInfo: vi.fn() }))
 vi.mock('../playTransfer', async () => { const { writable, get } = await import('svelte/store'); const transferBusy = writable(false); return { transferRequest: vi.fn(), transferBusy, transferStatus: writable(''), transferUnavailable: vi.fn(() => get(transferBusy)) } })
 vi.mock('../platform', () => ({ isNodeServer: false }))
 vi.mock('../stores.svelte', async () => { const { writable } = await import('svelte/store'); return { alertStore: writable({ type: 'none' }), loadedStore: writable(true) } })
@@ -993,5 +993,159 @@ describe('content updates: modules', () => {
         s.readModule.mockResolvedValueOnce(undefined)
         await expect(mod.applyItem(pending as any, fileBytes)).rejects.toThrow(/모듈을 읽지/)
         expect(JSON.parse(JSON.stringify(db))).toEqual(before)
+    })
+})
+
+// 0.9.96-ver5: a check from a settings button says why it stopped; the pressed item is asked first; a persona that cannot be written is
+// not asked; the download shows its size and time; the list read gives up after 2 minutes; a dropped NAS connection says how to retry.
+describe('content updates: reasons and progress (0.9.96-ver5)', () => {
+    const entry = (key: string, kind = 'character', bytes = 3_000_000) => ({ key, kind, title: key.split(':')[1], version: '1', file: 'f', fileName: 'x.charx', sha256: 's', bytes, publishedAt: new Date().toISOString(), publishedBy: '', decision: '' })
+    const serve = async (pending: any[], fetchImpl?: () => Promise<Response>) => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        reportSyncNetwork.mockReset().mockResolvedValue({})
+        const decisions: any[] = []
+        transferRequest.mockReset().mockImplementation(async (path: string, init: any) => {
+            if (path === '/content-updates/overview') return new Response(JSON.stringify({ configured: true, items: [], pending }))
+            if (path === '/content-updates/decide') { decisions.push(JSON.parse(init.body)); return new Response('{}') }
+            if (path === '/content-updates/fetch' && fetchImpl) return fetchImpl()
+            return new Response('{}')
+        })
+        return decisions
+    }
+    test('a pending import recovery is named in the panel when the button was pressed', async () => {
+        const { importSession } = await import('../importSession') as any
+        const { alertConfirmMulti } = await import('../alert') as any
+        await serve([entry('character:a')])
+        alertConfirmMulti.mockReset()
+        importSession.set({ phase: 'recovery' })
+        try {
+            expect(await mod.checkContentUpdates(true)).toBeNull()
+            expect(get(mod.contentUpdateStatus)).toMatch(/가져오기의 복구가 남아 있어요/)
+            expect(alertConfirmMulti).not.toHaveBeenCalled()
+        } finally { importSession.set({ phase: 'idle' }); mod.contentUpdateStatus.set('') }
+    })
+    test('the pressed item is asked first', async () => {
+        const { alertConfirmMulti } = await import('../alert') as any
+        await serve([entry('character:a'), entry('character:b')])
+        alertConfirmMulti.mockReset().mockResolvedValue(-1)
+        await mod.checkContentUpdates(true, 'character:b')
+        expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+        expect(alertConfirmMulti.mock.calls[0][2]).toMatch(/^b \(1\)/)
+    })
+    test('a persona that cannot be written now (a BardWiki reboot left on a chat) is not asked; the panel names the chat', async () => {
+        const { alertConfirmMulti } = await import('../alert') as any
+        const { transferUnavailable } = await import('../playTransfer') as any
+        const { getDatabase } = await import('../storage/database.svelte') as any
+        getDatabase.mockReturnValue({ personas: [], characters: [{ name: '마물소녀도감', chats: [{ name: '여행 1', risuBardWikiReboot: { status: 'paused' } }] }] })
+        await serve([entry('persona:함건희', 'persona')])
+        alertConfirmMulti.mockReset()
+        transferUnavailable.mockReturnValue(true)
+        try {
+            await mod.checkContentUpdates(true)
+            expect(alertConfirmMulti).not.toHaveBeenCalled()
+            expect(get(mod.contentUpdateStatus)).toMatch(/「마물소녀도감」의 「여행 1」 채팅에 위키 리부트 작업이 멈춘 채로/)
+        } finally { transferUnavailable.mockReset().mockImplementation(() => false); mod.contentUpdateStatus.set('') }
+    })
+    test('while a file downloads the panel shows its size and the time so far, and a toast says it started', async () => {
+        const { alertConfirmMulti, notifyInfo, alertError } = await import('../alert') as any
+        let release: (r: Response) => void = () => {}
+        await serve([entry('character:big', 'character', 85_000_000)], () => new Promise<Response>(resolve => { release = resolve }))
+        alertConfirmMulti.mockReset().mockResolvedValueOnce(0)
+        notifyInfo.mockReset(); alertError.mockReset()
+        const running = mod.checkContentUpdates(true)
+        await vi.waitFor(() => expect(get(mod.contentUpdateStatus)).toMatch(/^big \(1\) \(85\.0 MB\) NAS에서 받는 중… 0초 지남$/))
+        expect(notifyInfo).toHaveBeenCalledWith(expect.stringMatching(/85\.0 MB\)를 받기 시작했어요/))
+        // a second press meanwhile keeps the progress text
+        await mod.checkContentUpdates(true)
+        expect(get(mod.contentUpdateStatus)).toMatch(/NAS에서 받는 중/)
+        release(new Response('x'))
+        await running
+        expect(get(mod.contentUpdateStatus)).toMatch(/^「big \(1\)」를 가져오지 못했어요: 받은 파일이 배포본과 달라요/) // the reason stays in the panel
+        expect(alertError).toHaveBeenCalledTimes(1) // the 1-byte answer is not the published file
+    })
+    test('a dropped NAS connection says the item can be fetched again from the panel', async () => {
+        const { alertConfirmMulti, alertError } = await import('../alert') as any
+        await serve([entry('character:a')], async () => { throw new Error('socket hang up') })
+        alertConfirmMulti.mockReset().mockResolvedValueOnce(0); alertError.mockReset()
+        await mod.checkContentUpdates(true)
+        expect(alertError).toHaveBeenCalledWith(expect.stringMatching(/socket hang up[\s\S]*「지금 물어보기」를 누르면 다시 받아요/))
+        const { notifyInfo } = await import('../alert') as any
+        expect(notifyInfo).toHaveBeenLastCalledWith(expect.stringMatching(/^「a \(1\)」를 가져오지 못했어요: socket hang up NAS와의 연결이 끊겼어요/)) // toast too
+        expect(get(mod.contentUpdateStatus)).toMatch(/^「a \(1\)」를 가져오지 못했어요: socket hang up/) // and the panel
+    })
+    test('a list read with no answer gives up after 2 minutes, says so, and the next press runs', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        reportSyncNetwork.mockReset().mockResolvedValue({})
+        transferRequest.mockReset().mockImplementation(() => new Promise(() => {}))
+        vi.useFakeTimers()
+        try {
+            const first = mod.checkContentUpdates(true)
+            await vi.advanceTimersByTimeAsync(121_000)
+            expect(await first).toBeNull()
+            expect(get(mod.contentUpdateStatus)).toMatch(/배포 목록을 읽지 못했어요: NAS에서 배포 목록을 2분 안에/)
+            const second = mod.checkContentUpdates(true)
+            await vi.advanceTimersByTimeAsync(1)
+            expect(get(mod.contentUpdateStatus)).toBe('') // started again (not "still running")
+            await vi.advanceTimersByTimeAsync(121_000)
+            await second
+        } finally { vi.useRealTimers(); mod.contentUpdateStatus.set('') }
+    })
+})
+
+// 0.9.96-ver5 (Codex B round 1): an overview request given up after 2 minutes never writes the status line when it answers late.
+describe('content updates: a late overview answer (0.9.96-ver5)', () => {
+    test('a list read given up after 2 minutes that answers late leaves the next check\'s download text alone', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        const { alertConfirmMulti } = await import('../alert') as any
+        reportSyncNetwork.mockReset().mockResolvedValue({})
+        const item = { key: 'character:late', kind: 'character', title: 'late', version: '1', file: 'f', fileName: 'x.charx', sha256: 's', bytes: 2_000_000, publishedAt: new Date().toISOString(), publishedBy: '', decision: '' }
+        let overviews = 0, lateAnswer: (r: Response) => void = () => {}, lateFail: (e: any) => void = () => {}
+        transferRequest.mockReset().mockImplementation((path: string) => {
+            if (path === '/content-updates/overview') {
+                if (++overviews === 1) return new Promise<Response>((resolve, reject) => { lateAnswer = resolve; lateFail = reject })
+                return Promise.resolve(new Response(JSON.stringify({ configured: true, items: [], pending: [item] })))
+            }
+            if (path === '/content-updates/fetch') return new Promise(() => {}) // still downloading
+            return Promise.resolve(new Response('{}'))
+        })
+        alertConfirmMulti.mockReset().mockResolvedValue(0)
+        vi.useFakeTimers()
+        try {
+            const first = mod.checkContentUpdates(true)
+            await vi.advanceTimersByTimeAsync(121_000)
+            expect(await first).toBeNull()
+            void mod.checkContentUpdates(true) // asks, then downloads (never finishes in this test)
+            await vi.advanceTimersByTimeAsync(10)
+            expect(get(mod.contentUpdateStatus)).toMatch(/NAS에서 받는 중/)
+            lateAnswer(new Response(JSON.stringify({ configured: true, items: [], pending: [] })))
+            await vi.advanceTimersByTimeAsync(10)
+            expect(get(mod.contentUpdateStatus)).toMatch(/NAS에서 받는 중/)
+            void lateFail
+        } finally { vi.useRealTimers(); mod.contentUpdateStatus.set('') }
+    })
+    test('a list read that waited on a NAS sync step and then hit the 2-minute limit takes its waiting text down', async () => {
+        const { transferRequest } = await import('../playTransfer') as any
+        const { reportSyncNetwork } = await import('../nasSync') as any
+        reportSyncNetwork.mockReset().mockResolvedValue({})
+        let calls = 0
+        transferRequest.mockReset().mockImplementation((path: string) => {
+            if (path !== '/content-updates/overview') return Promise.resolve(new Response('{}'))
+            if (++calls === 1) return Promise.reject(Object.assign(new Error('busy'), { status: 423, code: 'NAS_SYNC_BUSY' }))
+            return new Promise(() => {}) // the second try never answers
+        })
+        vi.useFakeTimers()
+        try {
+            mod.contentUpdateStatus.set('')
+            const overview = mod.fetchOverview()
+            const settled = expect(overview).rejects.toThrow(/2분 안에/)
+            await vi.advanceTimersByTimeAsync(500)
+            expect(get(mod.contentUpdateStatus)).toBe('NAS 동기화가 끝나면 이어서 받아요…')
+            await vi.advanceTimersByTimeAsync(121_000)
+            await settled
+            expect(get(mod.contentUpdateStatus)).toBe('')
+        } finally { vi.useRealTimers(); mod.contentUpdateStatus.set('') }
     })
 })

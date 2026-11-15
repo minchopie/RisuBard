@@ -421,6 +421,35 @@ describe('content update download resume', () => {
         fs.rmSync(file)
     })
 
+    // 0.9.96-ver5: drops that each bring new bytes do not use up the attempts (a slow line with a large card).
+    test('keeps resuming past 5 drops while every attempt brings new bytes, and ends with the exact file', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        const seen: string[] = []
+        dav.hooks.push(({ method, path, headers }: any) => {
+            if (method !== 'GET' || !path.endsWith(item.file)) return undefined
+            seen.push(headers.Range ?? 'whole')
+            const start = headers.Range ? Number(/bytes=(\d+)-/.exec(headers.Range)![1]) : 0
+            if (seen.length <= 8) return dropping(big.subarray(start), start ? 206 : 200, start ? { 'content-range': `bytes ${start}-${big.length - 1}/${big.length}` } : {}, 5_000)
+            return ranged(big, headers.Range)
+        })
+        const { file } = await tablet(dav, []).download(bigMeta.key, item.sha256)
+        expect(fs.readFileSync(file)).toEqual(big)
+        expect(seen).toEqual(['whole', ...Array.from({ length: 8 }, (_, i) => `bytes=${(i + 1) * 5_000}-`)])
+        fs.rmSync(file)
+    })
+
+    test('after a drop that brought bytes, gives up only at the 5th drop in a row without new bytes', async () => {
+        const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
+        let n = 0
+        dav.hooks.push(({ method, path }: any) => {
+            if (method !== 'GET' || !path.endsWith(item.file)) return undefined
+            if (++n === 1) return dropping(big, 200, {}, 5_000)
+            return Object.assign(new Readable({ read() { this.destroy(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })) } }), { statusCode: 200, headers: {} })
+        })
+        await expect(tablet(dav, []).download(bigMeta.key, item.sha256)).rejects.toThrow(/socket hang up/)
+        expect(n).toBe(6) // 1 with progress + 5 in a row without
+    })
+
     test('gives up after 5 dropped attempts and leaves nothing behind', async () => {
         const dav = fixtureDav(), item = await device(dav, 'pc').updates.publish(Readable.from([big]), bigMeta)
         let n = 0

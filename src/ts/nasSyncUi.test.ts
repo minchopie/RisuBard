@@ -64,6 +64,8 @@ test('registering or forgetting a home Wi-Fi refreshes only the saved name list;
     expect(routeLabel({ route: 'home', reason: 'home-ssid', network: { transport: 'wifi', ssidKnown: true } })).toBe('NAS 경로: 집 네트워크 (내부 주소) · 등록된 집 Wi-Fi')
     expect(routeLabel({ route: 'external', reason: 'unknown-ssid' })).toBe('NAS 경로: 바깥 (외부 주소) · Wi-Fi 이름 미확인')
     expect(routeLabel({ route: 'single', reason: 'single-url' })).toBe('NAS 경로: 기본 주소 · 주소 하나')
+    expect(routeLabel({ route: 'home', reason: 'unknown-ssid-probe-ok' })).toBe('NAS 경로: 집 네트워크 (내부 주소) · Wi-Fi 이름 미확인 · 내부 주소 응답') // 0.9.96-ver5
+    expect(routeLabel({ route: 'external', reason: 'unknown-transport' })).toBe('NAS 경로: 바깥 (외부 주소) · 기기 연결 정보 없음')
 })
 
 test('sync overview names content, explains same-message differences and never claims a peer applied an upload', () => {

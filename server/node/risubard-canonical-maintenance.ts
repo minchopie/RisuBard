@@ -127,6 +127,11 @@ const MAINTENANCE_SYSTEM = [
     'Never invent facts. Keep every [[wiki link]] that still applies. Preserve attribution, certainty and conditions. Write in the language already used by the units.',
 ].join('\n')
 
+// RisuBard 0.9.96-ver5: units and dispositions carry no maxItems. Google AI Studio (also through OpenRouter) rejects this
+// schema with them (INVALID_ARGUMENT; 2026-11-16 calls: without both it is accepted, without only one it is not). What they bounded
+// is still bounded after the answer: a section's result takes only proposed units that a kept/merged disposition names, one
+// disposition per old unit (so at most as many proposed units as old ones), and extra dispositions or units are never used. Units
+// added back for a missing [[link]] are old units, as before.
 const MAINTENANCE_SCHEMA = JSON.stringify({
     type: 'object',
     additionalProperties: false,
@@ -138,12 +143,12 @@ const MAINTENANCE_SCHEMA = JSON.stringify({
                 type: 'object', additionalProperties: false, required: ['role', 'units'],
                 properties: {
                     role: { type: 'string', enum: [...MAINTAINED_ROLES] },
-                    units: { type: 'array', maxItems: MAX_UNITS, items: { type: 'string', minLength: 1, maxLength: 1200 } },
+                    units: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 1200 } },
                 },
             },
         },
         dispositions: {
-            type: 'array', maxItems: MAX_UNITS * MAINTAINED_ROLES.length,
+            type: 'array',
             items: {
                 type: 'object', additionalProperties: false,
                 required: ['role', 'old', 'action', 'newIndex', 'moveTo', 'movedText', 'documentId'],

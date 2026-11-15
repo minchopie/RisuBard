@@ -14,7 +14,14 @@ test('decision matrix: registered SSIDs → home; other/unknown/redacted SSID �
     expect(decide(cfg, { transport: 'wifi', ssid: 'fixture home 2g' })).toMatchObject({ route: 'external' }) // exact match only
     expect(decide(cfg, { transport: 'cellular', ssid: null })).toMatchObject({ route: 'external', reason: 'no-lan' })
     expect(decide(cfg, { transport: 'none', ssid: null })).toMatchObject({ route: 'external', reason: 'no-lan' })
-    expect(decide(cfg, { transport: 'unknown', ssid: null }, true)).toMatchObject({ route: 'external', reason: 'unknown-transport' }) // never home by default
+    expect(decide(cfg, { transport: 'unknown', ssid: null })).toMatchObject({ route: 'external', reason: 'unknown-transport' }) // never home by default
+    // 0.9.96-ver5: a Wi-Fi not confirmed as home or an unknown transport is home only when the internal URL answered the probe.
+    expect(decide(cfg, { transport: 'unknown', ssid: null }, true)).toMatchObject({ url: cfg.homeUrl, route: 'home', reason: 'unknown-transport-probe-ok' })
+    expect(decide(cfg, { transport: 'unknown', ssid: null }, false)).toMatchObject({ url: cfg.url, route: 'external', reason: 'unknown-transport' })
+    expect(decide(cfg, { transport: 'wifi', ssid: null }, true)).toMatchObject({ url: cfg.homeUrl, route: 'home', reason: 'unknown-ssid-probe-ok' })
+    expect(decide(cfg, { transport: 'wifi', ssid: 'Cafe' }, true)).toMatchObject({ url: cfg.homeUrl, route: 'home', reason: 'other-ssid-probe-ok' })
+    expect(decide(cfg, { transport: 'wifi', ssid: 'Cafe' }, false)).toMatchObject({ url: cfg.url, route: 'external', reason: 'other-ssid' })
+    expect(decide(cfg, { transport: 'cellular', ssid: null }, true)).toMatchObject({ url: cfg.url, route: 'external', reason: 'no-lan' }) // cellular never home
     expect(decide(cfg, { transport: 'ethernet', ssid: null }, true)).toMatchObject({ route: 'home', reason: 'probe-ok' })
     expect(decide(cfg, { transport: 'ethernet', ssid: null }, false)).toMatchObject({ route: 'external', reason: 'probe-failed' })
     expect(decide(cfg, { transport: 'ethernet', ssid: null }, undefined)).toMatchObject({ route: 'external', reason: 'probe-pending' })
@@ -45,22 +52,26 @@ test('probe is bounded and strict: any HTTPS answer counts, a hanging endpoint f
     await expect(probeUrl('http://nas-home.invalid/x', { fetch: async () => ({}) })).rejects.toThrow()
 })
 
-test('route object: fresh reports decide; a stale report is unknown (external, no probe); only a detected wired adapter probes (cached, invalidate re-probes); a detector failure is unknown', async () => {
+test('route object: fresh reports decide; a stale report is unknown (0.9.96-ver5: probed like a wired adapter); a detected wired adapter probes (cached, invalidate re-probes); a detector failure is unknown', async () => {
     let now = 1_000_000; const probe = vi.fn(async () => true)
     const secrets = { get: async () => cfg }
     const r = createNasRoute({ secrets, probe, now: () => now, detect: async () => ({ transport: 'ethernet', ssid: null }) })
     r.report({ transport: 'wifi', ssid: 'Fixture Home 2G' })
     expect(await r.urlFor(cfg)).toBe(cfg.homeUrl); expect(probe).not.toHaveBeenCalled()
     now += 121_000 // the client stopped reporting (app hidden): the old "home" is not trusted and the detector is NOT consulted for a client-reporting host
-    expect(await r.resolve()).toMatchObject({ route: 'external', reason: 'unknown-transport' }); expect(probe).not.toHaveBeenCalled()
+    // 0.9.96-ver5: the internal URL is probed instead; it answers here → home (the probe answer decides, not the old report).
+    expect(await r.resolve()).toMatchObject({ route: 'home', reason: 'unknown-transport-probe-ok' }); expect(probe).toHaveBeenCalledTimes(1)
+    probe.mockClear()
     const wired = createNasRoute({ secrets, probe, now: () => now, detect: async () => ({ transport: 'ethernet', ssid: null }) })
     expect(await wired.resolve()).toMatchObject({ route: 'home', reason: 'probe-ok' }); expect(probe).toHaveBeenCalledTimes(1)
     await wired.resolve(); expect(probe).toHaveBeenCalledTimes(1) // cached
     wired.invalidate(); await wired.resolve(); expect(probe).toHaveBeenCalledTimes(2)
     const failing = createNasRoute({ secrets, probe, now: () => now, detect: async () => { throw new Error('no adapter api') } })
-    expect(await failing.resolve()).toMatchObject({ route: 'external', reason: 'unknown-transport' })
+    expect(await failing.resolve()).toMatchObject({ route: 'home', reason: 'unknown-transport-probe-ok' }) // 0.9.96-ver5: an unknown transport probes
     const unknownAdapters = createNasRoute({ secrets, probe, now: () => now, detect: async () => ({ transport: 'unknown', ssid: null }) })
-    expect(await unknownAdapters.resolve()).toMatchObject({ route: 'external', reason: 'unknown-transport' })
+    expect(await unknownAdapters.resolve()).toMatchObject({ route: 'home', reason: 'unknown-transport-probe-ok' })
+    const unknownUnreachable = createNasRoute({ secrets, probe: vi.fn(async () => false), now: () => now, detect: async () => ({ transport: 'unknown', ssid: null }) })
+    expect(await unknownUnreachable.resolve()).toMatchObject({ route: 'external', reason: 'unknown-transport' })
 })
 
 test('pinning is per run in an async context: nested runs keep one URL while the network flips; a run suspended inside its probe does not leak an unpinned or shared decision to concurrent runs', async () => {
@@ -73,7 +84,7 @@ test('pinning is per run in an async context: nested runs keep one URL while the
     r.report({ transport: 'wifi', ssid: 'Fixture Home 2G' })
     const urls: string[] = []
     await r.run(async () => {
-        urls.push(await r.urlFor(cfg)); r.report({ transport: 'wifi', ssid: 'Cafe' })
+        urls.push(await r.urlFor(cfg)); r.report({ transport: 'cellular', ssid: null }) // 0.9.96-ver5: cellular (a Wi-Fi with another name now probes)
         await r.run(async () => { urls.push(await r.urlFor(cfg)) })
         urls.push(await r.urlFor(cfg)); expect((await r.status()).pinned).toBe(true)
     })
@@ -84,19 +95,35 @@ test('pinning is per run in an async context: nested runs keep one URL while the
     const a = r.run(async () => { aUrls.push(await r.urlFor(cfg)); await holdA.promise; aUrls.push(await r.urlFor(cfg)) })
     await probeStarted.promise // A is now inside its (unresolved) probe: no decision exists for it yet
     // B starts on another network while A is suspended: B must get its own, pinned decision (old code: depth 1 but pinned null → B ran unpinned).
-    r.report({ transport: 'wifi', ssid: 'Cafe' })
+    r.report({ transport: 'cellular', ssid: null })
     const bSeen: any[] = []
     const b = await r.run(async () => { const first = await r.urlFor(cfg); bSeen.push((await r.status()).pinned); r.report({ transport: 'wifi', ssid: 'Fixture Home 2G' }); return [first, await r.urlFor(cfg)] })
     expect(b).toEqual([cfg.url, cfg.url]); expect(bSeen).toEqual([true]); expect(probes).toBe(1) // B never probed and never waited for A
     // Release A's probe: A decides home and keeps running (held). C starts meanwhile on a cafe network: its own decision, not A's.
     probeAnswer.resolve(true); await new Promise(resolve => setTimeout(resolve, 0)); expect(aUrls).toEqual([cfg.homeUrl])
-    r.report({ transport: 'wifi', ssid: 'Cafe' })
+    r.report({ transport: 'cellular', ssid: null })
     expect(await r.run(() => r.urlFor(cfg))).toBe(cfg.url) // old code: shared A's pin → home (wrong)
     r.report({ transport: 'wifi', ssid: 'Fixture Home 5G' })
     holdA.resolve(); await a
     expect(aUrls).toEqual([cfg.homeUrl, cfg.homeUrl]) // A's second request still uses A's own decision
     expect((await r.status()).pinned).toBe(false)
     await expect(r.run(async () => { throw new Error('boom') })).rejects.toThrow('boom'); expect((await r.status()).pinned).toBe(false)
+})
+
+// 0.9.96-ver5: the tablet on the home Wi-Fi went to the external URL when its report aged or its SSID read failed for a moment.
+test('a Wi-Fi not confirmed as home and a stale report probe the internal URL (cached); cellular and a registered home Wi-Fi never probe', async () => {
+    let now = 9_000_000; let reachable = true; const probe = vi.fn(async () => reachable)
+    const r = createNasRoute({ secrets: { get: async () => cfg }, probe, now: () => now })
+    r.report({ transport: 'wifi', ssid: 'Fixture Home 5G' }); expect(await r.resolve()).toMatchObject({ route: 'home', reason: 'home-ssid' }); expect(probe).not.toHaveBeenCalled()
+    r.report({ transport: 'cellular', ssid: null }); expect(await r.resolve()).toMatchObject({ url: cfg.url, route: 'external', reason: 'no-lan' }); expect(probe).not.toHaveBeenCalled() // the phone on mobile data: at once, no probe
+    r.report({ transport: 'none', ssid: null }); expect(await r.resolve()).toMatchObject({ route: 'external', reason: 'no-lan' }); expect(probe).not.toHaveBeenCalled()
+    r.report({ transport: 'wifi', ssid: null }); expect(await r.resolve()).toMatchObject({ url: cfg.homeUrl, route: 'home', reason: 'unknown-ssid-probe-ok' }); expect(probe).toHaveBeenCalledTimes(1)
+    r.report({ transport: 'wifi', ssid: 'Other Name' }); expect(await r.resolve()).toMatchObject({ route: 'home', reason: 'other-ssid-probe-ok' }); expect(probe).toHaveBeenCalledTimes(1) // cached (60 s)
+    now += 61_000; reachable = false
+    r.report({ transport: 'wifi', ssid: 'Cafe' }); expect(await r.resolve()).toMatchObject({ url: cfg.url, route: 'external', reason: 'other-ssid' }); expect(probe).toHaveBeenCalledTimes(2)
+    now += 121_000 // no report since: unknown transport, probed again after the cache aged
+    now += 61_000; expect(await r.resolve()).toMatchObject({ route: 'external', reason: 'unknown-transport' }); expect(probe).toHaveBeenCalledTimes(3)
+    expect(probe).toHaveBeenCalledWith(cfg.homeUrl, { servername: '' })
 })
 
 test('registering the current Wi-Fi stores the name next to the same account; unknown SSID or non-Wi-Fi refuses; forget removes', async () => {

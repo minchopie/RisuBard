@@ -1680,3 +1680,73 @@ index 202cc08..fd50198 100644
                                          input: canonicalInput(targets),
                                      })
                                      canRetry = !response.noRetry && !response.toolExecuted
+diff --git a/server/node/risubard-canonical-maintenance.test.ts b/server/node/risubard-canonical-maintenance.test.ts
+index 9ed794c..7fb8f14 100644
+--- a/server/node/risubard-canonical-maintenance.test.ts
++++ b/server/node/risubard-canonical-maintenance.test.ts
+@@ -170,11 +170,28 @@ describe('canonical maintenance', () => {
+         expect(system).toContain('Equipment and Possessions')
+         const parsed = JSON.parse(schema)
+         expect(parsed.properties.sections.maxItems).toBe(4)
+-        expect(parsed.properties.dispositions.maxItems).toBe(128 * 4)
++        // RisuBard 0.9.96-ver5: Google AI Studio rejects the schema with these; the result is bounded after the answer instead.
++        expect(parsed.properties.dispositions.maxItems).toBeUndefined()
++        expect(parsed.properties.sections.items.properties.units.maxItems).toBeUndefined()
+         expect(parsed.properties.sections.items.properties.role.enum)
+             .toEqual(['knowledge', 'relationships', 'transitions', 'equipment'])
+     })
+ 
++    test('takes no more proposed units than the old ones and never an unreferenced one when the answer lists extra units and dispositions (no maxItems in the schema)', () => {
++        const result = apply({
++            sections: [
++                { role: 'knowledge', units: ['[[하루]]에게 마을 규칙 1~14를 들었다.', ...Array.from({ length: 200 }, (_, index) => `덧붙인 항목 ${index}`)] },
++            ],
++            dispositions: [
++                ...knowledgeUnits.map((_, old) => disposition('knowledge', old, 'merged', { newIndex: 0 })),
++                ...Array.from({ length: 600 }, (_, index) => disposition('knowledge', 100 + index, 'kept', { newIndex: 1 + (index % 200) })),
++            ],
++        })
++        expect(result.counts).toEqual([{ role: 'knowledge', heading: '지식과 비밀', before: 14, after: 1 }])
++        expect(result.markdown).toContain('### 지식과 비밀\n\n- [[하루]]에게 마을 규칙 1~14를 들었다.')
++        expect(result.markdown).not.toContain('덧붙인 항목')
++    })
++
+     test('keeps a section as it was when its rewrite is not shorter, dropping its moves too', () => {
+         const result = apply({
+             sections: [
+diff --git a/server/node/risubard-canonical-maintenance.ts b/server/node/risubard-canonical-maintenance.ts
+index 9104676..ff9e72f 100644
+--- a/server/node/risubard-canonical-maintenance.ts
++++ b/server/node/risubard-canonical-maintenance.ts
+@@ -152,11 +152,15 @@ function maintenanceSchema(keys: readonly string[]): string {
+     const schema = JSON.parse(MAINTENANCE_SCHEMA)
+     schema.properties.sections.maxItems = keys.length
+     schema.properties.sections.items.properties.role.enum = [...keys]
+-    schema.properties.dispositions.maxItems = MAX_UNITS * keys.length
+     schema.properties.dispositions.items.properties.role.enum = [...keys]
+     return JSON.stringify(schema)
+ }
+ 
++// RisuBard 0.9.96-ver5: units and dispositions carry no maxItems. Google AI Studio (also through OpenRouter) rejects this
++// schema with them (INVALID_ARGUMENT; 2026-11-16 calls: without both it is accepted, without only one it is not). What they bounded
++// is still bounded after the answer: a section's result takes only proposed units that a kept/merged disposition names, one
++// disposition per old unit (so at most as many proposed units as old ones), and extra dispositions or units are never used. Units
++// added back for a missing [[link]] are old units, as before.
+ const MAINTENANCE_SCHEMA = JSON.stringify({
+     type: 'object',
+     additionalProperties: false,
+@@ -168,12 +172,12 @@ const MAINTENANCE_SCHEMA = JSON.stringify({
+                 type: 'object', additionalProperties: false, required: ['role', 'units'],
+                 properties: {
+                     role: { type: 'string', enum: [...MAINTAINED_ROLES] },
+-                    units: { type: 'array', maxItems: MAX_UNITS, items: { type: 'string', minLength: 1, maxLength: 1200 } },
++                    units: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 1200 } },
+                 },
+             },
+         },
+         dispositions: {
+-            type: 'array', maxItems: MAX_UNITS * MAINTAINED_ROLES.length,
++            type: 'array',
+             items: {
+                 type: 'object', additionalProperties: false,
+                 required: ['role', 'old', 'action', 'newIndex', 'moveTo', 'movedText', 'documentId'],

@@ -195,7 +195,10 @@ export function withSavedHomeSsids<T extends { homeSsids: string[] }>(form: T, s
 }
 /** Current NAS route for the status area: never the SSID itself, only which side is in use and why. */
 export function routeLabel(route: any): string {
-    const reason: Record<string, string> = { 'single-url': '주소 하나', 'home-ssid': '등록된 집 Wi-Fi', 'other-ssid': '다른 Wi-Fi', 'unknown-ssid': 'Wi-Fi 이름 미확인', 'no-lan': '모바일 데이터/연결 없음', 'probe-ok': '유선 · 내부 주소 응답', 'probe-failed': '유선 · 내부 주소 무응답', 'probe-pending': '확인 전' }
+    const reason: Record<string, string> = { 'single-url': '주소 하나', 'home-ssid': '등록된 집 Wi-Fi', 'other-ssid': '다른 Wi-Fi', 'unknown-ssid': 'Wi-Fi 이름 미확인', 'no-lan': '모바일 데이터/연결 없음', 'probe-ok': '유선 · 내부 주소 응답', 'probe-failed': '유선 · 내부 주소 무응답', 'probe-pending': '확인 전',
+        // 0.9.96-ver5: a Wi-Fi not confirmed as home or an aged report probes the internal URL; these name what decided.
+        'unknown-transport': '기기 연결 정보 없음', 'unknown-ssid-probe-ok': 'Wi-Fi 이름 미확인 · 내부 주소 응답',
+        'other-ssid-probe-ok': '등록 안 된 Wi-Fi 이름 · 내부 주소 응답', 'unknown-transport-probe-ok': '기기 연결 정보 없음 · 내부 주소 응답' }
     const side = route?.route === 'home' ? '집 네트워크 (내부 주소)' : route?.route === 'external' ? '바깥 (외부 주소)' : '기본 주소'
     return `NAS 경로: ${side} · ${reason[route?.reason] ?? route?.reason ?? ''}`
 }

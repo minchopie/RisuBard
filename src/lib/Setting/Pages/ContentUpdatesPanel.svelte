@@ -54,7 +54,8 @@
         return run(async () => {
             // A declined item is forgotten first, so the check asks about it again.
             if (item.decision) await recordDecision(item, 'reset')
-            await checkContentUpdates(true)
+            // 0.9.96-ver5: the pressed item is asked first.
+            await checkContentUpdates(true, item.key)
             await refresh()
         })
     }

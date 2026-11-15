@@ -53,26 +53,32 @@ export const contentUpdateStatus = writable('')
 const BUSY_WAIT = 60_000
 const ARMED_WAIT = 15_000
 const BUSY_STEP = 1_000
-async function contentRequest(path: string, init: RequestInit): Promise<Response> {
+const BUSY_TEXT = 'NAS 동기화가 끝나면 이어서 받아요…'
+/** 0.9.96-ver5: `alive` false = the caller gave up on this request (the overview time limit): it no longer waits or touches the status
+ *  line. The status line is put back only when this request itself put up the waiting text and that text is still shown, so a late
+ *  answer never wipes another check's progress text. */
+async function contentRequest(path: string, init: RequestInit, alive: () => boolean = () => true): Promise<Response> {
     const started = Date.now(), shown = get(contentUpdateStatus)
+    let waited = false
+    const restore = () => { if (waited && alive() && get(contentUpdateStatus) === BUSY_TEXT) contentUpdateStatus.set(shown) }
     for (;;) {
-        try { const response = await transferRequest(path, init); contentUpdateStatus.set(shown); return response }
+        try { const response = await transferRequest(path, init); restore(); return response }
         catch (error: any) {
-            if (error?.status !== 423 || error?.code !== 'NAS_SYNC_BUSY') { contentUpdateStatus.set(shown); throw error }
+            if (error?.status !== 423 || error?.code !== 'NAS_SYNC_BUSY' || !alive()) { restore(); throw error }
             const armed = typeof error.transaction === 'string' && error.transaction !== ''
             if (Date.now() - started >= (armed ? ARMED_WAIT : BUSY_WAIT)) {
-                contentUpdateStatus.set(shown)
+                restore()
                 throw Object.assign(new Error(armed
                     ? 'NAS 동기화 적용이 끝나지 않은 상태라 처리하지 못했어요. 설정 > NAS 동기화에서 적용 결과를 확인해 주세요(NAS sync apply pending).'
                     : 'NAS 동기화가 1분 넘게 진행 중이라 지금은 처리하지 못했어요(NAS sync busy).'), { status: 423, code: 'NAS_SYNC_BUSY', ...(armed ? { transaction: error.transaction } : {}) })
             }
-            contentUpdateStatus.set('NAS 동기화가 끝나면 이어서 받아요…')
+            waited = true; contentUpdateStatus.set(BUSY_TEXT)
             await new Promise(resolve => setTimeout(resolve, BUSY_STEP))
         }
     }
 }
-const post = async <T>(path: string, body: unknown): Promise<T> =>
-    (await contentRequest('/content-updates' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
+const post = async <T>(path: string, body: unknown, alive?: () => boolean): Promise<T> =>
+    (await contentRequest('/content-updates' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, alive)).json()
 
 // 0.9.92-ver4: the server picks the home or external NAS address from this device's Wi-Fi report, which it trusts for 2 minutes
 // and which is otherwise sent only before a NAS sync cycle (Android). Report it again right before talking to the NAS, so a device
@@ -91,7 +97,20 @@ async function freshRoute() {
     } catch { /* the server decides as before */ } finally { clearTimeout(timer); controller.abort() }
 }
 
-export const fetchOverview = async () => { await freshRoute(); return post<ContentOverview>('/overview', { kinds: CONTENT_KINDS }) }
+// 0.9.96-ver5: the list read (a NAS folder listing and one small record per item) gives up after OVERVIEW_LIMIT, so a check never
+// stays running (every later button press was then skipped without a word). A file download has no such limit: a large card on a slow
+// line is an ordinary download, and the server already resumes a dropped one.
+const OVERVIEW_LIMIT = 120_000
+export const fetchOverview = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined, alive = true
+    try {
+        return await Promise.race([
+            (async () => { await freshRoute(); return post<ContentOverview>('/overview', { kinds: CONTENT_KINDS }, () => alive) })(),
+            // At the limit the request is given up: it no longer writes the status line, so its NAS-sync waiting text is taken down here.
+            new Promise<never>((_, reject) => { timer = setTimeout(() => { alive = false; if (get(contentUpdateStatus) === BUSY_TEXT) contentUpdateStatus.set(''); reject(new Error('NAS에서 배포 목록을 2분 안에 읽지 못했어요(응답 없음). 연결을 확인한 뒤 다시 눌러 주세요.')) }, OVERVIEW_LIMIT) }),
+        ])
+    } finally { clearTimeout(timer) }
+}
 export const recordDecision = (item: Pick<ContentItem, 'key' | 'sha256'>, decision: ContentDecisionInput) => post('/decide', { key: item.key, sha256: item.sha256, decision })
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -606,10 +625,36 @@ let started = false
 
 /** `ignoreAlert`: the caller's own dialog is the open one (app code update apply). */
 export async function busy(ignoreAlert = false): Promise<boolean> {
+    return (await busyReason(ignoreAlert)) !== ''
+}
+/** 0.9.96-ver5: why busy() is true ('' when it is not), the same conditions in the same order, worded for the settings panel. */
+async function busyReason(ignoreAlert = false): Promise<string> {
     const { stores, generation, session } = await app()
+    if (!get(stores.loadedStore)) return '앱을 아직 불러오는 중이에요.'
+    if (get(transferBusy)) return `다른 전송·동기화 작업이 진행 중이에요${get(transferStatus) ? `(${get(transferStatus)})` : ''}.`
+    if (get(generation.isAnyGenerating)) return '답변을 만드는 중이에요.'
+    if (!ignoreAlert && get(stores.alertStore).type !== 'none') return '다른 알림 창이 열려 있어요.'
     // An import in progress or waiting in rollback recovery has its own dialog: finish that first.
-    return !get(stores.loadedStore) || get(transferBusy) || get(generation.isAnyGenerating) || (!ignoreAlert && get(stores.alertStore).type !== 'none')
-        || get(session.importSession).phase !== 'idle'
+    const phase = get(session.importSession).phase
+    if (phase === 'recovery') return '끝나지 않은 가져오기의 복구가 남아 있어요. 앱을 다시 켜면 나오는 가져오기 복구 창에서 「다시 시도」로 마무리해 주세요.'
+    if (phase !== 'idle') return '다른 가져오기가 진행 중이에요.'
+    return ''
+}
+/** 0.9.96-ver5: why transferUnavailable() (playTransfer, unchanged) is true, for the panel. A persona, preset or plugin is written
+ *  under the busy state and waits for a reply, a NAS sync save or a BardWiki reboot job left on a chat to end (such a job stays until
+ *  it is resumed or cancelled, also across restarts). */
+async function unavailableReason(): Promise<string> {
+    const known = await busyReason(true)
+    if (known) return known
+    const { database, generation } = await app()
+    for (const character of database.getDatabase().characters ?? []) for (const chat of character?.chats ?? []) {
+        const job = (chat as any)?.risuBardWikiReboot
+        if (job) return `「${character.name}」의 「${chat.name || '이름 없는 채팅'}」 채팅에 위키 리부트 작업이 ${job.status === 'failed' ? '실패한 채로' : job.status === 'paused' ? '멈춘 채로' : '진행 중으로'} 남아 있어요. 그 채팅을 열어 리부트를 계속하거나 취소한 뒤 다시 받아 주세요.`
+        if (chat?.isStreaming) return `「${character.name}」의 채팅에서 답변을 만드는 중이에요.`
+    }
+    const doing = (generation as any).doingChat
+    if (doing && get(doing)) return '채팅을 보내는 중이에요.'
+    return 'NAS 동기화 변경을 저장하는 중이에요. 끝난 뒤 다시 받아 주세요.'
 }
 
 /** 0.9.92-ver6: this device already has what was published (a card or persona imported by hand, or via another route): it is
@@ -672,26 +717,39 @@ async function syncCycleRunning(): Promise<boolean> {
     try { return !!get((await import('../nasSyncCoordinator')).coordinatorState)?.running } catch { return false }
 }
 
-/** Asks about each published item this device has not answered yet. `force` ignores the interval (the settings button). */
-export async function checkContentUpdates(force = false): Promise<ContentOverview | null> {
-    return (await runCheck(force)).overview
+/** Asks about each published item this device has not answered yet. `force` ignores the interval (the settings button). 0.9.96-ver5:
+ *  `first` (a published key: 「지금 물어보기」/「다시 받기」) is asked before the other pending items. */
+export async function checkContentUpdates(force = false, first?: string): Promise<ContentOverview | null> {
+    return (await runCheck(force, force, first)).overview
 }
-/** `retry`: this call stopped because the app was (or became) busy before every item was answered — the start check tries again. */
-async function runCheck(force: boolean): Promise<{ overview: ContentOverview | null; retry: boolean }> {
-    if (running) return { overview: null, retry: true }
+/** `retry`: this call stopped because the app was (or became) busy before every item was answered — the start check tries again.
+ *  0.9.96-ver5: `manual` (a settings button) shows why the check stopped in contentUpdateStatus; the start and background checks
+ *  stay quiet as before. */
+async function runCheck(force: boolean, manual = false, first?: string): Promise<{ overview: ContentOverview | null; retry: boolean }> {
+    const skip = (reason: string) => { if (manual && reason) contentUpdateStatus.set(reason) }
+    // An earlier check still running shows its own progress text; otherwise say that it is still on.
+    if (running) { if (!get(contentUpdateStatus)) skip('앞선 배포 확인이 아직 끝나지 않았어요(파일을 받는 중이거나 질문 창이 열려 있어요). 끝난 뒤 다시 눌러 주세요.'); return { overview: null, retry: true } }
     if (!force && Date.now() - lastCheck < CHECK_INTERVAL) return { overview: null, retry: false }
     running = true
-    if (await busy() || await syncCycleRunning()) { running = false; return { overview: null, retry: true } }
+    if (manual) contentUpdateStatus.set('')
+    const startReason = await busyReason()
+    if (startReason || await syncCycleRunning()) { running = false; skip(startReason || 'NAS 동기화가 진행 중이에요. 끝난 뒤 다시 눌러 주세요.'); return { overview: null, retry: true } }
     let retry = false
     lastCheck = Date.now()
     try {
         const { alert } = await app()
         const overview = await fetchOverview()
-        for (const item of overview.pending) {
-            if (await busy()) { retry = true; break }
+        const pending = first ? [...overview.pending.filter(item => item.key === first), ...overview.pending.filter(item => item.key !== first)] : overview.pending
+        for (const item of pending) {
+            let reason = await busyReason()
+            if (reason) { retry = true; skip(reason); break }
             const installed = await alreadyInstalled(item)
-            if (await busy()) { retry = true; break } // the comparison download took a while: another dialog/activity may have started
+            reason = await busyReason()
+            if (reason) { retry = true; skip(reason); break } // the comparison download took a while: another dialog/activity may have started
             if (installed) { await recordDecision(item, 'applied'); continue }
+            // 0.9.96-ver5: a persona, preset or plugin that cannot be written now is not asked about (before, it was asked, downloaded
+            // and then dropped without a word); it is asked at a later check.
+            if (item.kind !== 'character' && item.kind !== 'module' && transferUnavailable()) { retry = true; skip(`「${itemLabel(item)}」은 지금 가져올 수 없어요: ${await unavailableReason()}`); break }
             const choice = await alert.alertConfirmMulti(
                 `새 ${kindLabel(item.kind)}${consonantKind(item.kind) ? '이' : '가'} 올라왔어요. 지금 가져올까요?`,
                 ['네, 가져오기', '아니오'],
@@ -705,31 +763,55 @@ async function runCheck(force: boolean): Promise<{ overview: ContentOverview | n
             // -1 is the dialog's own cancel/close: no answer yet, so it is asked again at the next check.
             if (choice === -1) break
             if (choice !== 0) { await recordDecision(item, 'declined'); continue }
+            // 0.9.96-ver5: after "yes" a stop is always told (toast and panel); the item is asked again at a later check.
+            const stopped = (reason: string) => {
+                const text = `「${itemLabel(item)}」를 받았지만 지금은 가져오지 못했어요: ${reason} 다음 확인 때 다시 물어볼게요.`
+                contentUpdateStatus.set(text); alert.notifyInfo(text)
+            }
             try {
-                contentUpdateStatus.set(`${itemLabel(item)} 받는 중…`)
-                const bytes = await fetchContent(item)
+                // 0.9.96-ver5: the server takes the whole file from the NAS before it answers, so nothing arrives for a while on a slow
+                // line. The panel shows the size and the time so far, and a toast says the download started (on any screen).
+                const size = `${(item.bytes / 1_000_000).toFixed(1)} MB`, began = Date.now(), prefix = `${itemLabel(item)} (${size}) `
+                const tick = () => {
+                    const now = get(contentUpdateStatus), seconds = Math.floor((Date.now() - began) / 1000)
+                    if (now && !now.startsWith(prefix)) return // contentRequest's NAS sync wait text stays while it waits
+                    contentUpdateStatus.set(`${prefix}NAS에서 받는 중… ${seconds >= 60 ? `${Math.floor(seconds / 60)}분 ` : ''}${seconds % 60}초 지남`)
+                }
+                contentUpdateStatus.set(''); tick()
+                const ticker = setInterval(tick, 1000)
+                alert.notifyInfo(`「${itemLabel(item)}」(${size})를 받기 시작했어요. 다 받으면 이어서 가져와요. 큰 파일은 몇 분 걸릴 수 있어요.`)
+                let bytes: Uint8Array
+                try { bytes = await fetchContent(item) } finally { clearInterval(ticker) }
                 contentUpdateStatus.set('')
                 // A transfer, sync apply or reply may have started while the file was coming: leave it for the next check.
-                if (await busy()) { retry = true; break }
+                const after = await busyReason()
+                if (after) { retry = true; stopped(after); break }
                 // A character or module import: the import session guards it (a module's switch step takes the busy state itself).
                 if (item.kind === 'character' || item.kind === 'module') { await recordDecision(item, await applyItem(item, bytes)); continue }
                 // 0.9.92-ver7 (tablet "setItem Error"): a persona/preset import owns the busy state while it writes, like the manual persona
                 // import (playTransfer): a NAS sync apply never arms under it (its foreign-busy check), and one already armed is not entered.
-                if (transferUnavailable()) { retry = true; break }
+                if (transferUnavailable()) { retry = true; stopped(await unavailableReason()); break }
                 transferBusy.set(true); transferStatus.set(`${kindLabel(item.kind)}${consonantKind(item.kind) ? '을' : '를'} 가져오는 중…`)
                 let decision: ContentDecision
                 try { decision = await applyItem(item, bytes) } finally { transferBusy.set(false); transferStatus.set('') }
                 await recordDecision(item, decision)
             } catch (error) {
-                contentUpdateStatus.set('')
-                alert.alertError(`「${itemLabel(item)}」를 가져오지 못했어요. 다음에 다시 물어볼게요.\n${error instanceof Error ? error.message : String(error)}`)
+                const message = error instanceof Error ? error.message : String(error)
+                // 0.9.96-ver5: a dropped NAS connection (the server resumes it while bytes keep coming) says how to get it again; the
+                // reason also stays in the panel (the error dialog closes).
+                const dropped = /socket hang up|aborted|ECONNRESET|ETIMEDOUT|멈췄어요|연결하지 못했어요/i.test(message)
+                const retryHint = dropped ? 'NAS와의 연결이 끊겼어요. 집 Wi-Fi에 연결된 상태에서 설정 > 전송의 「캐릭터·페르소나 배포」에서 「지금 물어보기」를 누르면 다시 받아요(처음부터 다시 받아요).' : ''
+                const failed = `「${itemLabel(item)}」를 가져오지 못했어요: ${message}${retryHint ? ` ${retryHint}` : ''} 다음 확인 때 다시 물어볼게요.`
+                contentUpdateStatus.set(failed); alert.notifyInfo(failed)
+                alert.alertError(`「${itemLabel(item)}」를 가져오지 못했어요. 다음에 다시 물어볼게요.\n${message}` + (retryHint ? `\n\n${retryHint}` : ''))
                 break
             }
         }
         return { overview, retry }
     } catch (error) {
-        // No NAS, offline or an old server: stay quiet and try again later.
+        // No NAS, offline or an old server: stay quiet and try again later (0.9.96-ver5: a settings button shows why).
         console.warn('[ContentUpdates] check skipped:', error instanceof Error ? error.message : String(error))
+        skip(`배포 목록을 읽지 못했어요: ${error instanceof Error ? error.message : String(error)}`)
         return { overview: null, retry: false }
     } finally {
         running = false
