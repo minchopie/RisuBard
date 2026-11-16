@@ -4344,6 +4344,14 @@
       "bytes": 2099
     },
     {
+      "path": "patchnote/0.9.96-ver8.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "7eade74bea6405f243de26e3bbe9b817482c05b41c328a4940c4f80b64080cbf",
+      "contentSha256": "7eade74bea6405f243de26e3bbe9b817482c05b41c328a4940c4f80b64080cbf",
+      "bytes": 3237
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4603,9 +4611,9 @@
       "path": "docs/content-updates/README.md",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "d8a42d1b872fce085fe1041c188e0448fbba983938e44f2593fdd5bab9238291",
-      "contentSha256": "d8a42d1b872fce085fe1041c188e0448fbba983938e44f2593fdd5bab9238291",
-      "bytes": 19351
+      "sha256": "b90694dd854a375edca9237f00fc03aaed51f2e548255833c7be5f623ac7e122",
+      "contentSha256": "b90694dd854a375edca9237f00fc03aaed51f2e548255833c7be5f623ac7e122",
+      "bytes": 20755
     },
     {
       "path": "server/node/content-updates/app-code-watch.cjs",
@@ -4638,6 +4646,22 @@
       "sha256": "a4d7710b3155743c562a6ce2583c8bd46f4e1f3016a61c09d140db974d0741d0",
       "contentSha256": "a4d7710b3155743c562a6ce2583c8bd46f4e1f3016a61c09d140db974d0741d0",
       "bytes": 12136
+    },
+    {
+      "path": "src/ts/content-updates/characterUpdateRefKeep.ts",
+      "module": "content-updates",
+      "kind": "files",
+      "sha256": "e49a5955ca493c4dc8188f67fa1aafa669a3f6752fe02700f4548f5a742d2333",
+      "contentSha256": "e49a5955ca493c4dc8188f67fa1aafa669a3f6752fe02700f4548f5a742d2333",
+      "bytes": 20900
+    },
+    {
+      "path": "src/ts/content-updates/characterUpdateRefKeep.test.ts",
+      "module": "content-updates",
+      "kind": "files",
+      "sha256": "ebb3143649f53421452481ad76210c8f8bf9df1f5cad17f0155791a3697e24e4",
+      "contentSha256": "ebb3143649f53421452481ad76210c8f8bf9df1f5cad17f0155791a3697e24e4",
+      "bytes": 28540
     }
   ],
   "modules": [
@@ -5282,7 +5306,8 @@
         "patchnote/0.9.96-ver3.md",
         "patchnote/0.9.96-ver4.md",
         "patchnote/0.9.96-ver5.md",
-        "patchnote/0.9.96-ver6.md"
+        "patchnote/0.9.96-ver6.md",
+        "patchnote/0.9.96-ver8.md"
       ],
       "patch": null
     },
@@ -5358,7 +5383,9 @@
         "server/node/content-updates/app-code-watch.cjs",
         "server/node/content-updates/app-code-watch.test.ts",
         "src/ts/content-updates/appCodeUpdate.ts",
-        "src/ts/content-updates/appCodeUpdate.test.ts"
+        "src/ts/content-updates/appCodeUpdate.test.ts",
+        "src/ts/content-updates/characterUpdateRefKeep.ts",
+        "src/ts/content-updates/characterUpdateRefKeep.test.ts"
       ],
       "patch": null
     }
@@ -5382,7 +5409,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "d4326dfb44c5590917fafc9b6b99024e53d2531139deee19594b8d6a520e0e9a"
+      "sha256": "3254a5f708163f80e14ce15ce7b3476e7b6a69e2481c2648b8f05ddc5a4deacf"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5460,7 +5487,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "c631a3256f4912d01f70c374efbcc4944f435da7422e4668fb8f84888adbab56"
+          "sha256": "887f022b5a00454a0190c5c30a64c4367f33732c358db80f7bb940e4ee205610"
         },
         {
           "module": "lore-lua",
@@ -5472,7 +5499,17 @@
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
           "sourceSha256": "24e61ff1e4f54ad7889962b6436a54c57ccb2d633240fa36abe93c353e7d3257",
-          "sha256": "5cb10b8d81ff85e5d2bfa94d6680a95d28bff1232410718153e7421fab4ffe68"
+          "targetHosts": [
+            {
+              "path": "src/ts/characterUpdate.ts",
+              "sha256": "cfc4f9fb0819223f9bde3553ddb8f5925dd730a3cf8962e963d2cb73ba4ef3cc"
+            },
+            {
+              "path": "src/ts/characterUpdateFlow.svelte.ts",
+              "sha256": "c61e8c744d3209e4a14a1f02866a2cf7e88b146cd2f50cb565eae23724168c2e"
+            }
+          ],
+          "sha256": "d5e8b736ae66b331084ccd2a52258ce14b70d9742cae424dcc5458ca8cf20e12"
         },
         {
           "module": "file-export",

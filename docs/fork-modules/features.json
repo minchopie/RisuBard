@@ -613,7 +613,8 @@
         "patchnote/0.9.96-ver3.md",
         "patchnote/0.9.96-ver4.md",
         "patchnote/0.9.96-ver5.md",
-        "patchnote/0.9.96-ver6.md"
+        "patchnote/0.9.96-ver6.md",
+        "patchnote/0.9.96-ver8.md"
       ]
     },
     {
@@ -679,7 +680,9 @@
         "server/node/content-updates/app-code-watch.cjs",
         "server/node/content-updates/app-code-watch.test.ts",
         "src/ts/content-updates/appCodeUpdate.ts",
-        "src/ts/content-updates/appCodeUpdate.test.ts"
+        "src/ts/content-updates/appCodeUpdate.test.ts",
+        "src/ts/content-updates/characterUpdateRefKeep.ts",
+        "src/ts/content-updates/characterUpdateRefKeep.test.ts"
       ]
     }
   ],
@@ -750,7 +753,17 @@
         {
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "24e61ff1e4f54ad7889962b6436a54c57ccb2d633240fa36abe93c353e7d3257"
+          "sourceSha256": "24e61ff1e4f54ad7889962b6436a54c57ccb2d633240fa36abe93c353e7d3257",
+          "targetHosts": [
+            {
+              "path": "src/ts/characterUpdate.ts",
+              "sha256": "cfc4f9fb0819223f9bde3553ddb8f5925dd730a3cf8962e963d2cb73ba4ef3cc"
+            },
+            {
+              "path": "src/ts/characterUpdateFlow.svelte.ts",
+              "sha256": "c61e8c744d3209e4a14a1f02866a2cf7e88b146cd2f50cb565eae23724168c2e"
+            }
+          ]
         },
         {
           "module": "file-export",
