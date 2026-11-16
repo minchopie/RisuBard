@@ -1750,3 +1750,106 @@ index 9104676..ff9e72f 100644
              items: {
                  type: 'object', additionalProperties: false,
                  required: ['role', 'old', 'action', 'newIndex', 'moveTo', 'movedText', 'documentId'],
+diff --git a/server/node/risubard-memory-writer.test.ts b/server/node/risubard-memory-writer.test.ts
+index d7f5437..3ebc24c 100644
+--- a/server/node/risubard-memory-writer.test.ts
++++ b/server/node/risubard-memory-writer.test.ts
+@@ -15,6 +15,7 @@ import {
+     serializeMemoryWriterDraft,
+     buildMemoryWriterSystemPrompt,
+ } from './risubard-memory-writer'
++import { combinedMemorySchema } from './risubard-combined-memory'
+ 
+ describe('BardWiki memory writer skill', () => {
+     test('isolates invalid and missing entries while retaining validated batch entries', () => {
+@@ -588,4 +589,40 @@ describe('BardWiki memory writer skill', () => {
+             remove: [{ index: 0, reason: 'forgotten', mergedInto: null }] }])).toThrow(/remove\[0\]/)
+         expect(() => parse([{ heading: '', operation: 'edit', content: '', add: ['y'], replace: [], remove: [] }])).toThrow()
+     })
++
++    // RisuBard 0.9.96-ver6: Google AI Studio refuses the schema with these maxItems; the parser keeps the same bounds.
++    test('leaves the 24-section and 128-edit bounds to the parser, keeping the document count in the schema', () => {
++        for (const schema of [JSON.parse(buildCanonicalBatchSchema(2)).properties.documents,
++            JSON.parse(canonicalBatchSchema).properties.documents,
++            JSON.parse(combinedMemorySchema()).properties.canonicalPatches]) {
++            const sections = schema.items.properties.sections
++            expect(sections.minItems).toBe(0)
++            expect(sections.maxItems).toBeUndefined()
++            for (const key of ['add', 'replace', 'remove']) expect(sections.items.properties[key].maxItems).toBeUndefined()
++        }
++        expect(JSON.parse(buildCanonicalBatchSchema(2)).properties.documents).toMatchObject({ minItems: 2, maxItems: 2 })
++        expect(JSON.parse(buildCanonicalBatchSchema(2)).properties.documents.items.properties.candidateIndex.maximum).toBe(1)
++        expect(JSON.parse(buildCanonicalSingleSchema()).properties.sections.maxItems).toBeUndefined()
++
++        const section = (index: number) => ({ heading: `절 ${index}`, operation: 'upsert', content: `- 항목 ${index}` })
++        const batch = (sections: unknown[]) => JSON.stringify({ documents: [{ candidateIndex: 0, sections }] })
++        expect(parseCanonicalBatch(batch(Array.from({ length: 24 }, (_, index) => section(index))), 1).documents[0].sections).toHaveLength(24)
++        expect(() => parseCanonicalBatch(batch(Array.from({ length: 25 }, (_, index) => section(index))), 1)).toThrow(/sections must be an array of at most 24 items/)
++        expect(() => parseCanonicalSingle(JSON.stringify({ sections: Array.from({ length: 25 }, (_, index) => section(index)) }))).toThrow(/at most 24/)
++        const isolated = parseCanonicalBatchIsolated(JSON.stringify({ documents: [
++            { candidateIndex: 0, sections: Array.from({ length: 25 }, (_, index) => section(index)) },
++            { candidateIndex: 1, sections: [section(0)] },
++        ] }), 2)
++        expect(isolated.documents.map((document) => document.candidateIndex)).toEqual([1])
++        expect(isolated.failures.map((failure) => [failure.candidateIndex, failure.error.message])).toEqual([[0, expect.stringMatching(/at most 24/)]])
++
++        const edit = (key: 'add' | 'replace' | 'remove', count: number) => ({ heading: 'A', operation: 'edit', content: '',
++            add: [], replace: [], remove: [], [key]: Array.from({ length: count }, (_, index) => key === 'add' ? `추가 ${index}`
++                : key === 'replace' ? { index, text: `고침 ${index}` } : { index, reason: 'superseded', mergedInto: null }) })
++        for (const key of ['add', 'replace', 'remove'] as const) {
++            const parsed = parseCanonicalBatch(batch([edit(key, 128)]), 1).documents[0].sections[0] as { edits: Record<string, unknown[]> }
++            expect(parsed.edits[key]).toHaveLength(128)
++            expect(() => parseCanonicalBatch(batch([edit(key, 129)]), 1)).toThrow(new RegExp(`\\.${key} must be an array of at most 128 items`))
++        }
++    })
+ })
+diff --git a/server/node/risubard-memory-writer.ts b/server/node/risubard-memory-writer.ts
+index e7d915a..c560a71 100644
+--- a/server/node/risubard-memory-writer.ts
++++ b/server/node/risubard-memory-writer.ts
+@@ -174,6 +174,13 @@ export const rebootBatchDraftSchema = buildRebootBatchDraftSchema()
+ 
+ export const CANONICAL_EDIT_MAX_ITEMS = 128
+ 
++// RisuBard 0.9.96-ver6: sections carries no maxItems (24) and add/replace/remove carry no maxItems (CANONICAL_EDIT_MAX_ITEMS).
++// Google AI Studio (also through OpenRouter) rejects this schema with them: "too many states for serving" (2026-11-17 calls:
++// without the four it is accepted; without only the three 128s, or only the sections bounds, it is not). That made every turn's
++// canonical batch and memory draft (combinedMemorySchema embeds these sections) a refused call plus the prompt-schema fallback.
++// The same bounds are still checked after the answer: parseCanonicalBatch rejects more than 24 sections per document and
++// parseCanonicalUnitEdits more than CANONICAL_EDIT_MAX_ITEMS add/replace/remove items of an edit section. The document count,
++// candidateIndex range, sections minItems 0 and every other keyword are unchanged.
+ export function buildCanonicalBatchSchema(candidateCount?: number): string {
+     if (candidateCount !== undefined
+         && (!Number.isSafeInteger(candidateCount) || candidateCount < 1)) {
+@@ -203,7 +210,7 @@ export function buildCanonicalBatchSchema(candidateCount?: number): string {
+                             }),
+                         },
+                         sections: {
+-                            type: 'array', minItems: 0, maxItems: 24,
++                            type: 'array', minItems: 0,
+                             items: {
+                                 type: 'object',
+                                 additionalProperties: false,
+@@ -217,11 +224,11 @@ export function buildCanonicalBatchSchema(candidateCount?: number): string {
+                                     },
+                                     content: { type: 'string' },
+                                     add: {
+-                                        type: 'array', maxItems: CANONICAL_EDIT_MAX_ITEMS,
++                                        type: 'array',
+                                         items: { type: 'string', minLength: 1 },
+                                     },
+                                     replace: {
+-                                        type: 'array', maxItems: CANONICAL_EDIT_MAX_ITEMS,
++                                        type: 'array',
+                                         items: {
+                                             type: 'object', additionalProperties: false,
+                                             required: ['index', 'text'],
+@@ -232,7 +239,7 @@ export function buildCanonicalBatchSchema(candidateCount?: number): string {
+                                         },
+                                     },
+                                     remove: {
+-                                        type: 'array', maxItems: CANONICAL_EDIT_MAX_ITEMS,
++                                        type: 'array',
+                                         items: {
+                                             type: 'object', additionalProperties: false,
+                                             required: ['index', 'reason', 'mergedInto'],

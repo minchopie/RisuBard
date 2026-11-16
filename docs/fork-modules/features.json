@@ -612,7 +612,8 @@
         "patchnote/0.9.96-ver2.md",
         "patchnote/0.9.96-ver3.md",
         "patchnote/0.9.96-ver4.md",
-        "patchnote/0.9.96-ver5.md"
+        "patchnote/0.9.96-ver5.md",
+        "patchnote/0.9.96-ver6.md"
       ]
     },
     {
@@ -655,6 +656,8 @@
         "server/node/risubard-memory-analysis.ts",
         "server/node/risubard-canonical-maintenance.test.ts",
         "server/node/risubard-canonical-maintenance.ts",
+        "server/node/risubard-memory-writer.test.ts",
+        "server/node/risubard-memory-writer.ts",
         "src/ts/process/request/structuredOutputFallback.test.ts",
         "src/ts/process/request/structuredOutputFallback.ts",
         "src/ts/risubard/memoryAnalysisClient.test.ts",

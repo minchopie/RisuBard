@@ -4336,6 +4336,14 @@
       "bytes": 5984
     },
     {
+      "path": "patchnote/0.9.96-ver6.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "cfb6ded6240309793fc945cb794061ffe8cb78d50459bb93665712a91a2aecdc",
+      "contentSha256": "cfb6ded6240309793fc945cb794061ffe8cb78d50459bb93665712a91a2aecdc",
+      "bytes": 2099
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4502,6 +4510,22 @@
       "sha256": "ff8c2b5c578e507e02c8518d26705e01ba923b2a9540a46cabf71b0fe53a3e01",
       "contentSha256": "ff8c2b5c578e507e02c8518d26705e01ba923b2a9540a46cabf71b0fe53a3e01",
       "bytes": 18324
+    },
+    {
+      "path": "server/node/risubard-memory-writer.test.ts",
+      "module": "bardwiki-cache-prefix",
+      "kind": "hosts",
+      "sha256": "873a083c93157cc9b073bed155568e582087b242574247bd201ac97fad7c5ec5",
+      "contentSha256": "873a083c93157cc9b073bed155568e582087b242574247bd201ac97fad7c5ec5",
+      "bytes": 24846
+    },
+    {
+      "path": "server/node/risubard-memory-writer.ts",
+      "module": "bardwiki-cache-prefix",
+      "kind": "hosts",
+      "sha256": "774bda5f748af9d7754f081f61a66f2f557113fc8ff935d2226de5029d46c338",
+      "contentSha256": "774bda5f748af9d7754f081f61a66f2f557113fc8ff935d2226de5029d46c338",
+      "bytes": 30216
     },
     {
       "path": "src/ts/process/request/structuredOutputFallback.test.ts",
@@ -5257,7 +5281,8 @@
         "patchnote/0.9.96-ver2.md",
         "patchnote/0.9.96-ver3.md",
         "patchnote/0.9.96-ver4.md",
-        "patchnote/0.9.96-ver5.md"
+        "patchnote/0.9.96-ver5.md",
+        "patchnote/0.9.96-ver6.md"
       ],
       "patch": null
     },
@@ -5306,6 +5331,8 @@
         "server/node/risubard-memory-analysis.ts",
         "server/node/risubard-canonical-maintenance.test.ts",
         "server/node/risubard-canonical-maintenance.ts",
+        "server/node/risubard-memory-writer.test.ts",
+        "server/node/risubard-memory-writer.ts",
         "src/ts/process/request/structuredOutputFallback.test.ts",
         "src/ts/process/request/structuredOutputFallback.ts",
         "src/ts/risubard/memoryAnalysisClient.test.ts",
@@ -5355,7 +5382,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "112e6b41abcfd774b6ca0d87dc4c60ba435d422efc0b5e7abe039f7d085ffbbb"
+      "sha256": "d4326dfb44c5590917fafc9b6b99024e53d2531139deee19594b8d6a520e0e9a"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5433,7 +5460,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "8af0c357ab993f6daf682110af1b5b385a92d25504a9ee24b937a9204e747f44"
+          "sha256": "c631a3256f4912d01f70c374efbcc4944f435da7422e4668fb8f84888adbab56"
         },
         {
           "module": "lore-lua",
@@ -5457,7 +5484,7 @@
           "module": "bardwiki-cache-prefix",
           "path": "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
           "sourceSha256": "04577c8b96987125dc060a7d7def4c766c5bd4b687034f076600b67b3a8f1108",
-          "sha256": "5a67dd7eeb3a41bd78d07db54cb1dfcbbffcf8058e84668161886b4d829f3526"
+          "sha256": "225ffd1fe5b029305680ca6198676660e1e4a38714622aec6a24cecb6b3a0836"
         },
         {
           "module": "transfer-sync",
