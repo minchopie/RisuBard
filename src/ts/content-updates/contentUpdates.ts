@@ -622,13 +622,15 @@ export async function applyItem(item: ContentItem, bytes: Uint8Array): Promise<C
 let running = false
 let lastCheck = 0
 let started = false
+/** 0.9.96-ver7: a check (list read, download or import) is running — the settings 「서버 끄기」 waits for it. */
+export const contentCheckRunning = (): boolean => running
 
 /** `ignoreAlert`: the caller's own dialog is the open one (app code update apply). */
 export async function busy(ignoreAlert = false): Promise<boolean> {
     return (await busyReason(ignoreAlert)) !== ''
 }
 /** 0.9.96-ver5: why busy() is true ('' when it is not), the same conditions in the same order, worded for the settings panel. */
-async function busyReason(ignoreAlert = false): Promise<string> {
+export async function busyReason(ignoreAlert = false): Promise<string> {
     const { stores, generation, session } = await app()
     if (!get(stores.loadedStore)) return '앱을 아직 불러오는 중이에요.'
     if (get(transferBusy)) return `다른 전송·동기화 작업이 진행 중이에요${get(transferStatus) ? `(${get(transferStatus)})` : ''}.`
@@ -713,7 +715,7 @@ async function moduleInstalled(item: Partial<ContentItem>): Promise<boolean> {
 }
 
 /** A NAS sync cycle is running (startup/foreground sync, possibly preparing an apply): a question waits for it to end. */
-async function syncCycleRunning(): Promise<boolean> {
+export async function syncCycleRunning(): Promise<boolean> {
     try { return !!get((await import('../nasSyncCoordinator')).coordinatorState)?.running } catch { return false }
 }
 

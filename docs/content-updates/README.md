@@ -44,6 +44,16 @@
   - PC·브라우저: 「다시 켜면 적용돼요」만 알린다.
 - 네이티브(transfer-sync 모듈 파일): `PlaySetController`의 `app.restart`, `MainActivity.restartServer()`, `EmbeddedServer.shutdown()`. 네이티브가 바뀌므로 런타임 지문이 바뀌어, 0.9.92-ver2는 모든 기기에 전체 APK·PC 패키지 설치가 한 번 필요하다.
 
+## 서버 끄기 스위치 (0.9.96-ver7)
+
+- 사용자 지시(2026-11-17 03:06) 「risubard에 끌 수 있는 스위치가 있으면 좋겠다.」 PC 서버는 탭을 닫아도 창 없이 계속 돌고, 받아 둔 앱 코드는 서버가 다시 켜질 때만 적용되므로 끄는 길이 필요했다.
+- 위치: 설정 > 전송, 「캐릭터·페르소나 배포」 아래 「서버 끄기 (이 PC)」(`ContentUpdatesPanel.svelte`). `serverShutdownAvailable()`: Node 서버 + 이 PC 자기 화면(`ownsServer`, localhost) + 안드로이드 앱 아님일 때만 보인다.
+- 흐름(`appCodeUpdate.ts` `shutdownServer`): 바쁨 이유(`contentUpdates.ts`의 `busyReason` + 입력칸 보내기 준비 + NAS 동기화 주기, 둘 다 기존 함수를 export만 함)가 있으면 이유만 보여 주고 끝. 확인 창 → 다시 이유 확인 → 「지금 적용」과 같은 `applyNow`(입력 잡기·대기 창·초안·`requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })`·저장 뒤 바쁨 재확인) → 그 사이 시작된 NAS 동기화 주기가 없으면 자동 동기화를 메모리에서 멈추고(`syncCoordinator().pause(true)`) → `POST /api/server-shutdown`. 거절되면 동기화 멈춤을 풀고 이유를 보여 준다. 받아들여지면 화면 전체를 덮는 안내(「서버를 끄고 있어요…」 → 서버가 연결을 거부하면 「서버가 꺼졌습니다. 다시 켜려면 RisuBard를 실행하세요.」, 60초 안에 안 꺼지면 그 사실)를 남기고 입력은 잡은 채 둔다.
+- 서버(host-bridges, v0.9.96 어댑터 `compat/v0.9.90/host-bridges.patch`의 `server.cjs` 한 덩어리): `/api/server-shutdown` — 앱 로그인(`checkAuth`) → 안드로이드 임베디드면 409 → 계정 가져오기·전송 정리·NAS 동기화 적용 중(기존 쓰기 문 `assertWrite`)이면 423 → 모델 요청이 진행 중이면 423(복구 대상 답변 작업 `modelJobs.listJobs('active')`, 이 서버가 중계 중인 `/proxy`·`/proxy2` POST·PUT·PATCH와 화면이 읽고 있는 모델 작업 스트림 `/api/model-jobs/:id/stream` — 번역·기록 정리 같은 보조(aux) 요청 포함 — 을 세는 `relayedRequests`, 이 서버가 만든 응답(`POST /api/model-jobs`) 또는 스트림 읽기로 알게 된 모델 작업 중 아직 실행 중인 것 `relayedJobs`(첫 스트림을 열기 전·화면이 재접속을 기다리는 동안에도 셈, 원작 `modelJobs.getJob`으로 상태 확인), 끝나지 않은 `proxyStreamJobs`) → 아니면 시작 메뉴 「중지」(`/api/local-shutdown`)와 같은 `shutdownGracefully`.
+- 클라이언트 쪽 바쁨 확인에는 배포 확인 진행(`contentCheckRunning`, 새 한 줄 getter)과 패널의 배포 작업(`working`)도 들어간다.
+- 보내지 않은 입력 초안: 설정 화면은 채팅 화면을 대신 띄우므로(`App.svelte`) 버튼을 누를 때 입력칸은 이미 닫혀 있고, 초안은 닫힐 때 원작 쓰기 대기열에 넘어가 있다. 스위치는 그 대기열이 끝나기를 기다릴 뿐이라, 그 쓰기가 실패했다면(원작은 실패를 알리지 않음) 그 손실은 끄기 전에 이미 일어난 것이다. 끄기가 새로 만드는 손실 경로는 아니다.
+- 작성 트리(base)의 `server.cjs`에는 넣지 않았다(배포 대상이 아님). base로 조립하면 버튼은 404 이유를 보여 준다.
+- 「서버 다시 시작」은 없다: PC에는 서버가 스스로 다시 뜨는 기존 경로가 없다(RisuBard.exe·업데이트 설치기가 띄움). 안드로이드는 기존 「지금 적용」의 `app.restart`가 그 역할이다.
 ## 모듈 구성
 
 - 소유 파일(`features.json` content-updates): `server/node/content-updates/content-updates.cjs`(+test), `src/ts/content-updates/contentUpdates.ts`(+test), `src/lib/Setting/Pages/ContentUpdatesPanel.svelte`, 이 문서, 0.9.92-ver2부터 `server/node/content-updates/app-code-watch.cjs`(+test)·`src/ts/content-updates/appCodeUpdate.ts`(+test). 앱 코드 확인 경로는 같은 `registerRoutes`, 클라이언트는 `startContentUpdates`에서 시작하므로 연결 줄은 늘지 않는다.

@@ -8,6 +8,8 @@
 import { get } from 'svelte/store'
 import { transferRequest } from '../playTransfer'
 import { busy } from './contentUpdates'
+import { isNodeServer } from '../platform'
+import { ownsServer } from '../transfer-sync/chatDeviceLabel'
 
 export interface AppCodeStatus {
     enabled: boolean; current: string | null; ready: string | null; state: string; version?: string; error?: string
@@ -154,4 +156,118 @@ export function startAppCodeUpdates() {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') void checkAppCodeUpdate()
     })
+}
+
+// ── 0.9.96-ver7: settings 「서버 끄기」 (PC) ──
+// The PC server keeps running without a window after its tab is closed, and an app code patch from the NAS is installed only when
+// the server starts again. This switch reuses the "지금 적용" steps above (held input, wait dialog, unsent draft, durable save to the
+// server's file, busy re-check) and, in place of the Android restart, asks the server for the graceful exit the start-menu stop uses
+// (POST /api/server-shutdown in server.cjs: refused while a write gate is held or a reply runs on the server, then shutdownGracefully).
+// The PC has no restart path of its own (RisuBard.exe or the package updater starts the server), so there is no restart switch.
+// Not shown on Android (the app owns its embedded server) nor in another device's browser that uses this PC's server.
+const SHUTDOWN_MESSAGE = '서버를 끄기 전에 저장하는 중…'
+export const SERVER_STOPPING_TEXT = '서버를 끄고 있어요. 저장을 마무리하는 중…'
+export const SERVER_STOPPED_TEXT = '서버가 꺼졌습니다. 다시 켜려면 RisuBard를 실행하세요.'
+export const SERVER_STILL_RUNNING_TEXT = '서버가 1분 안에 꺼지지 않았어요. 저장 마무리가 길어지는 중일 수 있어요. 잠시 뒤 이 탭을 새로 고쳐 확인해 주세요.'
+
+/** The PC's own screen on its Node server (localhost), not the Android app. */
+export function serverShutdownAvailable(nodeServer: boolean = isNodeServer, userAgent: string = String(globalThis.navigator?.userAgent ?? ''), hostname: string = String(globalThis.location?.hostname ?? '')): boolean {
+    return nodeServer && !/RisuBardAndroid/i.test(userAgent) && ownsServer(userAgent, hostname)
+}
+
+/** Covers the page with the message: the app cannot be used once its server is gone. */
+export function showServerStopped(text: string, doc: any = globalThis.document) {
+    let cover = doc.getElementById('risubard-server-stopped')
+    if (!cover) {
+        cover = doc.createElement('div')
+        cover.id = 'risubard-server-stopped'
+        cover.setAttribute('role', 'status')
+        cover.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:2rem;text-align:center;font-size:1.25rem;line-height:1.6;background:var(--color-bgcolor,#1e1e2e);color:var(--color-textcolor,#f8f8f2)'
+        doc.body.append(cover)
+    }
+    cover.textContent = text
+}
+
+/** The server still answers. A slow answer (the exit flushing saves) counts as still running; only a refused connection is gone. */
+export async function serverStillAnswers(fetcher: typeof fetch = globalThis.fetch): Promise<boolean> {
+    try { await fetcher('/', { cache: 'no-store', signal: AbortSignal.timeout(2_000) }); return true }
+    catch (error: any) { return error?.name === 'TimeoutError' || error?.name === 'AbortError' }
+}
+
+const shutdownDefaults = {
+    reason: async (): Promise<string> => {
+        const updates = await import('./contentUpdates')
+        return await updates.busyReason() || (await composerBusy() ? '채팅을 보내는 중이에요.' : '')
+            || (await updates.syncCycleRunning() ? 'NAS 동기화가 진행 중이에요. 끝난 뒤 다시 눌러 주세요.' : '')
+            || (updates.contentCheckRunning() ? '캐릭터·페르소나 배포 확인(목록 읽기·받기·가져오기)이 진행 중이에요. 끝난 뒤 다시 눌러 주세요.' : '')
+    },
+    confirm: async (): Promise<boolean> => (await import('../alert')).alertConfirm('서버를 끌까요?\n\n저장을 마친 뒤 이 PC의 RisuBard 서버를 꺼요. 꺼지면 이 탭은 쓸 수 없어요. 다시 쓰려면 RisuBard를 실행하세요. NAS에서 받아 둔 새 앱 코드가 있으면 그때 적용돼요.'),
+    busy: async (ignoreAlert: boolean): Promise<boolean> => {
+        const updates = await import('./contentUpdates')
+        return await defaults.busy(ignoreAlert) || await updates.syncCycleRunning() || updates.contentCheckRunning()
+    },
+    ownDialog: async (): Promise<boolean> => { const a: any = get((await import('../stores.svelte')).alertStore); return a?.type === 'wait' && a?.msg === SHUTDOWN_MESSAGE },
+    /** Holds automatic NAS sync (in memory) so no cycle starts while the server exits; returns how to undo it, or null when a cycle
+     *  is running right now (then nothing is paused). */
+    pauseSync: async (): Promise<(() => void) | null> => {
+        const coordinator: any = (await import('../nasSyncCoordinator')).syncCoordinator()
+        if (coordinator.state?.running) return null
+        if (coordinator.state?.paused) return () => {}
+        coordinator.pause(true)
+        return () => coordinator.pause(false)
+    },
+    request: async (): Promise<void> => {
+        const { forageStorage } = await import('../globalApi.svelte')
+        const response = await fetch('/api/server-shutdown', { method: 'POST', headers: { 'risu-auth': await forageStorage.createAuth() } })
+        if (!response.ok) throw new Error((await response.json().catch(() => null))?.error || `서버가 끄기 요청을 받지 않았어요 (${response.status}).`)
+    },
+    alive: (): Promise<boolean> => serverStillAnswers(),
+    show: (text: string) => showServerStopped(text),
+    hold: (): (() => void) => holdInput(),
+    apply: {} as Partial<typeof defaults>,
+    pollMs: 1_000,
+    stopWait: 60_000,
+}
+
+/** 「서버 끄기」. '' when cancelled; otherwise what happened, for the settings panel. Once the server took the request the page is
+ *  covered and input stays held (nothing here can be saved any more). */
+export async function shutdownServer(deps: Partial<typeof shutdownDefaults> = {}): Promise<string> {
+    const d = { ...shutdownDefaults, ...deps }
+    const before = await d.reason()
+    if (before) return `지금은 서버를 끌 수 없어요: ${before}`
+    if (!await d.confirm()) return ''
+    // The question was open for a while.
+    const after = await d.reason()
+    if (after) return `지금은 서버를 끌 수 없어요: ${after}`
+    const alert = await import('../alert')
+    let refused = ''
+    let release: (() => void) | null = d.hold()
+    try {
+        alert.alertWait(SHUTDOWN_MESSAGE)
+        const result = await applyNow({ ...d.apply, busy: d.busy, ownDialog: d.ownDialog, restart: async () => {
+            const resume = await d.pauseSync()
+            if (!resume) { refused = 'NAS 동기화가 막 시작됐어요. 끝난 뒤 다시 눌러 주세요.'; throw new Error(refused) }
+            try { await d.request() } catch (error) { resume(); refused = error instanceof Error ? error.message : String(error); throw error }
+        } })
+        if (result === 'restarting') {
+            release = null
+            if (await d.ownDialog()) alert.alertClear()
+            d.show(SERVER_STOPPING_TEXT)
+            const until = Date.now() + d.stopWait
+            while (Date.now() < until) {
+                if (!await d.alive()) { d.show(SERVER_STOPPED_TEXT); return SERVER_STOPPED_TEXT }
+                await new Promise(resolve => setTimeout(resolve, d.pollMs))
+            }
+            d.show(SERVER_STILL_RUNNING_TEXT)
+            return SERVER_STILL_RUNNING_TEXT
+        }
+        if (result === 'save-failed') return '저장을 마치지 못해서 서버를 끄지 않았어요. 잠시 뒤 다시 눌러 주세요.'
+        if (result === 'busy') return '그사이 다른 작업(답변·전송·NAS 동기화·가져오기 또는 다른 알림 창)이 시작돼서 서버를 끄지 않았어요. 끝난 뒤 다시 눌러 주세요.'
+        return `서버를 끄지 못했어요: ${refused}`
+    } finally {
+        if (release) {
+            release()
+            try { if (await d.ownDialog()) alert.alertClear() } catch { /* nothing to clear */ }
+        }
+    }
 }

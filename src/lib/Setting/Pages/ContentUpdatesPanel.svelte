@@ -62,7 +62,23 @@
     function decline(item: ContentItem) {
         return run(async () => { await recordDecision(item, 'declined'); await refresh() })
     }
-    onMount(() => { void refresh() })
+    // 0.9.96-ver7: 「서버 끄기」 (PC only; appCodeUpdate.ts shutdownServer).
+    let shutdownShown = $state(false)
+    let stopping = $state(false)
+    let stopMessage = $state('')
+    async function stopServer() {
+        if (stopping) return
+        // Publishing or a check started from this panel talks to the NAS through the server: let it finish.
+        if (working) { stopMessage = '지금은 서버를 끌 수 없어요: 위의 배포 작업(올리기·확인)이 진행 중이에요. 끝난 뒤 다시 눌러 주세요.'; return }
+        stopping = true; stopMessage = ''
+        try { stopMessage = await (await import('src/ts/content-updates/appCodeUpdate')).shutdownServer() }
+        catch (error) { stopMessage = `서버를 끄지 못했어요: ${error instanceof Error ? error.message : String(error)}` }
+        finally { stopping = false }
+    }
+    onMount(() => {
+        void refresh()
+        void import('src/ts/content-updates/appCodeUpdate').then(m => { shutdownShown = m.serverShutdownAvailable() }).catch(() => {})
+    })
 </script>
 
 <fieldset disabled={working} aria-label="캐릭터·페르소나 배포">
@@ -107,6 +123,14 @@
         </details>
     {/if}
 </fieldset>
+{#if shutdownShown}
+    <fieldset class="server-stop" disabled={stopping} aria-label="서버 끄기">
+        <legend>서버 끄기 (이 PC)</legend>
+        <p>탭을 닫아도 이 PC의 RisuBard 서버는 창 없이 계속 돌아요. 여기서 끄면 저장을 마친 뒤 서버가 꺼져요. 다시 쓰려면 RisuBard를 실행하세요. NAS에서 받아 둔 새 앱 코드는 서버가 다시 켜질 때 적용돼요. 답변·전송·NAS 동기화·가져오기가 진행 중이면 끄지 않고 이유를 알려 줘요.</p>
+        <div class="transfer-actions"><ShButton variant="destructive" onclick={stopServer}>서버 끄기</ShButton></div>
+        {#if stopMessage}<p role="status">{stopMessage}</p>{/if}
+    </fieldset>
+{/if}
 <style>
     fieldset { border: 1px solid var(--color-darkborderc); border-radius: var(--risu-radius-lg, .5rem); padding: 1rem; display: flex; flex-wrap: wrap; gap: .75rem; min-width: 0; }
     fieldset > p { width: 100%; }
@@ -118,4 +142,5 @@
     .remote-file { width: 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: .5rem; margin-block: .5rem; }
     .transfer-actions { width: 100%; display: flex; flex-wrap: wrap; gap: .5rem; }
     .hint { opacity: .8; font-size: .9em; }
+    .server-stop { margin-top: 1rem; }
 </style>

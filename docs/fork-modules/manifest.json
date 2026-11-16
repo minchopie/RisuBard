@@ -4344,6 +4344,14 @@
       "bytes": 2099
     },
     {
+      "path": "patchnote/0.9.96-ver7.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "fbb424fc24f941ddacb4847dd93fb46f8f5c37479c3870121cf1fdf1ee9cf557",
+      "contentSha256": "fbb424fc24f941ddacb4847dd93fb46f8f5c37479c3870121cf1fdf1ee9cf557",
+      "bytes": 1907
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4579,9 +4587,9 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "5f466a701477fd3dcf80aa50332e77d23550b70582d9986a9ab4b09a4b76031f",
-      "contentSha256": "5f466a701477fd3dcf80aa50332e77d23550b70582d9986a9ab4b09a4b76031f",
-      "bytes": 60999
+      "sha256": "824c0e80f61b5bc9d442220831d64706e2a87feb4d345878ad75fe5e2c4bf1c0",
+      "contentSha256": "824c0e80f61b5bc9d442220831d64706e2a87feb4d345878ad75fe5e2c4bf1c0",
+      "bytes": 61193
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
@@ -4595,17 +4603,17 @@
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "7fa02e8c1306c0096d0e03c6ed13525ce30bfc90dee86557b02ce9a03e034afa",
-      "contentSha256": "7fa02e8c1306c0096d0e03c6ed13525ce30bfc90dee86557b02ce9a03e034afa",
-      "bytes": 7711
+      "sha256": "6760b2a32a57c3cbdda922172125ec5d3eca2053f163f7687bde68871111dcaf",
+      "contentSha256": "6760b2a32a57c3cbdda922172125ec5d3eca2053f163f7687bde68871111dcaf",
+      "bytes": 9507
     },
     {
       "path": "docs/content-updates/README.md",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "d8a42d1b872fce085fe1041c188e0448fbba983938e44f2593fdd5bab9238291",
-      "contentSha256": "d8a42d1b872fce085fe1041c188e0448fbba983938e44f2593fdd5bab9238291",
-      "bytes": 19351
+      "sha256": "f1caf0857b7cc2a0cf7c952f3fb45275a45ea18c7daf3a75f780fc95d6a1d104",
+      "contentSha256": "f1caf0857b7cc2a0cf7c952f3fb45275a45ea18c7daf3a75f780fc95d6a1d104",
+      "bytes": 22973
     },
     {
       "path": "server/node/content-updates/app-code-watch.cjs",
@@ -4627,17 +4635,17 @@
       "path": "src/ts/content-updates/appCodeUpdate.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "bc7b094d75bd0b7b5e4e7b5844e4cd05c07b74db038d557fea31ab586fb3d697",
-      "contentSha256": "bc7b094d75bd0b7b5e4e7b5844e4cd05c07b74db038d557fea31ab586fb3d697",
-      "bytes": 10057
+      "sha256": "f273a66b0a3bfd00d534af7699c94f46df55c3ec8d17355534ba88e8a00fcaab",
+      "contentSha256": "f273a66b0a3bfd00d534af7699c94f46df55c3ec8d17355534ba88e8a00fcaab",
+      "bytes": 17983
     },
     {
       "path": "src/ts/content-updates/appCodeUpdate.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "a4d7710b3155743c562a6ce2583c8bd46f4e1f3016a61c09d140db974d0741d0",
-      "contentSha256": "a4d7710b3155743c562a6ce2583c8bd46f4e1f3016a61c09d140db974d0741d0",
-      "bytes": 12136
+      "sha256": "983a256799cff15963ae37987078737fb92c5c8af80fc7973b3504ac3a0b0808",
+      "contentSha256": "983a256799cff15963ae37987078737fb92c5c8af80fc7973b3504ac3a0b0808",
+      "bytes": 19299
     }
   ],
   "modules": [
@@ -5282,7 +5290,8 @@
         "patchnote/0.9.96-ver3.md",
         "patchnote/0.9.96-ver4.md",
         "patchnote/0.9.96-ver5.md",
-        "patchnote/0.9.96-ver6.md"
+        "patchnote/0.9.96-ver6.md",
+        "patchnote/0.9.96-ver7.md"
       ],
       "patch": null
     },
@@ -5382,7 +5391,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "d4326dfb44c5590917fafc9b6b99024e53d2531139deee19594b8d6a520e0e9a"
+      "sha256": "5aaba5682e3f6a05b23aaf8c7741028913ad1174b405ff64e431445ea2b95e0a"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5460,7 +5469,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "c631a3256f4912d01f70c374efbcc4944f435da7422e4668fb8f84888adbab56"
+          "sha256": "8bf41f049e50f2dd4102f4fbfddadf08963859717c02868503fb7714a4938887"
         },
         {
           "module": "lore-lua",
@@ -5472,7 +5481,7 @@
           "module": "host-bridges",
           "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
           "sourceSha256": "24e61ff1e4f54ad7889962b6436a54c57ccb2d633240fa36abe93c353e7d3257",
-          "sha256": "5cb10b8d81ff85e5d2bfa94d6680a95d28bff1232410718153e7421fab4ffe68"
+          "sha256": "dcf8e4e33319c337c8275819ad1a93469c3c6f40ab494f799293a87a9fa64215"
         },
         {
           "module": "file-export",
