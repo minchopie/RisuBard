@@ -455,9 +455,17 @@
         "src/ts/storage/nodeStorage.ts",
         "vitest.config.ts",
         "vitest.config.server.ts",
-        "vitest.config.compat.ts"
+        "vitest.config.compat.ts",
+        "src/ts/plugins/plugins.svelte.ts",
+        "src/ts/plugins/apiV3/v3.svelte.ts",
+        "src/ts/plugins/apiV3/factory.ts",
+        "src/ts/plugins/apiV3/factory.test.ts"
       ],
-      "files": []
+      "files": [
+        "src/ts/plugins/pluginData.ts",
+        "src/ts/plugins/pluginData.svelte.test.ts",
+        "src/ts/plugins/pluginReadPaths.svelte.test.ts"
+      ]
     },
     {
       "id": "history-docs",
@@ -621,7 +629,9 @@
         "patchnote/0.9.96-ver7.md",
         "patchnote/0.9.96-ver8.md",
         "patchnote/0.9.96-ver9.md",
-        "patchnote/0.9.96-ver10.md"
+        "patchnote/0.9.96-ver10.md",
+        "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
+        "docs/fork-modules/compat/v0.9.90/host-bridges.patch"
       ]
     },
     {
@@ -754,13 +764,13 @@
         },
         {
           "module": "lore-lua",
-          "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
-          "sourceSha256": "d459d0eb8d77fae8e55fc4fc7871a4fd34f868bb906e924c0a2fe91a45360b98"
+          "path": "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
+          "sourceSha256": "93cd88ddd3ee39bdcfb904cb144bcea12f1ec580639b8b3e78e1e6ec5bcd67a2"
         },
         {
           "module": "host-bridges",
-          "path": "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
-          "sourceSha256": "24e61ff1e4f54ad7889962b6436a54c57ccb2d633240fa36abe93c353e7d3257",
+          "path": "docs/fork-modules/compat/v0.9.96/host-bridges.patch",
+          "sourceSha256": "7eb857c1a0c078292860639e4a199f057cadd69f59bd3838d2a91e4e42109694",
           "targetHosts": [
             {
               "path": "src/ts/characterUpdate.ts",

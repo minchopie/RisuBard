@@ -1,3 +1,4 @@
+import { applyPluginCharacterUpdate } from "../pluginData";
 import { allowedDbKeys, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, pluginProviderOwners, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
 import { SandboxHost } from "./factory";
 import { getDatabase, normalizeChat } from "src/ts/storage/database.svelte";
@@ -1086,7 +1087,9 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             const charId = charIds[index];
             if(charId){
                 DBState.db.characters[charId] =
-                    stripBardWikiVirtualMemoryFromCharacter(char)
+                    applyPluginCharacterUpdate(
+                        db.characters[charId], stripBardWikiVirtualMemoryFromCharacter(char)
+                    )
             }
         },
         getChatFromIndex: async (characterIndex:number, chatIndex:number) => {

@@ -577,6 +577,128 @@ index bd439c5..27f8eb8 100644
          this.writer = writableStream.getWriter()
          return true
      }
+diff --git a/src/ts/plugins/apiV3/factory.test.ts b/src/ts/plugins/apiV3/factory.test.ts
+index ddbb1e9..88e99eb 100644
+--- a/src/ts/plugins/apiV3/factory.test.ts
++++ b/src/ts/plugins/apiV3/factory.test.ts
+@@ -138,3 +138,38 @@ describe('API v3 plugin sandbox document', () => {
+         stop()
+     })
+ })
++
++
++describe('plugin transfer collection fast path', () => {
++    test('keeps nested buffers and platform transfers in their original order', () => {
++        vi.stubGlobal('ImageBitmap', class ImageBitmap {})
++        try {
++            const host = new SandboxHost({}) as any
++            const a = new ArrayBuffer(2)
++            const b = new Uint8Array(3)
++            Object.defineProperty(b, 'constructor', { value: Object })
++            const channel = new MessageChannel()
++            vi.stubGlobal('MessagePort', channel.port1.constructor)
++            const bitmap = new ImageBitmap()
++            const writable = new WritableStream()
++            Object.defineProperty(writable, 'constructor', { value: Object })
++            const transform = new TransformStream()
++            const value = { chats: [{ message: [{ data: 'same', binary: b }] }], a, channel: channel.port1, bitmap, writable, transform }
++            expect(host.collectTransferables(value)).toEqual([b.buffer, a, channel.port1, bitmap, writable, transform])
++            channel.port1.close(); channel.port2.close()
++        } finally { vi.unstubAllGlobals() }
++    })
++
++    test('does not inspect platform instance prototypes for ordinary message records', () => {
++        const host = new SandboxHost({}) as any
++        const inspected = vi.fn(() => { throw new Error('slow platform check') })
++        const original = globalThis.ImageBitmap
++        const Fake = function () {}
++        Object.defineProperty(Fake, Symbol.hasInstance, { value: inspected })
++        vi.stubGlobal('ImageBitmap', Fake)
++        try {
++            expect(host.collectTransferables({ chats: [{ message: [{ role: 'user', data: 'hello' }] }] })).toEqual([])
++            expect(inspected).not.toHaveBeenCalled()
++        } finally { vi.stubGlobal('ImageBitmap', original); vi.unstubAllGlobals() }
++    })
++})
+diff --git a/src/ts/plugins/apiV3/factory.ts b/src/ts/plugins/apiV3/factory.ts
+index 28e2844..738446a 100644
+--- a/src/ts/plugins/apiV3/factory.ts
++++ b/src/ts/plugins/apiV3/factory.ts
+@@ -494,7 +494,16 @@ export class SandboxHost {
+ 
+     private collectTransferables(obj: any, transferables: Transferable[] = []): Transferable[] {
+         if (!obj || typeof obj !== 'object') return transferables;
+-
++        // Plain snapshots dominate plugin reads; retain the original path for platform objects.
++        const prototype = Object.getPrototypeOf(obj);
++        if (!ArrayBuffer.isView(obj) && prototype === Object.prototype && obj.constructor === Object) {
++            Object.values(obj).forEach(value => this.collectTransferables(value, transferables));
++            return transferables;
++        }
++        if (Array.isArray(obj) && prototype === Array.prototype) {
++            obj.forEach(item => this.collectTransferables(item, transferables));
++            return transferables;
++        }
+         if (obj instanceof ArrayBuffer ||
+             obj instanceof MessagePort ||
+             obj instanceof ImageBitmap ||
+@@ -512,7 +521,6 @@ export class SandboxHost {
+         else if (obj.constructor === Object) {
+             Object.values(obj).forEach(value => this.collectTransferables(value, transferables));
+         }
+-
+         return transferables;
+     }
+ 
+diff --git a/src/ts/plugins/apiV3/v3.svelte.ts b/src/ts/plugins/apiV3/v3.svelte.ts
+index d891dde..352791c 100644
+--- a/src/ts/plugins/apiV3/v3.svelte.ts
++++ b/src/ts/plugins/apiV3/v3.svelte.ts
+@@ -1,3 +1,4 @@
++import { applyPluginCharacterUpdate } from "../pluginData";
+ import { allowedDbKeys, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, pluginProviderOwners, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
+ import { SandboxHost } from "./factory";
+ import { getDatabase, normalizeChat } from "src/ts/storage/database.svelte";
+@@ -1086,7 +1087,9 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
+             const charId = charIds[index];
+             if(charId){
+                 DBState.db.characters[charId] =
+-                    stripBardWikiVirtualMemoryFromCharacter(char)
++                    applyPluginCharacterUpdate(
++                        db.characters[charId], stripBardWikiVirtualMemoryFromCharacter(char)
++                    )
+             }
+         },
+         getChatFromIndex: async (characterIndex:number, chatIndex:number) => {
+diff --git a/src/ts/plugins/plugins.svelte.ts b/src/ts/plugins/plugins.svelte.ts
+index 622b624..739a5d4 100644
+--- a/src/ts/plugins/plugins.svelte.ts
++++ b/src/ts/plugins/plugins.svelte.ts
+@@ -1,3 +1,4 @@
++import { applyPluginCharacterUpdate } from "./pluginData";
+ import { get, writable } from "svelte/store";
+ import { language } from "../../lang";
+ import { getCurrentCharacter, getDatabase, setDatabase, setDatabaseLite } from "../storage/database.svelte";
+@@ -544,7 +545,7 @@ export const getV2PluginAPIs = (pluginName = '') => {
+         setChar: (char: any) => {
+             const db = getDatabase()
+             const charid = get(selectedCharID)
+-            db.characters[charid] = char
++            db.characters[charid] = applyPluginCharacterUpdate(db.characters[charid], char)
+             setDatabaseLite(db)
+         },
+         addProvider: (name: string, func: (arg: PluginV2ProviderArgument, abortSignal?: AbortSignal) => Promise<{ success: boolean, content: string }>, options?: PluginV2ProviderOptions) => {
+@@ -732,9 +733,7 @@ export const getV2PluginAPIs = (pluginName = '') => {
+         },
+         pluginStorage: {
+             getItem: (key: string) => {
+-                const db = getDatabase({ snapshot: true });
+-                db.pluginCustomStorage ??= {}
+-                return db.pluginCustomStorage[key] || null;
++                return $state.snapshot((getDatabase().pluginCustomStorage ?? {})[key]) || null;
+             },
+             setItem: (key: string, value: string) => {
+                 const db = getDatabase();
 diff --git a/src/ts/storage/nodeStorage.ts b/src/ts/storage/nodeStorage.ts
 index baa1568..5f76797 100644
 --- a/src/ts/storage/nodeStorage.ts

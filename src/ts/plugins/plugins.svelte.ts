@@ -1,3 +1,4 @@
+import { applyPluginCharacterUpdate } from "./pluginData";
 import { get, writable } from "svelte/store";
 import { language } from "../../lang";
 import { getCurrentCharacter, getDatabase, setDatabase, setDatabaseLite } from "../storage/database.svelte";
@@ -544,7 +545,7 @@ export const getV2PluginAPIs = (pluginName = '') => {
         setChar: (char: any) => {
             const db = getDatabase()
             const charid = get(selectedCharID)
-            db.characters[charid] = char
+            db.characters[charid] = applyPluginCharacterUpdate(db.characters[charid], char)
             setDatabaseLite(db)
         },
         addProvider: (name: string, func: (arg: PluginV2ProviderArgument, abortSignal?: AbortSignal) => Promise<{ success: boolean, content: string }>, options?: PluginV2ProviderOptions) => {
@@ -732,9 +733,7 @@ export const getV2PluginAPIs = (pluginName = '') => {
         },
         pluginStorage: {
             getItem: (key: string) => {
-                const db = getDatabase({ snapshot: true });
-                db.pluginCustomStorage ??= {}
-                return db.pluginCustomStorage[key] || null;
+                return $state.snapshot((getDatabase().pluginCustomStorage ?? {})[key]) || null;
             },
             setItem: (key: string, value: string) => {
                 const db = getDatabase();

@@ -114,7 +114,7 @@ index 628cd6a..3209e9e 100644
  
  // LRU cache for DOMPurify + decodeStyle results.
 diff --git a/src/ts/process/lorebook.svelte.ts b/src/ts/process/lorebook.svelte.ts
-index 1e2df04..22bca3f 100644
+index 1e2df04..3e8c3dc 100644
 --- a/src/ts/process/lorebook.svelte.ts
 +++ b/src/ts/process/lorebook.svelte.ts
 @@ -15,6 +15,7 @@ import { v4 } from "uuid";
@@ -125,25 +125,81 @@ index 1e2df04..22bca3f 100644
      matchesLorebookKey,
      resolveLorebookMatchingMode,
      type LorebookMatchingMode,
-@@ -221,7 +222,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+@@ -212,6 +213,13 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+         activated: string
+     }[] = bardMatchLog
+ 
++    const matchMessageCache = new Map<number, { raw: typeof recursivePrompt; folded?: typeof recursivePrompt; combined: Map<typeof recursivePrompt, { raw: typeof recursivePrompt; folded?: typeof recursivePrompt }> }>()
++    const recursiveMatchCache = new Map<typeof recursivePrompt, typeof recursivePrompt>()
++    const foldMatchMessages = (messages: typeof recursivePrompt) => messages.map((m) => ({
++        source: m.source,
++        prompt: m.prompt.toLocaleLowerCase().replace(/\{\{\/\/(.+?)\}\}/g,'').replace(/\{\{comment:(.+?)\}\}/g,''),
++        data: m.data.toLocaleLowerCase().replace(/\{\{\/\/(.+?)\}\}/g,'').replace(/\{\{comment:(.+?)\}\}/g,''),
++    }))
+     const searchMatch = (messages:Message[],arg:{
+         keys:string[],
+         searchDepth:number,
+@@ -221,7 +229,6 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
          dontSearchWhenRecursive: boolean
          recursivePrompts: typeof recursivePrompt
      }) => {
 -        const sliced = messages.slice(messages.length - arg.searchDepth,messages.length)
-+        const sliced = messages.slice(Math.max(0, messages.length - arg.searchDepth),messages.length)
          const newKeys = []
          for (const key of arg.keys) {
              const trimmed = key.trim()
-@@ -229,7 +230,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+@@ -229,12 +236,10 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
                  newKeys.push(trimmed)
              }
          }
 -        arg.keys = newKeys
+-        let mList:{
+-            source:string
+-            prompt:string
+-            data:string
+-        }[] = sliced.map((msg, i) => {
 +        arg = {...arg, keys: newKeys}
-         let mList:{
-             source:string
-             prompt:string
-@@ -264,11 +265,15 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
++        let cached = matchMessageCache.get(arg.searchDepth)
++        if (!cached) {
++            const raw = messages.slice(Math.max(0, messages.length - arg.searchDepth), messages.length).map((msg, i) => {
+             if(msg.role === 'user'){
+                 return {
+                     source: `message ${i} by user`,
+@@ -249,14 +254,27 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+                     data: msg.data
+                 }
+             }
+-        }).concat(
+-            arg.dontSearchWhenRecursive ? [] : arg.recursivePrompts.map((msg) => {
+-                return {
+-                    source: 'lorebook ' + msg.source,
+-                    prompt: msg.prompt,
+-                    data: msg.data
++        })
++            cached = { raw, combined: new Map() }
++            matchMessageCache.set(arg.searchDepth, cached)
++        }
++        let combined: { raw: typeof recursivePrompt; folded?: typeof recursivePrompt } = cached
++        if (!arg.dontSearchWhenRecursive && arg.recursivePrompts.length) {
++            let existing = cached.combined.get(arg.recursivePrompts)
++            if (!existing) {
++                let recursive = recursiveMatchCache.get(arg.recursivePrompts)
++                if (!recursive) {
++                    recursive = arg.recursivePrompts.map(msg => ({
++                        source: 'lorebook ' + msg.source, prompt: msg.prompt, data: msg.data,
++                    }))
++                    recursiveMatchCache.set(arg.recursivePrompts, recursive)
+                 }
+-            }))    
++                existing = { raw: cached.raw.concat(recursive) }
++                cached.combined.set(arg.recursivePrompts, existing)
++            }
++            combined = existing
++        }
++        const mList = arg.regex ? combined.raw : (combined.folded ??= foldMatchMessages(combined.raw))
+ 
+         if(arg.regex){
+             for(const mText of mList){
+@@ -264,11 +282,15 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
                      if(!regexString.startsWith('/')){
                          return false
                      }
@@ -163,6 +219,40 @@ index 1e2df04..22bca3f 100644
                              const d = regex.test(mText.data)
                              if(d){
                                  matchLog.push({
+@@ -287,14 +309,6 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+             return false
+         }
+ 
+-        mList = mList.map((m) => {
+-            return {
+-                source: m.source,
+-                prompt: m.prompt.toLocaleLowerCase().replace(/\{\{\/\/(.+?)\}\}/g,'').replace(/\{\{comment:(.+?)\}\}/g,''),
+-                data: m.data.toLocaleLowerCase().replace(/\{\{\/\/(.+?)\}\}/g,'').replace(/\{\{comment:(.+?)\}\}/g,'')
+-            }
+-        })
+-
+         let allMode = arg.all ?? false
+         let allModeMatched = true
+ 
+@@ -680,6 +694,9 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+                 const requestStatusKind: RequestInjectionKind = bardEntry
+                     ? (bardEntry.bard.activation === 'required' ? 'grimoireRequired' : 'grimoire')
+                     : 'lorebook'
++                const contentTokens = await tokenize(risuChatParser(content, {chara: char, chat: chatContext?.chat}))
++                matchMessageCache.clear()
++                recursiveMatchCache.clear()
+                 actives.push({
+                     depth: depth,
+                     pos: pos,
+@@ -690,7 +707,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character:
+                     // so cutoff reflects what actually reaches the context, not the unevaluated source.
+                     // runVar is left false (matching the output path in index.svelte.ts), so this
+                     // evaluation has no side effects like setvar.
+-                    tokens: await tokenize(risuChatParser(content, {chara: char, chat: chatContext?.chat})),
++                    tokens: contentTokens,
+                     priority: priority,
+                     source: fullLore[i].comment || `lorebook ${i}`,
+                     requestStatusKind,
 diff --git a/src/ts/process/lorebookMatching.test.ts b/src/ts/process/lorebookMatching.test.ts
 index 922db27..bde27db 100644
 --- a/src/ts/process/lorebookMatching.test.ts
@@ -289,7 +379,7 @@ index f30a089..91e0fc1 100644
 +    return regex
 +}
 diff --git a/src/ts/process/lorebookRecursion.test.ts b/src/ts/process/lorebookRecursion.test.ts
-index 73995f0..c9743e2 100644
+index 73995f0..f371d2b 100644
 --- a/src/ts/process/lorebookRecursion.test.ts
 +++ b/src/ts/process/lorebookRecursion.test.ts
 @@ -60,6 +60,25 @@ function lore(comment: string, key: string, content: string) {
@@ -318,6 +408,50 @@ index 73995f0..c9743e2 100644
      it('keeps A history and local lore while B is selected during prompt retrieval', async () => {
          mockModuleSources.length = 0
          const a = { id: 'a', localLore: [lore('A lore', 'A keyword', 'A FACT')], message: [{ role: 'user', data: 'A keyword' }] }
+@@ -803,3 +822,43 @@ describe('Risu lorebook import owner routing', () => {
+         expect(replacement.globalLore).toEqual([])
+     })
+ })
++
++
++describe('lorebook scan message cache', () => {
++    it('folds a shared search window once for nonmatching entries and keeps output bytes', async () => {
++        mockModuleSources.length = 0
++        const entries = Array.from({ length: 80 }, (_, i) => lore(`unused ${i}`, `missing-${i}`, 'unused'))
++        const character = { chaId: 'cache', name: 'Bot', chatPage: 0, globalLore: entries,
++            chats: [{ id: 'chat', localLore: [], message: [{ role: 'user', data: 'HELLO {{comment:hidden}} world' }] }] }
++        mockDBState.db = { username: 'USER', loreBookDepth: 3, loreBookToken: 8000, characters: [character] }
++        const lower = vi.spyOn(String.prototype, 'toLocaleLowerCase')
++        try {
++            const result = await loadLoreBookV3Prompt()
++            expect(result.actives).toEqual([])
++            const historyCalls = lower.mock.contexts.filter(value => String(value).includes('HELLO {{comment:hidden}} world'))
++            // The user message and first-message window are folded once, not once per entry.
++            expect(historyCalls.length).toBeLessThanOrEqual(4)
++        } finally { lower.mockRestore() }
++    })
++})
++
++
++it('refreshes cached match bytes after tokenization yields to character or message edits', async () => {
++    mockModuleSources.length = 0
++    const entries = [lore('prime', 'before', 'PRIME'), lore('updated', 'after', 'UPDATED')]
++    const character = { chaId: 'cache', name: 'Bot', chatPage: 0, globalLore: entries,
++        chats: [{ id: 'chat', localLore: [], message: [{ role: 'user', data: 'BEFORE' }] }] }
++    mockDBState.db = { username: 'OLD', loreBookDepth: 1, loreBookToken: 8000, characters: [character] }
++    const { tokenize } = await import('../tokenizer')
++    vi.mocked(tokenize).mockImplementationOnce(async () => {
++        mockDBState.db.username = 'NEW'
++        character.chats[0].message[0].data = 'AFTER'
++        return 1 as any
++    })
++    const result = await loadLoreBookV3Prompt()
++    expect(JSON.stringify(result.matchLog)).toBe(JSON.stringify([
++        { prompt: '\x01{{old}}:before\x01', source: 'message 0 by user', activated: 'before' },
++        { prompt: '\x01{{new}}:after\x01', source: 'message 0 by user', activated: 'after' },
++    ]))
++    expect(result.actives.map(value => value.prompt).sort()).toEqual(['PRIME', 'UPDATED'])
++})
 diff --git a/src/ts/process/scriptings.ts b/src/ts/process/scriptings.ts
 index 9244b06..592812d 100644
 --- a/src/ts/process/scriptings.ts

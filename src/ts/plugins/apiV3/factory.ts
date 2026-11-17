@@ -494,7 +494,16 @@ export class SandboxHost {
 
     private collectTransferables(obj: any, transferables: Transferable[] = []): Transferable[] {
         if (!obj || typeof obj !== 'object') return transferables;
-
+        // Plain snapshots dominate plugin reads; retain the original path for platform objects.
+        const prototype = Object.getPrototypeOf(obj);
+        if (!ArrayBuffer.isView(obj) && prototype === Object.prototype && obj.constructor === Object) {
+            Object.values(obj).forEach(value => this.collectTransferables(value, transferables));
+            return transferables;
+        }
+        if (Array.isArray(obj) && prototype === Array.prototype) {
+            obj.forEach(item => this.collectTransferables(item, transferables));
+            return transferables;
+        }
         if (obj instanceof ArrayBuffer ||
             obj instanceof MessagePort ||
             obj instanceof ImageBitmap ||
@@ -512,7 +521,6 @@ export class SandboxHost {
         else if (obj.constructor === Object) {
             Object.values(obj).forEach(value => this.collectTransferables(value, transferables));
         }
-
         return transferables;
     }
 

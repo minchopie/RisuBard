@@ -822,3 +822,43 @@ describe('Risu lorebook import owner routing', () => {
         expect(replacement.globalLore).toEqual([])
     })
 })
+
+
+describe('lorebook scan message cache', () => {
+    it('folds a shared search window once for nonmatching entries and keeps output bytes', async () => {
+        mockModuleSources.length = 0
+        const entries = Array.from({ length: 80 }, (_, i) => lore(`unused ${i}`, `missing-${i}`, 'unused'))
+        const character = { chaId: 'cache', name: 'Bot', chatPage: 0, globalLore: entries,
+            chats: [{ id: 'chat', localLore: [], message: [{ role: 'user', data: 'HELLO {{comment:hidden}} world' }] }] }
+        mockDBState.db = { username: 'USER', loreBookDepth: 3, loreBookToken: 8000, characters: [character] }
+        const lower = vi.spyOn(String.prototype, 'toLocaleLowerCase')
+        try {
+            const result = await loadLoreBookV3Prompt()
+            expect(result.actives).toEqual([])
+            const historyCalls = lower.mock.contexts.filter(value => String(value).includes('HELLO {{comment:hidden}} world'))
+            // The user message and first-message window are folded once, not once per entry.
+            expect(historyCalls.length).toBeLessThanOrEqual(4)
+        } finally { lower.mockRestore() }
+    })
+})
+
+
+it('refreshes cached match bytes after tokenization yields to character or message edits', async () => {
+    mockModuleSources.length = 0
+    const entries = [lore('prime', 'before', 'PRIME'), lore('updated', 'after', 'UPDATED')]
+    const character = { chaId: 'cache', name: 'Bot', chatPage: 0, globalLore: entries,
+        chats: [{ id: 'chat', localLore: [], message: [{ role: 'user', data: 'BEFORE' }] }] }
+    mockDBState.db = { username: 'OLD', loreBookDepth: 1, loreBookToken: 8000, characters: [character] }
+    const { tokenize } = await import('../tokenizer')
+    vi.mocked(tokenize).mockImplementationOnce(async () => {
+        mockDBState.db.username = 'NEW'
+        character.chats[0].message[0].data = 'AFTER'
+        return 1 as any
+    })
+    const result = await loadLoreBookV3Prompt()
+    expect(JSON.stringify(result.matchLog)).toBe(JSON.stringify([
+        { prompt: '\x01{{old}}:before\x01', source: 'message 0 by user', activated: 'before' },
+        { prompt: '\x01{{new}}:after\x01', source: 'message 0 by user', activated: 'after' },
+    ]))
+    expect(result.actives.map(value => value.prompt).sort()).toEqual(['PRIME', 'UPDATED'])
+})

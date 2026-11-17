@@ -138,3 +138,38 @@ describe('API v3 plugin sandbox document', () => {
         stop()
     })
 })
+
+
+describe('plugin transfer collection fast path', () => {
+    test('keeps nested buffers and platform transfers in their original order', () => {
+        vi.stubGlobal('ImageBitmap', class ImageBitmap {})
+        try {
+            const host = new SandboxHost({}) as any
+            const a = new ArrayBuffer(2)
+            const b = new Uint8Array(3)
+            Object.defineProperty(b, 'constructor', { value: Object })
+            const channel = new MessageChannel()
+            vi.stubGlobal('MessagePort', channel.port1.constructor)
+            const bitmap = new ImageBitmap()
+            const writable = new WritableStream()
+            Object.defineProperty(writable, 'constructor', { value: Object })
+            const transform = new TransformStream()
+            const value = { chats: [{ message: [{ data: 'same', binary: b }] }], a, channel: channel.port1, bitmap, writable, transform }
+            expect(host.collectTransferables(value)).toEqual([b.buffer, a, channel.port1, bitmap, writable, transform])
+            channel.port1.close(); channel.port2.close()
+        } finally { vi.unstubAllGlobals() }
+    })
+
+    test('does not inspect platform instance prototypes for ordinary message records', () => {
+        const host = new SandboxHost({}) as any
+        const inspected = vi.fn(() => { throw new Error('slow platform check') })
+        const original = globalThis.ImageBitmap
+        const Fake = function () {}
+        Object.defineProperty(Fake, Symbol.hasInstance, { value: inspected })
+        vi.stubGlobal('ImageBitmap', Fake)
+        try {
+            expect(host.collectTransferables({ chats: [{ message: [{ role: 'user', data: 'hello' }] }] })).toEqual([])
+            expect(inspected).not.toHaveBeenCalled()
+        } finally { vi.stubGlobal('ImageBitmap', original); vi.unstubAllGlobals() }
+    })
+})

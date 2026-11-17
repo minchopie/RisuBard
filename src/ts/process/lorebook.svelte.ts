@@ -213,6 +213,13 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
         activated: string
     }[] = bardMatchLog
 
+    const matchMessageCache = new Map<number, { raw: typeof recursivePrompt; folded?: typeof recursivePrompt; combined: Map<typeof recursivePrompt, { raw: typeof recursivePrompt; folded?: typeof recursivePrompt }> }>()
+    const recursiveMatchCache = new Map<typeof recursivePrompt, typeof recursivePrompt>()
+    const foldMatchMessages = (messages: typeof recursivePrompt) => messages.map((m) => ({
+        source: m.source,
+        prompt: m.prompt.toLocaleLowerCase().replace(/\{\{\/\/(.+?)\}\}/g,'').replace(/\{\{comment:(.+?)\}\}/g,''),
+        data: m.data.toLocaleLowerCase().replace(/\{\{\/\/(.+?)\}\}/g,'').replace(/\{\{comment:(.+?)\}\}/g,''),
+    }))
     const searchMatch = (messages:Message[],arg:{
         keys:string[],
         searchDepth:number,
@@ -222,7 +229,6 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
         dontSearchWhenRecursive: boolean
         recursivePrompts: typeof recursivePrompt
     }) => {
-        const sliced = messages.slice(Math.max(0, messages.length - arg.searchDepth),messages.length)
         const newKeys = []
         for (const key of arg.keys) {
             const trimmed = key.trim()
@@ -231,11 +237,9 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
             }
         }
         arg = {...arg, keys: newKeys}
-        let mList:{
-            source:string
-            prompt:string
-            data:string
-        }[] = sliced.map((msg, i) => {
+        let cached = matchMessageCache.get(arg.searchDepth)
+        if (!cached) {
+            const raw = messages.slice(Math.max(0, messages.length - arg.searchDepth), messages.length).map((msg, i) => {
             if(msg.role === 'user'){
                 return {
                     source: `message ${i} by user`,
@@ -250,14 +254,27 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
                     data: msg.data
                 }
             }
-        }).concat(
-            arg.dontSearchWhenRecursive ? [] : arg.recursivePrompts.map((msg) => {
-                return {
-                    source: 'lorebook ' + msg.source,
-                    prompt: msg.prompt,
-                    data: msg.data
+        })
+            cached = { raw, combined: new Map() }
+            matchMessageCache.set(arg.searchDepth, cached)
+        }
+        let combined: { raw: typeof recursivePrompt; folded?: typeof recursivePrompt } = cached
+        if (!arg.dontSearchWhenRecursive && arg.recursivePrompts.length) {
+            let existing = cached.combined.get(arg.recursivePrompts)
+            if (!existing) {
+                let recursive = recursiveMatchCache.get(arg.recursivePrompts)
+                if (!recursive) {
+                    recursive = arg.recursivePrompts.map(msg => ({
+                        source: 'lorebook ' + msg.source, prompt: msg.prompt, data: msg.data,
+                    }))
+                    recursiveMatchCache.set(arg.recursivePrompts, recursive)
                 }
-            }))    
+                existing = { raw: cached.raw.concat(recursive) }
+                cached.combined.set(arg.recursivePrompts, existing)
+            }
+            combined = existing
+        }
+        const mList = arg.regex ? combined.raw : (combined.folded ??= foldMatchMessages(combined.raw))
 
         if(arg.regex){
             for(const mText of mList){
@@ -291,14 +308,6 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
             }
             return false
         }
-
-        mList = mList.map((m) => {
-            return {
-                source: m.source,
-                prompt: m.prompt.toLocaleLowerCase().replace(/\{\{\/\/(.+?)\}\}/g,'').replace(/\{\{comment:(.+?)\}\}/g,''),
-                data: m.data.toLocaleLowerCase().replace(/\{\{\/\/(.+?)\}\}/g,'').replace(/\{\{comment:(.+?)\}\}/g,'')
-            }
-        })
 
         let allMode = arg.all ?? false
         let allModeMatched = true
@@ -685,6 +694,9 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
                 const requestStatusKind: RequestInjectionKind = bardEntry
                     ? (bardEntry.bard.activation === 'required' ? 'grimoireRequired' : 'grimoire')
                     : 'lorebook'
+                const contentTokens = await tokenize(risuChatParser(content, {chara: char, chat: chatContext?.chat}))
+                matchMessageCache.clear()
+                recursiveMatchCache.clear()
                 actives.push({
                     depth: depth,
                     pos: pos,
@@ -695,7 +707,7 @@ export async function loadLoreBookV3Prompt(options?: ChatContext | { character: 
                     // so cutoff reflects what actually reaches the context, not the unevaluated source.
                     // runVar is left false (matching the output path in index.svelte.ts), so this
                     // evaluation has no side effects like setvar.
-                    tokens: await tokenize(risuChatParser(content, {chara: char, chat: chatContext?.chat})),
+                    tokens: contentTokens,
                     priority: priority,
                     source: fullLore[i].comment || `lorebook ${i}`,
                     requestStatusKind,
