@@ -484,7 +484,8 @@
       "src/ts/process/sendPreSync.test.ts",
       "src/lib/Setting/Pages/TransferMethodSelect.svelte.test.ts",
       "src/ts/transferSyncPanel.test.ts",
-      "src/ts/transfer-sync/androidNotification.test.ts"
+      "src/ts/transfer-sync/androidNotification.test.ts",
+      "src/ts/transfer-sync/androidBack.test.ts"
     ],
     "upstreamFeatureProbes": {
       "src/ts/storage/nodeStorage.ts": [

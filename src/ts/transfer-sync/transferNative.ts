@@ -12,6 +12,9 @@ export async function initializeNativeTransfers() {
   windows = (await (await transferRequest('/native-capabilities')).json()).windows === true;
 }
 export function androidTransferAvailable(): boolean { return !!(globalThis as any).RisuPlay; }
+// Android back key: installed when the app code loads (bootstrap imports this module), so it also answers on the account
+// import screen and during start-up recovery. Browsers and the PC app: no bridge, nothing happens.
+if (androidTransferAvailable()) void import('./androidBack').then(m => m.installAndroidBack()).catch(() => { /* the back key keeps leaving the app */ });
 export function playSetAvailable(): boolean { return windows || androidTransferAvailable(); }
 export const playNative = async <T>(op: string, args: Record<string, unknown> = {}): Promise<T> => {
   const bridge: Bridge = (globalThis as any).RisuPlay;

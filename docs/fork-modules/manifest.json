@@ -99,9 +99,9 @@
       "path": "android-app/app/src/main/java/app/risubard/personal/MainActivity.kt",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "3bd7cf2da72331fd205ca95640eabd3f979889153bf592bbbae77083ab1c1a2a",
-      "contentSha256": "3bd7cf2da72331fd205ca95640eabd3f979889153bf592bbbae77083ab1c1a2a",
-      "bytes": 19316
+      "sha256": "45917917e6389f485b066121687ceeae19a209a5841eba7756a31d2440928762",
+      "contentSha256": "45917917e6389f485b066121687ceeae19a209a5841eba7756a31d2440928762",
+      "bytes": 20300
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/NativeDownload.kt",
@@ -723,9 +723,9 @@
       "path": "docs/transfer-sync/manifest.json",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "56bcc1f48db693b8b4931d28294b2a55aeae2783853a37fd9eda092a5bfaddfa",
-      "contentSha256": "56bcc1f48db693b8b4931d28294b2a55aeae2783853a37fd9eda092a5bfaddfa",
-      "bytes": 18023
+      "sha256": "e43c55873acd9e12338ffbeed7103fe89aaff653c4dad3de41ee458ee2f1abe7",
+      "contentSha256": "e43c55873acd9e12338ffbeed7103fe89aaff653c4dad3de41ee458ee2f1abe7",
+      "bytes": 18073
     },
     {
       "path": "scripts/android/Dockerfile.node",
@@ -1675,9 +1675,9 @@
       "path": "src/ts/transfer-sync/transferNative.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "4370d929bc56d83408ff90c157089d704cc9d57518feff71e520a0eb44d73483",
-      "contentSha256": "4370d929bc56d83408ff90c157089d704cc9d57518feff71e520a0eb44d73483",
-      "bytes": 5382
+      "sha256": "6099b6830459889069681ae777649fc9d1d8f4969a1f90f2c9d7960e5d946a7a",
+      "contentSha256": "6099b6830459889069681ae777649fc9d1d8f4969a1f90f2c9d7960e5d946a7a",
+      "bytes": 5758
     },
     {
       "path": "src/ts/transfer-sync/transferState.ts",
@@ -1798,6 +1798,38 @@
       "sha256": "ef01827a56968976fd5a46e15c1f940a0b1884c7f66b4122a861f6bd6bcd4a76",
       "contentSha256": "ef01827a56968976fd5a46e15c1f940a0b1884c7f66b4122a861f6bd6bcd4a76",
       "bytes": 9286
+    },
+    {
+      "path": "src/ts/transfer-sync/androidBack.ts",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "97c373d07cd5d2991c950deda0698e14239aa7b3cc6a46f90b525c2fe3f3e477",
+      "contentSha256": "97c373d07cd5d2991c950deda0698e14239aa7b3cc6a46f90b525c2fe3f3e477",
+      "bytes": 15933
+    },
+    {
+      "path": "src/ts/transfer-sync/androidBack.test.ts",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "4e91dfa5b352303f1f09d8d68e407c567e5eb96710d3bfe0dbb7690c85c0fe5e",
+      "contentSha256": "4e91dfa5b352303f1f09d8d68e407c567e5eb96710d3bfe0dbb7690c85c0fe5e",
+      "bytes": 22738
+    },
+    {
+      "path": "android-app/app/src/main/java/app/risubard/personal/NativeBack.kt",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "a879a22a49646f03964e84ec8815d9190cc531061bc70195e9ed9eea847a2403",
+      "contentSha256": "a879a22a49646f03964e84ec8815d9190cc531061bc70195e9ed9eea847a2403",
+      "bytes": 1618
+    },
+    {
+      "path": "android-app/app/src/test/java/app/risubard/personal/NativeBackTest.kt",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "576cbd4afd741e7fa8b08e15cc560728de87394156e846034626dfa5e08d115b",
+      "contentSha256": "576cbd4afd741e7fa8b08e15cc560728de87394156e846034626dfa5e08d115b",
+      "bytes": 1615
     },
     {
       "path": "server/node/transfer-sync/persona-bundle.cjs",
@@ -4360,6 +4392,14 @@
       "bytes": 3288
     },
     {
+      "path": "patchnote/0.9.96-ver9.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "84cbdb316c2eef8a7fbb745ed71726dde708fd697bdad37d2c14883f10ceb936",
+      "contentSha256": "84cbdb316c2eef8a7fbb745ed71726dde708fd697bdad37d2c14883f10ceb936",
+      "bytes": 4173
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4903,6 +4943,10 @@
         "android-app/app/src/main/res/drawable/ic_notify.xml",
         "src/ts/transfer-sync/androidNotification.ts",
         "src/ts/transfer-sync/androidNotification.test.ts",
+        "src/ts/transfer-sync/androidBack.ts",
+        "src/ts/transfer-sync/androidBack.test.ts",
+        "android-app/app/src/main/java/app/risubard/personal/NativeBack.kt",
+        "android-app/app/src/test/java/app/risubard/personal/NativeBackTest.kt",
         "server/node/transfer-sync/persona-bundle.cjs",
         "server/node/persona-transfer.test.ts",
         "src/ts/transfer-sync/personaTransfer.ts",
@@ -5316,7 +5360,8 @@
         "patchnote/0.9.96-ver5.md",
         "patchnote/0.9.96-ver6.md",
         "patchnote/0.9.96-ver7.md",
-        "patchnote/0.9.96-ver8.md"
+        "patchnote/0.9.96-ver8.md",
+        "patchnote/0.9.96-ver9.md"
       ],
       "patch": null
     },
@@ -5418,7 +5463,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "631347f9e09db0c573a5e482000698e6eb8c26a6cd0682670b4ff4fb4001fee0"
+      "sha256": "003ce1147755a2de4888bc06d69d7de6d97ac9400e09788111c74a6bef809cc4"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5496,7 +5541,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "887f022b5a00454a0190c5c30a64c4367f33732c358db80f7bb940e4ee205610"
+          "sha256": "79aca68e287814f740a353a647d0319807b12ad75fdafc4268307890efadecc4"
         },
         {
           "module": "lore-lua",

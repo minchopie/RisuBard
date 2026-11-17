@@ -45,6 +45,8 @@ class MainActivity : Activity() {
     private var receivedIntent: Intent? = null
     @Volatile private var transferPageLocal = false
     private val worker = Executors.newSingleThreadExecutor()
+    private val back = NativeBack()
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -295,6 +297,17 @@ class MainActivity : Activity() {
     }
     override fun onResume() { super.onResume(); notifier.setVisible(true); transfers?.setForeground(true) }
     override fun onStop() { transfers?.setForeground(false); super.onStop() }
+    /** Back key / gesture (the app does not opt in to OnBackInvokedCallback, so both arrive here): the page goes
+     *  back one screen first (NativeBack); the old default (leave the app) unless the page answers that it used it. */
+    @Deprecated("Back key and gesture are routed to the page first")
+    override fun onBackPressed() {
+        if (rendererGone || connecting || origin == null || panel.visibility == android.view.View.VISIBLE) { leave(); return }
+        val id = back.ask() ?: return
+        ui.postDelayed({ if (back.timedOut(id) && !isDestroyed) leave() }, NativeBack.TIMEOUT_MS)
+        webView.evaluateJavascript(NativeBack.SCRIPT) { result -> if (back.answered(id, result) == true && !isDestroyed) leave() }
+    }
+    @Suppress("DEPRECATION")
+    private fun leave() = super.onBackPressed()
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val uri = when (intent.action) {
@@ -313,6 +326,7 @@ class MainActivity : Activity() {
         super.onSaveInstanceState(outState)
     }
     override fun onDestroy() {
+        ui.removeCallbacksAndMessages(null)
         notifier.destroy()
         transfers?.destroy(); transfers = null
         chooser?.onReceiveValue(null); chooser = null
