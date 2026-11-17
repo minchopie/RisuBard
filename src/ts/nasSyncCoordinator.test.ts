@@ -11,7 +11,7 @@ vi.mock('./transfer-sync/playTransfer', () => ({ transferUnavailable: () => f.un
 vi.mock('./transfer-sync/nasSync', () => ({ activityBlocksSync: () => f.activity(), retrySyncApply: vi.fn(), applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), reportSyncNetwork: vi.fn(async () => {}), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => f.chat }))
 vi.mock('./platform', () => ({ isNodeServer: true }))
 vi.mock('./stores.svelte', () => { const selectedCharID = writable(0); f.selected = selectedCharID; return { alertStore: writable(f.alert), selectedCharID } })
-import { createSyncCoordinator } from './nasSyncCoordinator'
+import { createSyncCoordinator, preSendSync, pluginWindowOpen, syncCoordinator, DEFAULT_CADENCE } from './nasSyncCoordinator'
 import { canonicalSaveSettled, transferBusy, transferStatus, syncSaveHold } from './transferState'
 
 /** The real apply's admission contract, modelled on the stores: hold+busy are set at arm and released on a pre-arm abort/failure; once
@@ -575,4 +575,266 @@ test('2026-11-07 join adoption: an upload the server withheld (adopting joining 
     h.io.snapshot.mockImplementation(async () => ({ committed: null, adopting: true })); h.io.publish.mockImplementation(async () => ({ stored: [], failed: [], adopting: true }))
     expect(await h.c.uploadNow()).toBe('adopting')
     h.c.stop()
+})
+
+// ── 0.9.96-ver10: automatic sync cadence = 5 answers or 1 hour, whichever comes first (user 2026-11-18, choice c: 「답 생성 5번(리롤 포함)」) ──
+// An answer = a sendChat that registers its generation. Like the real sendChat, each helper send awaits preSendSync(signal) and then
+// registers the generation in that continuation; an auto-continue / internal resend restarts sendChat with the SAME signal (whatever
+// the chat looks like by then, however long it waited); every new send (composer, reroll, command, plugin sendChat('')) has a new one.
+const CADENCE = { chats: 5, intervalMs: 60 * 60_000, applyRetryMs: 5 * 60_000 }
+function cadenced(options: { stored?: any; overrides?: any } = {}) {
+    let saved: any = options.stored ?? null, editing = false, preview = false
+    const generations = writable(new Map<string, unknown>())
+    const store = { load: vi.fn(() => saved), save: vi.fn((tally: any) => { saved = JSON.parse(JSON.stringify(tally)) }) }
+    const h = harness({ cadence: CADENCE, cadenceStore: store, generations, editing: () => editing, previewing: () => preview, ...options.overrides })
+    /** sendChat: await preSendSync(signal) → startGeneration(chat) … endGeneration(chat). */
+    const generate = async (chat = 'A', signal: AbortSignal = new AbortController().signal) => {
+        expect(await preSendSync(signal, h.c)).toBe(true)
+        generations.set(new Map([[chat, { kind: 'live' }]])); await flush(); generations.set(new Map()); await flush()
+    }
+    return {
+        ...h, store, generations, generate, saved: () => saved,
+        /** Any new send: composer send, reroll, manual continue, command/multisend line, plugin sendChat (also ''). */
+        send: (chat = 'A') => generate(chat),
+        /** One answer whose sendChat restarts `restarts` times with its signal (auto-continue / internal resend), after `waitMs` each. */
+        sendWithRestarts: async (chat = 'A', restarts = 2, waitMs = 0) => { const signal = new AbortController().signal; await generate(chat, signal); for (let i = 0; i < restarts; i++) { vi.setSystemTime(Date.now() + waitMs); await generate(chat, signal) } },
+        /** A send admitted by preSendSync but refused before it registers (the chat is already generating, a transfer started). */
+        refused: async () => { expect(await preSendSync(new AbortController().signal, h.c)).toBe(true) },
+        /** jobRecovery reattaching a server job after a restart: a background registration, no sendChat. */
+        reattach: async (chat = 'C') => { generations.set(new Map([[chat, { kind: 'background' }]])); await flush(); generations.set(new Map()); await flush() },
+        setEditing: (value: boolean) => { editing = value }, setPreview: (value: boolean) => { preview = value },
+    }
+}
+const settle = async (ms: number) => { await vi.advanceTimersByTimeAsync(ms); await flush() }
+const lifecycleEvents = async () => {
+    document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('online'))
+    window.dispatchEvent(new CustomEvent('risubard-chat-opened')); f.selected.set(Number(get(f.selected)) + 1); await flush()
+}
+const CYCLE = ['status', 'snapshot', 'publish', 'pull', 'preview']
+
+test('0.9.96-ver10 cadence: four answers (with their saves, foreground, focus, reconnect, chat open, character switch) start nothing; the fifth answer starts one cycle', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000)
+    expect(h.calls).toContain('snapshot') // app start is kept and counts as the last cycle
+    h.calls.length = 0
+    expect(h.c.cadenceState()).toMatchObject({ chats: 0, due: false })
+    for (let i = 1; i <= 4; i++) {
+        await h.send()
+        canonicalSaveSettled.set(Date.now()); await settle(40_000) // the old cadence: a cycle 5 s after every save and every 30 s
+        await lifecycleEvents()
+        expect(h.c.cadenceState().chats).toBe(i)
+    }
+    await settle(10 * 60_000)
+    expect(h.calls).toEqual([])
+    expect(h.saved()).toMatchObject({ chats: 4 }) // persisted on every count
+    await h.send(); canonicalSaveSettled.set(Date.now())
+    await settle(5_000)
+    expect(h.calls).toEqual(CYCLE)
+    expect(h.c.cadenceState()).toMatchObject({ chats: 0, due: false }); expect(h.saved()).toMatchObject({ chats: 0, lastAt: Date.now() })
+    h.calls.length = 0; await settle(30_000); await lifecycleEvents(); expect(h.calls).toEqual([]) // counting starts again
+    h.c.stop()
+})
+
+test('0.9.96-ver10 cadence: with no chats, one cycle an hour after the last one (and the poll is never 30 s)', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0
+    expect(h.c.state.nextAt).toBe(Date.now() + CADENCE.intervalMs) // the routine timer: an hour after the start cycle began
+    await settle(CADENCE.intervalMs - 2_000); expect(h.calls).toEqual([])
+    await settle(2_000); expect(h.calls).toEqual(CYCLE)
+    h.calls.length = 0; await settle(CADENCE.intervalMs - 1_000); expect(h.calls).toEqual([])
+    await settle(1_000); expect(h.calls).toEqual(CYCLE)
+    h.c.stop()
+})
+
+test('0.9.96-ver10 cadence: whichever comes first — three chats then the hour starts it, and the chat count restarts from zero', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0
+    for (let i = 0; i < 3; i++) await h.send()
+    await settle(CADENCE.intervalMs); expect(h.calls).toEqual(CYCLE)
+    expect(h.c.cadenceState().chats).toBe(0); h.calls.length = 0
+    for (let i = 0; i < 4; i++) await h.send()
+    await settle(60_000); expect(h.calls).toEqual([])
+    await h.send(); await settle(5_000); expect(h.calls).toEqual(CYCLE)
+    h.c.stop()
+})
+
+test('0.9.96-ver10 cadence (c): every answer counts — new message, reroll, resend, manual continue, command lines, plugin sendChat, another chat, back to back; auto-continue / internal resend restarts are the same answer however long they waited; a preview, a refused send or a reattached job is not', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0
+    await h.send('A'); await h.send('A'); await h.send('A') // a message, its reroll right away, a manual continue
+    expect(h.c.cadenceState().chats).toBe(3)
+    await h.sendWithRestarts('B', 2, 30_000) // one answer (assistant, plugin, or a trigger cutting and resending) restarted twice after 30 s waits
+    expect(h.c.cadenceState().chats).toBe(4)
+    h.setPreview(true); await h.send('A'); h.setPreview(false) // DevTool / hotkey prompt preview (alertWait open)
+    await h.refused(); await h.reattach('C')
+    expect(h.c.cadenceState().chats).toBe(4)
+    await settle(60_000); expect(h.calls).toEqual([])
+    await h.send('P'); expect(h.c.cadenceState().chats).toBe(5) // e.g. plugin sendChat('') on a chat ending with the character's answer
+    await settle(5_000); expect(h.calls).toEqual(CYCLE)
+    h.calls.length = 0
+    for (let i = 0; i < 4; i++) await h.send('M') // /multisend lines back to back
+    expect(h.c.cadenceState().chats).toBe(4)
+    h.c.stop()
+})
+
+test('0.9.96-ver10 cadence (c): with the real generation registry and preSendSync — sendChat-shaped sequences, refused sends next to other chats in the same task', async () => {
+    const { registerAbort, startGeneration, endGeneration } = await import('./process/generationState')
+    let saved: any = null
+    const h = harness({ cadence: CADENCE, cadenceStore: { load: () => saved, save: (t: any) => { saved = t } }, previewing: () => false })
+    await h.c.start(); await settle(1_000)
+    const send = async (chat: string, signal: AbortSignal, id: string) => { if (await preSendSync(signal, h.c)) startGeneration(chat, id); await flush() }
+    const composer = new AbortController(); registerAbort('chat-x', composer)
+    await send('chat-x', composer.signal, 'g1'); endGeneration('chat-x', { keepPendingAbort: true }); await flush() // auto-continue …
+    await send('chat-x', composer.signal, 'g2'); endGeneration('chat-x', { keepPendingAbort: true }); await flush() // … and a trigger resend
+    await send('chat-x', composer.signal, 'g3'); endGeneration('chat-x'); await flush()
+    expect(h.c.cadenceState().chats).toBe(1)
+    const plugin = new AbortController().signal // sendChat's own signal when the caller passes none
+    await send('chat-x', plugin, 'g4'); endGeneration('chat-x', { keepPendingAbort: true }); await flush()
+    await send('chat-x', plugin, 'g5'); endGeneration('chat-x'); await flush()
+    expect(h.c.cadenceState().chats).toBe(2)
+    // A send refused by the per-chat guard, then — in the same task, no timer in between — another chat's send and its restart.
+    const busy = new AbortController().signal, b = new AbortController().signal
+    await send('chat-y', busy, 'g6') // chat-y generating (counted: 3)
+    if (await preSendSync(new AbortController().signal, h.c)) { /* the guard: chat-y is generating → return false, nothing registered */ }
+    await send('chat-b', b, 'g7'); endGeneration('chat-b', { keepPendingAbort: true }); await flush() // chat-b: a new answer (4) …
+    await vi.advanceTimersByTimeAsync(5_000)
+    await send('chat-b', b, 'g8'); endGeneration('chat-b'); await flush() // … and its auto-continue: the same answer
+    expect(h.c.cadenceState().chats).toBe(4)
+    // The reverse: a counted answer's signal refused (a restart that found the chat busy), then a new send still counts.
+    if (await preSendSync(b, h.c)) { /* refused */ }
+    await send('chat-c', new AbortController().signal, 'g9'); endGeneration('chat-c'); await flush()
+    expect(h.c.cadenceState().chats).toBe(5)
+    endGeneration('chat-y'); await flush()
+    startGeneration('chat-q', 'g10'); await flush(); endGeneration('chat-q'); await flush() // a registration with no send admitted before it
+    expect(h.c.cadenceState().chats).toBe(5)
+    h.c.stop()
+})
+
+test('0.9.96-ver10 cadence: a restart keeps the device tally — the count and the hour carry over until a cycle runs; a missing/garbage/future record counts from now', async () => {
+    let visible = false
+    const four = cadenced({ stored: { chats: 4, lastAt: Date.now() - 10 * 60_000 }, overrides: { visible: () => visible } })
+    await four.c.start(); await settle(1_000)
+    expect(four.c.state.lastOutcome).toBe('hidden'); expect(four.calls).toEqual(['status']) // only the start probe; the hidden start cycle did no work
+    expect(four.c.cadenceState()).toMatchObject({ chats: 4, due: false })
+    await four.send(); expect(four.c.cadenceState()).toMatchObject({ chats: 5, due: true }) // counted across the restart
+    visible = true; four.calls.length = 0
+    document.dispatchEvent(new Event('visibilitychange')); await flush()
+    expect(four.calls).toEqual(CYCLE); expect(four.c.cadenceState().chats).toBe(0)
+    four.c.stop()
+
+    visible = false
+    const stale = cadenced({ stored: { chats: 0, lastAt: Date.now() - 2 * CADENCE.intervalMs }, overrides: { visible: () => visible } })
+    await stale.c.start(); await settle(1_000); stale.calls.length = 0
+    expect(stale.c.cadenceState().due).toBe(true) // the hour passed while the app was closed
+    visible = true; document.dispatchEvent(new Event('visibilitychange')); await flush()
+    expect(stale.calls).toEqual(CYCLE)
+    stale.c.stop()
+
+    for (const stored of [null, { chats: 'x', lastAt: Date.now() + 86_400_000 }]) {
+        const fresh = cadenced({ stored, overrides: { visible: () => false } })
+        expect(fresh.c.cadenceState()).toEqual({ chats: 0, lastAt: Date.now(), due: false })
+    }
+})
+
+test('0.9.96-ver10 cadence: a retry that came due while the app was hidden runs when it comes back, before the hour', async () => {
+    let visible = true
+    const g = cadenced({ overrides: { visible: () => visible } }); await g.c.start(); await settle(1_000); g.calls.length = 0
+    g.io.publish.mockRejectedValueOnce(new Error('server error'))
+    await g.send(); await g.send(); await g.send(); await g.send(); await g.send(); await settle(5_000)
+    expect(g.c.state.lastOutcome).toBe('error'); expect(g.c.state.failures).toBe(1) // backoff 5 s
+    visible = false; await settle(5_000); expect(g.c.state.lastOutcome).toBe('hidden')
+    g.calls.length = 0; await settle(10 * 60_000); expect(g.calls).toEqual([]) // nothing while hidden
+    visible = true; document.dispatchEvent(new Event('visibilitychange')); await flush()
+    expect(g.calls).toEqual(CYCLE); expect(g.c.state.failures).toBe(0)
+    g.c.stop()
+})
+
+test('0.9.96-ver10 cadence: chats counted while a cycle runs make the next one start right after it, not an hour later', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0
+    let releasePull: () => void
+    h.io.pull.mockImplementationOnce(async () => { h.calls.push('pull'); await new Promise<void>(r => { releasePull = r }); return { admitted: [] } })
+    expect(h.c.retryNow()).toBeInstanceOf(Promise); await flush()
+    expect(h.c.state.running).toBe(true)
+    for (let i = 0; i < 5; i++) await h.send()
+    releasePull!(); await flush(); h.calls.length = 0
+    await settle(5_000); expect(h.calls).toEqual(CYCLE)
+    h.c.stop()
+})
+
+test('0.9.96-ver10 cadence: a manual sync runs at once whatever the count, and the count restarts from it', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0
+    await h.send(); await h.send(); await settle(60_000)
+    expect(await h.c.retryNow()).toBe('empty'); expect(h.c.cadenceState()).toMatchObject({ chats: 0, lastAt: Date.now() })
+    expect(await h.c.uploadNow()).toBe('uploaded')
+    expect(h.calls.filter(x => x === 'snapshot')).toHaveLength(2)
+    h.c.stop()
+})
+
+test('0.9.96-ver10: while a fullscreen plugin window (Asset Maid) is open no automatic cycle starts; it runs once the window closes', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0
+    h.setEditing(true)
+    for (let i = 0; i < 5; i++) await h.send()
+    canonicalSaveSettled.set(Date.now()); await settle(5 * 60_000); await lifecycleEvents(); await settle(61 * 60_000)
+    expect(h.calls).toEqual([]); expect(h.c.state.lastOutcome).toBe('deferred')
+    expect(h.c.cadenceState()).toMatchObject({ chats: 5, due: true }) // still owed
+    h.setEditing(false); await settle(30_000)
+    expect(h.calls).toEqual(CYCLE)
+    expect(h.c.cadenceState().chats).toBe(0)
+    h.c.stop()
+})
+
+test('0.9.96-ver10: a fullscreen plugin window opened during a cycle keeps received work from being applied (its frame hides the user\'s interaction)', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0; h.setPending(1)
+    for (let i = 0; i < 5; i++) await h.send()
+    h.io.pendingRoots.mockImplementationOnce(async () => { h.calls.push('preview'); h.setEditing(true); return { roots: [{ domain: 'play', type: 'chat', root: 'r0' }], plan: null } })
+    window.dispatchEvent(new CustomEvent('risubard-chat-opened')); await flush() // due: the reopen window cycle
+    expect(h.calls).toEqual(CYCLE); expect(h.io.apply).not.toHaveBeenCalled()
+    expect(h.c.state.lastOutcome).toBe('pulled')
+    h.setEditing(false); h.calls.length = 0
+    let seen = false // the plan guard sees it too (window opened after the apply started)
+    h.io.apply.mockImplementationOnce(async (_auto: boolean, _signal?: AbortSignal, guard?: any) => { h.calls.push('apply'); h.setEditing(true); seen = guard.interacted(); return { state: 'deferred', deferred: ['activity'] } })
+    expect(await h.c.downloadNow()).toBe('deferred'); expect(seen).toBe(true)
+    h.c.stop()
+})
+
+test('0.9.96-ver10 cadence: received work that waits for a window may use one lifecycle event per 5 minutes; events queued meanwhile do not add cycles', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0; h.setPending(1)
+    for (let i = 0; i < 5; i++) await h.send()
+    await settle(5_000) // windowless (chat count) cycle: received, waits
+    expect(h.c.state.lastOutcome).toBe('pulled'); expect(h.io.apply).not.toHaveBeenCalled(); h.calls.length = 0
+    window.dispatchEvent(new CustomEvent('risubard-chat-opened')); await flush(); expect(h.calls).toEqual([]) // within 5 minutes
+    await settle(CADENCE.applyRetryMs)
+    let releaseStatus: () => void
+    h.io.status.mockImplementationOnce(async () => { h.calls.push('status'); await new Promise<void>(r => { releaseStatus = r }); return STATUS() })
+    window.dispatchEvent(new CustomEvent('risubard-chat-opened')); await flush()
+    window.dispatchEvent(new CustomEvent('risubard-chat-opened')); f.selected.set(9); await flush() // arrive while it runs
+    h.setPending(0); h.io.pendingRoots.mockImplementationOnce(async () => { h.calls.push('preview'); return { roots: [{ domain: 'play', type: 'chat', root: 'r0' }], plan: null } })
+    releaseStatus!(); await flush(); await settle(1_000)
+    expect(h.calls).toEqual([...CYCLE, 'apply']); expect(h.guards.at(-1).window).toBe('reopen')
+    h.calls.length = 0; await settle(CADENCE.applyRetryMs)
+    window.dispatchEvent(new CustomEvent('risubard-chat-opened')); await flush(); expect(h.calls).toEqual([]) // applied: nothing waits any more
+    h.c.stop()
+})
+
+test('0.9.96-ver10 cadence: a reconnect after a failed cycle still retries at once', async () => {
+    const h = cadenced(); await h.c.start(); await settle(1_000); h.calls.length = 0
+    h.io.publish.mockRejectedValueOnce(new Error('Failed to fetch'))
+    expect(await h.c.retryNow()).toBe('offline'); h.calls.length = 0
+    window.dispatchEvent(new Event('online')); await flush()
+    expect(h.calls).toEqual(CYCLE)
+    h.c.stop()
+})
+
+test('0.9.96-ver10: a fullscreen plugin container is recognised from the DOM the API v3 showContainer/hideContainer leave', () => {
+    const frame = document.createElement('iframe'); document.body.appendChild(frame)
+    try {
+        expect(pluginWindowOpen()).toBe(false) // a plugin frame that was never shown
+        frame.style.setProperty('display', 'block', 'important'); frame.style.position = 'fixed' // showContainer('fullscreen')
+        expect(pluginWindowOpen()).toBe(true)
+        frame.style.zIndex = '30'; expect(pluginWindowOpen()).toBe(true) // behind an app dialog it is still open
+        frame.style.setProperty('display', 'none', 'important') // hideContainer()
+        expect(pluginWindowOpen()).toBe(false)
+    } finally { frame.remove() }
+})
+
+test('0.9.96-ver10: the app coordinator (singleton) uses the 5-chat / 1-hour cadence; createSyncCoordinator() alone keeps the old one', () => {
+    expect(DEFAULT_CADENCE).toEqual({ chats: 5, intervalMs: 3_600_000, applyRetryMs: 300_000 })
+    expect(syncCoordinator().cadence).toBe(DEFAULT_CADENCE)
+    expect(createSyncCoordinator({ supported: () => false }).cadence).toBeNull()
 })

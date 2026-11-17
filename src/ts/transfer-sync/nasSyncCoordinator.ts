@@ -3,7 +3,7 @@ import { canonicalSaveSettled, transferStatus, syncSaveHold } from './transferSt
 import { applySync, retrySyncApply, pullSync, publishSync, snapshotSync, syncStatus, activityBlocksSync, reportSyncNetwork, pendingRootsSync, activeChatSignature, releaseSyncPlan, type SyncApplyGuard } from './nasSync'
 import { transferUnavailable } from './playTransfer'
 import { isNodeServer } from '../platform'
-import { isAnyGenerating } from '../process/generationState'
+import { isAnyGenerating, generationStates } from '../process/generationState'
 import { alertStore, selectedCharID } from '../stores.svelte'
 
 /**
@@ -25,6 +25,23 @@ import { alertStore, selectedCharID } from '../stores.svelte'
  *   (deadlineMs): past it the plan is released. An ARMED apply is never interrupted and settles through finish/recovery.
  * - Failures back off 5 → 15 → 60 s, capped at 5 min; reports (failed uploads, rotation, held/quarantined, repair failures) are never
  *   shown as "up to date". Disabling cancels future cycles only: outbox, store and data stay. Nothing runs while hidden.
+ * - 0.9.96-ver10 cadence (the app singleton; `cadence` option): the routine starts — the poll after a finished cycle, a settled save,
+ *   foreground/focus, chat open/character switch, reconnect — run only once `chats` chats were sent since the last cycle started or
+ *   `intervalMs` passed, whichever comes first. A chat = an answer the user gets: every sendChat that registers a
+ *   generation (a new message, a reroll, a resend, a manual continue, an answer through the character assistant, a command/multisend
+ *   line, a plugin's sendChat). The answer's identity is the abort signal sendChat runs under: its auto-continue and internal resend
+ *   restart sendChat with the SAME signal (whatever the chat looks like by then), every new send gets a new one. preSendSync (in every
+ *   sendChat, with no await before startGeneration) hands the signal over; the generation registration that follows takes the last one
+ *   handed over (a send its guard refused is replaced by the next send's). Two sends whose preSendSync both resolve before either
+ *   registers (parallel sends to two chats in the same microtask turn) could pair crosswise — not done by the app's own send paths.
+ *   Not counted: a restart with a signal already counted, a prompt preview (DevTool/hotkey run it under alertWait), a background job
+ *   reattached after a restart (no sendChat), a send refused before it registers, and model calls that never register a chat
+ *   generation (BardWiki sub calls, plugin helper requests, memory/translation).
+ *   App start, manual runs, enabling/resuming, and the existing
+ *   retries (failure backoff, busy, waiting for a generation, recovery; one owed while hidden runs when visible) are unchanged. Received
+ *   work that still waits may use one lifecycle window per `applyRetryMs`. The tally is device-local (localStorage, never synced) and
+ *   survives a restart. While a fullscreen plugin window (Asset Maid's workspace) is open
+ *   no automatic cycle starts and nothing is applied: interaction inside its sandboxed frame is invisible to the interaction epoch.
  */
 export interface CoordinatorOptions {
     debounceMs?: number; pollMs?: number; deadlineMs?: number; backoffMs?: number[]
@@ -46,6 +63,36 @@ export interface CoordinatorOptions {
     interactions?: () => number
     /** "<character>/<chat>" on screen (for the deferred-chat bookkeeping). */
     activeChat?: () => string
+    /** 0.9.96-ver10: routine cadence; omitted/null keeps the pre-ver10 cadence (the machinery tests). The app singleton uses DEFAULT_CADENCE. */
+    cadence?: SyncCadence | null
+    /** Device-local persistence of the cadence tally (default: localStorage). */
+    cadenceStore?: { load(): CadenceTally | null; save(tally: CadenceTally): void }
+    /** Per-chat generation registry (keys = chat ids); a new key = a generation started for that chat (default: generationStates). */
+    generations?: Readable<Map<string, { kind?: string } | unknown>>
+    /** A prompt preview is generating (DevTool/hotkey run it under alertWait('Loading...')): not a chat. */
+    previewing?: () => boolean
+    /** A fullscreen plugin window (Asset Maid's workspace) is open: no automatic cycle starts and nothing is applied. */
+    editing?: () => boolean
+}
+/** 0.9.96-ver10 (user, 2026-11-18: 「동기화를 5채팅 혹은 1시간으로 늘려줘」). */
+export interface SyncCadence { chats: number; intervalMs: number; applyRetryMs: number }
+export interface CadenceTally { chats: number; lastAt: number }
+export const DEFAULT_CADENCE: SyncCadence = { chats: 5, intervalMs: 60 * 60_000, applyRetryMs: 5 * 60_000 }
+const CADENCE_KEY = 'risubard-nas-sync-cadence'
+/** Browser storage of this device only (each device's WebView/browser profile); never part of the synced database. */
+export const localCadenceStore = {
+    load(): CadenceTally | null { try { const raw = globalThis.localStorage?.getItem(CADENCE_KEY); return raw ? JSON.parse(raw) : null } catch { return null } },
+    save(tally: CadenceTally) { try { globalThis.localStorage?.setItem(CADENCE_KEY, JSON.stringify(tally)) } catch { /* private mode/blocked storage: the tally lives in memory */ } },
+}
+/** A plugin's fullscreen container (API v3 `showContainer('fullscreen')`: a fixed iframe on <body>, display:block) is shown. */
+export function pluginWindowOpen(doc: Document | undefined = typeof document === 'undefined' ? undefined : document): boolean {
+    try { return Array.from(doc?.body?.children ?? []).some(el => el.tagName === 'IFRAME' && (el as HTMLElement).style.position === 'fixed' && (el as HTMLElement).style.getPropertyValue('display') === 'block') } catch { return false }
+}
+function loadTally(stored: CadenceTally | null, now: number): CadenceTally {
+    const chats = Number.isFinite(stored?.chats) && stored!.chats > 0 ? Math.floor(stored!.chats) : 0
+    // No record yet (first start of ver10) or a clock that moved back: count from now.
+    const lastAt = Number.isFinite(stored?.lastAt) && stored!.lastAt > 0 && stored!.lastAt <= now ? stored!.lastAt : now
+    return { chats, lastAt }
 }
 export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number; stage?: string; stageAt?: number }
 export type SafeWindow = { window: SyncApplyGuard['window']; epoch: number }
@@ -68,8 +115,30 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         blocked: () => (transferUnavailable() && !activityBlocksSync()) || get(syncSaveHold),
         generating: () => activityBlocksSync(), generatingChanged: isAnyGenerating, alerting: () => get(alertStore).type !== 'none',
         interactions: () => interactions, activeChat: () => { try { return activeChatSignature() } catch { return '' } },
+        cadence: null as SyncCadence | null, cadenceStore: localCadenceStore as NonNullable<CoordinatorOptions['cadenceStore']>,
+        generations: generationStates as Readable<Map<string, unknown>>, editing: () => pluginWindowOpen(),
+        previewing: () => get(alertStore).type === 'wait',
         ...options,
     }
+    const cadence = o.cadence ?? null
+    const tally: CadenceTally = loadTally(cadence ? o.cadenceStore.load() : null, o.now())
+    /** The routine may start: always without a cadence; with it, after `chats` chats or `intervalMs`, whichever first. */
+    const due = () => !cadence || tally.chats >= cadence.chats || o.now() - tally.lastAt >= cadence.intervalMs
+    /** A cycle started: the next routine one counts from here (manual and retries included). */
+    const counted = () => { owedWhenVisible = false; if (!cadence) return; tally.chats = 0; tally.lastAt = o.now(); o.cadenceStore.save({ ...tally }) }
+    /** Delay of the routine poll after a finished cycle: chats counted meanwhile may already have made it due. */
+    const routineDelay = () => !cadence ? o.pollMs : due() ? o.debounceMs : Math.max(1_000, tally.lastAt + cadence.intervalMs - o.now())
+    /** A start (routine timer, retry) that found the app hidden: the next foreground event runs it. */
+    let owedWhenVisible = false
+    /** A lifecycle event (foreground, focus, chat open, character switch) may open a window: when due, or — rate limited — when received
+     *  work still waits for one. */
+    /** The signal of the send preSendSync admitted last (a restart's too). sendChat's registration follows it with no await in between;
+     *  a send refused by its guard is simply replaced by the next send's signal (no registration happens without one). */
+    let admitted: AbortSignal | null = null
+    /** Signals of answers already counted: a restart (auto-continue / internal resend) runs under the same one. */
+    const answered = new WeakSet<AbortSignal>()
+    const waiting = () => !!state.pendingRoots && ['pulled', 'deferred', 'deferred-active-chat'].includes(state.lastOutcome.replace(/^key-pending:/, ''))
+    const lifecycleAllowed = () => !cadence || due() || owedWhenVisible || (waiting() && o.now() - state.lastCycleAt >= cadence.applyRetryMs)
     const state: CoordinatorState = { enabled: false, running: false, paused: false, offline: false, failures: 0, lastCycleAt: 0, lastError: '', nextAt: 0, lastOutcome: '', generation: 0, attention: '', probed: false, deferredForChat: '', pendingRoots: 0, lastWindow: '' }
     const publish = () => { if (instance && instance.state === state) coordinatorState.set({ ...state }) }
     let started = false, timer: ReturnType<typeof setTimeout> | null = null, debounce: ReturnType<typeof setTimeout> | null = null
@@ -104,9 +173,10 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         if (reason === 'manual' && started && !state.probed && !state.paused) await probe()
         if (!active()) return 'idle'
         if (state.running) return 'running'
-        if (!o.visible()) { state.lastOutcome = 'hidden'; return 'hidden' } // no background work; the visibility listener resumes
+        if (!o.visible()) { owedWhenVisible = true; state.lastOutcome = 'hidden'; return 'hidden' } // no background work; the visibility listener resumes
         if (o.blocked()) { state.lastOutcome = 'busy'; schedule(Math.min(o.pollMs, 5_000)); return 'busy' } // manual transfer/import or an unresolved hold: try again shortly
         if (reason !== 'manual' && o.generating()) { deferForGeneration(); publish(); return 'deferred' } // 0.9.92-ver10: no automatic sync while a model request runs
+        if (reason !== 'manual' && o.editing()) { state.lastOutcome = 'deferred'; schedule(o.pollMs); publish(); return 'deferred' } // 0.9.96-ver10: a fullscreen plugin window (Asset Maid) is open: look again later
         if (direction === 'upload' && o.generating()) { state.lastOutcome = 'deferred'; publish(); return 'deferred' } // upload must capture settled local edits first; download can receive and wait
         const generation = state.generation, mine = controller = new AbortController(), signal = mine.signal
         const onExternal = () => mine.abort(new Cancelled('cancelled'))
@@ -115,7 +185,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         const boundary = () => { if (generation !== state.generation || !active()) throw new Cancelled('sync cycle invalidated'); if (signal.aborted) throw signal.reason ?? new Error('sync network deadline'); if (reason !== 'manual' && o.generating()) throw new Cancelled('generating') }
         const interacted = () => !safe || o.interactions() > safe.epoch
         let receiveOnly = direction === 'download' && o.generating()
-        state.running = true; state.direction = direction; state.lastWindow = safe?.window ?? ''; publish()
+        state.running = true; state.direction = direction; state.lastWindow = safe?.window ?? ''; counted(); publish()
         let stage = 'status', deadline: ReturnType<typeof setTimeout> | null = null
         // 0.9.92-ver7: the cycle's current step for the progress display (NasSyncProgress.svelte); display only.
         const enter = (next: string) => { stage = next; state.stage = next; state.stageAt = o.now(); publish() }
@@ -156,7 +226,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // 2026-11-07 join adoption: the server withheld this device's changes; that is not an upload.
                     state.lastOutcome = !keyReady ? 'key-pending:idle' : (remaining ?? status)?.role === 'joining' && (remaining ?? status)?.adopting ? 'adopting' : attention || remaining?.sync?.outbox?.pending?.length ? 'upload-pending' : 'uploaded'
                     state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
-                    schedule(o.pollMs)
+                    schedule(routineDelay())
                     return state.lastOutcome
                 }
                 enter('pull'); const pulled = await o.pull(signal); boundary()
@@ -171,12 +241,12 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 let outcome = 'pulled'
                 if (!state.pendingRoots) { outcome = attention.includes('incoming-review') || status.conflicts ? 'review-needed' : 'empty'; state.deferredForChat = '' }
                 else if (!safe) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' } // waits for a lifecycle window (chat open, foreground, manual)
-                else if (receiveOnly || o.generating() || o.alerting() || interacted()) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' }
+                else if (receiveOnly || o.generating() || o.alerting() || interacted() || o.editing()) { outcome = 'pulled'; state.deferredForChat ||= o.activeChat() || '-' }
                 else {
                     enter('apply')
                     // Large Wiki plans may take longer without blocking play. Bound client preparation after the server answers.
                     // 0.9.92-ver5: a dialog opened while the plan was prepared (e.g. a content update question) ends the safe window like a touch does.
-                    const result = await o.apply(true, signal, { window: safe.window, interacted: () => interacted() || !!o.alerting?.(), planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
+                    const result = await o.apply(true, signal, { window: safe.window, interacted: () => interacted() || !!o.alerting?.() || o.editing(), planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
                     if (result.state === 'deferred' && signal.aborted && /deadline/i.test(String(signal.reason))) throw signal.reason
                     if (result.state === 'deferred' && o.generating()) resumeAfterGeneration = true // the apply gave way to a model request that started meanwhile: resume when it ends, like a cycle stopped between steps
                     outcome = result.state
@@ -187,7 +257,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 state.lastOutcome = (keyReady ? '' : 'key-pending:') + outcome
                 state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
                 if (!keyReady) transferStatus.set('동기화 키를 기다리는 중 · 권한 기기에 키 요청을 보내 주세요.')
-                if (generation === state.generation) schedule(o.pollMs)
+                if (generation === state.generation) schedule(routineDelay())
                 return state.lastOutcome
             } catch (error: any) {
                 if (error instanceof Cancelled && error.message === 'generating' && generation === state.generation && active()) return deferForGeneration() // stopped between steps (never inside the apply)
@@ -205,7 +275,9 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
             } finally {
                 if (deadline) o.clearTimer(deadline); external?.removeEventListener('abort', onExternal); if (controller === mine) controller = null; state.running = false; state.stage = ''; current = null; publish(); void reason
                 const queued = pendingWindow; pendingWindow = null
-                if (queued && active() && generation === state.generation) void cycle(queued.window, undefined, queued) // the event that arrived mid-cycle, with its own epoch
+                // 0.9.96-ver10: with a cadence the queued event runs only if it is still owed — due, or work this windowless cycle received waits.
+                const stillOwed = !cadence || due() || owedWhenVisible || (!safe && waiting())
+                if (queued && active() && generation === state.generation && stillOwed) void cycle(queued.window, undefined, queued) // the event that arrived mid-cycle, with its own epoch
             }
         })()
         current = run
@@ -213,9 +285,25 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
     }
     /** A lifecycle event opens a safe window with the epoch taken NOW. If a cycle is running, the window is kept (same epoch) and the cycle
      *  runs right after; interactions in between void it exactly like any other, so received work is never applied under a renewed window. */
-    const lifecycle = (window: SyncApplyGuard['window'], reason: string) => { if (!active()) return; const safe = openWindow(window); if (state.running) { pendingWindow = pendingWindow ?? safe; return } void cycle(reason, undefined, safe) }
+    const lifecycle = (window: SyncApplyGuard['window'], reason: string) => { if (!active() || !lifecycleAllowed()) return; const safe = openWindow(window); if (state.running) { pendingWindow = pendingWindow ?? safe; return } void cycle(reason, undefined, safe) }
     return {
-        state, cycle,
+        state, cycle, cadence,
+        /** Device-local cadence tally (read only; for the UI and tests). */
+        cadenceState: () => ({ ...tally, due: due() }),
+        /** 0.9.96-ver10: a generation was registered for `chatKey` (see the cadence note at the top); the cadence's `chats`-th answer
+         *  schedules the cycle (it then waits for the generation like any automatic cycle). */
+        /** 0.9.96-ver10: called by preSendSync once a send is admitted; synchronously after it sendChat registers its generation. */
+        sendAdmitted(signal: AbortSignal) { if (cadence) admitted = signal },
+        chatStarted(_chatKey: string, entry?: unknown) {
+            if (!cadence || (entry as { kind?: string } | undefined)?.kind === 'background') return // reattached job: no sendChat
+            const signal = admitted; admitted = null
+            if (!signal || answered.has(signal)) return // not a send / auto-continue or internal resend: the same answer
+            answered.add(signal)
+            if (o.previewing()) return // prompt preview
+
+            tally.chats += 1; o.cadenceStore.save({ ...tally })
+            if (active() && !state.running && tally.chats >= cadence.chats && (!timer || state.nextAt > o.now() + o.debounceMs)) schedule(o.debounceMs)
+        },
         /** Explicit retry remains available while paused/held; it only settles the same transaction, never starts a new transfer. */
         async retryApply() {
             if (state.running) return 'running'
@@ -241,10 +329,18 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
             if (!started) return false // stopped while probing: no listeners, no timers, nothing enabled
             try {
                 const unsubscribeGenerating = o.generatingChanged.subscribe(on => { if (on || !resumeAfterGeneration || !active()) return; resumeAfterGeneration = false; schedule(o.debounceMs) })
-                const unsubscribeSave = canonicalSaveSettled.subscribe(at => { if (!at || !active()) return; if (debounce) o.clearTimer(debounce); debounce = o.setTimer(() => { debounce = null; void cycle('save') }, o.debounceMs) })
-                unsubscribe = () => { unsubscribeSave(); unsubscribeGenerating() }
+                const unsubscribeSave = canonicalSaveSettled.subscribe(at => { if (!at || !active() || !due()) return; if (debounce) o.clearTimer(debounce); debounce = o.setTimer(() => { debounce = null; if (due()) void cycle('save') }, o.debounceMs) })
+                // 0.9.96-ver10: answers are counted where the send path registers its generation (the real target chat); keys present at
+                // subscription are not new starts.
+                let live: Set<string> | null = null
+                const unsubscribeChats = o.generations.subscribe(map => {
+                    const keys = new Set(map.keys())
+                    if (live) for (const key of keys) if (!live.has(key)) this.chatStarted(key, map.get(key))
+                    live = keys
+                })
+                unsubscribe = () => { unsubscribeSave(); unsubscribeGenerating(); unsubscribeChats() }
                 // Foreground: visible/focus open a window (epoch at the event). Reconnect is network-only: it never opens a window.
-                const wake = (why: string, window: SyncApplyGuard['window'] | null) => { if (!started || state.paused) return; if (!state.probed) { void probe().then(ok => { if (ok && active()) schedule(500) }); return } if (!active()) return; if (window) { lifecycle(window, why); return } if (!state.running) void cycle(why, undefined, null) }
+                const wake = (why: string, window: SyncApplyGuard['window'] | null) => { if (!started || state.paused) return; if (!state.probed) { void probe().then(ok => { if (ok && active()) schedule(500) }); return } if (!active()) return; if (window) { lifecycle(window, why); return } if (!state.running && (due() || owedWhenVisible || state.failures > 0 || state.offline)) void cycle(why, undefined, null) }
                 if (typeof document !== 'undefined') listen(document, 'visibilitychange', () => { if (o.visible()) wake('visible', 'foreground') })
                 if (typeof window !== 'undefined') {
                     listen(window, 'online', () => wake('online', null))
@@ -286,7 +382,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
     }
 }
 /** Process-wide singleton used by bootstrap, the send path and the settings UI. */
-export function syncCoordinator() { return instance ??= createSyncCoordinator() }
+export function syncCoordinator() { return instance ??= createSyncCoordinator({ cadence: DEFAULT_CADENCE }) }
 export async function startSyncCoordinator() { return syncCoordinator().start() }
 /**
  * Called by the real send path after the local send preparation (which keeps its own unlimited, cancel-only wait). It never waits
@@ -295,5 +391,8 @@ export async function startSyncCoordinator() { return syncCoordinator().start() 
  */
 export async function preSendSync(signal?: AbortSignal, _coordinator: unknown = instance): Promise<boolean> {
     if (signal?.aborted) return false // a cancelled send never reaches generation or scripts
-    return !get(syncSaveHold)
+    if (get(syncSaveHold)) return false
+    // 0.9.96-ver10: the sync cadence counts answers; sendChat registers its generation synchronously after this resolves.
+    if (signal) try { (_coordinator as ReturnType<typeof createSyncCoordinator> | null)?.sendAdmitted?.(signal) } catch { /* counting never blocks a send */ }
+    return true
 }
