@@ -4464,6 +4464,14 @@
       "bytes": 9559
     },
     {
+      "path": "patchnote/0.9.96-ver11.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "5b32c4adea6053c443f693563aebdd3842789d21ecea1ba1af05ff98643e19d4",
+      "contentSha256": "5b32c4adea6053c443f693563aebdd3842789d21ecea1ba1af05ff98643e19d4",
+      "bytes": 3179
+    },
+    {
       "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
       "module": "history-docs",
       "kind": "files",
@@ -4715,25 +4723,25 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "824c0e80f61b5bc9d442220831d64706e2a87feb4d345878ad75fe5e2c4bf1c0",
-      "contentSha256": "824c0e80f61b5bc9d442220831d64706e2a87feb4d345878ad75fe5e2c4bf1c0",
-      "bytes": 61193
+      "sha256": "1d5bf5a554935c7eeb2b14a55f1ee0dd0c3c7974dc38a9334721c9bf6c3c6bee",
+      "contentSha256": "1d5bf5a554935c7eeb2b14a55f1ee0dd0c3c7974dc38a9334721c9bf6c3c6bee",
+      "bytes": 61349
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "d7734bc50e4c286556ee5fdb14e8b584b3e29b42830a76734295f3c7146b6965",
-      "contentSha256": "d7734bc50e4c286556ee5fdb14e8b584b3e29b42830a76734295f3c7146b6965",
-      "bytes": 87460
+      "sha256": "fae7e21baa49ebf0ae7ea06039aa0abc03c50932a7901e36adc18def5ec91290",
+      "contentSha256": "fae7e21baa49ebf0ae7ea06039aa0abc03c50932a7901e36adc18def5ec91290",
+      "bytes": 90775
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "6760b2a32a57c3cbdda922172125ec5d3eca2053f163f7687bde68871111dcaf",
-      "contentSha256": "6760b2a32a57c3cbdda922172125ec5d3eca2053f163f7687bde68871111dcaf",
-      "bytes": 9507
+      "sha256": "06280e0fd2d606cdf0ce66b0191ae2f2e3ba4485008f148f5108e6abe80dbf7d",
+      "contentSha256": "06280e0fd2d606cdf0ce66b0191ae2f2e3ba4485008f148f5108e6abe80dbf7d",
+      "bytes": 9517
     },
     {
       "path": "docs/content-updates/README.md",
@@ -4779,17 +4787,17 @@
       "path": "src/ts/content-updates/characterUpdateRefKeep.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "e49a5955ca493c4dc8188f67fa1aafa669a3f6752fe02700f4548f5a742d2333",
-      "contentSha256": "e49a5955ca493c4dc8188f67fa1aafa669a3f6752fe02700f4548f5a742d2333",
-      "bytes": 20900
+      "sha256": "b51b17bf884a7dbd7b1e042eb1cef73703559a7ca7ba40627e7d9f84a88731dc",
+      "contentSha256": "b51b17bf884a7dbd7b1e042eb1cef73703559a7ca7ba40627e7d9f84a88731dc",
+      "bytes": 28508
     },
     {
       "path": "src/ts/content-updates/characterUpdateRefKeep.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "ebb3143649f53421452481ad76210c8f8bf9df1f5cad17f0155791a3697e24e4",
-      "contentSha256": "ebb3143649f53421452481ad76210c8f8bf9df1f5cad17f0155791a3697e24e4",
-      "bytes": 28540
+      "sha256": "7533ccf1d87325d2e5eac5ae083abe8efd1c3a35d584d7696c7f0d568ed9af65",
+      "contentSha256": "7533ccf1d87325d2e5eac5ae083abe8efd1c3a35d584d7696c7f0d568ed9af65",
+      "bytes": 44674
     }
   ],
   "modules": [
@@ -5451,6 +5459,7 @@
         "patchnote/0.9.96-ver8.md",
         "patchnote/0.9.96-ver9.md",
         "patchnote/0.9.96-ver10.md",
+        "patchnote/0.9.96-ver11.md",
         "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.90/host-bridges.patch"
       ],
@@ -5554,7 +5563,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "15c42cfd726a12b73d5e2774add76c390502d7edf1c588cff588815302514dd3"
+      "sha256": "06e232deee1a3b8b46e9c17542cda66ba786ef5acc7cfb9c7b332701f60072ce"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5632,7 +5641,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.96/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "435a337c63b151c1c484b397fa5ae517aded5bb56eafe3db089f857c8bb39a8b"
+          "sha256": "38e4dcce541125886a9293177d7e389a54292d755a62e9b9f75c2c754ec1fe42"
         },
         {
           "module": "lore-lua",

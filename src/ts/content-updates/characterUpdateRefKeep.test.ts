@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
-vi.mock('svelte-sonner', () => ({ toast: { warning: vi.fn() } }))
+vi.mock('svelte-sonner', () => ({ toast: { warning: vi.fn(), success: vi.fn() } }))
 vi.mock('../log', () => ({ addLog: vi.fn() }))
 import { toast } from 'svelte-sonner'
+import { addLog } from '../log'
 import type { character, loreBook } from '../storage/database.svelte'
-import { CHARACTER_UPDATE, applyUpdate, planUpdate, type UpdateChoice, type UpdatePlan } from '../characterUpdate'
+import { CHARACTER_UPDATE, applyUpdate, baseSnapshot, planUpdate, type UpdateChoice, type UpdatePlan } from '../characterUpdate'
 import { editedValue } from '../characterUpdateView'
-import { ASSET_MAID_COMMENT, applyAssetMaidPreset, finalizeAssetMaidMerge as finalizeWith, mergeAssetMaid, presetAssetMaidMerge } from './characterUpdateRefKeep'
+import { ASSET_MAID_COMMENT, assetMaidCharacterLocators, applyAssetMaidPreset, finalizeAssetMaidMerge as finalizeWith, mergeAssetMaid, presetAssetMaidMerge } from './characterUpdateRefKeep'
 
 const lore = (comment: string, content: string, extra: Partial<loreBook> = {}): loreBook => ({
     key: comment.toLowerCase(), secondkey: '', insertorder: 100, comment, content, mode: 'normal', alwaysActive: false, selective: false, bookVersion: 2, ...extra,
@@ -19,7 +20,7 @@ function maidEntry(entries: EntrySpec[], assets: Record<number, string> = {}, ex
         entities: { lorebooks: Object.fromEntries(entries.map(entry => [`lore:${entry.at}`, fp(entry.fp)])) },
         features: { characterForms: { entries: entries.map(entry => ({ target: `lore:${entry.at}`, defaultFormId: entry.forms[0]?.id, forms: entry.forms.map(form => ({ id: form.id, label: form.id, ...(form.asset !== undefined ? { reference: { asset: `asset:${form.asset}` } } : {}) })) })) } },
     }
-    if (Object.keys(assets).length) data.entities.assets = Object.fromEntries(Object.entries(assets).map(([index, name]) => [`asset:${index}`, { fingerprints: { descriptor: `am2:${name}` } }]))
+    if (Object.keys(assets).length) data.entities.assets = Object.fromEntries(Object.entries(assets).map(([index, name]) => [`asset:${index}`, { fingerprints: { descriptor: assetMaidCharacterLocators([pic(name)])[0]?.descriptor ?? `am2:${name}` } }]))
     return lore(ASSET_MAID_COMMENT, '@@dont_activate ' + JSON.stringify(data), { key: '', ...extra })
 }
 const portable = (entry: loreBook | undefined) => JSON.parse(entry!.content.slice(entry!.content.indexOf('{')))
@@ -65,7 +66,7 @@ function scenario() {
     return { mine, theirs, base }
 }
 
-beforeEach(() => vi.mocked(toast.warning).mockClear())
+beforeEach(() => vi.clearAllMocks())
 
 describe('lore format copies (A1)', () => {
     test('risu_id, risu_loreCache and risu_bookVersion in extentions are not edits', () => {
@@ -113,7 +114,7 @@ describe('Asset Maid references across a card update (A2)', () => {
         const entry = merged.globalLore.find(e => e.comment === ASSET_MAID_COMMENT)
         expect(entry!.id).toBe('maid-id')
         expect(refs(entry).sort()).toEqual(['lore:0/g1=asset:2', 'lore:1/f1=asset:2', 'lore:1/f2=asset:3'])
-        expect(portable(entry).entities.assets).toEqual({ 'asset:2': { fingerprints: { descriptor: 'am2:u1' } }, 'asset:3': { fingerprints: { descriptor: 'am2:u2' } } })
+        expect(portable(entry).entities.assets).toEqual({ 'asset:2': { fingerprints: { descriptor: assetMaidCharacterLocators([pic('u1')])[0]!.descriptor } }, 'asset:3': { fingerprints: { descriptor: assetMaidCharacterLocators([pic('u2')])[0]!.descriptor } } })
         // Everything else of the new body is the new body.
         const body = portable(entry)
         for (const e of body.features.characterForms.entries) for (const f of e.forms) delete f.reference
@@ -133,7 +134,7 @@ describe('Asset Maid references across a card update (A2)', () => {
         expect(merged.additionalAssets!.map(asset => asset[0])).toEqual(['card1', 'u1', 'u2', '__asset_maid_crop_x1', 'card2'])
         expect(result.appended).toBe(0)
         expect(refs(entry).sort()).toEqual(['lore:0/g1=asset:1', 'lore:0/g2=asset:4', 'lore:1/f1=asset:1', 'lore:1/f2=asset:2'])
-        expect(portable(entry).entities.assets['asset:4']).toEqual({ fingerprints: { descriptor: 'am2:card2' } })
+        expect(portable(entry).entities.assets['asset:4']).toEqual({ fingerprints: { descriptor: assetMaidCharacterLocators([pic('card2')])[0]!.descriptor } })
     })
 
     test('references whose character or form is gone are held and reported, the rest move', () => {
@@ -364,5 +365,214 @@ describe('Asset Maid references across a card update (A2)', () => {
 
     test('mergeAssetMaid leaves anything that is not Portable data alone', () => {
         expect(mergeAssetMaid(lore(ASSET_MAID_COMMENT, 'not json'), lore(ASSET_MAID_COMMENT, '{}'), bot(), bot(), [])).toBeNull()
+    })
+})
+
+// 0.9.96-ver11: records describe the final pictures, including re-imports of an already broken card.
+describe('Asset Maid final character picture fingerprints', () => {
+    const setup = (own: [string, string, string][], next: [string, string, string][]) => {
+        const mine = bot({ additionalAssets: own, globalLore: [lore('Person', 'person'), maidEntry([{ at: 0, fp: 'person', forms: [{ id: 'default', asset: 0 }] }], { 0: 'stale' })] })
+        const theirs = bot({ additionalAssets: next, globalLore: [lore('Person', 'person'), maidEntry([{ at: 0, fp: 'person', forms: [{ id: 'default', asset: 0 }] }], { 0: 'new' })] })
+        return { mine, theirs }
+    }
+    const merge = (mine: character, theirs: character, result = [...theirs.additionalAssets!]) => {
+        const merged = mergeAssetMaid(mine.globalLore[1], theirs.globalLore[1], mine, theirs, result)!
+        return { merged, data: JSON.parse(merged.content.slice(merged.content.indexOf('{'))), result }
+    }
+    test('a renamed picture with unchanged bytes and an already broken re-import use the final descriptor', () => {
+        for (const own of [['Old', 'same', 'png'], ['New', 'same', 'png']] as [string, string, string][]) {
+            const { mine, theirs } = setup([own], [['New', 'same', 'png']])
+            const { merged, data } = merge(mine, theirs)
+            expect(merged.kept).toBe(1)
+            expect(data.entities.assets['asset:0']).toEqual({ fingerprints: { descriptor: assetMaidCharacterLocators(theirs.additionalAssets!)[0]!.descriptor } })
+            const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, null)
+            const dialog = { choices: {}, edits: {} }
+            applyAssetMaidPreset(dialog, plan, mine, theirs)
+            expect(Object.values(dialog.choices)).toContain('edit')
+        }
+    })
+    test('a correct record (including its key order and explicit zero) is untouched byte for byte', () => {
+        const { mine, theirs } = setup([pic('Same')], [pic('Same')])
+        const body = portable(mine.globalLore[1])
+        body.entities.assets['asset:0'] = { occurrence: 0, fingerprints: { descriptor: assetMaidCharacterLocators(mine.additionalAssets!)[0]!.descriptor } }
+        mine.globalLore[1].content = theirs.globalLore[1].content = '@@dont_activate ' + JSON.stringify(body)
+        expect(merge(mine, theirs).merged.content).toBe(theirs.globalLore[1].content)
+    })
+    test('a user-added reference absent from the new card is appended, with occurrence counting unreferenced pictures too', () => {
+        const { mine, theirs } = setup([['same', 'user-file', 'png']], [[' SAME ', 'card-file', '.PNG']])
+        const { merged, data, result } = merge(mine, theirs)
+        expect(merged).toMatchObject({ kept: 1, appended: 1 })
+        expect(data.features.characterForms.entries[0].forms[0].reference.asset).toBe('asset:1')
+        expect(result[1]).toEqual(mine.additionalAssets![0])
+        expect(data.entities.assets['asset:1']).toEqual({ fingerprints: { descriptor: assetMaidCharacterLocators(result)[1]!.descriptor }, occurrence: 1 })
+    })
+    test('module and ineligible picture records stay unchanged', () => {
+        for (const [picture, module] of [[pic('Same'), true], [pic('__asset_maid_crop_x'), false], [['no-extension', 'path.png', ''], false]] as [[string, string, string], boolean][]) {
+            const { mine, theirs } = setup([picture], [picture])
+            const body = portable(mine.globalLore[1])
+            if (module) body.entities.assets['asset:0'].module = 'module:0'
+            mine.globalLore[1].content = '@@dont_activate ' + JSON.stringify(body)
+            expect(merge(mine, theirs).data.entities.assets['asset:0']).toEqual(body.entities.assets['asset:0'])
+        }
+    })
+    test('normalization, extension fallback, generated assets and duplicate occurrences match fixed plugin vectors', () => {
+        const loc = assetMaidCharacterLocators([[' Face ', 'a', '.PNG'], ['face', 'b', 'png'], ['face.png', 'c', ''], ['face', 'c.png', ''],
+            ['Face.__am__.chat.01234567-89ab-cdef-0123-456789abcdef', 'a', 'png'], ['__asset_maid_crop_x', 'a', 'png']])
+        expect(loc[0]!.descriptor).toBe('am2:ea0e75c854e67fbcc3fe6bcb78516d09')
+        expect(loc[1]).toEqual({ ...loc[0], occurrence: 1 })
+        expect(loc[2]!.descriptor).toBe('am2:1564117d8c7f9b4f6acd3d5ca8d9df9b')
+        expect(loc.slice(3)).toEqual([null, null, null])
+    })
+    test('no conflicting body or no retained user references leaves preselection unchanged', () => {
+        const { mine, theirs } = setup([pic('Same')], [pic('Same')])
+        // With the incoming card already recorded as the base, a stale body is mine-only: the ver8 gate stays closed.
+        const base = baseSnapshot(CHARACTER_UPDATE, theirs)
+        const mineOnly = planUpdate(CHARACTER_UPDATE, mine, theirs, base)
+        expect(mineOnly.items.find(item => item.field === 'globalLore' && (item.mine as loreBook)?.comment === ASSET_MAID_COMMENT)?.status).toBe('mine')
+        expect(presetAssetMaidMerge(mineOnly, mine, theirs)).toBeNull()
+        mine.globalLore[1].content = theirs.globalLore[1].content
+        expect(presetAssetMaidMerge(planUpdate(CHARACTER_UPDATE, mine, theirs, null), mine, theirs)).toBeNull()
+        mine.globalLore[1] = maidEntry([{ at: 0, fp: 'person', forms: [{ id: 'gone', asset: 0 }] }], { 0: 'stale' })
+        expect(presetAssetMaidMerge(planUpdate(CHARACTER_UPDATE, mine, theirs, null), mine, theirs)).toBeNull()
+    })
+})
+
+describe('Asset Maid finalize recovery of an already installed broken body', () => {
+    function broken() {
+        const pictures = [pic('anchor'), pic('renamed'), pic('renamed')]
+        const entry = maidEntry([{ at: 0, fp: 'person', forms: [{ id: 'default', asset: 1 }, { id: 'other', asset: 2 }] }], { 0: 'anchor', 1: 'old', 2: 'old' })
+        const body = portable(entry)
+        body.entities.assets['asset:1'] = { extra: { keep: true }, occurrence: 4, fingerprints: { anchor: 'keep', descriptor: 'stale-one' } }
+        body.entities.assets['asset:2'].occurrence = 8
+        body.entities.assets['asset:99'] = { module: null, fingerprints: { descriptor: 'module-stays' } }
+        body.features.characterForms.entries[0].forms[0].reference.crop = { rect: [1, 2, 3, 4] }
+        entry.content = '@@dont_activate \n' + JSON.stringify(body, null, 2)
+        const mine = bot({ globalLore: [lore('Person', 'person'), entry], additionalAssets: pictures })
+        const theirs = structuredClone(mine)
+        const data = portable(theirs.globalLore[1]), locators = assetMaidCharacterLocators(pictures)
+        for (const at of [1, 2]) data.entities.assets[`asset:${at}`] = { fingerprints: { descriptor: locators[at]!.descriptor }, ...(locators[at]!.occurrence ? { occurrence: locators[at]!.occurrence } : {}) }
+        theirs.globalLore[1].content = '@@dont_activate ' + JSON.stringify(data)
+        return { mine, theirs }
+    }
+    function run(mine: character, theirs: character, base: Partial<character> | null = baseSnapshot(CHARACTER_UPDATE, theirs)) {
+        const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, base)
+        const dialog = { choices: {} as Record<string, 'mine' | 'theirs' | 'edit'>, edits: {} as Record<string, string> }
+        applyAssetMaidPreset(dialog, plan, mine, theirs)
+        const merged = apply(plan, mine, theirs, dialog.choices, dialog.edits)
+        const before = structuredClone(merged)
+        const pendingResult = finalize(merged, mine, theirs)
+        return { merged, before, plan, pendingResult }
+    }
+    test('mine-only with the incoming base repairs just descriptors and occurrences, preserving every reference and other field', () => {
+        const { mine, theirs } = broken()
+        const { merged, before, plan, pendingResult } = run(mine, theirs)
+        expect(plan.items.find(item => item.field === 'globalLore')?.choice).toBe('mine')
+        expect(pendingResult).toBeNull()
+        const data = portable(merged.globalLore[1]), old = portable(before.globalLore[1])
+        expect(JSON.stringify(data.features)).toBe(JSON.stringify(old.features))
+        expect(data.entities.assets['asset:0']).toEqual(old.entities.assets['asset:0'])
+        expect(data.entities.assets['asset:99']).toEqual(old.entities.assets['asset:99'])
+        expect(data.entities.assets['asset:1']).toEqual({ extra: { keep: true }, fingerprints: { anchor: 'keep', descriptor: assetMaidCharacterLocators(merged.additionalAssets!)[1]!.descriptor } })
+        expect(data.entities.assets['asset:2'].occurrence).toBe(1)
+        expect(merged.globalLore[1].content.startsWith('@@dont_activate \n{')).toBe(true)
+        expect(merged.additionalAssets).toEqual(before.additionalAssets)
+        expect(merged.globalLore[0]).toEqual(before.globalLore[0])
+        expect(addLog).toHaveBeenCalledWith(expect.objectContaining({ level: 'info', source: 'character-update', message: expect.stringContaining('2개') }))
+        expect(toast.success).toHaveBeenCalledOnce()
+        const once = JSON.stringify(merged)
+        finalizeWith(merged, mine, theirs, plan, {})
+        expect(JSON.stringify(merged)).toBe(once)
+        expect(addLog).toHaveBeenCalledTimes(1)
+    })
+    test('healthy mine, update and differs choices keep the selected body byte for byte', () => {
+        for (const status of ['mine', 'update', 'differs']) {
+            const { theirs: healthy } = broken()
+            const mine = structuredClone(healthy), theirs = structuredClone(healthy)
+            mine.globalLore[1].content += ' '
+            theirs.globalLore[1].content += '\n'
+            const base = status === 'mine' ? baseSnapshot(CHARACTER_UPDATE, theirs) : status === 'update' ? baseSnapshot(CHARACTER_UPDATE, mine) : null
+            // No preset: this is the final chosen healthy Portable, regardless of the comparison category.
+            presetAssetMaidMerge(null, mine, theirs)
+            const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, base)
+            expect(plan.items.find(item => item.field === 'globalLore')?.status).toBe(status)
+            const choices: Record<string, UpdateChoice> = Object.fromEntries(plan.items.filter(item => !item.choice).map(item => [item.id, 'mine' as const]))
+            const merged = applyUpdate(CHARACTER_UPDATE, mine, theirs, plan, choices)
+            const before = JSON.stringify(merged)
+            finalizeWith(merged, mine, theirs, plan, {})
+            expect(JSON.stringify(merged)).toBe(before)
+        }
+        expect(addLog).not.toHaveBeenCalled()
+    })
+    test('one resolved record pointing at another numbered picture blocks the whole recovery', () => {
+        const { mine, theirs } = broken()
+        const data = portable(mine.globalLore[1])
+        data.entities.assets['asset:2'] = { fingerprints: { descriptor: assetMaidCharacterLocators(mine.additionalAssets!)[0]!.descriptor } }
+        mine.globalLore[1].content = '@@dont_activate ' + JSON.stringify(data)
+        const { merged, before } = run(mine, theirs)
+        expect(merged.globalLore[1].content).toBe(before.globalLore[1].content)
+        expect(addLog).toHaveBeenCalledWith(expect.objectContaining({ level: 'warning', description: expect.stringContaining('그림과 일치하지 않아') }))
+    })
+    test('without any resolved record there is no numbering evidence, even when matching pictures exist', () => {
+        const { mine, theirs } = broken()
+        const data = portable(mine.globalLore[1])
+        delete data.entities.assets['asset:0']
+        mine.globalLore[1].content = '@@dont_activate ' + JSON.stringify(data)
+        const { merged, before } = run(mine, theirs)
+        expect(merged.globalLore[1].content).toBe(before.globalLore[1].content)
+        expect(addLog).toHaveBeenCalledWith(expect.objectContaining({ level: 'warning', description: expect.stringContaining('기록이 없어') }))
+    })
+    test('a legacy fingerprint that the plugin still resolves is never rewritten or used as semantic numbering proof', () => {
+        const { mine, theirs } = broken()
+        const data = portable(mine.globalLore[1])
+        // Actual cc(AE(anchor)) vector; kRe indexes this alias as well as semanticDescriptor.
+        data.entities.assets['asset:1'] = { fingerprints: { descriptor: 'am2:3bc773119d270ffc9f404c9f2e77987c' } }
+        mine.globalLore[1].content = '@@dont_activate ' + JSON.stringify(data)
+        const { merged, before } = run(mine, theirs)
+        expect(merged.globalLore[1].content).toBe(before.globalLore[1].content)
+        expect(addLog).toHaveBeenCalledWith(expect.objectContaining({ level: 'warning', message: expect.stringContaining('1개'), description: expect.stringContaining('그림과 일치하지 않아') }))
+    })
+    test('missing and ineligible numbered pictures are left intact and reported', () => {
+        const { mine, theirs } = broken()
+        const data = portable(mine.globalLore[1])
+        data.entities.assets['asset:2'].occurrence = 0
+        data.entities.assets['asset:8'] = { fingerprints: { descriptor: 'missing' } }
+        mine.additionalAssets![1] = pic('__asset_maid_crop_kept')
+        mine.additionalAssets![2] = ['unsupported', 'file', 'gif']
+        theirs.additionalAssets = structuredClone(mine.additionalAssets)
+        mine.globalLore[1].content = '@@dont_activate ' + JSON.stringify(data)
+        const { merged, before } = run(mine, theirs)
+        expect(merged.globalLore[1].content).toBe(before.globalLore[1].content)
+        expect(addLog).toHaveBeenCalledWith(expect.objectContaining({ level: 'warning', message: expect.stringContaining('3개'), description: expect.stringContaining('asset:8') }))
+        expect(toast.warning).toHaveBeenCalledOnce()
+    })
+    test('a partially recoverable body repairs only eligible candidates', () => {
+        const { mine, theirs } = broken()
+        const data = portable(mine.globalLore[1])
+        data.entities.assets['asset:8'] = { fingerprints: { descriptor: 'missing' } }
+        mine.globalLore[1].content = '@@dont_activate ' + JSON.stringify(data)
+        const { merged } = run(mine, theirs)
+        expect(portable(merged.globalLore[1]).entities.assets['asset:8']).toEqual(data.entities.assets['asset:8'])
+        expect(addLog).toHaveBeenCalledWith(expect.objectContaining({ level: 'warning', message: expect.stringContaining('2개를 복구') }))
+    })
+    test('duplicate entries, non-Portable and malformed records are preserved without throwing', () => {
+        for (const content of ['not-json', '{"schema":"another"}', '{"schema":"asset-maid.portable","entities":{"assets":[null]}}', '{"schema":"asset-maid.portable","entities":{"assets":{"asset:0":null,"asset:1":{"fingerprints":"bad"},"asset:2":{"fingerprints":{"descriptor":"x"},"occurrence":-1}}}}']) {
+            const mine = bot({ globalLore: [lore(ASSET_MAID_COMMENT, content)] })
+            const { merged, before } = run(mine, structuredClone(mine))
+            expect(JSON.stringify(merged)).toBe(JSON.stringify(before))
+        }
+        const { mine, theirs } = broken()
+        mine.globalLore.push(structuredClone(mine.globalLore[1]))
+        const { merged, before } = run(mine, theirs)
+        expect(JSON.stringify(merged)).toBe(JSON.stringify(before))
+    })
+    test('the existing pending merge stays identical to R1 and recovery is idempotent afterward', () => {
+        const { mine, theirs, base } = scenario()
+        const { merged, pendingResult, plan } = run(mine, theirs, base)
+        expect(pendingResult).toMatchObject({ kept: 3, held: [] })
+        expect(merged.globalLore.find(entry => entry.comment === ASSET_MAID_COMMENT)?.content).toBe(pendingResult!.content)
+        const before = JSON.stringify(merged)
+        finalizeWith(merged, mine, theirs, plan, {})
+        expect(JSON.stringify(merged)).toBe(before)
+        expect(addLog).not.toHaveBeenCalled()
     })
 })

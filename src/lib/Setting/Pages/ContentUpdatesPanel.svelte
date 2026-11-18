@@ -52,10 +52,10 @@
     }
     function askAgain(item: ContentItem) {
         return run(async () => {
-            // A declined item is forgotten first, so the check asks about it again.
+            // A decided item is forgotten first; only its explicit re-download bypasses installed detection.
             if (item.decision) await recordDecision(item, 'reset')
             // 0.9.96-ver5: the pressed item is asked first.
-            await checkContentUpdates(true, item.key)
+            await checkContentUpdates(true, item.key, !!item.decision)
             await refresh()
         })
     }
@@ -115,7 +115,7 @@
                     {#if !item.decision}
                         <ShButton variant="outline" onclick={() => askAgain(item)}>지금 물어보기</ShButton>
                         <ShButton variant="outline" onclick={() => decline(item)}>이 기기에서 안 받기</ShButton>
-                    {:else if item.decision === 'declined'}
+                    {:else}
                         <ShButton variant="outline" onclick={() => askAgain(item)}>다시 받기</ShButton>
                     {/if}
                 </div>

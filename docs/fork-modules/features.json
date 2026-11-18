@@ -630,6 +630,7 @@
         "patchnote/0.9.96-ver8.md",
         "patchnote/0.9.96-ver9.md",
         "patchnote/0.9.96-ver10.md",
+        "patchnote/0.9.96-ver11.md",
         "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.90/host-bridges.patch"
       ]

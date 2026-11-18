@@ -808,6 +808,13 @@ describe('content updates: modules', () => {
         expect(s.calls).not.toContain('/content-updates/fetch')
         expect(s.readModule).not.toHaveBeenCalled()
         expect(s.decisions).toEqual(['applied'])
+        const before = JSON.stringify(db)
+        await mod.checkContentUpdates(true, pending.key, true)
+        expect(s.alertConfirmMulti).toHaveBeenCalledTimes(1)
+        expect(s.calls).toContain('/content-updates/fetch')
+        expect(s.readModule).not.toHaveBeenCalled()
+        expect(JSON.stringify(db)).toBe(before)
+        expect(db.modules.filter((m: any) => m.id === id)).toHaveLength(1)
     })
 
     test('the module is here (synced, or an earlier try could not switch) but the earlier one is still on: asked; yes switches without importing again, under the busy hold', async () => {
@@ -1032,6 +1039,48 @@ describe('content updates: reasons and progress (0.9.96-ver5)', () => {
         await mod.checkContentUpdates(true, 'character:b')
         expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
         expect(alertConfirmMulti.mock.calls[0][2]).toMatch(/^b \(1\)/)
+    })
+    test('only explicit re-download asks about an installed item; no and close retain the existing decision semantics', async () => {
+        const { alertConfirmMulti } = await import('../alert') as any
+        const { getDatabase } = await import('../storage/database.svelte') as any
+        getDatabase.mockReturnValue({ characters: [{ name: 'a', characterVersion: '1' }, { name: 'b', characterVersion: '1' }] })
+        const a = entry('character:a'), b = entry('character:b')
+        for (const redownload of [false, true]) {
+            const decisions = await serve([b, a])
+            alertConfirmMulti.mockReset().mockResolvedValue(1)
+            await mod.checkContentUpdates(true, a.key, redownload)
+            expect(alertConfirmMulti).toHaveBeenCalledTimes(redownload ? 1 : 0)
+            expect(decisions.map(d => [d.key, d.decision])).toEqual([[a.key, redownload ? 'declined' : 'applied'], [b.key, 'applied']])
+        }
+        const decisions = await serve([a])
+        alertConfirmMulti.mockReset().mockResolvedValue(-1)
+        await mod.recordDecision(a as any, 'reset')
+        await mod.checkContentUpdates(true, a.key, true)
+        expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+        expect(decisions.map(d => d.decision)).toEqual(['reset'])
+        alertConfirmMulti.mockClear()
+        // The normal automatic path still detects installed content after the interval.
+        const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 24 * 60 * 60 * 1000)
+        try { await mod.checkContentUpdates() } finally { now.mockRestore() }
+        expect(alertConfirmMulti).not.toHaveBeenCalled()
+        expect(decisions.at(-1).decision).toBe('applied')
+    })
+    test('an installed character explicitly re-downloaded is fetched and passed to the existing card import', async () => {
+        const { alertConfirmMulti } = await import('../alert') as any
+        const { getDatabase } = await import('../storage/database.svelte') as any
+        const { importCharacterProcess } = await import('../characterCards') as any
+        const bytes = strToU8('same card bytes')
+        const a = { ...entry('character:a', 'character', bytes.length), sha256: createHash('sha256').update(bytes).digest('hex') }
+        getDatabase.mockReturnValue({ characters: [{ name: 'a', characterVersion: '1' }] })
+        const fetchFile = vi.fn(async () => new Response(bytes as BodyInit))
+        const decisions = await serve([a], fetchFile)
+        alertConfirmMulti.mockReset().mockResolvedValue(0)
+        importCharacterProcess.mockReset().mockResolvedValue(undefined)
+        await mod.checkContentUpdates(true, a.key, true)
+        expect(alertConfirmMulti).toHaveBeenCalledTimes(1)
+        expect(fetchFile).toHaveBeenCalledTimes(1)
+        expect(importCharacterProcess).toHaveBeenCalledWith({ name: a.fileName, data: bytes })
+        expect(decisions.at(-1).decision).toBe('applied')
     })
     test('a persona that cannot be written now (a BardWiki reboot left on a chat) is not asked; the panel names the chat', async () => {
         const { alertConfirmMulti } = await import('../alert') as any
