@@ -630,6 +630,7 @@
         "patchnote/0.9.96-ver8.md",
         "patchnote/0.9.96-ver9.md",
         "patchnote/0.9.96-ver10.md",
+        "patchnote/0.9.96-ver11.md",
         "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
         "docs/fork-modules/compat/v0.9.92/transfer-integration.patch",
@@ -638,7 +639,8 @@
         "docs/fork-modules/compat/v0.9.96/host-bridges.patch",
         "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
         "docs/fork-modules/WEEKLY-20261118.md",
-        "patchnote/0.9.102-ver1.md"
+        "patchnote/0.9.102-ver1.md",
+        "patchnote/0.9.102-ver2.md"
       ]
     },
     {

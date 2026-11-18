@@ -30,7 +30,7 @@ type Asset = [string, string, string]
 type Reference = { asset?: string, [key: string]: unknown }
 type Form = { id?: string, reference?: Reference | null, [key: string]: unknown }
 type Entry = { target?: string, forms?: Form[], [key: string]: unknown }
-type Fingerprinted = { fingerprints?: Record<string, string> }
+type Fingerprinted = { fingerprints?: Record<string, string>, module?: unknown, occurrence?: number }
 interface Portable {
     schema?: string
     entities?: { lorebooks?: Record<string, Fingerprinted>, assets?: Record<string, Fingerprinted>, [key: string]: unknown }
@@ -102,6 +102,48 @@ function findAsset(list: readonly unknown[], asset: Asset): number {
     const exact = list.findIndex(item => JSON.stringify(item) === same)
     if (exact >= 0 || !asset[1]) return exact
     return list.findIndex(item => Array.isArray(item) && item[1] === asset[1])
+}
+
+/** Asset Maid 0.9.91 cc, including its string-input form for legacy fingerprint lookups. */
+function assetMaidFingerprint(input: string): string {
+    const hashes = [2166136261, 2654435769, 2246822507, 3266489909]
+    for (let i = 0; i < input.length; i++) for (let seed = 0; seed < hashes.length; seed++) {
+        hashes[seed] ^= input.charCodeAt(i)
+        hashes[seed] = Math.imul(hashes[seed], 16777619)
+        hashes[seed] ^= hashes[seed] >>> 13
+    }
+    return `am2:${hashes.map(hash => (hash >>> 0).toString(16).padStart(8, '0')).join('')}`
+}
+
+/** Asset Maid 0.9.91 aee/AE/vRe, restricted to character arrays (YQ/cn/Bze/fi). */
+function characterLocators(pictures: readonly unknown[]): ({ descriptor: string, fingerprint: string, occurrence: number } | null)[] {
+    const text = (value: unknown) => value == null ? '' : String(value).trim()
+    const seen = new Map<string, number>()
+    return pictures.map(picture => {
+        if (!Array.isArray(picture)) return null
+        const name = text(picture[0]), key = text(picture[1])
+        const extension = text(picture[2]).replace(/^\./, '').toLowerCase()
+            || (text(name || key).split(/[\\/.]/g).at(-1)?.toLowerCase() ?? '')
+        if (!name || !key || !['png', 'jpg', 'jpeg', 'webp', 'avif'].includes(extension)
+            || name.startsWith(CROP_PREFIX)) return null
+        // fi/jQ: only a valid, canonically labelled generated chat/outfit name is excluded.
+        const generated = /^(.+)\.__am__\.(chat|outfit)\.([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/u.exec(name)
+        if (generated) {
+            const label = generated[1].normalize('NFKC').replace(/(?:\.__am__\.|\{\{|\}\}|<|>|[\u0000-\u001f\u007f])/giu, ' ')
+                .replace(/[:"/\\|?*]/gu, ' ').replace(/\s+/gu, ' ').replace(/^[.\s]+|[.\s]+$/gu, '').slice(0, 96).trim() || 'Asset Maid'
+            if (label === generated[1]) return null
+        }
+        const normalizedName = name.toLocaleLowerCase(), normalizedExtension = extension.trim().replace(/^\./u, '').toLocaleLowerCase()
+        const bucket = [normalizedName, normalizedExtension, 'character', ''].join('\0')
+        const occurrence = seen.get(bucket) ?? 0
+        seen.set(bucket, occurrence + 1)
+        const input = JSON.stringify({ name: normalizedName, extension: normalizedExtension, owner: 'self', origin: { kind: 'character' } })
+        return { descriptor: assetMaidFingerprint(input), fingerprint: assetMaidFingerprint(bucket), occurrence }
+    })
+}
+
+export function assetMaidCharacterLocators(pictures: readonly unknown[]): ({ descriptor: string, occurrence: number } | null)[] {
+    return characterLocators(pictures).map(locator => locator ? { descriptor: locator.descriptor, occurrence: locator.occurrence } : null)
 }
 
 /** Upstream's lore item keys of a whole list (characterUpdate.ts loreKey + keyed() slot): the keys plan items carry. */
@@ -229,6 +271,16 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         slot.reference = moved
         kept++
     }
+    // Final order includes user-added pictures; occurrence counts every eligible picture, not just referenced ones.
+    const locators = assetMaidCharacterLocators(result)
+    for (const [token, record] of Object.entries(assets)) {
+        if ('module' in record) continue
+        const locator = locators[indexOf(token, 'asset')]
+        if (!locator || (record.fingerprints?.descriptor === locator.descriptor && (record.occurrence ?? 0) === locator.occurrence)) continue
+        record.fingerprints = { ...record.fingerprints, descriptor: locator.descriptor }
+        if (locator.occurrence > 0) record.occurrence = locator.occurrence
+        else delete record.occurrence
+    }
     const entities = { ...(data.entities ?? {}) }
     if (Object.keys(assets).length) entities.assets = assets
     else delete entities.assets
@@ -303,7 +355,7 @@ function report(held: HeldReference[], dropped: string[]) {
  * After the choices are applied (offerUpdate, with the decision's plan and choices): renumbers the preselected merge against the final
  * lorebook and pictures. Does nothing unless the user applied the preselected edit as it was ('edit' with exactly that text).
  */
-export function finalizeAssetMaidMerge(merged: character, mine: character, theirs: character, plan: UpdatePlan, choices: Record<string, UpdateChoice>): AssetMaidMerge | null {
+function finalizePendingAssetMaidMerge(merged: character, mine: character, theirs: character, plan: UpdatePlan, choices: Record<string, UpdateChoice>): AssetMaidMerge | null {
     const current = pending
     pending = null
     if (!current || current.chaId !== mine.chaId || current.incoming !== theirs) return null
@@ -327,5 +379,68 @@ export function finalizeAssetMaidMerge(merged: character, mine: character, their
     merged.additionalAssets = pictures as Asset[]
     merged.globalLore = lore.map((entry, index) => index === at ? { ...entry, content: result.content } : entry)
     report(result.held, result.dropped)
+    return result
+}
+
+/** Repair unresolved character records only when the resolved records prove asset numbers still follow picture positions. */
+function repairAssetMaidRecords(merged: character) {
+    const lore = Array.isArray(merged.globalLore) ? merged.globalLore : []
+    const entries = lore.filter(entry => entry?.comment === ASSET_MAID_COMMENT)
+    if (entries.length !== 1) return
+    const parsed = parse(entries[0].content)
+    const assets = parsed?.data.entities?.assets
+    if (!parsed || !assets || typeof assets !== 'object' || Array.isArray(assets)) return
+    const locators = characterLocators(Array.isArray(merged.additionalAssets) ? merged.additionalAssets : [])
+    const buckets = new Map<string, NonNullable<typeof locators[number]>[]>()
+    for (const locator of locators) if (locator) {
+        for (const fingerprint of new Set([locator.descriptor, locator.fingerprint])) {
+            const bucket = buckets.get(fingerprint) ?? []
+            bucket.push(locator)
+            buckets.set(fingerprint, bucket)
+        }
+    }
+    const unresolved: [string, Fingerprinted][] = []
+    let resolved = 0, aligned = true
+    for (const [token, record] of Object.entries(assets)) {
+        if (!record || typeof record !== 'object' || Array.isArray(record) || 'module' in record) continue
+        if (!record.fingerprints || typeof record.fingerprints !== 'object' || Array.isArray(record.fingerprints)
+            || typeof record.fingerprints.descriptor !== 'string' || (record.occurrence !== undefined && (!Number.isInteger(record.occurrence) || record.occurrence < 0))) continue
+        const occurrence = record.occurrence ?? 0
+        // kRe/LA also registers legacy fingerprints: a record that still resolves must never be repaired.
+        const found = buckets.get(record.fingerprints?.descriptor ?? '')?.[occurrence]
+        if (!found) { unresolved.push([token, record]); continue }
+        resolved++
+        const numbered = locators[indexOf(token, 'asset')]
+        if (!numbered || record.fingerprints?.descriptor !== numbered.descriptor || occurrence !== numbered.occurrence) aligned = false
+    }
+    if (!unresolved.length) return
+    const reasons: string[] = []
+    let fixed = 0
+    if (!resolved) reasons.push('풀리는 캐릭터 그림 기록이 없어 그림 번호를 확인할 수 없음')
+    else if (!aligned) reasons.push('풀리는 기록의 지문·순번이 자기 번호의 그림과 일치하지 않아 그림 번호를 확인할 수 없음')
+    else for (const [token, record] of unresolved) {
+        const locator = locators[indexOf(token, 'asset')]
+        if (!locator) { reasons.push(`${token}: 그림이 없거나 Asset Maid 대상 그림이 아님`); continue }
+        record.fingerprints = { ...record.fingerprints, descriptor: locator.descriptor }
+        if (locator.occurrence > 0) record.occurrence = locator.occurrence
+        else delete record.occurrence
+        fixed++
+    }
+    if (fixed) {
+        const content = parsed.prefix + JSON.stringify(parsed.data)
+        merged.globalLore = lore.map(entry => entry === entries[0] ? { ...entry, content } : entry)
+    }
+    const remaining = unresolved.length - fixed
+    const message = `Asset Maid 그림 기록 ${fixed}개를 복구했어요. ${remaining}개는 그대로 뒀어요.`
+    const description = reasons.length ? reasons.join('\n') : '그림 번호가 실제 그림 위치와 같은 것을 확인해, 풀리지 않는 기록의 지문과 순번만 바로잡았어요.'
+    addLog({ level: remaining ? 'warning' : 'info', message, description, source: 'character-update' })
+    if (remaining) toast.warning(message, { description: reasons[0] })
+    else toast.success(message)
+}
+
+/** Finalize the preselected merge, then check the chosen Portable body even when the choice stayed 'mine'. */
+export function finalizeAssetMaidMerge(merged: character, mine: character, theirs: character, plan: UpdatePlan, choices: Record<string, UpdateChoice>): AssetMaidMerge | null {
+    const result = finalizePendingAssetMaidMerge(merged, mine, theirs, plan, choices)
+    repairAssetMaidRecords(merged)
     return result
 }

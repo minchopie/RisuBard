@@ -91,7 +91,10 @@ async function freshRoute() {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
         await Promise.race([
-            import('../nasSync').then(m => m.reportSyncNetwork(controller.signal)),
+            (async () => {
+                const { reportSyncNetwork } = await import('../nasSync')
+                await reportSyncNetwork(controller.signal)
+            })(),
             new Promise(resolve => { timer = setTimeout(resolve, ROUTE_REPORT_LIMIT) }),
         ])
     } catch { /* the server decides as before */ } finally { clearTimeout(timer); controller.abort() }
@@ -720,14 +723,14 @@ export async function syncCycleRunning(): Promise<boolean> {
 }
 
 /** Asks about each published item this device has not answered yet. `force` ignores the interval (the settings button). 0.9.96-ver5:
- *  `first` (a published key: 「지금 물어보기」/「다시 받기」) is asked before the other pending items. */
-export async function checkContentUpdates(force = false, first?: string): Promise<ContentOverview | null> {
-    return (await runCheck(force, force, first)).overview
+ *  `first` (a published key: 「지금 물어보기」/「다시 받기」) is asked before the other pending items. `redownload` bypasses installed detection for that key only. */
+export async function checkContentUpdates(force = false, first?: string, redownload = false): Promise<ContentOverview | null> {
+    return (await runCheck(force, force, first, redownload)).overview
 }
 /** `retry`: this call stopped because the app was (or became) busy before every item was answered — the start check tries again.
  *  0.9.96-ver5: `manual` (a settings button) shows why the check stopped in contentUpdateStatus; the start and background checks
  *  stay quiet as before. */
-async function runCheck(force: boolean, manual = false, first?: string): Promise<{ overview: ContentOverview | null; retry: boolean }> {
+async function runCheck(force: boolean, manual = false, first?: string, redownload = false): Promise<{ overview: ContentOverview | null; retry: boolean }> {
     const skip = (reason: string) => { if (manual && reason) contentUpdateStatus.set(reason) }
     // An earlier check still running shows its own progress text; otherwise say that it is still on.
     if (running) { if (!get(contentUpdateStatus)) skip('앞선 배포 확인이 아직 끝나지 않았어요(파일을 받는 중이거나 질문 창이 열려 있어요). 끝난 뒤 다시 눌러 주세요.'); return { overview: null, retry: true } }
@@ -745,7 +748,7 @@ async function runCheck(force: boolean, manual = false, first?: string): Promise
         for (const item of pending) {
             let reason = await busyReason()
             if (reason) { retry = true; skip(reason); break }
-            const installed = await alreadyInstalled(item)
+            const installed = redownload && item.key === first ? false : await alreadyInstalled(item)
             reason = await busyReason()
             if (reason) { retry = true; skip(reason); break } // the comparison download took a while: another dialog/activity may have started
             if (installed) { await recordDecision(item, 'applied'); continue }

@@ -53,6 +53,7 @@ const SECRET_FIELDS = [
     field(['proxyKey'], 'forceReplaceUrl'),
     field(['hordeConfig', 'apiKey']), field(['novelai', 'token']), field(['deeplOptions', 'key']), field(['deeplXOptions', 'token'], 'url'),
     field(['google', 'accessToken']), field(['hypaCustomSettings', 'key'], 'url'), field(['openaiCompatImage', 'key'], 'url'), field(['wavespeedImage', 'key']),
+    field(['risuBardSourceReranker', 'key'], 'url'),
     field(['account', 'token']), field(['account', 'data', 'refresh_token']), field(['account', 'data', 'access_token']),
     field(['OaiCompAPIKeys', { each: true }]),
     field(['customModels', { id: 'id' }, 'key'], 'url'), field(['customModels', { id: 'id' }, 'params'], 'url', 'params'),
@@ -78,6 +79,7 @@ const SECRET_FIELDS = [
 const URL_FIELDS = [
     ...'forceReplaceUrl textgenWebUIStreamURL textgenWebUIBlockingURL koboldURL ollamaURL webUiUrl comfyUiUrl voicevoxUrl NAIImgUrl'.split(' ').map(key => [key]),
     ['customModels', { id: 'id' }, 'url'], ['openaiCompatImage', 'url'], ['hypaCustomSettings', 'url'], ['deeplXOptions', 'url'],
+    ['risuBardSourceReranker', 'url'],
     ...'forceReplaceUrl koboldURL textgenWebUIStreamURL textgenWebUIBlockingURL'.split(' ').map(key => ['botPresets', { id: 'id' }, key]),
     ['characters', { id: 'chaId' }, 'oaiTTSConfig', 'baseURL'], preset('profileSnapshot', 'endpoint', 'url'), preset('userValues', { each: true, match: presetEndpointOverride }),
 ];

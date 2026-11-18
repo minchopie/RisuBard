@@ -1099,9 +1099,9 @@
       "path": "server/node/nas-sync-vault.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "96b9c90af1528765a3d4d08b08a41632ec49130a4315e744656054644e9dc607",
-      "contentSha256": "96b9c90af1528765a3d4d08b08a41632ec49130a4315e744656054644e9dc607",
-      "bytes": 30076
+      "sha256": "384ef1099c12711950729065823a050590e2fca84989464666cf2d1008fbcf78",
+      "contentSha256": "384ef1099c12711950729065823a050590e2fca84989464666cf2d1008fbcf78",
+      "bytes": 31940
     },
     {
       "path": "server/node/play-set-archive.cjs",
@@ -1299,9 +1299,9 @@
       "path": "server/node/transfer-sync/nas-sync-vault.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "1e627d1a2904f562e111038b345397c364446e1776d32f47ea9f2aa08994ecc6",
-      "contentSha256": "1e627d1a2904f562e111038b345397c364446e1776d32f47ea9f2aa08994ecc6",
-      "bytes": 22440
+      "sha256": "e48b24a3300b91032109010e54c735d4cc408f11541e23d325f48396809151c1",
+      "contentSha256": "e48b24a3300b91032109010e54c735d4cc408f11541e23d325f48396809151c1",
+      "bytes": 22532
     },
     {
       "path": "server/node/transfer-sync/play-set-archive.cjs",
@@ -4464,6 +4464,14 @@
       "bytes": 9559
     },
     {
+      "path": "patchnote/0.9.96-ver11.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "5b32c4adea6053c443f693563aebdd3842789d21ecea1ba1af05ff98643e19d4",
+      "contentSha256": "5b32c4adea6053c443f693563aebdd3842789d21ecea1ba1af05ff98643e19d4",
+      "bytes": 3179
+    },
+    {
       "path": "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
       "module": "history-docs",
       "kind": "files",
@@ -4534,6 +4542,14 @@
       "sha256": "376e7c027da94dad684498065273571042ef60000ae272554dd22027fefd47d6",
       "contentSha256": "376e7c027da94dad684498065273571042ef60000ae272554dd22027fefd47d6",
       "bytes": 3729
+    },
+    {
+      "path": "patchnote/0.9.102-ver2.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "47e820f69f753bf3b38f17b531561cf3b4b4b4e425a123b98cfe3fb3773a05cd",
+      "contentSha256": "47e820f69f753bf3b38f17b531561cf3b4b4b4e425a123b98cfe3fb3773a05cd",
+      "bytes": 2005
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",
@@ -4771,25 +4787,25 @@
       "path": "src/ts/content-updates/contentUpdates.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "824c0e80f61b5bc9d442220831d64706e2a87feb4d345878ad75fe5e2c4bf1c0",
-      "contentSha256": "824c0e80f61b5bc9d442220831d64706e2a87feb4d345878ad75fe5e2c4bf1c0",
-      "bytes": 61193
+      "sha256": "77882886ed3fee37e6247397358084fdc024364bc7a5210532ade2eb81fea1b8",
+      "contentSha256": "77882886ed3fee37e6247397358084fdc024364bc7a5210532ade2eb81fea1b8",
+      "bytes": 61442
     },
     {
       "path": "src/ts/content-updates/contentUpdates.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "d7734bc50e4c286556ee5fdb14e8b584b3e29b42830a76734295f3c7146b6965",
-      "contentSha256": "d7734bc50e4c286556ee5fdb14e8b584b3e29b42830a76734295f3c7146b6965",
-      "bytes": 87460
+      "sha256": "ec09d79e015e7f01f5337d9dd6161e17d06bab78c7e35bb58e98777f6d073382",
+      "contentSha256": "ec09d79e015e7f01f5337d9dd6161e17d06bab78c7e35bb58e98777f6d073382",
+      "bytes": 93065
     },
     {
       "path": "src/lib/Setting/Pages/ContentUpdatesPanel.svelte",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "6760b2a32a57c3cbdda922172125ec5d3eca2053f163f7687bde68871111dcaf",
-      "contentSha256": "6760b2a32a57c3cbdda922172125ec5d3eca2053f163f7687bde68871111dcaf",
-      "bytes": 9507
+      "sha256": "06280e0fd2d606cdf0ce66b0191ae2f2e3ba4485008f148f5108e6abe80dbf7d",
+      "contentSha256": "06280e0fd2d606cdf0ce66b0191ae2f2e3ba4485008f148f5108e6abe80dbf7d",
+      "bytes": 9517
     },
     {
       "path": "docs/content-updates/README.md",
@@ -4835,17 +4851,17 @@
       "path": "src/ts/content-updates/characterUpdateRefKeep.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "e49a5955ca493c4dc8188f67fa1aafa669a3f6752fe02700f4548f5a742d2333",
-      "contentSha256": "e49a5955ca493c4dc8188f67fa1aafa669a3f6752fe02700f4548f5a742d2333",
-      "bytes": 20900
+      "sha256": "b51b17bf884a7dbd7b1e042eb1cef73703559a7ca7ba40627e7d9f84a88731dc",
+      "contentSha256": "b51b17bf884a7dbd7b1e042eb1cef73703559a7ca7ba40627e7d9f84a88731dc",
+      "bytes": 28508
     },
     {
       "path": "src/ts/content-updates/characterUpdateRefKeep.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "ebb3143649f53421452481ad76210c8f8bf9df1f5cad17f0155791a3697e24e4",
-      "contentSha256": "ebb3143649f53421452481ad76210c8f8bf9df1f5cad17f0155791a3697e24e4",
-      "bytes": 28540
+      "sha256": "7533ccf1d87325d2e5eac5ae083abe8efd1c3a35d584d7696c7f0d568ed9af65",
+      "contentSha256": "7533ccf1d87325d2e5eac5ae083abe8efd1c3a35d584d7696c7f0d568ed9af65",
+      "bytes": 44674
     }
   ],
   "modules": [
@@ -5507,6 +5523,7 @@
         "patchnote/0.9.96-ver8.md",
         "patchnote/0.9.96-ver9.md",
         "patchnote/0.9.96-ver10.md",
+        "patchnote/0.9.96-ver11.md",
         "docs/fork-modules/compat/v0.9.84/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.90/host-bridges.patch",
         "docs/fork-modules/compat/v0.9.92/transfer-integration.patch",
@@ -5515,7 +5532,8 @@
         "docs/fork-modules/compat/v0.9.96/host-bridges.patch",
         "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
         "docs/fork-modules/WEEKLY-20261118.md",
-        "patchnote/0.9.102-ver1.md"
+        "patchnote/0.9.102-ver1.md",
+        "patchnote/0.9.102-ver2.md"
       ],
       "patch": null
     },
@@ -5617,7 +5635,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "c9397980cda0f40edae7bc481835308bfb794a77d381f76dadfbe3ec448af3ea"
+      "sha256": "a796784f7da103f63e619e25d36b63fd5c855d7a2c30a4ebd84ebc9604630c11"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5695,7 +5713,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.102/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "6c2aa459222abcf1186ca5ef2cdf7ec09947c10b4b436ee56b6ccab642645470"
+          "sha256": "f8efdc0375e9873a27b3a50b5246739ed9d71f0c8d860df7918fb517ec788b7e"
         },
         {
           "module": "lore-lua",
