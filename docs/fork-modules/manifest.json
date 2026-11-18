@@ -1099,9 +1099,9 @@
       "path": "server/node/nas-sync-vault.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "384ef1099c12711950729065823a050590e2fca84989464666cf2d1008fbcf78",
-      "contentSha256": "384ef1099c12711950729065823a050590e2fca84989464666cf2d1008fbcf78",
-      "bytes": 31940
+      "sha256": "e15f9211969c3beffa61b67bf9ddaf9450612abc39789c9f1b0fa171e1ee006a",
+      "contentSha256": "e15f9211969c3beffa61b67bf9ddaf9450612abc39789c9f1b0fa171e1ee006a",
+      "bytes": 31817
     },
     {
       "path": "server/node/play-set-archive.cjs",
@@ -1299,9 +1299,9 @@
       "path": "server/node/transfer-sync/nas-sync-vault.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "e48b24a3300b91032109010e54c735d4cc408f11541e23d325f48396809151c1",
-      "contentSha256": "e48b24a3300b91032109010e54c735d4cc408f11541e23d325f48396809151c1",
-      "bytes": 22532
+      "sha256": "d7be15538ca52023e8def0b6fb15b377d0521e2a86ef18ad2ca747dcdd8df058",
+      "contentSha256": "d7be15538ca52023e8def0b6fb15b377d0521e2a86ef18ad2ca747dcdd8df058",
+      "bytes": 22493
     },
     {
       "path": "server/node/transfer-sync/play-set-archive.cjs",
@@ -4547,9 +4547,9 @@
       "path": "patchnote/0.9.102-ver2.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "47e820f69f753bf3b38f17b531561cf3b4b4b4e425a123b98cfe3fb3773a05cd",
-      "contentSha256": "47e820f69f753bf3b38f17b531561cf3b4b4b4e425a123b98cfe3fb3773a05cd",
-      "bytes": 2005
+      "sha256": "f3ab3d8c98e9dbb59ef4961642d4ad0261546a8b72b96eb9cf5d907a21de16a7",
+      "contentSha256": "f3ab3d8c98e9dbb59ef4961642d4ad0261546a8b72b96eb9cf5d907a21de16a7",
+      "bytes": 2520
     },
     {
       "path": "server/node/app-update/bootstrap.cjs",

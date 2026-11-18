@@ -16,7 +16,7 @@ function fixture() {
         hordeConfig: { apiKey: S('horde'), model: 'm' }, novelai: { token: S('nai'), model: 'clio' }, deeplOptions: { key: S('deepl'), freeApi: true },
         deeplXOptions: { url: 'https://deeplx.example/translate', token: S('deeplx') }, google: { accessToken: S('google'), projectId: 'p' },
         hypaCustomSettings: { url: 'https://embed.example/v1', key: S('hypa'), model: 'e' }, openaiCompatImage: { url: 'https://img.example', key: S('img'), model: 'i' },
-        risuBardSourceReranker: { method: 'reranker', url: 'https://rank.example/v1/rerank?key=' + S('rerank-query') + '&x=1', key: S('rerank'), model: 'r', minScore: 0.2 },
+        risuBardSourceReranker: { method: 'reranker', url: 'https://rank.example/v1/rerank', key: S('rerank'), model: 'r', minScore: 0.2 },
         wavespeedImage: { key: S('wave'), model: 'w' }, account: { token: S('account'), id: 'me', data: { refresh_token: S('refresh'), access_token: S('access'), expires_in: 3600 } },
         OaiCompAPIKeys: { 'https://a.example': S('oaicomp-a'), 'https://b.example': S('oaicomp-b') },
         customModels: [{ id: 'cm1', url: 'https://custom.example/v1', key: S('custom'), name: 'c', params: `temperature=0.5\nheader::Authorization=Bearer ${S('param-auth')}\nheader::X-Title=public\nheader::X-Api-Key={{none}}` }, { id: 'cm2', url: '', key: '', name: 'nokey', params: '' }],
@@ -38,7 +38,7 @@ const text = (v: unknown) => JSON.stringify(v)
 const master = Buffer.from('ab'.repeat(32), 'hex'), otherMaster = Buffer.from('cd'.repeat(32), 'hex')
 const EXPECTED_SLOTS = ['/openAIKey', '/proxyKey', '/claudeAPIKey', '/vertexPrivateKey', '/vertexAccessToken', '/hordeConfig/apiKey', '/novelai/token', '/deeplOptions/key', '/deeplXOptions/token', '/google/accessToken',
     '/hypaCustomSettings/key', '/openaiCompatImage/key', '/wavespeedImage/key', '/account/token', '/account/data/refresh_token', '/account/data/access_token', '/OaiCompAPIKeys/https:~1~1a.example', '/OaiCompAPIKeys/https:~1~1b.example',
-    '/risuBardSourceReranker/key', '/risuBardSourceReranker/url#query:key',
+    '/risuBardSourceReranker/key',
     '/customModels/cm1/key', '/customModels/cm1/params#header:Authorization', '/apiKeyPool/pool1/key', '/authRefreshes/https:~1~1auth.example~1a/refreshToken', '/authRefreshes/https:~1~1auth.example~1a/clientSecret',
     '/botPresets/bp1/openAIKey', '/botPresets/bp1/proxyKey', '/botPresets/1/openAIKey', '/characters/card/oaiTTSConfig/apiKey',
     '/modelPresets/mp1/userValues/apiKey', '/modelPresets/mp1/userValues/saToken', '/modelPresets/mp1/userValues/legacyAuth', '/modelPresets/mp1/customHeaders/Authorization', '/modelPresets/mp1/customHeaders/X-Api-Key',
@@ -61,7 +61,7 @@ test('projection removes every inventoried credential; public record, envelopes 
     expect(pub.customModels[1]).toEqual({ id: 'cm2', url: '', key: '', name: 'nokey', params: '' })
     expect(pub.koboldURL).toBe('not a url')
     expect(pub.textgenWebUIStreamURL).toBe('https://textgen.example/api?key=&x=1')
-    expect(pub.risuBardSourceReranker).toEqual({ ...db.risuBardSourceReranker, url: 'https://rank.example/v1/rerank?key=&x=1', key: '' })
+    expect(pub.risuBardSourceReranker).toEqual({ ...db.risuBardSourceReranker, key: '' })
     expect(pub[REFS].map((r: any) => r.slot)).toEqual(EXPECTED_SLOTS)
     expect(envelopes).toHaveLength(EXPECTED_SLOTS.length)
     const ref = (slot: string) => pub[REFS].find((r: any) => r.slot === slot)

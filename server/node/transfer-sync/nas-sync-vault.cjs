@@ -79,7 +79,6 @@ const SECRET_FIELDS = [
 const URL_FIELDS = [
     ...'forceReplaceUrl textgenWebUIStreamURL textgenWebUIBlockingURL koboldURL ollamaURL webUiUrl comfyUiUrl voicevoxUrl NAIImgUrl'.split(' ').map(key => [key]),
     ['customModels', { id: 'id' }, 'url'], ['openaiCompatImage', 'url'], ['hypaCustomSettings', 'url'], ['deeplXOptions', 'url'],
-    ['risuBardSourceReranker', 'url'],
     ...'forceReplaceUrl koboldURL textgenWebUIStreamURL textgenWebUIBlockingURL'.split(' ').map(key => ['botPresets', { id: 'id' }, key]),
     ['characters', { id: 'chaId' }, 'oaiTTSConfig', 'baseURL'], preset('profileSnapshot', 'endpoint', 'url'), preset('userValues', { each: true, match: presetEndpointOverride }),
 ];
