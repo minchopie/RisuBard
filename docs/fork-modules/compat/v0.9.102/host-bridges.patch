@@ -477,14 +477,14 @@ index 7b92585..12f8202 100644
          const { id: _id, ...rest } = value as { id?: string }
          clean = rest
 diff --git a/src/ts/characterUpdateFlow.svelte.ts b/src/ts/characterUpdateFlow.svelte.ts
-index 379e730..df6c7b8 100644
+index 379e730..dd18c46 100644
 --- a/src/ts/characterUpdateFlow.svelte.ts
 +++ b/src/ts/characterUpdateFlow.svelte.ts
 @@ -19,6 +19,7 @@ import {
      CHARACTER_UPDATE, MODULE_UPDATE, applyUpdate, baseSnapshot, findModuleUpdateCandidates, findUpdateCandidates,
      planUpdate, unresolvedItems, type UpdateCandidate, type UpdateChoice, type UpdatePlan, type UpdateSide, type UpdateSpec,
  } from './characterUpdate'
-+import { applyAssetMaidPreset, finalizeAssetMaidMerge } from './content-updates/characterUpdateRefKeep'
++import { applyAssetMaidPreset, finalizeAssetMaidMerge, keepChatPictures } from './content-updates/characterUpdateRefKeep'
  
  export type UpdateKind = 'character' | 'module'
  
@@ -506,12 +506,14 @@ index 379e730..df6c7b8 100644
          dialog.baseSource = { kind: 'file', name: file.name }
      } catch (error) {
          dialog.error = `${language.characterUpdate.baseFileFailed}: ${error instanceof Error ? error.message : String(error)}`
-@@ -305,6 +310,8 @@ async function offerUpdate<T extends object>(entity: Entity<T>, incoming: T, can
+@@ -305,6 +310,10 @@ async function offerUpdate<T extends object>(entity: Entity<T>, incoming: T, can
      const { index, value: current } = find(entity, decision.id)
      if (!current) throw new Error(language.errors.noData)
      const merged = applyUpdate(entity.spec, current, incoming, decision.plan, decision.choices)
 +    // RisuBard fork 0.9.96-ver8: Asset Maid references follow their characters and pictures to where the choices put them.
 +    if (entity.kind === 'character') finalizeAssetMaidMerge(merged as character, current as character, incoming as character, decision.plan, decision.choices)
++    // RisuBard fork 0.9.102-ver3: pictures the installed chats use by name stay linked (closed chats are read too).
++    if (entity.kind === 'character') await keepChatPictures(merged as character, current as character)
      ;(merged as { updateBase?: string }).updateBase = baseKey
      return { index, current, merged }
  }

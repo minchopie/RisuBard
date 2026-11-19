@@ -4851,17 +4851,17 @@
       "path": "src/ts/content-updates/characterUpdateRefKeep.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "b51b17bf884a7dbd7b1e042eb1cef73703559a7ca7ba40627e7d9f84a88731dc",
-      "contentSha256": "b51b17bf884a7dbd7b1e042eb1cef73703559a7ca7ba40627e7d9f84a88731dc",
-      "bytes": 28508
+      "sha256": "fe57ff63bdcd0363a21524741ff4284e9d97b501c550d816686969d1d8ad987f",
+      "contentSha256": "fe57ff63bdcd0363a21524741ff4284e9d97b501c550d816686969d1d8ad987f",
+      "bytes": 34324
     },
     {
       "path": "src/ts/content-updates/characterUpdateRefKeep.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "7533ccf1d87325d2e5eac5ae083abe8efd1c3a35d584d7696c7f0d568ed9af65",
-      "contentSha256": "7533ccf1d87325d2e5eac5ae083abe8efd1c3a35d584d7696c7f0d568ed9af65",
-      "bytes": 44674
+      "sha256": "bf06bdf7e77b8667356e446b599621fd125fb189f4d8e99dd1b233512bf31766",
+      "contentSha256": "bf06bdf7e77b8667356e446b599621fd125fb189f4d8e99dd1b233512bf31766",
+      "bytes": 61020
     }
   ],
   "modules": [
@@ -5735,7 +5735,7 @@
               "sha256": "c61e8c744d3209e4a14a1f02866a2cf7e88b146cd2f50cb565eae23724168c2e"
             }
           ],
-          "sha256": "c4113a4099c0370ca756fe0c50494181ab96b3d6a6406acbd95003ac1c3cf287"
+          "sha256": "d64cf51bd3c70b6da61434a7d71ba9ec1ebf81860e484a25919241b72e35654a"
         },
         {
           "module": "file-export",

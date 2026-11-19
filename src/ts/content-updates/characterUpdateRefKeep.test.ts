@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 vi.mock('svelte-sonner', () => ({ toast: { warning: vi.fn(), success: vi.fn() } }))
 vi.mock('../log', () => ({ addLog: vi.fn() }))
+vi.mock('../storage/chatStorage', () => ({ fetchChatFromServer: vi.fn() }))
+vi.mock('../storage/database.svelte', () => ({ getDatabase: vi.fn() }))
 import { toast } from 'svelte-sonner'
 import { addLog } from '../log'
+import { fetchChatFromServer } from '../storage/chatStorage'
 import type { character, loreBook } from '../storage/database.svelte'
+import { getDatabase } from '../storage/database.svelte'
 import { CHARACTER_UPDATE, applyUpdate, baseSnapshot, planUpdate, type UpdateChoice, type UpdatePlan } from '../characterUpdate'
 import { editedValue } from '../characterUpdateView'
-import { ASSET_MAID_COMMENT, assetMaidCharacterLocators, applyAssetMaidPreset, finalizeAssetMaidMerge as finalizeWith, mergeAssetMaid, presetAssetMaidMerge } from './characterUpdateRefKeep'
+import { ASSET_MAID_COMMENT, assetMaidCharacterLocators, applyAssetMaidPreset, finalizeAssetMaidMerge as finalizeWith, keepChatPictures, mergeAssetMaid, presetAssetMaidMerge } from './characterUpdateRefKeep'
 
 const lore = (comment: string, content: string, extra: Partial<loreBook> = {}): loreBook => ({
     key: comment.toLowerCase(), secondkey: '', insertorder: 100, comment, content, mode: 'normal', alwaysActive: false, selective: false, bookVersion: 2, ...extra,
@@ -574,5 +578,291 @@ describe('Asset Maid finalize recovery of an already installed broken body', () 
         finalizeWith(merged, mine, theirs, plan, {})
         expect(JSON.stringify(merged)).toBe(before)
         expect(addLog).not.toHaveBeenCalled()
+    })
+})
+
+describe('character pictures referenced by installed chats', async () => {
+    const maidName = 'X.__am__.chat.01234567-89ab-cdef-0123-456789abcdef'
+    const chat = (...texts: string[]): character['chats'][number] => ({
+        name: 'Chat 1', note: '', localLore: [], message: texts.map(data => ({ role: 'char', data })),
+    })
+    const update = (mine: character, theirs = bot(), base: Partial<character> | null = baseSnapshot(CHARACTER_UPDATE, bot())) => {
+        const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, base)
+        const choices: Record<string, UpdateChoice> = Object.fromEntries(plan.items.map(item => [item.id, 'theirs']))
+        return { plan, choices, merged: applyUpdate(CHARACTER_UPDATE, mine, theirs, plan, choices) }
+    }
+    const database = (characters: character[], assets?: character['additionalAssets']) => {
+        vi.mocked(getDatabase).mockReturnValue({
+            characters, modules: assets ? [{ id: 'module', name: 'Module', description: '', assets }] : [],
+        } as ReturnType<typeof getDatabase>)
+    }
+    beforeEach(() => database([]))
+
+    const pictureUpdate = () => {
+        const mine = bot({
+            additionalAssets: [pic('card'), pic(maidName), pic('my-pic'), pic('unused')],
+            chats: [chat(`<span class="am-image"><img class="am-image__media" data-am-asset="${maidName}" src="{{raw::${maidName}}}" width="20" height="20" alt=""></span>`),
+                chat('{{img::my-pic}}')],
+        })
+        const theirs = bot({ additionalAssets: [pic('card'), pic('new-card-pic')] })
+        return { mine, theirs, base: baseSnapshot(CHARACTER_UPDATE, bot({ additionalAssets: [pic('card')] })) }
+    }
+
+    test('finalizing the Portable body alone leaves chat pictures untouched', () => {
+        const { mine, theirs, base } = pictureUpdate()
+        const { plan, choices, merged } = update(mine, theirs, base)
+        const pictures = merged.additionalAssets
+        expect(finalizeWith(merged, mine, theirs, plan, choices)).toBeNull()
+        expect(merged.additionalAssets).toBe(pictures)
+        expect(merged.additionalAssets).toEqual(theirs.additionalAssets)
+        expect(fetchChatFromServer).not.toHaveBeenCalled()
+        expect(addLog).not.toHaveBeenCalled()
+    })
+
+    test('reads placeholder and stub bodies in order without replacing their slots', async () => {
+        const { mine, theirs, base } = pictureUpdate()
+        const [body, stubBody] = mine.chats
+        const placeholder = { ...chat(), id: 'closed', _placeholder: true }
+        const stub = { id: 'stub', name: 'Chat 2', _stub: true } as unknown as character['chats'][number]
+        const chats = [placeholder, stub]
+        mine.chats = chats
+        const { merged } = update(mine, theirs, base)
+        let resolvePlaceholder!: (result: typeof body) => void
+        const placeholderRead = new Promise<typeof body>(resolve => { resolvePlaceholder = resolve })
+        vi.mocked(fetchChatFromServer).mockReturnValueOnce(placeholderRead).mockResolvedValueOnce(stubBody)
+
+        const keeping = keepChatPictures(merged, mine)
+        expect(fetchChatFromServer).toHaveBeenCalledExactlyOnceWith(mine.chaId, 0, 'closed')
+        resolvePlaceholder(body)
+        await keeping
+
+        expect(fetchChatFromServer).toHaveBeenCalledTimes(2)
+        expect(fetchChatFromServer).toHaveBeenNthCalledWith(2, mine.chaId, 1, 'stub')
+        expect(merged.additionalAssets).toEqual([...theirs.additionalAssets!, ...mine.additionalAssets!.slice(1, 3)])
+        expect(mine.chats).toBe(chats)
+        expect(mine.chats[0]).toBe(placeholder)
+        expect(mine.chats[0]).toMatchObject({ _placeholder: true, message: [] })
+        expect(mine.chats[1]).toBe(stub)
+        expect(mine.chats[1]).not.toHaveProperty('message')
+        expect(toast.warning).not.toHaveBeenCalled()
+    })
+
+    test('warns once for missing and rejected reads and keeps pictures from the next chat', async () => {
+        const mine = bot({ additionalAssets: [pic('open')], chats: [
+            { ...chat(), id: 'missing', _placeholder: true },
+            { ...chat(), id: 'rejected', _placeholder: true },
+            chat('{{img::open}}'),
+        ] })
+        const { merged } = update(mine)
+        vi.mocked(fetchChatFromServer).mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('Read failed'))
+
+        await keepChatPictures(merged, mine)
+
+        expect(merged.additionalAssets).toEqual([pic('open')])
+        const message = expect.stringMatching(/보존 1, 복구 0.* 채팅 2개는 읽지 못해 확인하지 못했어요\.$/)
+        expect(addLog).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ level: 'warning', source: 'character-update', message }))
+        expect(toast.warning).toHaveBeenCalledOnce()
+        expect(vi.mocked(toast.warning).mock.calls[0][0]).toEqual(message)
+        expect(toast.success).not.toHaveBeenCalled()
+    })
+
+    test('warns about an unread chat even when there are no pictures to keep', async () => {
+        const mine = bot({ chats: [{ ...chat(), id: 'missing', _placeholder: true }] })
+        const { merged } = update(mine)
+        const pictures = merged.additionalAssets
+        vi.mocked(fetchChatFromServer).mockResolvedValueOnce(null)
+
+        await keepChatPictures(merged, mine)
+
+        expect(merged.additionalAssets).toBe(pictures)
+        const message = expect.stringMatching(/보존 0, 복구 0.* 채팅 1개는 읽지 못해 확인하지 못했어요\.$/)
+        expect(addLog).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ level: 'warning', source: 'character-update', message }))
+        expect(toast.warning).toHaveBeenCalledOnce()
+        expect(vi.mocked(toast.warning).mock.calls[0][0]).toEqual(message)
+        expect(toast.success).not.toHaveBeenCalled()
+    })
+
+    test('uses an open chat with an ID without fetching it', async () => {
+        const open = { ...chat('{{raw::open}}'), id: 'open', _stub: true }
+        const mine = bot({ additionalAssets: [pic('open')], chats: [open] })
+        const { merged } = update(mine)
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toEqual([pic('open')])
+        expect(fetchChatFromServer).not.toHaveBeenCalled()
+    })
+
+    test.each([true, false])('keeps only chat pictures dropped by all-theirs (base: %s)', async hasBase => {
+        const { mine, theirs, base } = pictureUpdate()
+        const { plan, merged } = update(mine, theirs, hasBase ? base : null)
+        const removed = plan.items.filter(item => item.field === 'additionalAssets' && item.mine && !item.theirs)
+        expect(removed.map(item => item.status)).toEqual(Array(3).fill(hasBase ? 'mineOnly' : 'differs'))
+        expect(merged.additionalAssets).toEqual(theirs.additionalAssets)
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toEqual([...theirs.additionalAssets!, ...mine.additionalAssets!.slice(1, 3)])
+        expect(merged.additionalAssets![2]).not.toBe(mine.additionalAssets![1])
+        expect(merged.additionalAssets![3]).not.toBe(mine.additionalAssets![2])
+        expect(addLog).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            level: 'info', source: 'character-update', message: expect.stringContaining('보존 2, 복구 0'),
+        }))
+        expect(toast.success).toHaveBeenCalledOnce()
+        expect(toast.warning).not.toHaveBeenCalled()
+        expect(getDatabase).not.toHaveBeenCalled()
+    })
+
+    test('default choices leave the upstream result and its picture array untouched', async () => {
+        const { mine, theirs, base } = pictureUpdate()
+        const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, base)
+        const merged = applyUpdate(CHARACTER_UPDATE, mine, theirs, plan)
+        const upstream = structuredClone(merged), pictures = merged.additionalAssets
+        await keepChatPictures(merged, mine)
+        expect(merged).toEqual(upstream)
+        expect(JSON.stringify(merged)).toBe(JSON.stringify(upstream))
+        expect(merged.additionalAssets).toBe(pictures)
+        expect(addLog).not.toHaveBeenCalled()
+        expect(toast.success).not.toHaveBeenCalled()
+        expect(toast.warning).not.toHaveBeenCalled()
+        expect(getDatabase).not.toHaveBeenCalled()
+    })
+
+    test('keeps the old name after a rename, matching chat references case-insensitively', async () => {
+        const old = pic('Old'), renamed: [string, string, string] = ['New', old[1], old[2]]
+        const mine = bot({ additionalAssets: [old], chats: [chat('{{raw::Old}}', '{{raw::old}}')] })
+        const theirs = bot({ additionalAssets: [renamed] })
+        const { merged } = update(mine, theirs, baseSnapshot(CHARACTER_UPDATE, mine))
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toEqual([renamed, old])
+        expect(addLog).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ description: 'Old (보존)' }))
+    })
+
+    test('leaves the incoming path for the same name', async () => {
+        const mine = bot({ additionalAssets: [pic('card')], chats: [chat('{{raw::CARD}}')] })
+        const theirs = bot({ additionalAssets: [['card', 'assets/changed.png', 'png']] })
+        const { merged } = update(mine, theirs, baseSnapshot(CHARACTER_UPDATE, mine))
+        const pictures = merged.additionalAssets
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toBe(pictures)
+        expect(merged.additionalAssets).toEqual(theirs.additionalAssets)
+        expect(addLog).not.toHaveBeenCalled()
+    })
+
+    test('copies every installed path for a missing name in installed order', async () => {
+        const duplicates: [string, string, string][] = [pic('My-pic'), ['my-pic', 'assets/second.png', 'png']]
+        const mine = bot({ additionalAssets: duplicates, chats: [chat('{{img::MY-PIC}}')] })
+        const theirs = bot()
+        const { merged } = update(mine, theirs)
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toEqual(duplicates)
+        duplicates.forEach((picture, index) => expect(merged.additionalAssets![index]).not.toBe(picture))
+    })
+
+    test('preserves emotion tokens in the emotion list alone', async () => {
+        const smile: [string, string] = ['Smile', 'assets/emotion.png']
+        const mine = bot({ additionalAssets: [pic('smile')], emotionImages: [smile], chats: [chat('{{emotion::smile}}')] })
+        const theirs = bot({ emotionImages: [['sad', 'assets/sad.png']] })
+        const { merged } = update(mine, theirs)
+        await keepChatPictures(merged, mine)
+        expect(merged.emotionImages).toEqual([...theirs.emotionImages, smile])
+        expect(merged.emotionImages[1]).not.toBe(smile)
+        expect(merged.additionalAssets).toEqual([])
+    })
+
+    const broken = (pictures: character['additionalAssets'] = []) => {
+        const mine = bot({ chats: [chat('{{raw::lost}}')] })
+        const theirs = bot({ additionalAssets: pictures })
+        return { mine, ...update(mine, theirs) }
+    }
+    const trash = (chaId: string, picture = pic('Lost')) => bot({ chaId, trashTime: 42, additionalAssets: [picture] })
+
+    test.each([1, 2])('recovers one tuple from %d trash copies of the same path', async count => {
+        const picture = pic('Lost')
+        database([trash('first', picture), ...(count === 2 ? [trash('second', picture)] : [])])
+        const { mine, merged } = broken([pic('new')])
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toEqual([pic('new'), picture])
+        expect(merged.additionalAssets![1]).not.toBe(picture)
+        expect(addLog).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            level: 'info', source: 'character-update', description: 'lost (복구)', message: expect.stringContaining('보존 0, 복구 1'),
+        }))
+        expect(toast.success).toHaveBeenCalledOnce()
+        expect(toast.warning).not.toHaveBeenCalled()
+    })
+
+    test('holds a reference with different paths in two trash characters', async () => {
+        database([trash('first'), trash('second', ['lost', 'assets/other.png', 'png'])])
+        const { mine, merged } = broken()
+        const pictures = merged.additionalAssets
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toBe(pictures)
+        expect(merged.additionalAssets).toEqual([])
+        expect(addLog).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ level: 'warning', description: 'lost (보류: 경로가 여럿)' }))
+        expect(toast.warning).toHaveBeenCalledOnce()
+        expect(toast.success).not.toHaveBeenCalled()
+    })
+
+    test('ignores a reference with matches only in a live character or the installed identity', async () => {
+        const { mine, merged } = broken()
+        database([bot({ chaId: 'live', additionalAssets: [pic('lost')] }), trash(mine.chaId)])
+        const upstream = structuredClone(merged), pictures = merged.additionalAssets
+        await keepChatPictures(merged, mine)
+        expect(merged).toEqual(upstream)
+        expect(merged.additionalAssets).toBe(pictures)
+        expect(addLog).not.toHaveBeenCalled()
+        expect(toast.success).not.toHaveBeenCalled()
+        expect(toast.warning).not.toHaveBeenCalled()
+    })
+
+    test('skips trash recovery when a module already supplies the name', async () => {
+        database([trash('backup')], [pic('LOST')])
+        const { mine, merged } = broken()
+        const pictures = merged.additionalAssets
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toBe(pictures)
+        expect(merged.additionalAssets).toEqual([])
+        expect(addLog).not.toHaveBeenCalled()
+        expect(toast.success).not.toHaveBeenCalled()
+        expect(toast.warning).not.toHaveBeenCalled()
+    })
+
+    test('ignores source tokens, stub chats, malformed message arrays and non-string data', async () => {
+        const mine = bot({ additionalAssets: [pic('source'), pic('stub'), pic('invalid')], chats: [
+            chat('{{source::source}}'), { _stub: true },
+            { message: '{{raw::invalid}}' }, { message: [{ data: 42 }, null] },
+        ] as unknown as character['chats'] })
+        const theirs = bot()
+        const { merged } = update(mine, theirs)
+        const pictures = merged.additionalAssets
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toBe(pictures)
+        expect(merged.additionalAssets).toEqual([])
+        expect(getDatabase).not.toHaveBeenCalled()
+        expect(addLog).not.toHaveBeenCalled()
+    })
+
+    test('replaces a non-array field only when there is a picture to append', async () => {
+        const nonArray = {} as character['additionalAssets']
+        const { mine, merged } = broken()
+        merged.additionalAssets = nonArray
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toBe(nonArray)
+        mine.additionalAssets = [pic('lost')]
+        await keepChatPictures(merged, mine)
+        expect(merged.additionalAssets).toEqual(mine.additionalAssets)
+        expect(merged.additionalAssets).not.toBe(mine.additionalAssets)
+    })
+
+    test('limits a single log to 20 names and reports the remaining count', async () => {
+        const names = Array.from({ length: 22 }, (_, i) => `ambiguous-${i}`)
+        database([
+            { ...trash('first'), additionalAssets: names.map(pic) },
+            { ...trash('second'), additionalAssets: names.map(name => [name, `assets/other-${name}.png`, 'png']) },
+        ])
+        const mine = bot({ chats: [chat(...names.map(name => `{{img::${name}}}`))] })
+        const theirs = bot()
+        const { merged } = update(mine, theirs)
+        await keepChatPictures(merged, mine)
+        expect(addLog).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            level: 'warning', description: [...names.slice(0, 20).map(name => `${name} (보류: 경로가 여럿)`), '… 외 2개'].join('\n'),
+        }))
+        expect(toast.warning).toHaveBeenCalledOnce()
     })
 })

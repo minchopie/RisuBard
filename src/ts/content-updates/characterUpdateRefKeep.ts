@@ -17,10 +17,13 @@
 // entry to the final lore order (upstream's merge replayed on stand-ins; characters left out of the lorebook are taken out of the body),
 // the user's referenced pictures and Asset Maid crop pictures stay (appended when a choice dropped them), every "asset:N" (the user's
 // and the new body's own) is renumbered to the final picture order, and entities.assets / entities.lorebooks are rekeyed to match.
+// A separate async hook after finalization reads closed chats on demand and keeps their named pictures alongside those from open chats.
+// Skip module names during trash recovery, report ambiguous paths and unread chats, and skip names with no trash candidate.
 import { toast } from 'svelte-sonner'
 import { addLog } from '../log'
 import { applyUpdate, CHARACTER_UPDATE, type UpdateChoice, type UpdatePlan } from '../characterUpdate'
-import type { character, loreBook } from '../storage/database.svelte'
+import { fetchChatFromServer } from '../storage/chatStorage'
+import { getDatabase, type character, type loreBook } from '../storage/database.svelte'
 
 export const ASSET_MAID_COMMENT = '__ASSET_MAID_DATA__'
 const CROP_PREFIX = '__asset_maid_crop_'
@@ -435,6 +438,114 @@ function repairAssetMaidRecords(merged: character) {
     const description = reasons.length ? reasons.join('\n') : '그림 번호가 실제 그림 위치와 같은 것을 확인해, 풀리지 않는 기록의 지문과 순번만 바로잡았어요.'
     addLog({ level: remaining ? 'warning' : 'info', message, description, source: 'character-update' })
     if (remaining) toast.warning(message, { description: reasons[0] })
+    else toast.success(message)
+}
+
+export async function keepChatPictures(merged: character, mine: character): Promise<void> {
+    // Matches assetRegex in parser/parser.svelte.ts; source tokens aren't picture names here.
+    const assetRegex = /{{(raw|path|img|image|video|audio|bgm|bg|emotion|asset|video-img|source)::(.+?)}}/gms
+    const assets = new Map<string, string>(), emotions = new Map<string, string>()
+    let unread = 0
+    const chats = Array.isArray(mine.chats) ? mine.chats : []
+    for (const [index, chat] of chats.entries()) {
+        let messages = chat?.message
+        if (!Array.isArray(messages) || chat._placeholder === true) {
+            if (!chat?.id) continue
+            try {
+                messages = (await fetchChatFromServer(mine.chaId, index, chat.id))?.message
+            } catch {
+                messages = undefined
+            }
+            if (!Array.isArray(messages)) {
+                unread++
+                continue
+            }
+        }
+        for (const message of messages) {
+            if (typeof message?.data !== 'string') continue
+            for (const [, type, name] of message.data.matchAll(assetRegex)) {
+                if (type === 'source') continue
+                const names = type === 'emotion' ? emotions : assets
+                const key = name.toLocaleLowerCase()
+                if (!names.has(key)) names.set(key, name)
+            }
+        }
+    }
+
+    const pictureName = (picture: unknown) => Array.isArray(picture) && typeof picture[0] === 'string' ? picture[0].toLocaleLowerCase() : ''
+    const notes: string[] = []
+    const note = (name: string, action: string) => {
+        if (notes.length < 20) notes.push(`${name} (${action})`)
+    }
+    let kept = 0, recovered = 0, held = 0
+    let db: ReturnType<typeof getDatabase> | undefined
+    let moduleNames: Set<string> | undefined
+    function additions<T extends [string, string, ...string[]]>(names: Map<string, string>, result: T[] | undefined,
+        installed: T[] | undefined, fromBackup: (backup: character) => T[] | undefined): T[] {
+        if (!names.size) return []
+        for (const picture of Array.isArray(result) ? result : []) names.delete(pictureName(picture))
+        if (!names.size) return []
+
+        const appended: T[] = []
+        const keptNames = new Set<string>()
+        for (const picture of Array.isArray(installed) ? installed : []) {
+            const key = pictureName(picture)
+            if (!names.has(key)) continue
+            appended.push([...picture] as T)
+            keptNames.add(key)
+        }
+        for (const key of keptNames) {
+            note(names.get(key)!, '보존')
+            names.delete(key)
+            kept++
+        }
+        if (!names.size) return appended
+
+        db ??= getDatabase()
+        moduleNames ??= new Set((db.modules ?? []).flatMap(module => Array.isArray(module?.assets) ? module.assets.map(pictureName) : []))
+        for (const key of names.keys()) if (moduleNames.has(key)) names.delete(key)
+        if (!names.size) return appended
+
+        const candidates = new Map<string, T | null>()
+        for (const backup of db.characters ?? []) {
+            if (!backup?.trashTime || backup.chaId === mine.chaId) continue
+            const pictures = fromBackup(backup)
+            if (!Array.isArray(pictures)) continue
+            for (const picture of pictures) {
+                const key = pictureName(picture)
+                if (!names.has(key) || typeof picture[1] !== 'string' || !picture[1]) continue
+                const previous = candidates.get(key)
+                if (previous === undefined) candidates.set(key, picture)
+                else if (previous && previous[1] !== picture[1]) candidates.set(key, null)
+            }
+        }
+        for (const [key, name] of names) {
+            const picture = candidates.get(key)
+            if (picture) {
+                appended.push([...picture] as T)
+                recovered++
+                note(name, '복구')
+            } else if (picture === null) {
+                held++
+                note(name, '보류: 경로가 여럿')
+            }
+        }
+        return appended
+    }
+
+    const newAssets = additions(assets, merged.additionalAssets, mine.additionalAssets, backup => backup.additionalAssets)
+    if (newAssets.length) merged.additionalAssets = [...(Array.isArray(merged.additionalAssets) ? merged.additionalAssets : []), ...newAssets]
+    const newEmotions = additions(emotions, merged.emotionImages, mine.emotionImages, backup => backup.emotionImages)
+    if (newEmotions.length) merged.emotionImages = [...(Array.isArray(merged.emotionImages) ? merged.emotionImages : []), ...newEmotions]
+
+    const total = kept + recovered + held
+    if (!total && !unread) return
+    const message = `채팅이 쓰는 그림 ${kept + recovered}개를 업데이트 뒤에도 연결해 뒀어요(보존 ${kept}, 복구 ${recovered}).`
+        + (held ? ` ${held}개는 연결하지 못했어요.` : '')
+        + (unread ? ` 채팅 ${unread}개는 읽지 못해 확인하지 못했어요.` : '')
+    const description = notes.join('\n') + (total > notes.length ? `\n… 외 ${total - notes.length}개` : '')
+    addLog({ level: held || unread ? 'warning' : 'info', message, description, source: 'character-update' })
+    if (held || unread) toast.warning(message, held ? { description: '보류된 그림의 이름과 사유는 로그에서 확인할 수 있어요.' } : undefined)
     else toast.success(message)
 }
 
