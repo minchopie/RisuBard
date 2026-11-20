@@ -1051,9 +1051,9 @@
       "path": "server/node/nas-sync-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "a24771608e8e51aeb832819efe762b5eaa937238ee3dc2b43b5b0b9f7949a9c0",
-      "contentSha256": "a24771608e8e51aeb832819efe762b5eaa937238ee3dc2b43b5b0b9f7949a9c0",
-      "bytes": 256895
+      "sha256": "a0e9de0f4a13a5e2efda75901617615661b623dfdb26d4d9c5fc91f51e76a4ae",
+      "contentSha256": "a0e9de0f4a13a5e2efda75901617615661b623dfdb26d4d9c5fc91f51e76a4ae",
+      "bytes": 263503
     },
     {
       "path": "server/node/nas-sync-share.cjs",
@@ -1275,9 +1275,9 @@
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "d394abfb18859811e0d48e4ef55730a7fa061dd5dc5bc75d72dfb3a25aec1258",
-      "contentSha256": "d394abfb18859811e0d48e4ef55730a7fa061dd5dc5bc75d72dfb3a25aec1258",
-      "bytes": 173608
+      "sha256": "a78d1b83644d3c8fa9b47229af09b43857e0d09a0bffa4100c74b2ce3e939b3d",
+      "contentSha256": "a78d1b83644d3c8fa9b47229af09b43857e0d09a0bffa4100c74b2ce3e939b3d",
+      "bytes": 176966
     },
     {
       "path": "server/node/transfer-sync/nas-sync-share.cjs",
@@ -2531,9 +2531,9 @@
       "path": "server/node/file-kv.cjs",
       "module": "storage-recovery",
       "kind": "hosts",
-      "sha256": "6957adf9f9f577e6473f292b8c6972ea0201aa622e172e0529a089a7809b75a3",
-      "contentSha256": "75f73dbd79da2db3caee3efc28c998853d36121e027052532e9540537ee6640d",
-      "bytes": 32856
+      "sha256": "110f500ad7aff629f3c5f4e170b65aad5fa9ea8a237b837c415e683e6ffe452e",
+      "contentSha256": "f80d3be9dec1914b2e02829200694bafef208eb0c8615dafcb4efa59a8cd7796",
+      "bytes": 32934
     },
     {
       "path": "server/node/file-store.cjs",
@@ -5423,7 +5423,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/storage-recovery.patch",
-        "sha256": "da772583a5a39b665a46aeb388f8ec8cd9582613705b33498f42f5799f5582c7"
+        "sha256": "7128bd9d13cdaf487d256a8e5b059c950809274a8fab4da4f1b90eb6c7539993"
       }
     },
     {
@@ -5797,7 +5797,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "895a4054fc3b6c8385ed80cdba4f3a88e02f6f8ccc961501d3be95899f648b9e"
+      "sha256": "16151d1f3674cfb45aa360db1f409f43eafde05f76c2ebcff8c3f2720df7393b"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5854,7 +5854,7 @@
         {
           "module": "storage-recovery",
           "path": "docs/fork-modules/compat/v0.9.103/storage-recovery.patch",
-          "sourceSha256": "da772583a5a39b665a46aeb388f8ec8cd9582613705b33498f42f5799f5582c7",
+          "sourceSha256": "7128bd9d13cdaf487d256a8e5b059c950809274a8fab4da4f1b90eb6c7539993",
           "targetHosts": [
             {
               "path": "server/node/risubard-story-order.test.ts",
@@ -5869,7 +5869,7 @@
               "sha256": "5ec486474cca47299b2749076ad99aba2e09d98c128868d6bb87a9f5955f2cf1"
             }
           ],
-          "sha256": "c42689ecc68f8b0b9ee4fe709fac5785676c527c1e66a9d96cdf84be60e5e199"
+          "sha256": "8232edecae4514c0e317ca03ba65bca534ad9ec12bda912522625e1b299f0a29"
         },
         {
           "module": "distribution",

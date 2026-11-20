@@ -539,7 +539,8 @@ function createFileKv(options = {}) {
         if (checkEntry()) return null; // Only the object was missing. Keep the original registration, including retired entries.
         const updatedAt = Date.now();
         manifest.entries[key] = { object: hash, size: object.size, updatedAt };
-        saveManifest();
+        try { saveManifest(); }
+        catch (error) { delete manifest.entries[key]; throw error; }
         return updatedAt;
     }
 

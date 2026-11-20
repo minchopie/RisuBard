@@ -768,7 +768,7 @@
         {
           "module": "storage-recovery",
           "path": "docs/fork-modules/compat/v0.9.103/storage-recovery.patch",
-          "sourceSha256": "da772583a5a39b665a46aeb388f8ec8cd9582613705b33498f42f5799f5582c7",
+          "sourceSha256": "7128bd9d13cdaf487d256a8e5b059c950809274a8fab4da4f1b90eb6c7539993",
           "targetHosts": [
             {
               "path": "server/node/risubard-story-order.test.ts",

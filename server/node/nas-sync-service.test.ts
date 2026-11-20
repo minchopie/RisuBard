@@ -330,6 +330,60 @@ test.for(['same', 'different'])('R9 preserves the registered asset mapping when 
     expect(local.service.store().pendingApply()).toHaveLength(1)
 })
 
+test.for(['apply', 'cancel', 'unreadable'])('R10 verifies standard reads after recovering a missing asset (%s)', async (mode, t) => {
+    const dav = fixtureDav(), previous = 'assets/previous-r10.png', bytes = Buffer.from('incoming picture')
+    const hash = sha(bytes), key = `assets/${hash}.png`, root = 'library\nmodule\nmod'
+    const peer = await device(t, dav, 'asset-r10-source', { modules: [{ id: 'mod', name: 'before', icon: previous }] })
+    const local = await device(t, dav, 'asset-r10-receiver', { modules: [] })
+    r7Enable(peer, local)
+    peer.storage.kvSet(previous, Buffer.from('previous picture'))
+    await peer.service.snapshot()
+    await r7Send(peer, local)
+    await settle(local)
+    expect(local.storage.kvGet(previous)).toEqual(Buffer.from('previous picture'))
+
+    local.storage.kvSet(key, bytes)
+    expect(local.storage.kvObjectHash(key)).toBe(hash) // Prime the store stat cache before the file vanishes.
+    const storeFile = join(local.dataRoot, 'asset-store', hash.slice(0, 2), hash + '.png')
+    const storeOnly = typeof local.storage.assetStoreStatus === 'function'
+    const manifest = join(local.dataRoot, 'kv', 'manifest.json')
+    if (storeOnly) expect(JSON.parse(await readFile(manifest, 'utf8')).entries[key]).toBeUndefined()
+    await unlink(storeOnly ? storeFile : join(local.dataRoot, 'kv', 'objects', hash))
+    peer.storage.kvSet(key, bytes)
+    const next = peer.db(); next.modules[0] = { id: 'mod', name: 'incoming', icon: key }; peer.save(next)
+    await peer.service.snapshot()
+    if (mode === 'unreadable') {
+        const safe = peer.db(); safe.language = 'en'; peer.save(safe)
+        await peer.service.snapshot()
+    }
+    await r7Send(peer, local)
+
+    if (mode === 'unreadable') {
+        const kvGet = local.storage.kvGet
+        local.storage.kvGet = (name: string) => name === key ? null : kvGet(name)
+        const plan = await settle(local)
+        expect({ modules: plan.modules, pending: plan.pending, commits: plan.commits.length,
+            saved: local.db().modules[0].icon, language: local.db().language, waiting: local.service.store().pendingApply().length }).toEqual({
+            modules: [], pending: [{ root, reason: 'missing material', missing: ['asset:' + key] }],
+            commits: 1, saved: previous, language: 'en', waiting: 1,
+        })
+        if (storeOnly) expect(JSON.parse(await readFile(manifest, 'utf8')).entries[key]).toBeUndefined()
+        return
+    }
+    const plan = mode === 'apply' ? await settle(local) : await local.service.plan()
+    expect(plan.modules).toEqual([expect.objectContaining({ name: 'incoming', icon: key })])
+    expect(local.storage.kvGet(key)).toEqual(bytes)
+    if (mode === 'cancel') {
+        expect(await local.make().finish(plan.transaction)).toMatchObject({ state: 'rolled-back' })
+        expect(local.storage.kvGet(key)).toEqual(storeOnly ? null : bytes)
+        expect(local.db().modules[0].icon).toBe(previous)
+        expect(local.service.store().pendingApply()).toHaveLength(1)
+    } else {
+        expect(local.db().modules[0].icon).toBe(key)
+        expect(local.service.store().pendingApply()).toHaveLength(0)
+    }
+})
+
 test.for(['cohort', 'local-only'])('R9 holds a deleted parent with an actual child excluded by card-only upload (%s)', async (mode, t) => {
     const dav = fixtureDav(), local = await device(t, dav, 'card-only-delete-local', r7Db(mode === 'cohort' ? [r7Chat] : []))
     const peer = await device(t, dav, 'card-only-delete-peer', { characters: [], modules: [] })
@@ -456,6 +510,67 @@ test.for(['no-commit', 'committed-before-crash', 'reimport-backup'])('R7/R9 resu
     expect(graph.get(restored).parents).toEqual([lineage[key]])
     expect(graph.classify(root).liveHeads).toEqual(expect.arrayContaining([restored, latestHead]))
     expect(reopened.state().deferredRestores).toBeUndefined()
+})
+
+test.for(['replace', 'blocked-delete'])('R10 retires only the deferred restore replaced by verified receive (%s)', async (mode, t) => {
+    const dav = fixtureDav(), icon = 'assets/deferred-r10.png', bytes = Buffer.from('backup picture')
+    const key = 'library\nmodule\nmod#mod', otherKey = 'library\nmodule\nother#other'
+    const local = await device(t, dav, 'deferred-r10-receiver', { modules: [{ id: 'mod', name: 'A', icon }, { id: 'other', name: 'held', icon }] })
+    const peer = await device(t, dav, 'deferred-r10-source', { modules: [] })
+    r7Enable(local, peer)
+    local.storage.kvSet(icon, bytes)
+    await local.service.snapshot()
+    const backup = local.db(), lineage = { ...local.service.state().lineage }
+    await r7Send(local, peer)
+    await settle(peer)
+    const newer = peer.db(); newer.modules.find((m: any) => m.id === 'mod').name = 'B'; peer.save(newer)
+    await peer.service.snapshot()
+    await r7Send(peer, local)
+    await settle(local)
+    const before = local.db()
+
+    local.service.markRestore({ source: 'backup-import', restoreId: 'backup-a-r10', lineage })
+    local.save(backup)
+    local.storage.kvDel(icon)
+    expect((await local.service.snapshot()).committed).toBeNull()
+    expect(local.service.state().deferredRestores[key].base).toBe(lineage[key])
+    const otherMark = local.service.state().deferredRestores[otherKey]
+    expect(otherMark.base).toBe(lineage[otherKey])
+
+    local.service.enable({ role: 'joining', workspaceId: 'ws-fixture' })
+    await local.service.startAdoption()
+    const next = peer.db()
+    if (mode === 'blocked-delete') next.modules = next.modules.filter((m: any) => m.id !== 'mod')
+    else next.modules.find((m: any) => m.id === 'mod').name = 'C'
+    peer.save(next)
+    await peer.service.snapshot()
+    await r7Send(peer, local)
+    const db = local.db()
+    db.modules = db.modules.filter((m: any) => m.id !== 'mod')
+    if (mode === 'blocked-delete') db.modules.push(before.modules.find((m: any) => m.id === 'mod'))
+    local.save(db)
+    if (mode === 'blocked-delete') local.storage.kvSet(icon, bytes)
+    expect(await local.service.snapshot()).toEqual({ committed: null, adopting: true })
+
+    const plan = await settle(local)
+    const saved = local.db().modules.find((m: any) => m.id === 'mod')
+    if (mode === 'blocked-delete') {
+        expect(plan).toMatchObject({ empty: true, pending: [{ root: 'library\nmodule\nmod', reason: 'local-edit' }] })
+        expect(saved?.name).toBe('B')
+        expect(local.service.state().deferredRestores[key].base).toBe(lineage[key])
+        expect(local.service.store().pendingApply()).toHaveLength(1)
+        return
+    }
+    expect(saved?.name).toBe('C')
+    expect(plan.commits).toHaveLength(1)
+    expect(local.service.store().pendingApply()).toHaveLength(0)
+    const recorded = JSON.parse(await readFile(join(local.dataRoot, 'risubard', 'nas-sync', 'lineage.json'), 'utf8')).lineage
+    const expected = peer.service.state().lineage[key]
+    const state = local.make().state()
+    expect({ savedBase: recorded[key], liveBase: state.lineage[key], staleMark: state.deferredRestores[key],
+        otherBase: recorded[otherKey], otherMark: state.deferredRestores[otherKey] }).toEqual({
+        savedBase: expected, liveBase: expected, staleMark: undefined, otherBase: lineage[otherKey], otherMark,
+    })
 })
 
 test('R7 protects an untracked parent whose new missing chat held its membership', async t => {

@@ -207,7 +207,7 @@ index 459ed8f..7932e26 100644
          const root = tempRoot()
          const result = spawnSync(process.execPath, ['-e', `
 diff --git a/server/node/file-kv.cjs b/server/node/file-kv.cjs
-index ac3ea16..b6c6019 100644
+index ac3ea16..589a91a 100644
 --- a/server/node/file-kv.cjs
 +++ b/server/node/file-kv.cjs
 @@ -33,6 +33,11 @@ async function inspectFileAsync(filePath) {
@@ -343,7 +343,7 @@ index ac3ea16..b6c6019 100644
      async function kvExportFile(key, destination) {
          const entry = entryOf(key);
          if (!entry) return false;
-@@ -436,6 +524,32 @@ function createFileKv(options = {}) {
+@@ -436,6 +524,33 @@ function createFileKv(options = {}) {
          return entryOf(key)?.updatedAt ?? null;
      }
  
@@ -362,7 +362,8 @@ index ac3ea16..b6c6019 100644
 +        if (checkEntry()) return null; // Only the object was missing. Keep the original registration, including retired entries.
 +        const updatedAt = Date.now();
 +        manifest.entries[key] = { object: hash, size: object.size, updatedAt };
-+        saveManifest();
++        try { saveManifest(); }
++        catch (error) { delete manifest.entries[key]; throw error; }
 +        return updatedAt;
 +    }
 +
@@ -376,7 +377,7 @@ index ac3ea16..b6c6019 100644
      function kvCopyValue(source, destination) {
          const entry = entryOf(source);
          if (!entry) return;
-@@ -620,6 +734,8 @@ function createFileKv(options = {}) {
+@@ -620,6 +735,8 @@ function createFileKv(options = {}) {
      return {
          kvGet,
          kvExportFile,
@@ -385,7 +386,7 @@ index ac3ea16..b6c6019 100644
          kvSet,
          kvSetMany,
          kvSetManyAsync,
-@@ -635,6 +751,9 @@ function createFileKv(options = {}) {
+@@ -635,6 +752,9 @@ function createFileKv(options = {}) {
          kvDelManyAndCollect,
          kvSize,
          kvGetUpdatedAt,

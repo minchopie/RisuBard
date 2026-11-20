@@ -1133,6 +1133,15 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const pending = s.pendingApply().sort((a, b) => compare(a.device, b.device) || compare(a.incarnation, b.incarnation) || a.sequence - b.sequence);
         if (!pending.length && !(service().localApply ?? []).length) return { empty: true, pending: [] };
         const db = await readDatabase(); if (!db) throw new Error('Database unavailable');
+        const recoveredAssets = new Map();
+        try { return await preparePlan(s, v, pending, db, recoveredAssets); }
+        finally {
+            for (const item of recoveredAssets.values()) {
+                if (item.registeredAt != null) storage.kvRollbackNasAssetRegistration(item.key, item.hash, item.registeredAt);
+            }
+        }
+    }
+    async function preparePlan(s, v, pending, db, recoveredAssets) {
         const transaction = randomUUID(), staging = join(root, 'apply', transaction), work = join(staging, 'work');
         await fsp.mkdir(work, { recursive: true, mode: 0o700 });
         const touched = new Map();
@@ -1183,6 +1192,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             for (const [k, h] of Object.entries(rev.dependencies)) {
                 if (k.startsWith('asset:')) {
                     const key = k.slice(6);
+                    const recovered = recoveredAssets.get(key);
+                    if (recovered) {
+                        if (recovered.hash !== h) return { collision: key };
+                        items.push(recovered); continue;
+                    }
                     const registeredHash = storage.kvObjectHash(key);
                     if (registeredHash !== null && registeredHash !== h) return { collision: key };
                     let present = false;
@@ -1192,7 +1206,23 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                         catch (error) { if (!missingMediaFile(error)) throw error; }
                         if (present && await hashFile(tmp) !== h) return { collision: key };
                     }
-                    if (!present) items.push({ kind: 'asset', key, hash: h });
+                    if (!present) {
+                        const item = { kind: 'asset', key, hash: h, registeredAt: null };
+                        let verified = false;
+                        try {
+                            // The KV import consumes its input. Keep the admitted blob pinned for retries.
+                            const copy = join(work, randomUUID()); await fsp.copyFile(s.blobFile(h), copy);
+                            item.registeredAt = await storage.kvInstallNasAssetFromFile(key, copy, h);
+                            const bytes = storage.kvGet(key);
+                            verified = bytes != null && sha256(bytes) === h;
+                        } catch { /* A root with unverified media stays pending. */ }
+                        if (!verified) {
+                            if (item.registeredAt != null) storage.kvRollbackNasAssetRegistration(key, h, item.registeredAt);
+                            return { missing: k };
+                        }
+                        recoveredAssets.set(key, item);
+                        items.push(item);
+                    }
                 }
                 else if (k.startsWith('inlay:')) { const id = k.slice(6), existing = await readLocalInlay(id); if (existing) { const bytes = typeof existing.data === 'string' ? Buffer.from(existing.data) : Buffer.isBuffer(existing.data) ? existing.data : Buffer.from(await existing.data.arrayBuffer()); if (sha256(bytes) !== h) return { collision: id }; } else items.push({ kind: 'inlay', id, hash: h, metadata: rev.dependencies['inlay-metadata:' + id] ?? null, owner: rootKey.startsWith('play\nchat\n') ? { root: rootKey.split('\n')[2] } : null }); }
             }
@@ -1240,6 +1270,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             if (missing.length) { result.pending.push({ root: key, reason: 'missing material', missing }); continue; }
             const media = await mediaFor(head, key);
             if (media.collision) { result.pending.push({ root: key, reason: 'media collision', item: media.collision }); continue; }
+            if (media.missing) { result.pending.push({ root: key, reason: 'missing material', missing: [media.missing] }); continue; }
             const content = clone(head.content);
             if (domain === 'settings') {
                 if (rootId === 'personas' && !personaMirrorsMatch(db)) { result.pending.push({ root: key, reason: 'local-persona-edit' }); continue; }
@@ -1304,7 +1335,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         });
         // Pins are compared in the same secret-stripped public form the sender used, on the database as this plan will leave it.
         const futureView = v.project(planView(db, result)).public;
-        for (const key of touched.keys()) {
+        chatRoots: for (const key of touched.keys()) {
             const [domain, type, rootId] = key.split('\n');
             if (domain !== 'play' || type !== 'chat') continue;
             if (assetConflicts.has(key)) { result.pending.push({ root: key, reason: 'media collision', item: assetConflicts.get(key) }); continue; }
@@ -1315,6 +1346,14 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             if (c.state === 'delete-pending' && !locals.length && !(db.characters ?? []).some(x => x.chaId === chatOwner.get(rootId))) { result.pending.push({ root: key, reason: 'delete-pending', heads: c.liveHeads }); continue; }
             if (c.variants.length > 1 && c.state === 'diverged' && chatDifference(c.liveHeads.map(id => s.graph.get(id))).sameMessages) {
                 result.pending.push({ root: key, reason: 'same-messages', variants: c.variants.length }); continue;
+            }
+            const branchMedia = new Map();
+            if (c.variants.length > 1) for (const [id] of c.variants) {
+                const head = s.graph.get(id);
+                if (!Object.keys(head.dependencies).some(k => k.startsWith('asset:')) || missingMaterial(head).length) continue;
+                const media = await mediaFor(head, key);
+                if (media.missing) { result.pending.push({ root: key, head: id, reason: 'missing material', missing: [media.missing] }); continue chatRoots; }
+                branchMedia.set(id, media);
             }
             const segments = s.graph.branchSegments(key), taken = new Set(locals.map(l => l.chat.id)); // local ids in use, including the ones this plan assigns
             let rootApplied = true;
@@ -1335,8 +1374,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 if (!characterId) { result.pending.push({ root: key, head: head.id, reason: 'owner unknown' }); rootApplied = false; continue; }
                 const knownHead = continuing ? s.graph.get(lineage[key + '#' + continuing.chat.id]) : null;
                 if (knownHead && (variant.includes(knownHead.id) || (knownHead.contentHash === head.contentHash && knownHead.dependencyHash === head.dependencyHash))) { result.lineage[key + '#' + localId] = head.id; continue; } // already at this head or equal content: nothing to apply
-                const media = await mediaFor(head, key);
+                const media = branchMedia.get(head.id) ?? await mediaFor(head, key);
                 if (media.collision) { result.pending.push({ root: key, head: head.id, reason: 'media collision', item: media.collision }); rootApplied = false; continue; }
+                if (media.missing) { result.pending.push({ root: key, head: head.id, reason: 'missing material', missing: [media.missing] }); rootApplied = false; continue; }
                 let content = clone(head.content); content.id = localId;
                 // Exact dependency compatibility: every pinned item must be active locally with exactly the pinned content once this
                 // plan has applied its own library/settings updates; a conflicting or pending dependency blocks the chat, not the batch.
@@ -1382,6 +1422,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         // Only commits whose every root was planned are acknowledged at finish; the rest stay pending for a later plan.
         const appliedRoots = new Set(result.appliedRoots);
         result.commits = pending.filter(p => (p.revisions ?? []).every(id => { const r = s.graph.get(id); return r && appliedRoots.has(rootKey(r)); })).map(({ device, incarnation, sequence, commitId }) => ({ device, incarnation, sequence, commitId }));
+        const usedAssets = new Set(result.media.filter(item => item.kind === 'asset').map(item => item.key));
+        for (const [key, item] of recoveredAssets) if (!usedAssets.has(key)) {
+            if (item.registeredAt != null) storage.kvRollbackNasAssetRegistration(key, item.hash, item.registeredAt);
+            recoveredAssets.delete(key);
+        }
         // Sealed recovery copy and sealed plan journal; media staged (immutable, hash-checked) before the client sees the plan.
         atomicWriteJson(root, `recovery/${transaction}/before.json`, await sealRecord(s, v, before, work));
         for (const item of new Map(result.media.map(i => [i.kind + ':' + (i.key ?? i.id), i])).values()) {
@@ -1390,11 +1435,6 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 await fsp.copyFile(s.blobFile(item.hash), join(staging, name));
                 const ownership = meta.ownership ? { ...meta.ownership, ...(item.owner?.chatId && meta.ownership.chatId === item.owner.root ? { chatId: item.owner.chatId } : {}), ...(item.owner?.characterId ? { charId: item.owner.characterId } : {}) } : null;
                 await installInlay({ id: item.id, metadata: meta.metadata, file: name, ownership }, staging); item.installed = true;
-            } else {
-                // The KV import CONSUMES its source file (file-kv moves/unlinks it). Hand it a staged copy, never the admitted blob:
-                // the blob stays pinned by the admitted revision and every later plan/verification that depends on it.
-                const copy = join(staging, 'asset-' + randomUUID()); await fsp.copyFile(s.blobFile(item.hash), copy);
-                item.registeredAt = await storage.kvInstallNasAssetFromFile(item.key, copy, item.hash);
             }
         }
         const sealedPlan = await sealRecord(s, v, { settings: result.settings, modules: result.modules, plugins: result.plugins, characters: [...result.characters.map(r => ({ chaId: r.chaId, ...r.fields })), ...result.newCharacters] }, work);
@@ -1403,7 +1443,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             newCharacters: sealedPlan.characters.slice(result.characters.length), secretRefs: sealedPlan.secretRefs, envelopes: sealedPlan.envelopes, phase: 'prepared' };
         delete journal.before;
         journal.prepared = entityHashes(journal, db); // the canonical state this plan was computed from; arm refuses a different one
-        writePlan(journal); manifest.transact(x => { x.plan = { transaction, phase: 'prepared', workspaceId: journal.workspaceId }; });
+        writePlan(journal); recoveredAssets.clear(); // The durable journal now owns rollback for these registrations.
+        manifest.transact(x => { x.plan = { transaction, phase: 'prepared', workspaceId: journal.workspaceId }; });
         await fsp.rm(work, { recursive: true, force: true });
         return materializePlan(s, v, journal);
     }
@@ -1712,9 +1753,19 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             await step(c => { c.progress.workspaces[workspace.chatId].done = true; });
         }
         const lineageUpdate = Object.fromEntries(Object.entries(current.lineage).filter(([k]) => !current.deletions.some(d => kept.has(`${d.kind}:${d.characterId ?? ''}:${d.id}`) && k.endsWith('#' + d.id))));
+        const replacedChats = new Set(current.chats.map(({ root, chat }) => rootKeyOf('play', 'chat', root) + '#' + chat.id));
         manifest.transact(x => {
-            for (const [k, head] of Object.entries(lineageUpdate)) x.lineage[k] = head;
-            for (const d of current.expected?.deletions ?? []) for (const k of Object.keys(x.lineage)) if (k.endsWith('#' + d.id)) delete x.lineage[k];
+            for (const [k, head] of Object.entries(lineageUpdate)) {
+                x.lineage[k] = head;
+                const revision = x.deferredRestores?.[k] && s.graph.get(head);
+                if (revision && !revision.tombstone && (revision.type !== 'chat' || replacedChats.has(k))) delete x.deferredRestores[k];
+            }
+            for (const d of current.expected?.deletions ?? []) {
+                for (const k of Object.keys(x.lineage)) if (k.endsWith('#' + d.id)) delete x.lineage[k];
+                const root = d.kind === 'chat' ? rootKeyOf('play', 'chat', x.branches[d.id]?.root ?? d.id) : rootKeyOf('library', d.kind, d.id);
+                delete x.deferredRestores?.[root + '#' + d.id];
+            }
+            if (x.deferredRestores && !Object.keys(x.deferredRestores).length) delete x.deferredRestores;
             Object.assign(x.branches, current.branches);
             x.localApply = (x.localApply ?? []).filter(k => !current.appliedRoots.includes(k));
         });
