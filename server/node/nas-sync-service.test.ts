@@ -1,7 +1,7 @@
-import { test, expect } from 'vitest'
-import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, stat, rename, cp, copyFile } from 'node:fs/promises'
+import { test, expect, vi } from 'vitest'
+import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, stat, rename, cp, copyFile, utimes } from 'node:fs/promises'
 import * as memoryFs from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import fs, { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -124,11 +124,15 @@ test('startup waits for the data-root owner and clears abandoned capture work af
     d.storage.kvSet('assets/icon.png', Buffer.from('fixture object'))
     d.service.enable({ workspaceId: 'ws-fixture' })
     const root = join(d.dataRoot, 'nas-sync'), planCheck = join(root, 'plan-check-Ab12xy'), keep = join(root, 'snapshot-ABCDEF')
-    await mkdir(planCheck); await writeFile(keep, 'unrelated file')
+    const recent = join(root, 'plan-check-News12')
+    await mkdir(recent); await mkdir(planCheck); await writeFile(keep, 'unrelated file')
+    const old = new Date(Date.now() - 61 * 60_000)
+    await utimes(planCheck, old, old)
+    const lock = require('./data-root-lock.cjs').acquireDataRootLock(d.dataRoot)
+    t.onTestFinished(() => lock.release())
     const child = spawn(process.execPath, ['-e', `
         const [dir, root, db] = process.argv.slice(1)
         const load = file => require(require('node:path').join(dir, file))
-        load('data-root-lock.cjs').acquireDataRootLock(root)
         const service = load('nas-sync-service.cjs').createNasSyncService({
             dataRoot: root, ownsDataRoot: false, readDatabase: async () => JSON.parse(db),
             memory: {}, storage: load('file-kv.cjs').createFileKv({ dataRoot: root }),
@@ -141,22 +145,57 @@ test('startup waits for the data-root owner and clears abandoned capture work af
     const closed = once(child, 'close')
     t.onTestFinished(async () => { child.kill(); await closed })
     await Promise.race([once(child.stdout, 'data').then(([s]) => expect(String(s)).toContain('capture-ready')), closed.then(() => { throw new Error('Child exited before capture') })])
-    const { acquireDataRootLock } = require('./data-root-lock.cjs')
-    expect(() => acquireDataRootLock(d.dataRoot)).toThrow(/DATA_ROOT_IN_USE/)
     const staged = (await readdir(root, { withFileTypes: true })).find(x => x.isDirectory() && x.name.startsWith('snapshot-'))!
     expect(staged).toBeDefined()
-    expect(existsSync(planCheck)).toBe(true)
+    const work = join(root, staged.name)
+    const owner = JSON.parse(await readFile(join(work, 'owner.json'), 'utf8'))
+    expect(owner).toMatchObject({ pid: child.pid, startedAt: expect.any(Number) })
+    d.make({}, { ownsDataRoot: true })
+    expect(existsSync(work)).toBe(true)
+    expect(existsSync(planCheck)).toBe(false)
+    expect(existsSync(recent)).toBe(true)
     child.kill(); await closed
-    const lock = acquireDataRootLock(d.dataRoot)
+    const reopened = d.make({}, { ownsDataRoot: true })
+    expect(existsSync(work)).toBe(false)
+    expect(existsSync(recent)).toBe(true)
+    expect(await readFile(keep, 'utf8')).toBe('unrelated file')
+    expect(reopened.store().state().commits).toHaveLength(0)
+    expect((await reopened.snapshot()).committed.sequence).toBe(1)
+    expect((await reopened.publish()).failed).toEqual([])
+})
+
+test('failure to read the list of abandoned captures does not abort service creation', async t => {
+    const d = await device(t, fixtureDav(), 'capture-unreadable', { characters: [] })
+    const root = join(d.dataRoot, 'nas-sync')
+    const read = vi.spyOn(fs, 'readdirSync').mockImplementationOnce(path => {
+        expect(path).toBe(root)
+        throw Object.assign(new Error('cannot list work'), { code: 'EACCES' })
+    })
     try {
-        const reopened = d.make({}, { ownsDataRoot: true })
-        expect(existsSync(join(root, staged.name))).toBe(false)
-        expect(existsSync(planCheck)).toBe(false)
-        expect(await readFile(keep, 'utf8')).toBe('unrelated file')
-        expect(reopened.store().state().commits).toHaveLength(0)
-        expect((await reopened.snapshot()).committed.sequence).toBe(1)
-        expect((await reopened.publish()).failed).toEqual([])
-    } finally { lock.release() }
+        expect(d.make({}, { ownsDataRoot: true }).status().enabled).toBe(false)
+        expect(read).toHaveBeenCalled()
+    } finally { read.mockRestore() }
+})
+
+test.for([false, true])('a verified asset survives moving its original before commit (already stored: %s)', async (stored, t) => {
+    const database = { characters: [{ chaId: 'card', type: 'character', name: 'card', image: 'assets/icon.png', chats: [] }] }
+    const bytes = Buffer.from('fixture asset owned by the snapshot'), hash = sha(bytes)
+    const d = await device(t, fixtureDav(), 'verified-copy', database, MASTER, { readDatabase: async () => database })
+    d.storage.kvSet('assets/icon.png', bytes)
+    const source = join(d.dataRoot, 'kv', 'objects', hash)
+    const service = d.make({ beforeSnapshotCommit: async () => {
+        const workRoot = join(d.dataRoot, 'nas-sync')
+        const work = (await readdir(workRoot)).find(name => name.startsWith('snapshot-'))!
+        const copies = (await readdir(join(workRoot, work))).filter(name => name.startsWith('asset-'))
+        expect(copies).toHaveLength(stored ? 0 : 1)
+        if (!stored) expect(await readFile(join(workRoot, work, copies[0]))).toEqual(bytes)
+        await rename(source, join(d.dataRoot, 'moved-icon'))
+    } })
+    service.enable({ workspaceId: 'ws-fixture' })
+    if (stored) service.store().storeBlobFromFile(hash, source)
+    expect((await service.snapshot()).committed.sequence).toBe(1)
+    expect(await readFile(service.store().blobFile(hash))).toEqual(bytes)
+    expect(existsSync(source)).toBe(false)
 })
 
 test('a second service in the same process preserves an active capture and joined retries', async t => {

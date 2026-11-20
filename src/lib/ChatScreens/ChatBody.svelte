@@ -25,6 +25,8 @@
         bodyRoot?: HTMLElement|null
         modelShortName: string
         renderRawStreaming?: boolean
+        isStreamingDisplay?: boolean
+        isLastMessage?: boolean
         rawStreamingText?: string
         onRenderSettled?: () => void
         onRemoveInlay?: (id: string, occurrence: number) => void
@@ -42,13 +44,14 @@
         bodyRoot,
         modelShortName = '',
         renderRawStreaming = false,
+        isStreamingDisplay = false,
+        isLastMessage = false,
         rawStreamingText = '',
         onRenderSettled,
         onRemoveInlay,
     }: Props =  $props()
 
-    // svelte-ignore non_reactive_update
-    let lastParsed = ''
+    const translationLoading = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid var(--color-primary); border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
     let lastCharArg:string|simpleCharacterArgument = null
     let lastChatId = -10
 
@@ -74,11 +77,9 @@
         // track 'translated' and 'retranslate' state
         translated;
         retranslate;
-        let lastParsedQueue = ''
         let mode = 'notrim' as const
         try {
             if((!isEqual(lastCharArg, charArg)) || (chatID !== lastChatId)){
-                lastParsedQueue = ''
                 lastCharArg = charArg
                 lastChatId = chatID
                 let translateText = false
@@ -115,10 +116,6 @@
                 }
             }
             if(retranslate || translated){
-                if (DBState.db.showTranslationLoading) {
-                    lastParsed = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid var(--color-primary); border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
-                }
-
                 let transResult
                 
                 if(DBState.db.translatorType === 'llm' && DBState.db.translateBeforeHTMLFormatting){
@@ -127,7 +124,6 @@
                     data = await translateHTML(data, false, charArg, chatID, retranslate)
                     translating = false
                     const marked = await ParseMarkdown(data, charArg, mode, chatID, getCbsCondition())
-                    lastParsedQueue = marked
                     lastCharArg = charArg
                     transResult = marked
                 }
@@ -136,7 +132,6 @@
                     translating = true
                     const translated = await postTranslationParse(await translateHTML(marked, false, charArg, chatID, retranslate))
                     translating = false
-                    lastParsedQueue = translated
                     lastCharArg = charArg
                     transResult = translated
                 }
@@ -145,7 +140,6 @@
                     translating = true
                     const translated = await translateHTML(marked, false, charArg, chatID, retranslate)
                     translating = false
-                    lastParsedQueue = translated
                     lastCharArg = charArg
                     transResult = translated
                 }
@@ -158,7 +152,6 @@
             }
             else{
                 const marked = await ParseMarkdown(data, charArg, mode, chatID, getCbsCondition())
-                lastParsedQueue = marked
                 lastCharArg = charArg
                 return marked
             }   
@@ -170,10 +163,6 @@
                 return data
             }
             return await markParsing(data, charArg, chatID, (tries ?? 0) + 1)
-        }
-        finally{
-            //since trimMarkdown is fast, we don't need to cache it
-            lastParsed = lastParsedQueue
         }
     }
 
@@ -258,7 +247,12 @@
         }
     }
 
-    let markParsingResult = $derived.by(() => markParsing(msgDisplay, character, idx))
+    let markParsingResult = $derived.by(() => {
+        // Display scripts can change output without changing the message text.
+        void isStreamingDisplay
+        void isLastMessage
+        return markParsing(msgDisplay, character, idx)
+    })
 
     function onHtmlRendered() {
         checkImg()
@@ -266,20 +260,19 @@
     }
 </script>
 
-{#if shouldRenderRawStreaming}
-    <span class="whitespace-pre-wrap">{rawStreamingText}</span>
-{:else}
-    <span data-painter-body style="display: contents" use:inlayImageControls={onRemoveInlay} use:retainedChatHtml={{
-        content: markParsingResult,
-        format: (html) => addMetadataToElement(trimMarkdown(html), modelShortName),
-        onRender: () => {
-            onRenderSettled?.()
-            onHtmlRendered()
-        },
-        onError: onRenderSettled,
-        pendingHtml: (translated || retranslate) && DBState.db.showTranslationLoading ? lastParsed : undefined,
-    }}></span>
-{/if}
+<span data-painter-body={shouldRenderRawStreaming ? undefined : ''} data-chat-raw-body={shouldRenderRawStreaming ? '' : undefined}
+    style="display: contents" use:inlayImageControls={onRemoveInlay} use:retainedChatHtml={{
+    content: shouldRenderRawStreaming ? undefined : markParsingResult,
+    rawText: shouldRenderRawStreaming ? rawStreamingText : undefined,
+    format: (html) => addMetadataToElement(trimMarkdown(html), modelShortName),
+    onRender: () => {
+        onRenderSettled?.()
+        onHtmlRendered()
+    },
+    onError: onRenderSettled,
+    onPending: onRenderSettled,
+    pendingHtml: (translated || retranslate) && DBState.db.showTranslationLoading ? translationLoading : undefined,
+}}></span>
 
 <style>
     :global(.inlay-image-control) {

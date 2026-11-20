@@ -1,6 +1,7 @@
 <script lang="ts">
     import type { character, Message, StreamingDisplayOptimizationMode } from 'src/ts/storage/database.svelte';
     import { mount, onDestroy, unmount } from 'svelte';
+    import { copyChatBody, holdChatDisplay } from './retainedChatHtml'
     import Chat from './Chat.svelte';
     import { getCharImage } from 'src/ts/characters';
     import { createSimpleCharacter, DBState, selectedCharID, ReloadChatPointer } from 'src/ts/stores.svelte';
@@ -67,13 +68,14 @@
             streamingOptimizationMode: StreamingDisplayOptimizationMode
             rawStreamingText: string
             totalLength: number
+            isStreamingDisplay: boolean
             messageGenerationInfo?: Message['generationInfo']
             memoryConfirmed?: boolean
             canonicalReceipt?: Message['risubardCanonicalReceipt']
         }) => void
     }
     let mountInstances: Map<number, ChatInstance> = new Map();
-    type ChatContainer = { hash: number; element: HTMLDivElement; releaseHeight?: () => void }
+    type ChatContainer = { hash: number; identity: string; element: HTMLDivElement; release?: () => void }
     let containersByIndex = new Map<number, ChatContainer>();
 
     //Non-cryptographic hash function to generate a unique hash for each message
@@ -137,6 +139,8 @@
             const reloadPointer = reloadPointerMap[i] ?? 0;
             const isRerollTarget = i === lastRealCharIdx;
             const activeStreamingMessage = i === activeStreamingIndex && message.role === 'char';
+            const isStreamingDisplay = currentChat?.isStreaming === true && i === messages.length - 1 && message.role === 'char';
+            const identity = JSON.stringify([currentCharacter.chaId, currentCharacter.chatPage, currentChat?.id, message.chatId, message.role]);
             const turnNumber = turnNavigation.turnByMessageIndex.get(i)
             // Keep the reading DOM alive through final text and receipt updates.
             // Reloads, swipes and structural changes still replace the message.
@@ -154,17 +158,15 @@
                 const b = document.createElement('div');
                 b.setAttribute('x-hashed', currentHash.toString());
                 b.classList.add('chat-message-container');
-                const height = containersByIndex.get(i)?.element.offsetHeight ?? 0;
-                let releaseHeight: (() => void) | undefined;
-                if (height > 0) {
-                    b.style.minHeight = height + 'px';
-                    const deadline = setTimeout(() => releaseHeight?.(), 3000);
-                    releaseHeight = () => {
-                        clearTimeout(deadline);
-                        b.style.removeProperty('min-height');
-                    };
-                }
-                nextContainers.set(i, { hash: currentHash, element: b, releaseHeight });
+                const previous = containersByIndex.get(i);
+                const old = previous?.identity === identity ? previous.element : undefined;
+                const height = old?.offsetHeight ?? 0;
+                const snapshot = old && copyChatBody(old);
+                if (height > 0) b.style.minHeight = height + 'px';
+                const release = snapshot || height > 0
+                    ? holdChatDisplay(snapshot, () => b.style.removeProperty('min-height'))
+                    : undefined;
+                nextContainers.set(i, { hash: currentHash, identity, element: b, release });
                 const swipes = message.swipes;
                 const swipeId = message.swipeId ?? 0;
                 const inst = mount(Chat, {
@@ -174,7 +176,8 @@
                         isLastMemory: false,
                         idx: i,
                         totalLength: messages.length,
-                        onInitialRenderSettled: releaseHeight,
+                        onInitialRenderSettled: release,
+                        isStreamingDisplay,
                         img: message.role === 'user' ? userImage : charImage,
                         onReroll: onReroll,
                         onNextSwipe: i === lastRealCharIdx ? onNextSwipe : () => {},
@@ -204,6 +207,7 @@
                     },
 
                 })
+                if (snapshot) b.querySelector('.chattext')?.prepend(snapshot);
                 mountInstances.set(currentHash, inst);
                 const nextElement = nextHash === 0 ? null : chatBody.querySelector(`[x-hashed="${nextHash}"]`);
                 if(nextElement){
@@ -228,6 +232,7 @@
                     streamingOptimizationMode: performanceMode,
                     rawStreamingText: message.data,
                     totalLength: messages.length,
+                    isStreamingDisplay,
                     messageGenerationInfo: message.generationInfo,
                     memoryConfirmed: message.risubardMemoryConfirmed === true,
                     canonicalReceipt: message.risubardCanonicalReceipt,
@@ -252,7 +257,7 @@
         });
 
         for (const previous of containersByIndex.values()) {
-            if (!currentHashes.has(previous.hash)) previous.releaseHeight?.();
+            if (!currentHashes.has(previous.hash)) previous.release?.();
         }
         hashes = currentHashes;
         containersByIndex = nextContainers;
@@ -261,7 +266,7 @@
     onDestroy(() => {
         console.log('Unmounting Chats');
         hashes.clear();
-        for (const container of containersByIndex.values()) container.releaseHeight?.();
+        for (const container of containersByIndex.values()) container.release?.();
         containersByIndex.clear();
         mountInstances.forEach((inst) => {
             unmount(inst);

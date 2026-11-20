@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
 const { resolveDataRoot } = require('./data-root.cjs');
+const { nasDiagnosticDescription, nasDiagnosticMessage } = require('../../shared/play-set/nas-diagnostic.ts');
 
 const MAX_ROWS = 5000;
 const MAX_DESCRIPTION_BYTES = 10 * 1024; // 10KB per entry
@@ -208,11 +209,17 @@ function insertEntry(entry) {
     const timestamp = typeof entry.timestamp === 'number' ? entry.timestamp : Date.now();
     const level = ['error', 'warning', 'info'].includes(entry.level) ? entry.level : 'info';
     const origin = entry.origin === 'server' ? 'server' : 'client';
-    const message = maskSensitive(String(entry.message ?? '')).slice(0, 1000);
-    const description = entry.description != null
+    const source = entry.source ? String(entry.source).slice(0, 64) : null;
+    const nasDiagnostic = source === 'nas-sync';
+    const message = nasDiagnostic ? nasDiagnosticMessage : maskSensitive(String(entry.message ?? '')).slice(0, 1000);
+    let description = entry.description != null && !nasDiagnostic
         ? truncate(maskSensitive(String(entry.description)), MAX_DESCRIPTION_BYTES)
         : null;
-    const source = entry.source ? String(entry.source).slice(0, 64) : null;
+    if (nasDiagnostic) {
+        // Older clients may still send raw messages. Persist only recognized diagnostic fields.
+        const fields = /^stage=([a-z]+) code=([A-Z_]+)$/.exec(String(entry.description ?? ''));
+        description = nasDiagnosticDescription(fields?.[1], fields?.[2]);
+    }
     const count = Number.isInteger(entry.count) && entry.count > 0 ? entry.count : 1;
     const platform = entry.platform ? String(entry.platform).slice(0, 128) : null;
     const clientId = entry.clientId ? String(entry.clientId).slice(0, 64) : null;

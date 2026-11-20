@@ -410,15 +410,36 @@ describe('Asset Maid free-created characters', () => {
         expect(merged).toMatchObject({ kept: 0, replaced: 0, appended: 0, dropped: [] })
     })
 
-    test('preserves an installed empty slot through preselection without counting it as kept', () => {
-        const mine = bot({ globalLore: [customBody([{ target, forms: [{ id: 'f', reference: {} }] }])] })
-        const theirs = bot({ globalLore: [customBody([{ target, forms: [{ id: 'f', label: 'New' }] }])] })
+    test('empty slots alone keep upstream choices and do not restore a removed crop', () => {
+        const mine = bot({ additionalAssets: [pic('__asset_maid_crop_unused')], globalLore: [customBody([{ target, forms: [{ id: 'f', reference: {} }, { id: 'removed', reference: {} }] }])] })
+        const theirs = bot({ globalLore: [customBody([{ target, forms: [{ id: 'f', label: 'New' }, { id: 'incoming', reference: {} }] }])] })
+        const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, null)
+        expect(presetAssetMaidMerge(plan, mine, theirs)).toBeNull()
+        const merged = apply(plan, mine, theirs, Object.fromEntries(plan.items.map(item => [item.id, 'theirs'])))
+        finalize(merged, mine, theirs)
+        expect(merged.additionalAssets ?? []).toEqual([])
+        expect(portable(merged.globalLore[0]).features.characterForms.entries[0].forms).toEqual([{ id: 'f', label: 'New' }, { id: 'incoming', reference: {} }])
+    })
+
+    test('preserves an empty slot in a preset carried by a real reference and never holds missing or ambiguous empty slots', () => {
+        const forms = [{ id: 'f', reference: {} }]
+        const mine = bot({ additionalAssets: [pic('mine')], globalLore: [customBody([
+            { target, forms: [...forms, { id: 'removed', reference: {} }, { id: 'picture', reference: { asset: 'asset:0' } }] },
+            { target: 'custom:missing', forms }, { target: 'custom:duplicate', forms }, { target: 'custom:claim', forms }, { target: 'custom:claim', forms },
+        ], { 0: 'mine' })] })
+        const theirs = bot({ globalLore: [customBody([
+            { target, forms: [{ id: 'f' }, { id: 'picture' }] },
+            { target: 'custom:duplicate', forms }, { target: 'custom:duplicate', forms }, { target: 'custom:claim', forms },
+        ])] })
         const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, null)
         const keep = presetAssetMaidMerge(plan, mine, theirs)!
-        expect(keep.kept).toBe(0)
-        const merged = apply(plan, mine, theirs, { [keep.id]: 'edit' }, { [keep.id]: keep.text })
-        finalize(merged, mine, theirs)
-        expect(portable(merged.globalLore[0]).features.characterForms.entries[0].forms).toEqual([{ id: 'f', label: 'New', reference: {} }])
+        expect(keep).toMatchObject({ kept: 1, held: [] })
+        const choices = Object.fromEntries(plan.items.map(item => [item.id, item.id === keep.id ? 'edit' : 'theirs']))
+        const merged = apply(plan, mine, theirs, choices, { [keep.id]: keep.text })
+        expect(finalize(merged, mine, theirs)).toMatchObject({ kept: 1, held: [] })
+        expect(portable(merged.globalLore[0]).features.characterForms.entries[0].forms).toEqual([
+            { id: 'f', reference: {} }, { id: 'picture', reference: { asset: 'asset:0' } },
+        ])
     })
 })
 

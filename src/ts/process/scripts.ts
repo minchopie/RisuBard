@@ -73,6 +73,14 @@ let processScriptCache = new Map<string, string>()
 
 function generateScriptCacheKey(scripts: customscript[], data: string, mode: ScriptMode, chatID = -1, cbsConditions: CbsConditions = {}, characterId = '', chat?: import('../storage/database.svelte').Chat, db?:Database, chara?:character) {
     let hash = data + '|||' + mode + '|||' + characterId + '|||' + (chat?.id ?? '') + '|||';
+    if (mode === 'editdisplay') {
+        const lastMessageId = untrack(() => {
+            const selected = chara && 'chats' in chara ? chara : getCurrentCharacter()
+            const current = chat ?? selected?.chats?.[selected.chatPage]
+            return cbsConditions.lastMessageId ?? (current ? current.message.length - 1 : '')
+        })
+        hash += `${lastMessageId ?? ''}|||`
+    }
     for (const script of scripts) {
         if(script.type !== mode){
             continue

@@ -1,17 +1,19 @@
 diff --git a/server/node/logs.cjs b/server/node/logs.cjs
-index 55a08a3..7f2c380 100644
+index 55a08a3..baa5d34 100644
 --- a/server/node/logs.cjs
 +++ b/server/node/logs.cjs
-@@ -3,7 +3,7 @@
+@@ -3,8 +3,9 @@
  const path = require('path');
  const fs = require('fs');
  const os = require('os');
 -const { atomicWriteFile, atomicWriteJson, readVerifiedJson } = require('./file-store.cjs');
 +const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
  const { resolveDataRoot } = require('./data-root.cjs');
++const { nasDiagnosticDescription, nasDiagnosticMessage } = require('../../shared/play-set/nas-diagnostic.ts');
  
  const MAX_ROWS = 5000;
-@@ -17,19 +17,21 @@ const logFile = path.join(logRoot, 'system.jsonl');
+ const MAX_DESCRIPTION_BYTES = 10 * 1024; // 10KB per entry
+@@ -17,19 +18,21 @@ const logFile = path.join(logRoot, 'system.jsonl');
  const stateFile = path.join(logRoot, 'state.json');
  const writeLockFile = path.join(logRoot, '.write.lock');
  const LOCK_WAIT_MS = 5;
@@ -36,7 +38,7 @@ index 55a08a3..7f2c380 100644
      }
  }
  
-@@ -39,7 +41,7 @@ function removeStaleWriteLock() {
+@@ -39,7 +42,7 @@ function removeStaleWriteLock() {
          const pid = Number.parseInt(fs.readFileSync(writeLockFile, 'utf8'), 10);
          const age = Date.now() - stat.mtimeMs;
          if (!Number.isInteger(pid) && age < LOCK_OWNER_GRACE_MS) return false;
@@ -45,7 +47,7 @@ index 55a08a3..7f2c380 100644
          fs.unlinkSync(writeLockFile);
          return true;
      } catch (error) {
-@@ -52,7 +54,9 @@ function acquireWriteLock() {
+@@ -52,7 +55,9 @@ function acquireWriteLock() {
      while (Date.now() - startedAt < LOCK_TIMEOUT_MS) {
          try {
              const fd = fs.openSync(writeLockFile, 'wx', 0o600);
@@ -56,7 +58,7 @@ index 55a08a3..7f2c380 100644
              return fd;
          } catch (error) {
              const isWindowsLockContention = process.platform === 'win32'
-@@ -71,7 +75,8 @@ function withWriteLock(action) {
+@@ -71,7 +76,8 @@ function withWriteLock(action) {
          return action();
      } finally {
          try { fs.closeSync(fd); } catch {}
@@ -66,7 +68,7 @@ index 55a08a3..7f2c380 100644
      }
  }
  
-@@ -177,7 +182,13 @@ const MASK_PATTERNS = [
+@@ -177,7 +183,13 @@ const MASK_PATTERNS = [
  
  function maskSensitive(value) {
      if (typeof value !== 'string') return value;
@@ -81,14 +83,53 @@ index 55a08a3..7f2c380 100644
      for (const { re, replacement } of MASK_PATTERNS) {
          out = out.replace(re, replacement);
      }
+@@ -197,11 +209,17 @@ function insertEntry(entry) {
+     const timestamp = typeof entry.timestamp === 'number' ? entry.timestamp : Date.now();
+     const level = ['error', 'warning', 'info'].includes(entry.level) ? entry.level : 'info';
+     const origin = entry.origin === 'server' ? 'server' : 'client';
+-    const message = maskSensitive(String(entry.message ?? '')).slice(0, 1000);
+-    const description = entry.description != null
++    const source = entry.source ? String(entry.source).slice(0, 64) : null;
++    const nasDiagnostic = source === 'nas-sync';
++    const message = nasDiagnostic ? nasDiagnosticMessage : maskSensitive(String(entry.message ?? '')).slice(0, 1000);
++    let description = entry.description != null && !nasDiagnostic
+         ? truncate(maskSensitive(String(entry.description)), MAX_DESCRIPTION_BYTES)
+         : null;
+-    const source = entry.source ? String(entry.source).slice(0, 64) : null;
++    if (nasDiagnostic) {
++        // Older clients may still send raw messages. Persist only recognized diagnostic fields.
++        const fields = /^stage=([a-z]+) code=([A-Z_]+)$/.exec(String(entry.description ?? ''));
++        description = nasDiagnosticDescription(fields?.[1], fields?.[2]);
++    }
+     const count = Number.isInteger(entry.count) && entry.count > 0 ? entry.count : 1;
+     const platform = entry.platform ? String(entry.platform).slice(0, 128) : null;
+     const clientId = entry.clientId ? String(entry.clientId).slice(0, 64) : null;
 diff --git a/server/node/logs.test.ts b/server/node/logs.test.ts
-index 3ef5c95..5f51b76 100644
+index 3ef5c95..ce7f5c2 100644
 --- a/server/node/logs.test.ts
 +++ b/server/node/logs.test.ts
-@@ -40,6 +40,43 @@ afterEach(() => {
+@@ -40,6 +40,61 @@ afterEach(() => {
  })
  
  describe('file-native system logs', () => {
++    test('persists only fixed NAS diagnostic text and known fields even for a stale client', () => {
++        const root = tempRoot()
++        const message = 'getaddrinfo ENOTFOUND fixture.nas.invalid user=qa password=a,b;c email: user@fixture.invalid https://host.invalid/ 192.0.2.12 2001:db8::1 ' + 'a'.repeat(45)
++        const result = spawnSync(process.execPath, ['-e', `
++            const logs = require(${JSON.stringify(logsModule)})
++            const add = description => logs.addLog({ level: 'error', source: 'nas-sync', message: ${JSON.stringify(message)}, description })
++            add('stage=pull code=ENOTFOUND')
++            add('stage=pull code=LONG_TOKEN_FROM_UNKNOWN_SOURCE')
++            add('stage=somehost code=ENOTFOUND password=a,b;c')
++        `], { env: { ...process.env, RISUBARD_DATA_ROOT: root }, encoding: 'utf8' })
++        expect(result.status, result.stderr).toBe(0)
++        const rows = readFileSync(join(root, 'logs/system.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
++        expect(rows.map(({ message, description }) => [message, description])).toEqual([
++            ['NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=pull code=ENOTFOUND'],
++            ['NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=pull code=UNKNOWN'],
++            ['NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=unknown code=UNKNOWN'],
++        ])
++    })
 +    test('recovers its own abandoned lock and retries Windows lock release', () => {
 +        const root = tempRoot()
 +        const result = spawnSync(process.execPath, ['-e', `

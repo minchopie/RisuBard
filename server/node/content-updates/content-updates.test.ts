@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -300,10 +300,24 @@ describe('content updates: modules', () => {
 describe('content update download resume', () => {
     const big = Buffer.from(Array.from({ length: 64 * 1024 }, (_, i) => i % 251))
     const bigMeta = { ...meta, fileName: 'big.charx' }
-    // A body that sends `cut` bytes, then fails like a dropped socket.
+    const createWriteStream = fs.createWriteStream
+    let dropAfterWrite: (() => void) | undefined
+    beforeEach(() => {
+        vi.spyOn(fs, 'createWriteStream').mockImplementation((target, options) => {
+            const drop = dropAfterWrite
+            if (!drop) return createWriteStream(target, options)
+            dropAfterWrite = undefined
+            const writer = createWriteStream(target, { ...(typeof options === 'string' ? { encoding: options } : options), highWaterMark: 1 })
+            writer.once('drain', drop)
+            return writer
+        })
+    })
+    afterEach(() => { dropAfterWrite = undefined; vi.mocked(fs.createWriteStream).mockRestore() })
+    // Wait for the real file writer to acknowledge the partial write before dropping the socket.
     const dropping = (data: Buffer, statusCode: number, headers: Record<string, string>, cut: number) => {
         const stream = new Readable({ read() {} })
-        stream.push(data.subarray(0, cut)); setTimeout(() => stream.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' })), 5)
+        stream.push(data.subarray(0, cut))
+        dropAfterWrite = () => stream.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' }))
         return Object.assign(stream, { statusCode, headers })
     }
     const ranged = (data: Buffer, range: string) => { const start = Number(/bytes=(\d+)-/.exec(range)![1]); return Object.assign(Readable.from([data.subarray(start)]), { statusCode: 206, headers: { 'content-range': `bytes ${start}-${data.length - 1}/${data.length}` } }) }
@@ -410,10 +424,7 @@ describe('content update download resume', () => {
             n++
             const start = headers.Range ? Number(/bytes=(\d+)-/.exec(headers.Range)![1]) : 0
             const rest = big.subarray(start), cut = n < 5 ? Math.min(14_000, rest.length - 1) : rest.length
-            // the data is pushed, read and written before the drop
-            const stream = new Readable({ read() {} }); stream.push(rest.subarray(0, cut))
-            setTimeout(() => stream.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' })), 30)
-            return Object.assign(stream, start ? { statusCode: 206, headers: { 'content-range': `bytes ${start}-${big.length - 1}/${big.length}` } } : { statusCode: 200, headers: {} })
+            return dropping(rest, start ? 206 : 200, start ? { 'content-range': `bytes ${start}-${big.length - 1}/${big.length}` } : {}, cut)
         })
         const { file } = await tablet(dav, []).download(bigMeta.key, item.sha256)
         expect(fs.readFileSync(file)).toEqual(big)

@@ -56,9 +56,9 @@ test('the verified NAS source is direct and a cached digest cannot hide same-siz
     await expect(f.kv.kvVerifiedAssetFile(key)).rejects.toMatchObject({ code: 'ENOENT' })
 })
 
-test('an interrupted verification checkpoint resumes with a fresh KV instance and checks changed files', async () => {
+async function checkpointFixture(count: number) {
     const f = await fixture(), { atomicWriteJson } = require('./file-store.cjs')
-    const objects = Array.from({ length: 257 }, (_, i) => {
+    const objects = Array.from({ length: count }, (_, i) => {
         const key = 'assets/file-' + i + '.png', value = Buffer.from(String(i).padStart(4, '0'))
         return { key, value, object: sha(value) }
     })
@@ -66,13 +66,17 @@ test('an interrupted verification checkpoint resumes with a fresh KV instance an
     await Promise.all(objects.map(({ object, value }) => writeFile(f.objectPath(object), value)))
     atomicWriteJson(f.dataRoot, 'kv/manifest.json', { schemaVersion: 1, updatedAt: 1,
         entries: Object.fromEntries(objects.map(({ key, object, value }) => [key, { object, size: value.length, updatedAt: 1 }])) })
-    const checkpoint = join(f.dataRoot, 'kv', 'nas-asset-verification.json')
+    return { ...f, objects, checkpoint: join(f.dataRoot, 'kv', 'nas-asset-verification.json') }
+}
+
+test('an interrupted verification checkpoint resumes with a fresh KV instance and checks changed files', async () => {
+    const f = await checkpointFixture(257), { objects, checkpoint } = f
     const kv = createFileKv({ dataRoot: f.dataRoot })
     await expect(kv.kvWithNasAssetVerification(async () => {
         for (const entry of objects.slice(0, 256)) await kv.kvVerifiedAssetFile(entry.key)
         throw new Error('capture interrupted')
     })).rejects.toThrow('capture interrupted')
-    expect(JSON.parse(await readFile(checkpoint, 'utf8'))).toHaveLength(256)
+    expect(JSON.parse(await readFile(checkpoint, 'utf8')).entries).toHaveLength(256)
     await writeFile(f.objectPath(objects[255].object), 'oops')
     const restarted = createFileKv({ dataRoot: f.dataRoot })
     const reads = vi.spyOn(fs, 'createReadStream')
@@ -87,6 +91,48 @@ test('an interrupted verification checkpoint resumes with a fresh KV instance an
     } finally { reads.mockRestore() }
     await absent(checkpoint)
     await absent(checkpoint + '.sha256')
+})
+
+test.each(['primary', 'both', 'interrupted replace'])('recovers only validated checkpoint generations after %s', async mode => {
+    const f = await checkpointFixture(512)
+    const { objects, checkpoint } = f
+    const kv = createFileKv({ dataRoot: f.dataRoot })
+    const renameSync = fs.renameSync
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        if (mode === 'interrupted replace' && to === checkpoint && fs.existsSync(checkpoint)) {
+            throw new Error('simulated interruption before replacing checkpoint')
+        }
+        return renameSync(from, to)
+    })
+    try {
+        await expect(kv.kvWithNasAssetVerification(async () => {
+            for (const entry of objects) await kv.kvVerifiedAssetFile(entry.key)
+            throw new Error('capture interrupted')
+        })).rejects.toThrow('capture interrupted')
+    } finally { rename.mockRestore() }
+    const main = JSON.parse(await readFile(checkpoint, 'utf8'))
+    const backup = JSON.parse(await readFile(checkpoint + '.bak', 'utf8'))
+    expect(main.entries).toHaveLength(mode === 'interrupted replace' ? 256 : 512)
+    expect(backup.entries).toHaveLength(256)
+    await absent(checkpoint + '.sha256')
+    await absent(checkpoint + '.bak.sha256')
+    if (mode !== 'interrupted replace') {
+        main.entries.pop()
+        await writeFile(checkpoint, JSON.stringify(main))
+    }
+    if (mode === 'both') await writeFile(checkpoint + '.bak', '{"entries":[],"checksum":"torn"}')
+    const reopened = createFileKv({ dataRoot: f.dataRoot })
+    const reads = vi.spyOn(fs, 'createReadStream')
+    try {
+        await reopened.kvWithNasAssetVerification(async () => {
+            await reopened.kvVerifiedAssetFile(objects[0].key)
+            expect(reads).toHaveBeenCalledTimes(mode === 'both' ? 1 : 0)
+            await reopened.kvVerifiedAssetFile(objects[511].key)
+            expect(reads).toHaveBeenCalledTimes(mode === 'both' ? 2 : 1)
+        })
+    } finally { reads.mockRestore() }
+    await absent(checkpoint)
+    await absent(checkpoint + '.bak')
 })
 
 describe('kvExportFile on KV objects', () => {

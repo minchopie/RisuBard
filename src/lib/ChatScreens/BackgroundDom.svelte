@@ -10,6 +10,7 @@
     let currentChar:character = $derived(DBState.db?.characters?.[selIdState.selId])
 
     let renderedBackground = $state('')
+    let renderedPointer = $state<number>()
     let request = 0
     let previousIndex: number | undefined
     let previousCharacter: string | undefined
@@ -32,10 +33,12 @@
             return
         }
 
-        void $ReloadGUIPointer
+        const pointer = $ReloadGUIPointer
         void ParseMarkdown(risuChatParser((html || '') + '\n' + (embedding || ''), {chara:char}), char, 'back')
             .then(md => {
-                if (current === request) renderedBackground = md
+                if (current !== request) return
+                renderedBackground = md
+                renderedPointer = pointer
             }, error => {
                 if (current !== request) return
                 renderedBackground = ''
@@ -50,7 +53,9 @@
 {#if backgroundHTML || $moduleBackgroundEmbedding}
     {#if selIdState.selId > -1}
         <div class="absolute top-0 left-0 w-full h-full">
-            {@html renderedBackground}
+            {#key renderedPointer}
+                {@html renderedBackground}
+            {/key}
         </div>
     {/if}
 {/if}

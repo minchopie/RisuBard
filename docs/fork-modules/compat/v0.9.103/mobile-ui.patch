@@ -15,10 +15,18 @@ index 6618b8a..1c3be81 100644
      <title>RisuBard</title>
    </head>
 diff --git a/src/lib/ChatScreens/Chat.svelte b/src/lib/ChatScreens/Chat.svelte
-index 1ef0881..4a78cc0 100644
+index 1ef0881..34843f0 100644
 --- a/src/lib/ChatScreens/Chat.svelte
 +++ b/src/lib/ChatScreens/Chat.svelte
-@@ -50,6 +50,7 @@
+@@ -32,6 +32,7 @@
+     import { HideIconStore, ReloadGUIPointer, selIdState } from "../../ts/stores.svelte"
+     import AutoresizeArea from "../UI/GUI/TextAreaResizable.svelte"
+     import ChatBody from './ChatBody.svelte'
++    import { copyChatBody, holdChatDisplay } from './retainedChatHtml'
+     import { removeInlayOccurrence } from './inlayImageControls'
+     import PopupButton from "../UI/PopupButton.svelte";
+     import PartialEditController from './PartialEditController.svelte';
+@@ -50,6 +51,7 @@
      import { mergeTriggerChat } from './triggerResultMerge'
      import { getChatVar } from 'src/ts/parser/chatVar.svelte'
      import { Popover } from 'bits-ui'
@@ -26,31 +34,35 @@ index 1ef0881..4a78cc0 100644
  
      let viewportWidth = $state(window.innerWidth)
      let inlineMessageActions = $derived(viewportWidth >= 640 || DBState.db.mobileMessageActionsInline === true)
-@@ -74,6 +75,7 @@
+@@ -74,6 +76,8 @@
          role?: string;
          turnNumber?: number;
          totalLength?: number;
 +        onInitialRenderSettled?: () => void;
++        isStreamingDisplay?: boolean;
          onReroll?: () => void;
          onNextSwipe?: () => void;
          unReroll?: () => void;
-@@ -107,6 +109,7 @@
+@@ -107,6 +111,8 @@
          role = null,
          turnNumber,
          totalLength = 0,
 +        onInitialRenderSettled,
++        isStreamingDisplay = false,
          onReroll = () => {},
          onNextSwipe = () => {},
          unReroll = () => {},
-@@ -144,6 +147,7 @@
+@@ -144,13 +150,17 @@
          isOptimizedStreamingMessage: boolean
          streamingOptimizationMode: StreamingDisplayOptimizationMode
          rawStreamingText: string
 +        totalLength?: number
++        isStreamingDisplay?: boolean
          messageGenerationInfo?: MessageGenerationInfo
          memoryConfirmed?: boolean
          canonicalReceipt?: CanonicalTurnReceipt
-@@ -151,6 +155,7 @@
+     }){
++        isStreamingDisplay = state.isStreamingDisplay ?? false
          isOptimizedStreamingMessage = state.isOptimizedStreamingMessage
          streamingOptimizationMode = state.streamingOptimizationMode
          rawStreamingText = state.rawStreamingText
@@ -58,27 +70,20 @@ index 1ef0881..4a78cc0 100644
          if (!editMode) message = state.rawStreamingText
          messageGenerationInfo = state.messageGenerationInfo ?? null
          memoryConfirmed = state.memoryConfirmed ?? false
-@@ -343,6 +348,101 @@
+@@ -343,6 +353,76 @@
      let displayMessage = $derived(isOptimizedStreamingMessage ? rawStreamingText : message)
      let renderRawStreaming = $derived(isOptimizedStreamingMessage && streamingOptimizationMode === 'strong')
  
 +    // A GUI reload can also reset a message pointer. Keep both parts of the redraw key.
 +    let chatReloadPointer = $derived(`${$ReloadGUIPointer}:${$ReloadChatPointer[idx] ?? 0}`)
-+    let totalLengthPointer = $derived((idx > totalLength - 6) ? totalLength : 0)
-+    let chatBodyKey = $derived(`${totalLengthPointer}|${chatReloadPointer}`)
++    let isLastMessage = $derived(idx >= 0 && idx === totalLength - 1)
 +    let measuredBody: HTMLElement | null = null
 +    let previousBodyKey: string | undefined
-+    let restoreBodyHeight: (() => void) | undefined
-+    let bodySnapshot: HTMLElement | undefined
-+
-+    function releaseBodyHeight() {
-+        restoreBodyHeight?.()
-+    }
++    let releaseBodyDisplay: (() => void) | undefined
 +
 +    function clearBodySnapshot() {
-+        bodySnapshot?.remove()
-+        bodySnapshot = undefined
-+        releaseBodyHeight()
++        releaseBodyDisplay?.()
++        releaseBodyDisplay = undefined
 +    }
 +
 +    function settleBodyRender() {
@@ -88,44 +93,30 @@ index 1ef0881..4a78cc0 100644
 +    }
 +
 +    $effect.pre(() => {
-+        const key = chatBodyKey
++        const key = chatReloadPointer
 +        const root = bodyRoot
 +        const changed = previousBodyKey !== undefined && key !== previousBodyKey && measuredBody === root
 +        if (measuredBody !== root) clearBodySnapshot()
 +        measuredBody = root
 +        previousBodyKey = key
 +
-+        if (!root || editMode || editTranslationMode || blankMessage || !message.trim() || renderRawStreaming) {
-+            clearBodySnapshot()
++        if (editMode || editTranslationMode || blankMessage || renderRawStreaming) {
++            settleBodyRender()
 +            return
 +        }
-+        if (!changed || bodySnapshot) return
-+        const rendered = root.querySelector<HTMLElement>('[data-painter-body]')
-+        if (!rendered?.hasChildNodes()) return
++        if (!root) return
++        if ((translated || retranslate) && DBState.db.showTranslationLoading) {
++            settleBodyRender()
++            return
++        }
++        if (!changed || root.querySelector('[data-chat-body-snapshot]')) return
 +
-+        // Keep the previous picture outside the keyed block until the fresh body commits.
-+        const snapshot = rendered.cloneNode(true) as HTMLElement
-+        snapshot.removeAttribute('data-painter-body')
-+        snapshot.setAttribute('data-chat-body-snapshot', '')
-+        snapshot.setAttribute('inert', '')
-+        snapshot.setAttribute('aria-hidden', 'true')
-+        for (const embed of snapshot.querySelectorAll('iframe, object, embed, script')) embed.remove()
-+        for (const media of snapshot.querySelectorAll('audio, video')) {
-+            media.removeAttribute('autoplay')
-+            media.removeAttribute('src')
-+            for (const source of media.querySelectorAll('source, track')) source.remove()
-+        }
++        const snapshot = copyChatBody(root)
++        if (!snapshot) return
++        clearBodySnapshot()
 +        const restoreHeight = holdBodyHeight(root)
-+        bodySnapshot = snapshot
 +        root.prepend(snapshot)
-+        if (restoreHeight) {
-+            const deadline = setTimeout(releaseBodyHeight, 3000)
-+            restoreBodyHeight = () => {
-+                clearTimeout(deadline)
-+                restoreHeight()
-+                restoreBodyHeight = undefined
-+            }
-+        }
++        releaseBodyDisplay = holdChatDisplay(snapshot, restoreHeight)
 +    })
 +
 +    function holdBodyHeight(root: HTMLElement) {
@@ -151,16 +142,12 @@ index 1ef0881..4a78cc0 100644
 +        return () => style.setProperty('min-height', previous, priority)
 +    }
 +
-+    $effect(() => {
-+        if (blankMessage || renderRawStreaming) settleBodyRender()
-+    })
-+
 +    onDestroy(settleBodyRender)
 +
      function updateDisplayedMessage(){
          if(renderRawStreaming){
              return
-@@ -704,10 +804,6 @@
+@@ -704,10 +784,6 @@
              {language.noMessage}
          </div>
      {:else}
@@ -171,26 +158,28 @@ index 1ef0881..4a78cc0 100644
          <!-- svelte-ignore a11y_click_events_have_key_events -->
          <!-- svelte-ignore a11y_no_static_element_interactions -->
          <span class="text chat-width chattext prose minw-0"
-@@ -725,7 +821,7 @@
+@@ -725,7 +801,7 @@
              style:font-size="{0.875 * (DBState.db.zoomsize / 100)}rem"
              style:line-height="{(DBState.db.lineHeight ?? 1.25) * (DBState.db.zoomsize / 100)}rem"
          >
 -            {#key `${totalLengthPointer}|${chatReloadPointer}`}
-+            {#key chatBodyKey}
++            {#key chatReloadPointer}
                  <ChatBody
                      {character}
                      {firstMessage}
-@@ -742,7 +838,8 @@
+@@ -742,7 +818,10 @@
                      bind:translating={translating}
                      bind:retranslate={retranslate}
                      {renderRawStreaming}
 -                    {rawStreamingText} />
++                    {isStreamingDisplay}
++                    {isLastMessage}
 +                    {rawStreamingText}
 +                    onRenderSettled={settleBodyRender} />
              {/key}
              {#if idx >= 0 && !readOnly && !editMode && !isOptimizedStreamingMessage && partialEditEnabled && (DBState.db.enableBlockPartialEdit || DBState.db.enableDragPartialEdit)}
                  <PartialEditController
-@@ -1745,13 +1842,13 @@
+@@ -1745,13 +1824,13 @@
       onpointerdowncapture={buttonTriggerActivation.pointerdown}
       onclickcapture={buttonTriggerActivation.click}
       onsubmitcapture={handleFormTriggerWithin}>
@@ -312,68 +301,218 @@ index 62e0be8..02094fe 100644
      }
      const schedule = () => { if (!raf) raf = requestAnimationFrame(apply) }
 diff --git a/src/lib/ChatScreens/ChatBody.svelte b/src/lib/ChatScreens/ChatBody.svelte
-index 79a3d01..f480e5f 100644
+index 79a3d01..ce3fe35 100644
 --- a/src/lib/ChatScreens/ChatBody.svelte
 +++ b/src/lib/ChatScreens/ChatBody.svelte
-@@ -27,6 +27,7 @@
+@@ -26,7 +26,10 @@
+         bodyRoot?: HTMLElement|null
          modelShortName: string
          renderRawStreaming?: boolean
++        isStreamingDisplay?: boolean
++        isLastMessage?: boolean
          rawStreamingText?: string
 +        onRenderSettled?: () => void
          onRemoveInlay?: (id: string, occurrence: number) => void
      }
  
-@@ -43,6 +44,7 @@
+@@ -42,12 +45,14 @@
+         bodyRoot,
          modelShortName = '',
          renderRawStreaming = false,
++        isStreamingDisplay = false,
++        isLastMessage = false,
          rawStreamingText = '',
 +        onRenderSettled,
          onRemoveInlay,
      }: Props =  $props()
  
-@@ -279,7 +281,11 @@
-     <span data-painter-body style="display: contents" use:inlayImageControls={onRemoveInlay} use:retainedChatHtml={{
-         content: markParsingResult,
-         format: (html) => addMetadataToElement(trimMarkdown(html), modelShortName),
+-    // svelte-ignore non_reactive_update
+-    let lastParsed = ''
++    const translationLoading = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid var(--color-primary); border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
+     let lastCharArg:string|simpleCharacterArgument = null
+     let lastChatId = -10
+ 
+@@ -73,11 +78,9 @@
+         // track 'translated' and 'retranslate' state
+         translated;
+         retranslate;
+-        let lastParsedQueue = ''
+         let mode = 'notrim' as const
+         try {
+             if((!isEqual(lastCharArg, charArg)) || (chatID !== lastChatId)){
+-                lastParsedQueue = ''
+                 lastCharArg = charArg
+                 lastChatId = chatID
+                 let translateText = false
+@@ -116,10 +119,6 @@
+                 }
+             }
+             if(retranslate || translated){
+-                if (DBState.db.showTranslationLoading) {
+-                    lastParsed = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid var(--color-primary); border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
+-                }
+-
+                 let transResult
+                 
+                 if(DBState.db.translatorType === 'llm' && DBState.db.translateBeforeHTMLFormatting){
+@@ -128,7 +127,6 @@
+                     data = await translateHTML(data, false, charArg, chatID, retranslate)
+                     translating = false
+                     const marked = await ParseMarkdown(data, charArg, mode, chatID, getCbsCondition())
+-                    lastParsedQueue = marked
+                     lastCharArg = charArg
+                     transResult = marked
+                 }
+@@ -137,7 +135,6 @@
+                     translating = true
+                     const translated = await postTranslationParse(await translateHTML(marked, false, charArg, chatID, retranslate))
+                     translating = false
+-                    lastParsedQueue = translated
+                     lastCharArg = charArg
+                     transResult = translated
+                 }
+@@ -146,7 +143,6 @@
+                     translating = true
+                     const translated = await translateHTML(marked, false, charArg, chatID, retranslate)
+                     translating = false
+-                    lastParsedQueue = translated
+                     lastCharArg = charArg
+                     transResult = translated
+                 }
+@@ -161,7 +157,6 @@
+                 const timingStart = performance.now()
+                 const marked = await ParseMarkdown(data, charArg, mode, chatID, getCbsCondition())
+                 debugTiming.render(idx, performance.now() - timingStart)
+-                lastParsedQueue = marked
+                 lastCharArg = charArg
+                 return marked
+             }   
+@@ -178,10 +173,6 @@
+             }
+             return await markParsing(data, charArg, chatID, (tries ?? 0) + 1)
+         }
+-        finally{
+-            //since trimMarkdown is fast, we don't need to cache it
+-            lastParsed = lastParsedQueue
+-        }
+     }
+ 
+     const checkImg = () => {
+@@ -265,7 +256,12 @@
+         }
+     }
+ 
+-    let markParsingResult = $derived.by(() => markParsing(msgDisplay, character, idx))
++    let markParsingResult = $derived.by(() => {
++        // Display scripts can change output without changing the message text.
++        void isStreamingDisplay
++        void isLastMessage
++        return markParsing(msgDisplay, character, idx)
++    })
+ 
+     function onHtmlRendered() {
+         checkImg()
+@@ -273,16 +269,19 @@
+     }
+ </script>
+ 
+-{#if shouldRenderRawStreaming}
+-    <span class="whitespace-pre-wrap">{rawStreamingText}</span>
+-{:else}
+-    <span data-painter-body style="display: contents" use:inlayImageControls={onRemoveInlay} use:retainedChatHtml={{
+-        content: markParsingResult,
+-        format: (html) => addMetadataToElement(trimMarkdown(html), modelShortName),
 -        onRender: onHtmlRendered,
-+        onRender: () => {
-+            onRenderSettled?.()
-+            onHtmlRendered()
-+        },
-+        onError: onRenderSettled,
-         pendingHtml: (translated || retranslate) && DBState.db.showTranslationLoading ? lastParsed : undefined,
-     }}></span>
- {/if}
+-        pendingHtml: (translated || retranslate) && DBState.db.showTranslationLoading ? lastParsed : undefined,
+-    }}></span>
+-{/if}
++<span data-painter-body={shouldRenderRawStreaming ? undefined : ''} data-chat-raw-body={shouldRenderRawStreaming ? '' : undefined}
++    style="display: contents" use:inlayImageControls={onRemoveInlay} use:retainedChatHtml={{
++    content: shouldRenderRawStreaming ? undefined : markParsingResult,
++    rawText: shouldRenderRawStreaming ? rawStreamingText : undefined,
++    format: (html) => addMetadataToElement(trimMarkdown(html), modelShortName),
++    onRender: () => {
++        onRenderSettled?.()
++        onHtmlRendered()
++    },
++    onError: onRenderSettled,
++    onPending: onRenderSettled,
++    pendingHtml: (translated || retranslate) && DBState.db.showTranslationLoading ? translationLoading : undefined,
++}}></span>
+ 
+ <style>
+     :global(.inlay-image-control) {
 diff --git a/src/lib/ChatScreens/retainedChatHtml.ts b/src/lib/ChatScreens/retainedChatHtml.ts
-index 49d7c5d..d94709f 100644
+index 49d7c5d..be2009f 100644
 --- a/src/lib/ChatScreens/retainedChatHtml.ts
 +++ b/src/lib/ChatScreens/retainedChatHtml.ts
-@@ -2,6 +2,7 @@ interface ChatHtmlUpdate {
-     content: Promise<string>
+@@ -1,8 +1,40 @@
+ interface ChatHtmlUpdate {
+-    content: Promise<string>
++    content?: Promise<string>
++    rawText?: string
      format: (html: string) => string
      onRender: () => void
 +    onError?: () => void
      pendingHtml?: string
++    onPending?: () => void
++}
++
++export function copyChatBody(source: ParentNode) {
++    const body = source.querySelector<HTMLElement>('[data-chat-body-snapshot], [data-painter-body], [data-chat-raw-body]')
++    if (!body?.hasChildNodes() || body.hasAttribute('data-chat-body-pending')) return
++    const snapshot = body.cloneNode(true) as HTMLElement
++    snapshot.removeAttribute('data-painter-body')
++    snapshot.removeAttribute('data-chat-raw-body')
++    snapshot.setAttribute('data-chat-body-snapshot', '')
++    snapshot.setAttribute('inert', '')
++    snapshot.setAttribute('aria-hidden', 'true')
++    for (const embed of snapshot.querySelectorAll('iframe, object, embed, script')) embed.remove()
++    for (const media of snapshot.querySelectorAll('audio, video')) {
++        media.removeAttribute('autoplay')
++        media.removeAttribute('src')
++        for (const child of media.querySelectorAll('source, track')) child.remove()
++    }
++    return snapshot
++}
++
++export function holdChatDisplay(snapshot: HTMLElement | undefined, restoreHeight?: () => void) {
++    const deadline = setTimeout(release, 3000)
++    function release() {
++        clearTimeout(deadline)
++        snapshot?.remove()
++        restoreHeight?.()
++        restoreHeight = undefined
++    }
++    return release
  }
  
-@@ -19,14 +20,24 @@ function patchChildren(live: Element, previous: Node, next: Node) {
+ // Compare parser output with the previous parser output, not the live DOM:
+@@ -19,14 +51,31 @@ function patchChildren(live: Element, previous: Node, next: Node) {
          return
      }
  
 -    for (let index = 0; index < Math.max(oldChildren.length, nextChildren.length); index++) {
 -        const oldChild = oldChildren[index]
 -        const nextChild = nextChildren[index]
++    let start = 0
 +    let oldEnd = oldChildren.length
 +    let nextEnd = nextChildren.length
++    while (start < oldEnd && start < nextEnd && oldChildren[start].isEqualNode(nextChildren[start])) start++
 +    if (oldEnd !== nextEnd) {
-+        // Keep equal trailing blocks aligned when body paragraphs grow or shrink.
-+        while (oldEnd > 0 && nextEnd > 0 && oldChildren[oldEnd - 1].isEqualNode(nextChildren[nextEnd - 1])) {
++        while (oldEnd > start && nextEnd > start && oldChildren[oldEnd - 1].isEqualNode(nextChildren[nextEnd - 1])) {
 +            oldEnd--
 +            nextEnd--
 +        }
++        // An identical block in the changed middle makes moving the trailing node ambiguous.
++        const middle = [...oldChildren.slice(start, oldEnd), ...nextChildren.slice(start, nextEnd)]
++        if (oldChildren.slice(oldEnd).some(tail => middle.some(node => tail.isEqualNode(node)))) {
++            oldEnd = oldChildren.length
++            nextEnd = nextChildren.length
++        }
 +    }
 +    const tail = liveChildren[oldEnd] ?? null
-+    for (let index = 0; index < Math.max(oldEnd, nextEnd); index++) {
++    for (let index = start; index < Math.max(oldEnd, nextEnd); index++) {
 +        const oldChild = index < oldEnd ? oldChildren[index] : undefined
 +        const nextChild = index < nextEnd ? nextChildren[index] : undefined
          const liveChild = liveChildren[index]
@@ -385,8 +524,49 @@ index 49d7c5d..d94709f 100644
          } else if (!oldChild.isEqualNode(nextChild)) {
              patchNode(liveChild, oldChild, nextChild)
          }
-@@ -91,7 +102,10 @@ export function retainedChatHtml(node: HTMLElement, initial: ChatHtmlUpdate) {
-             commit(options.format(html))
+@@ -76,22 +125,45 @@ export function retainedChatHtml(node: HTMLElement, initial: ChatHtmlUpdate) {
+     let previous: Node = createParserElement()
+     let revision = 0
+ 
+-    function commit(html: string) {
+-        const next = createParserElement()
+-        next.innerHTML = html
++    function commit(next: HTMLElement) {
+         patchChildren(node, previous, next)
+         previous = next
+     }
+ 
++    function commitHtml(html: string) {
++        const next = createParserElement()
++        next.innerHTML = html
++        commit(next)
++    }
++
+     function update(options: ChatHtmlUpdate) {
+         const request = ++revision
+-        if (options.pendingHtml) commit(options.format(options.pendingHtml))
+-        void options.content.then(html => {
++        if (options.rawText !== undefined) {
++            const next = createParserElement()
++            const raw = next.ownerDocument.createElement('span')
++            raw.className = 'whitespace-pre-wrap'
++            raw.textContent = options.rawText
++            next.append(raw)
++            node.removeAttribute('data-chat-body-pending')
++            commit(next)
++            return
++        }
++        if (options.pendingHtml) {
++            options.onPending?.()
++            node.setAttribute('data-chat-body-pending', '')
++            commitHtml(options.format(options.pendingHtml))
++        }
++        else node.removeAttribute('data-chat-body-pending')
++        void options.content?.then(html => {
+             if (request !== revision) return
+-            commit(options.format(html))
++            commitHtml(options.format(html))
++            node.removeAttribute('data-chat-body-pending')
              options.onRender()
          }).catch(error => {
 -            if (request === revision) console.error('Failed to render chat HTML', error)
@@ -398,7 +578,7 @@ index 49d7c5d..d94709f 100644
      }
  
 diff --git a/src/lib/ChatScreens/ChatEditInteraction.test.ts b/src/lib/ChatScreens/ChatEditInteraction.test.ts
-index 4f2b9d9..508ee57 100644
+index 4f2b9d9..0754a97 100644
 --- a/src/lib/ChatScreens/ChatEditInteraction.test.ts
 +++ b/src/lib/ChatScreens/ChatEditInteraction.test.ts
 @@ -1,13 +1,13 @@
@@ -418,7 +598,15 @@ index 4f2b9d9..508ee57 100644
  
  vi.mock('src/ts/stores.svelte', () => ({
      DBState: { db: {} },
-@@ -68,6 +68,185 @@ vi.mock('src/ts/storage/database.svelte', () => ({
+@@ -61,13 +61,226 @@ vi.mock('src/ts/parser/parser.svelte', () => ({
+     resolveInlayPlaceholders: vi.fn((value: string) => value),
+     trimMarkdown: vi.fn((value: string) => value),
+ }))
+-vi.mock('src/ts/translator/translator', () => ({ getLLMCache: vi.fn(), setLLMCache: vi.fn() }))
++vi.mock('src/ts/translator/translator', () => ({ getLLMCache: vi.fn(), setLLMCache: vi.fn(), translateHTML: vi.fn() }))
+ vi.mock('src/ts/storage/database.svelte', () => ({
+     getCurrentCharacter: vi.fn(() => DBState.db.characters[0]),
+     getCurrentChat: vi.fn(() => DBState.db.characters[0].chats[0]),
      setCurrentChat: vi.fn(),
  }))
  
@@ -464,7 +652,7 @@ index 4f2b9d9..508ee57 100644
 +            } else if (end === 'deadline') {
 +                vi.advanceTimersByTime(3000)
 +                expect(box.style.minHeight).toBe('12px')
-+                expect(body.querySelector('[data-chat-body-snapshot]')).toBe(snapshot)
++                expect(body.querySelector('[data-chat-body-snapshot]')).toBeNull()
 +                expect(body.querySelector('[data-painter-body] p')).toBeNull()
 +                resolve('<p>After</p>')
 +                await tick(); await tick(); await tick()
@@ -490,6 +678,30 @@ index 4f2b9d9..508ee57 100644
 +        }
 +    })
 +
++    test('shows the translation loading indicator instead of an old body snapshot', async () => {
++        DBState.db.translator = 'en'
++        DBState.db.showTranslationLoading = true
++        const { translateHTML } = await import('src/ts/translator/translator')
++        const translate = vi.mocked(translateHTML)
++        translate.mockResolvedValue('<p>Translated</p>')
++        try {
++            mounted = mount(Chat, { target: document.body, props: {
++                message: '<p>Before</p>', name: 'Character', isLastMemory: false, idx: 0, role: 'char',
++            } })
++            await vi.waitFor(() => expect(document.querySelector('.chattext')?.textContent).toContain('Before'))
++            document.querySelector<HTMLButtonElement>('.button-icon-translate')!.click()
++            await vi.waitFor(() => expect(document.querySelector('.chattext')?.textContent).toContain('Translated'))
++            const body = document.querySelector('.chattext')!
++            DBState.db.autoTranslate = true
++            translate.mockImplementationOnce(() => new Promise(() => {}))
++            ReloadGUIPointer.update(value => value + 1)
++            await vi.waitFor(() => expect(body.querySelector('[data-chat-body-pending] style')?.textContent).toContain('@keyframes spin'))
++            expect(body.querySelector('[data-chat-body-snapshot]')).toBeNull()
++        } finally {
++            translate.mockReset()
++        }
++    })
++
 +    test('skips raw streaming content when the GUI reloads', async () => {
 +        mounted = mount(Chat, { target: document.body, props: {
 +            message: 'before', name: 'Character', isLastMemory: false, idx: 0, role: 'char',
@@ -508,9 +720,11 @@ index 4f2b9d9..508ee57 100644
 +    })
 +})
 +describe('message container remount', () => {
-+    test.each(['commit', 'error', 'deadline', 'unmount'] as const)('holds only the replaced index until %s', async end => {
++    test.each(['commit', 'error', 'deadline', 'unmount', 'edit'] as const)('holds only the replaced index until %s', async end => {
 +        const currentCharacter = DBState.db.characters[0]
-+        const state = new SvelteMap<string, any>([['messages', [{ role: 'char', data: '<p>Before</p>', chatId: 'reply' }]]])
++        const state = new SvelteMap<string, any>([['messages', [{
++            role: 'char', data: '<p>Before</p><iframe></iframe><video autoplay src="old.mp4"><source src="old.mp4"></video>', chatId: 'reply',
++        }]]])
 +        mounted = mount(Chats, { target: document.body, props: {
 +            get messages() { return state.get('messages') },
 +            get pageEnd() { return state.get('messages').length },
@@ -544,11 +758,18 @@ index 4f2b9d9..508ee57 100644
 +            expect(fresh).not.toBe(old)
 +            expect(height).toHaveBeenCalledOnce()
 +            expect(fresh.style.minHeight).toBe('612px')
++            const snapshot = fresh.querySelector('[data-chat-body-snapshot][inert][aria-hidden="true"]')
++            expect(snapshot?.querySelector('p')?.textContent).toBe('Before')
++            expect(snapshot?.querySelector('iframe, video[src], video[autoplay], source')).toBeNull()
 +            expect(fresh.querySelector('[data-painter-body]')?.innerHTML).toBe('')
 +            expect(container(1).style.minHeight).toBe('')
 +
 +            if (end === 'deadline') vi.advanceTimersByTime(3000)
-+            else if (end === 'unmount') {
++            else if (end === 'edit') {
++                fresh.querySelector<HTMLButtonElement>('.button-icon-edit')!.click()
++                await tick()
++                expect(fresh.querySelector('.message-edit-area')).not.toBeNull()
++            } else if (end === 'unmount') {
 +                await unmount(mounted!)
 +                mounted = undefined
 +            } else {
@@ -559,6 +780,7 @@ index 4f2b9d9..508ee57 100644
 +                else expect(fresh.querySelector('[data-painter-body]')?.innerHTML).toBe('<p>After</p>')
 +            }
 +            expect(fresh.style.minHeight).toBe('')
++            expect(fresh.querySelector('[data-chat-body-snapshot]')).toBeNull()
 +        } finally {
 +            if (end === 'deadline') vi.useRealTimers()
 +            log.mockRestore()
@@ -590,10 +812,10 @@ index 4f2b9d9..508ee57 100644
 +        parse.mockClear()
 +        state.set('messages', [...messages, { role: 'char', data: '<p>Streaming reply</p>', chatId: 'stream' }])
 +        await tick(); await tick(); await tick()
-+        expect(parse.mock.calls.map(call => call[3]).sort()).toEqual([3, 4, 5, 6, 7, 8])
++        expect(parse.mock.calls.map(call => call[3]).sort()).toEqual([7, 8])
 +        expect(document.querySelectorAll('.last-message-ui')).toHaveLength(1)
 +        expect(document.querySelector('[data-chat-index="8"] .last-message-ui')).not.toBeNull()
-+        for (const index of [0, 1, 2]) {
++        for (const index of [0, 1, 2, 3, 4, 5, 6]) {
 +            expect(document.querySelector(`[data-chat-index="${index}"] [data-painter-body]`)).toBe(oldBodies[7 - index])
 +        }
 +    } finally {
@@ -604,31 +826,63 @@ index 4f2b9d9..508ee57 100644
  let mounted: ReturnType<typeof mount> | undefined
  
  beforeEach(() => {
-@@ -194,7 +373,8 @@ describe('message edit button', () => {
-         state.set('messages', [reply, { role: 'user', chatId: 'input', data: 'Next input' }])
+@@ -195,6 +408,7 @@ describe('message edit button', () => {
          await tick(); await tick(); await tick()
          expect(document.querySelector('[data-chat-index="0"]')).toBe(previousReply)
--        expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
-+        expect(previousReply.querySelector('.chattext p')).not.toBe(paragraph)
+         expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
 +        expect(previousReply.querySelector('.chattext p')?.outerHTML).toBe(paragraph?.outerHTML)
          expect(previousReply.querySelector('[data-hotkey-action="reroll"]')).toBeNull()
          expect(document.querySelector('[data-chat-index="1"]')?.textContent).toContain('Next input')
  
-@@ -202,7 +382,8 @@ describe('message edit button', () => {
-         state.set('messages', [reply])
+@@ -203,6 +417,7 @@ describe('message edit button', () => {
          await tick(); await tick(); await tick()
          expect(document.querySelector('[data-chat-index="0"]')).toBe(previousReply)
--        expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
-+        expect(previousReply.querySelector('.chattext p')).not.toBe(paragraph)
+         expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
 +        expect(previousReply.querySelector('.chattext p')?.outerHTML).toBe(paragraph?.outerHTML)
          expect(previousReply.textContent).toContain('2/2')
          previousReply.querySelector<HTMLButtonElement>('.button-icon-reroll')!.click()
          expect(nextSwipe).toHaveBeenCalledOnce()
+@@ -236,10 +451,25 @@ describe('message edit button', () => {
+         const messageElement = document.querySelector('[data-chat-index="0"]')
+         const readingParagraph = messageElement?.querySelector('.chattext p')
+         expect(messageElement).not.toBeNull()
+-        state.set('text', '<p>Reading here</p><p>Completed response</p>')
++        const parse = vi.mocked(ParseMarkdown)
++        let complete!: () => void
++        parse.mockClear()
++        parse.mockImplementationOnce((value) => new Promise(resolve => {
++            complete = () => resolve(value + '<p>Completed response</p>')
++        }))
++        // The final chunk is identical. No GUI pointer is advanced on this path.
+         state.set('streaming', false)
+         await tick(); await tick(); await tick()
+         const completedElement = document.querySelector('[data-chat-index="0"]')
++        expect(parse.mock.calls.map(call => call[3])).toEqual([0])
++        expect(completedElement?.textContent).toContain('Reading here')
++        expect(completedElement?.textContent).not.toContain('Completed response')
++        if (!preserve) expect(completedElement?.querySelector('[data-chat-body-snapshot][inert]')).not.toBeNull()
++        if (mode === 'strong') expect(completedElement?.querySelector('.chattext .whitespace-pre-wrap')?.textContent).toContain('<p>Reading here</p>')
++        complete()
++        await tick(); await tick(); await tick()
++        expect(completedElement?.textContent).toContain('Completed response')
++        expect(completedElement?.querySelector('[data-chat-body-snapshot]')).toBeNull()
+         if (preserve) {
+             expect(completedElement).toBe(messageElement)
+             if (mode !== 'strong') expect(completedElement?.querySelector('.chattext p')).toBe(readingParagraph)
+@@ -256,7 +486,7 @@ describe('message edit button', () => {
+         document.querySelector<HTMLButtonElement>('.button-icon-edit')!.click()
+         await tick()
+         expect(document.querySelector<HTMLTextAreaElement>('.message-edit-area')?.value)
+-            .toBe(preserve ? '<p>Reading here</p><p>Post-processed response</p>' : '<p>Reading here</p><p>Completed response</p>')
++            .toBe(preserve ? '<p>Reading here</p><p>Post-processed response</p>' : '<p>Reading here</p><p>Partial</p>')
+         if (preserve) {
+             state.set('room', 'another-room')
+             await tick(); await tick(); await tick()
 diff --git a/src/lib/ChatScreens/BackgroundDom.svelte b/src/lib/ChatScreens/BackgroundDom.svelte
-index 3dc8ac6..a8528af 100644
+index 3dc8ac6..f1fd828 100644
 --- a/src/lib/ChatScreens/BackgroundDom.svelte
 +++ b/src/lib/ChatScreens/BackgroundDom.svelte
-@@ -4,20 +4,53 @@
+@@ -4,20 +4,58 @@
      import { DBState } from 'src/ts/stores.svelte';
      import { moduleBackgroundEmbedding, ReloadGUIPointer, selIdState } from "src/ts/stores.svelte";
  
@@ -638,6 +892,7 @@ index 3dc8ac6..a8528af 100644
      let currentChar:character = $derived(DBState.db?.characters?.[selIdState.selId])
  
 +    let renderedBackground = $state('')
++    let renderedPointer = $state<number>()
 +    let request = 0
 +    let previousIndex: number | undefined
 +    let previousCharacter: string | undefined
@@ -660,10 +915,12 @@ index 3dc8ac6..a8528af 100644
 +            return
 +        }
 +
-+        void $ReloadGUIPointer
++        const pointer = $ReloadGUIPointer
 +        void ParseMarkdown(risuChatParser((html || '') + '\n' + (embedding || ''), {chara:char}), char, 'back')
 +            .then(md => {
-+                if (current === request) renderedBackground = md
++                if (current !== request) return
++                renderedBackground = md
++                renderedPointer = pointer
 +            }, error => {
 +                if (current !== request) return
 +                renderedBackground = ''
@@ -685,32 +942,43 @@ index 3dc8ac6..a8528af 100644
 -            </div>
 -        {/key}
 +        <div class="absolute top-0 left-0 w-full h-full">
-+            {@html renderedBackground}
++            {#key renderedPointer}
++                {@html renderedBackground}
++            {/key}
 +        </div>
      {/if}
  {/if}
 \ No newline at end of file
 diff --git a/src/lib/ChatScreens/Chats.svelte b/src/lib/ChatScreens/Chats.svelte
-index ebcaebd..4297f42 100644
+index ebcaebd..6037cb7 100644
 --- a/src/lib/ChatScreens/Chats.svelte
 +++ b/src/lib/ChatScreens/Chats.svelte
-@@ -66,12 +66,15 @@
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+     import type { character, Message, StreamingDisplayOptimizationMode } from 'src/ts/storage/database.svelte';
+     import { mount, onDestroy, unmount } from 'svelte';
++    import { copyChatBody, holdChatDisplay } from './retainedChatHtml'
+     import Chat from './Chat.svelte';
+     import { getCharImage } from 'src/ts/characters';
+     import { createSimpleCharacter, DBState, selectedCharID, ReloadChatPointer } from 'src/ts/stores.svelte';
+@@ -66,12 +67,16 @@
              isOptimizedStreamingMessage: boolean
              streamingOptimizationMode: StreamingDisplayOptimizationMode
              rawStreamingText: string
 +            totalLength: number
++            isStreamingDisplay: boolean
              messageGenerationInfo?: Message['generationInfo']
              memoryConfirmed?: boolean
              canonicalReceipt?: Message['risubardCanonicalReceipt']
          }) => void
      }
      let mountInstances: Map<number, ChatInstance> = new Map();
-+    type ChatContainer = { hash: number; element: HTMLDivElement; releaseHeight?: () => void }
++    type ChatContainer = { hash: number; identity: string; element: HTMLDivElement; release?: () => void }
 +    let containersByIndex = new Map<number, ChatContainer>();
  
      //Non-cryptographic hash function to generate a unique hash for each message
      function hashCode(str:string):number {
-@@ -94,6 +97,7 @@
+@@ -94,6 +99,7 @@
  
          let nextHash = 0;
          let currentHashes: Set<number> = new Set();
@@ -718,33 +986,49 @@ index ebcaebd..4297f42 100644
          const charImage = getCharImage(currentCharacter.image, 'css')
          const userImage = getCharImage(userIcon, 'css')
          const simpleChar = createSimpleCharacter(currentCharacter);
-@@ -150,6 +154,17 @@
+@@ -133,6 +139,8 @@
+             const reloadPointer = reloadPointerMap[i] ?? 0;
+             const isRerollTarget = i === lastRealCharIdx;
+             const activeStreamingMessage = i === activeStreamingIndex && message.role === 'char';
++            const isStreamingDisplay = currentChat?.isStreaming === true && i === messages.length - 1 && message.role === 'char';
++            const identity = JSON.stringify([currentCharacter.chaId, currentCharacter.chatPage, currentChat?.id, message.chatId, message.role]);
+             const turnNumber = turnNavigation.turnByMessageIndex.get(i)
+             // Keep the reading DOM alive through final text and receipt updates.
+             // Reloads, swipes and structural changes still replace the message.
+@@ -150,6 +158,15 @@
                  const b = document.createElement('div');
                  b.setAttribute('x-hashed', currentHash.toString());
                  b.classList.add('chat-message-container');
-+                const height = containersByIndex.get(i)?.element.offsetHeight ?? 0;
-+                let releaseHeight: (() => void) | undefined;
-+                if (height > 0) {
-+                    b.style.minHeight = height + 'px';
-+                    const deadline = setTimeout(() => releaseHeight?.(), 3000);
-+                    releaseHeight = () => {
-+                        clearTimeout(deadline);
-+                        b.style.removeProperty('min-height');
-+                    };
-+                }
-+                nextContainers.set(i, { hash: currentHash, element: b, releaseHeight });
++                const previous = containersByIndex.get(i);
++                const old = previous?.identity === identity ? previous.element : undefined;
++                const height = old?.offsetHeight ?? 0;
++                const snapshot = old && copyChatBody(old);
++                if (height > 0) b.style.minHeight = height + 'px';
++                const release = snapshot || height > 0
++                    ? holdChatDisplay(snapshot, () => b.style.removeProperty('min-height'))
++                    : undefined;
++                nextContainers.set(i, { hash: currentHash, identity, element: b, release });
                  const swipes = message.swipes;
                  const swipeId = message.swipeId ?? 0;
                  // Read the text here, not only inside the microtask: when the hash
-@@ -172,6 +187,7 @@
+@@ -172,6 +189,8 @@
                          isLastMemory: false,
                          idx: i,
                          totalLength: messages.length,
-+                        onInitialRenderSettled: releaseHeight,
++                        onInitialRenderSettled: release,
++                        isStreamingDisplay,
                          img: message.role === 'user' ? userImage : charImage,
                          onReroll: onReroll,
                          onNextSwipe: i === lastRealCharIdx ? onNextSwipe : () => {},
-@@ -211,6 +227,8 @@
+@@ -200,6 +219,7 @@
+                     },
+ 
+                 })
++                if (snapshot) b.querySelector('.chattext')?.prepend(snapshot);
+                 mountInstances.set(currentHash, inst);
+                 })
+                 const nextElement = nextHash === 0 ? null : chatBody.querySelector(`[x-hashed="${nextHash}"]`);
+@@ -211,6 +231,8 @@
                  }
              }
              else{
@@ -753,20 +1037,21 @@ index ebcaebd..4297f42 100644
                  mountInstances.get(currentHash)?.updateRerollControls?.({
                      rerollIcon: isRerollTarget ? 'force' : false,
                      onNextSwipe: isRerollTarget ? onNextSwipe : () => {},
-@@ -222,6 +240,7 @@
+@@ -222,6 +244,8 @@
                      isOptimizedStreamingMessage: activeStreamingMessage,
                      streamingOptimizationMode: performanceMode,
                      rawStreamingText: message.data,
 +                    totalLength: messages.length,
++                    isStreamingDisplay,
                      messageGenerationInfo: message.generationInfo,
                      memoryConfirmed: message.risubardMemoryConfirmed === true,
                      canonicalReceipt: message.risubardCanonicalReceipt,
-@@ -245,12 +264,18 @@
+@@ -245,12 +269,18 @@
              }
          });
  
 +        for (const previous of containersByIndex.values()) {
-+            if (!currentHashes.has(previous.hash)) previous.releaseHeight?.();
++            if (!currentHashes.has(previous.hash)) previous.release?.();
 +        }
          hashes = currentHashes;
 +        containersByIndex = nextContainers;
@@ -775,16 +1060,16 @@ index ebcaebd..4297f42 100644
      onDestroy(() => {
          console.log('Unmounting Chats');
          hashes.clear();
-+        for (const container of containersByIndex.values()) container.releaseHeight?.();
++        for (const container of containersByIndex.values()) container.release?.();
 +        containersByIndex.clear();
          mountInstances.forEach((inst) => {
              unmount(inst);
          });
 diff --git a/src/lib/ChatScreens/retainedChatHtml.test.ts b/src/lib/ChatScreens/retainedChatHtml.test.ts
-index 1248364..87aff2a 100644
+index 1248364..ece707e 100644
 --- a/src/lib/ChatScreens/retainedChatHtml.test.ts
 +++ b/src/lib/ChatScreens/retainedChatHtml.test.ts
-@@ -20,6 +20,64 @@ describe('retainedChatHtml', () => {
+@@ -20,6 +20,81 @@ describe('retainedChatHtml', () => {
          expect(node.querySelector('p')?.textContent).toBe('x')
      })
  
@@ -810,6 +1095,23 @@ index 1248364..87aff2a 100644
 +        retainedChatHtml(fresh, render(after + suffix))
 +        await flush()
 +        expect(node.isEqualNode(fresh)).toBe(true)
++    })
++
++    test.each([false, true])('preserves the first open details when an identical one is added (changed prefix: %s)', async changed => {
++        const node = document.createElement('span')
++        const details = '<details><summary>Panel</summary></details>'
++        const prefix = '<p>First</p>'
++        const action = retainedChatHtml(node, render(prefix + details + '<aside>End</aside>'))
++        await flush()
++        const open = node.querySelector('details')!
++        open.open = true
++        action.update(render((changed ? '<p>Changed</p>' : prefix) + details + details + '<aside>End</aside>'))
++        await flush()
++        const result = node.querySelectorAll('details')
++        expect(result).toHaveLength(2)
++        expect(result[0]).toBe(open)
++        expect(result[0].open).toBe(true)
++        expect(result[1].open).toBe(false)
 +    })
 +
 +    test('preserves live media resolution in the retained suffix and replaces a changed source', async () => {

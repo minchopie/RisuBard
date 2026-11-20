@@ -1,20 +1,26 @@
 import { expect, test, vi } from 'vitest'
-import { processScriptFull } from './scripts'
+import { writable } from 'svelte/store'
+import { processScriptFull, resetScriptCache } from './scripts'
 import { runLuaEditTrigger } from './scriptings'
 import { getCurrentCharacter, type character } from '../storage/database.svelte'
 
-vi.mock('../stores.svelte', () => ({ CharEmotion: {}, selectedCharID: {} }))
+const state = vi.hoisted(() => ({ db: { characters: [] as character[], presetRegex: [] } }))
+vi.mock('../stores.svelte', () => ({
+    DBState: { db: state.db }, CharEmotion: {}, selectedCharID: writable(0), selIdState: { selId: 0 },
+}))
 vi.mock('../storage/database.svelte', () => ({
-    getDatabase: () => ({ presetRegex: [] }),
+    appVer: '0.9.103',
+    getDatabase: () => state.db,
     getCurrentCharacter: vi.fn(),
     getCurrentChat: vi.fn(),
 }))
 vi.mock('../globalApi.svelte', () => ({ downloadFile: vi.fn() }))
 vi.mock('../alert', () => ({ alertError: vi.fn(), notifySuccess: vi.fn() }))
 vi.mock('src/lang', () => ({ language: {} }))
-vi.mock('../util', () => ({ selectSingleFile: vi.fn() }))
-vi.mock('../parser/parser.svelte', () => ({ risuChatParser: (data: string) => data }))
-vi.mock('./modules', () => ({ getModuleAssets: () => [], getModuleRegexScripts: () => [] }))
+vi.mock('../util', () => ({ selectSingleFile: vi.fn(), getUserName: () => 'QA', getPersonaPrompt: () => '', pickHashRand: vi.fn() }))
+vi.mock('./infunctions', () => ({ calcString: vi.fn() }))
+vi.mock('./files/inlays', () => ({ getInlayInfosBatch: vi.fn() }))
+vi.mock('./modules', () => ({ getModuleAssets: () => [], getModuleRegexScripts: () => [], getModuleLorebooks: () => [], getModules: () => [] }))
 vi.mock('./memory/hypamemory', () => ({ HypaProcesser: vi.fn() }))
 vi.mock('./scriptings', () => ({ runLuaEditTrigger: vi.fn(async (_char, _mode, data) => data) }))
 vi.mock('../plugins/plugins.svelte', () => ({
@@ -50,4 +56,25 @@ test('passes the streaming flag only for display of the selected chat’s last m
         ['editoutput', { index: 1 }],
         ['editprocess', { index: 1 }],
     ])
+})
+
+test('updates a cached display replacement with the real last-message CBS after appending', async () => {
+    resetScriptCache()
+    const chat = { message: [{ role: 'char', data: 'HUD' }] }
+    const char = {
+        type: 'character', chaId: 'cache-test', chatPage: 0, chats: [chat],
+        customscript: [
+            { type: 'editdisplay', in: 'HUD', out: 'Last={{lastmessageid}}' },
+            { type: 'editoutput', in: 'HUD', out: 'Last={{lastmessageid}}' },
+        ],
+    } as unknown as character
+    state.db.characters[0] = char
+    vi.mocked(getCurrentCharacter).mockReturnValue(char)
+    const display = () => processScriptFull(char, 'HUD', 'editdisplay', 0)
+    const request = () => processScriptFull(char, 'HUD', 'editoutput', 0)
+    expect((await display()).data).toBe('Last=0')
+    expect((await request()).data).toBe('Last=0')
+    chat.message.push({ role: 'user', data: 'new message' })
+    expect((await display()).data).toBe('Last=1')
+    expect((await request()).data).toBe('Last=0')
 })

@@ -61,7 +61,7 @@ vi.mock('src/ts/parser/parser.svelte', () => ({
     resolveInlayPlaceholders: vi.fn((value: string) => value),
     trimMarkdown: vi.fn((value: string) => value),
 }))
-vi.mock('src/ts/translator/translator', () => ({ getLLMCache: vi.fn(), setLLMCache: vi.fn() }))
+vi.mock('src/ts/translator/translator', () => ({ getLLMCache: vi.fn(), setLLMCache: vi.fn(), translateHTML: vi.fn() }))
 vi.mock('src/ts/storage/database.svelte', () => ({
     getCurrentCharacter: vi.fn(() => DBState.db.characters[0]),
     getCurrentChat: vi.fn(() => DBState.db.characters[0].chats[0]),
@@ -110,7 +110,7 @@ describe('keyed chat body height', () => {
             } else if (end === 'deadline') {
                 vi.advanceTimersByTime(3000)
                 expect(box.style.minHeight).toBe('12px')
-                expect(body.querySelector('[data-chat-body-snapshot]')).toBe(snapshot)
+                expect(body.querySelector('[data-chat-body-snapshot]')).toBeNull()
                 expect(body.querySelector('[data-painter-body] p')).toBeNull()
                 resolve('<p>After</p>')
                 await tick(); await tick(); await tick()
@@ -136,6 +136,30 @@ describe('keyed chat body height', () => {
         }
     })
 
+    test('shows the translation loading indicator instead of an old body snapshot', async () => {
+        DBState.db.translator = 'en'
+        DBState.db.showTranslationLoading = true
+        const { translateHTML } = await import('src/ts/translator/translator')
+        const translate = vi.mocked(translateHTML)
+        translate.mockResolvedValue('<p>Translated</p>')
+        try {
+            mounted = mount(Chat, { target: document.body, props: {
+                message: '<p>Before</p>', name: 'Character', isLastMemory: false, idx: 0, role: 'char',
+            } })
+            await vi.waitFor(() => expect(document.querySelector('.chattext')?.textContent).toContain('Before'))
+            document.querySelector<HTMLButtonElement>('.button-icon-translate')!.click()
+            await vi.waitFor(() => expect(document.querySelector('.chattext')?.textContent).toContain('Translated'))
+            const body = document.querySelector('.chattext')!
+            DBState.db.autoTranslate = true
+            translate.mockImplementationOnce(() => new Promise(() => {}))
+            ReloadGUIPointer.update(value => value + 1)
+            await vi.waitFor(() => expect(body.querySelector('[data-chat-body-pending] style')?.textContent).toContain('@keyframes spin'))
+            expect(body.querySelector('[data-chat-body-snapshot]')).toBeNull()
+        } finally {
+            translate.mockReset()
+        }
+    })
+
     test('skips raw streaming content when the GUI reloads', async () => {
         mounted = mount(Chat, { target: document.body, props: {
             message: 'before', name: 'Character', isLastMemory: false, idx: 0, role: 'char',
@@ -154,9 +178,11 @@ describe('keyed chat body height', () => {
     })
 })
 describe('message container remount', () => {
-    test.each(['commit', 'error', 'deadline', 'unmount'] as const)('holds only the replaced index until %s', async end => {
+    test.each(['commit', 'error', 'deadline', 'unmount', 'edit'] as const)('holds only the replaced index until %s', async end => {
         const currentCharacter = DBState.db.characters[0]
-        const state = new SvelteMap<string, any>([['messages', [{ role: 'char', data: '<p>Before</p>', chatId: 'reply' }]]])
+        const state = new SvelteMap<string, any>([['messages', [{
+            role: 'char', data: '<p>Before</p><iframe></iframe><video autoplay src="old.mp4"><source src="old.mp4"></video>', chatId: 'reply',
+        }]]])
         mounted = mount(Chats, { target: document.body, props: {
             get messages() { return state.get('messages') },
             get pageEnd() { return state.get('messages').length },
@@ -190,11 +216,18 @@ describe('message container remount', () => {
             expect(fresh).not.toBe(old)
             expect(height).toHaveBeenCalledOnce()
             expect(fresh.style.minHeight).toBe('612px')
+            const snapshot = fresh.querySelector('[data-chat-body-snapshot][inert][aria-hidden="true"]')
+            expect(snapshot?.querySelector('p')?.textContent).toBe('Before')
+            expect(snapshot?.querySelector('iframe, video[src], video[autoplay], source')).toBeNull()
             expect(fresh.querySelector('[data-painter-body]')?.innerHTML).toBe('')
             expect(container(1).style.minHeight).toBe('')
 
             if (end === 'deadline') vi.advanceTimersByTime(3000)
-            else if (end === 'unmount') {
+            else if (end === 'edit') {
+                fresh.querySelector<HTMLButtonElement>('.button-icon-edit')!.click()
+                await tick()
+                expect(fresh.querySelector('.message-edit-area')).not.toBeNull()
+            } else if (end === 'unmount') {
                 await unmount(mounted!)
                 mounted = undefined
             } else {
@@ -205,6 +238,7 @@ describe('message container remount', () => {
                 else expect(fresh.querySelector('[data-painter-body]')?.innerHTML).toBe('<p>After</p>')
             }
             expect(fresh.style.minHeight).toBe('')
+            expect(fresh.querySelector('[data-chat-body-snapshot]')).toBeNull()
         } finally {
             if (end === 'deadline') vi.useRealTimers()
             log.mockRestore()
@@ -236,10 +270,10 @@ test('refreshes the former last message while keeping the latest UI unique', asy
         parse.mockClear()
         state.set('messages', [...messages, { role: 'char', data: '<p>Streaming reply</p>', chatId: 'stream' }])
         await tick(); await tick(); await tick()
-        expect(parse.mock.calls.map(call => call[3]).sort()).toEqual([3, 4, 5, 6, 7, 8])
+        expect(parse.mock.calls.map(call => call[3]).sort()).toEqual([7, 8])
         expect(document.querySelectorAll('.last-message-ui')).toHaveLength(1)
         expect(document.querySelector('[data-chat-index="8"] .last-message-ui')).not.toBeNull()
-        for (const index of [0, 1, 2]) {
+        for (const index of [0, 1, 2, 3, 4, 5, 6]) {
             expect(document.querySelector(`[data-chat-index="${index}"] [data-painter-body]`)).toBe(oldBodies[7 - index])
         }
     } finally {
@@ -358,7 +392,7 @@ describe('message edit button', () => {
         state.set('messages', [reply, { role: 'user', chatId: 'input', data: 'Next input' }])
         await tick(); await tick(); await tick()
         expect(document.querySelector('[data-chat-index="0"]')).toBe(previousReply)
-        expect(previousReply.querySelector('.chattext p')).not.toBe(paragraph)
+        expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
         expect(previousReply.querySelector('.chattext p')?.outerHTML).toBe(paragraph?.outerHTML)
         expect(previousReply.querySelector('[data-hotkey-action="reroll"]')).toBeNull()
         expect(document.querySelector('[data-chat-index="1"]')?.textContent).toContain('Next input')
@@ -367,7 +401,7 @@ describe('message edit button', () => {
         state.set('messages', [reply])
         await tick(); await tick(); await tick()
         expect(document.querySelector('[data-chat-index="0"]')).toBe(previousReply)
-        expect(previousReply.querySelector('.chattext p')).not.toBe(paragraph)
+        expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
         expect(previousReply.querySelector('.chattext p')?.outerHTML).toBe(paragraph?.outerHTML)
         expect(previousReply.textContent).toContain('2/2')
         previousReply.querySelector<HTMLButtonElement>('.button-icon-reroll')!.click()
@@ -402,10 +436,25 @@ describe('message edit button', () => {
         const messageElement = document.querySelector('[data-chat-index="0"]')
         const readingParagraph = messageElement?.querySelector('.chattext p')
         expect(messageElement).not.toBeNull()
-        state.set('text', '<p>Reading here</p><p>Completed response</p>')
+        const parse = vi.mocked(ParseMarkdown)
+        let complete!: () => void
+        parse.mockClear()
+        parse.mockImplementationOnce((value) => new Promise(resolve => {
+            complete = () => resolve(value + '<p>Completed response</p>')
+        }))
+        // The final chunk is identical. No GUI pointer is advanced on this path.
         state.set('streaming', false)
         await tick(); await tick(); await tick()
         const completedElement = document.querySelector('[data-chat-index="0"]')
+        expect(parse.mock.calls.map(call => call[3])).toEqual([0])
+        expect(completedElement?.textContent).toContain('Reading here')
+        expect(completedElement?.textContent).not.toContain('Completed response')
+        if (!preserve) expect(completedElement?.querySelector('[data-chat-body-snapshot][inert]')).not.toBeNull()
+        if (mode === 'strong') expect(completedElement?.querySelector('.chattext .whitespace-pre-wrap')?.textContent).toContain('<p>Reading here</p>')
+        complete()
+        await tick(); await tick(); await tick()
+        expect(completedElement?.textContent).toContain('Completed response')
+        expect(completedElement?.querySelector('[data-chat-body-snapshot]')).toBeNull()
         if (preserve) {
             expect(completedElement).toBe(messageElement)
             if (mode !== 'strong') expect(completedElement?.querySelector('.chattext p')).toBe(readingParagraph)
@@ -422,7 +471,7 @@ describe('message edit button', () => {
         document.querySelector<HTMLButtonElement>('.button-icon-edit')!.click()
         await tick()
         expect(document.querySelector<HTMLTextAreaElement>('.message-edit-area')?.value)
-            .toBe(preserve ? '<p>Reading here</p><p>Post-processed response</p>' : '<p>Reading here</p><p>Completed response</p>')
+            .toBe(preserve ? '<p>Reading here</p><p>Post-processed response</p>' : '<p>Reading here</p><p>Partial</p>')
         if (preserve) {
             state.set('room', 'another-room')
             await tick(); await tick(); await tick()

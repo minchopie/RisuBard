@@ -40,6 +40,24 @@ afterEach(() => {
 })
 
 describe('file-native system logs', () => {
+    test('persists only fixed NAS diagnostic text and known fields even for a stale client', () => {
+        const root = tempRoot()
+        const message = 'getaddrinfo ENOTFOUND fixture.nas.invalid user=qa password=a,b;c email: user@fixture.invalid https://host.invalid/ 192.0.2.12 2001:db8::1 ' + 'a'.repeat(45)
+        const result = spawnSync(process.execPath, ['-e', `
+            const logs = require(${JSON.stringify(logsModule)})
+            const add = description => logs.addLog({ level: 'error', source: 'nas-sync', message: ${JSON.stringify(message)}, description })
+            add('stage=pull code=ENOTFOUND')
+            add('stage=pull code=LONG_TOKEN_FROM_UNKNOWN_SOURCE')
+            add('stage=somehost code=ENOTFOUND password=a,b;c')
+        `], { env: { ...process.env, RISUBARD_DATA_ROOT: root }, encoding: 'utf8' })
+        expect(result.status, result.stderr).toBe(0)
+        const rows = readFileSync(join(root, 'logs/system.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+        expect(rows.map(({ message, description }) => [message, description])).toEqual([
+            ['NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=pull code=ENOTFOUND'],
+            ['NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=pull code=UNKNOWN'],
+            ['NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=unknown code=UNKNOWN'],
+        ])
+    })
     test('recovers its own abandoned lock and retries Windows lock release', () => {
         const root = tempRoot()
         const result = spawnSync(process.execPath, ['-e', `

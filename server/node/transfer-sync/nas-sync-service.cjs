@@ -86,30 +86,53 @@ const readOnThread = (worker, root, ids) => new Promise((resolve, reject) => {
     }
 });
 
-const activeCaptureWork = new Set();
+const captureOwner = { pid: process.pid, startedAt: Math.floor(Date.now() - process.uptime() * 1000) };
+const captureOwnerFile = 'owner.json';
+const legacyCaptureGraceMs = 60 * 60_000;
+
+function sweepCaptureWork(root) {
+    try {
+        if (!fs.lstatSync(root).isDirectory()) return;
+        for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+            if (!entry.isDirectory() || !/^(?:snapshot|plan-check)-[A-Za-z0-9]{6}$/.test(entry.name)) continue;
+            const work = join(root, entry.name);
+            try {
+                let owner;
+                try { owner = JSON.parse(fs.readFileSync(join(work, captureOwnerFile), 'utf8')); }
+                catch (error) {
+                    if (error.code !== 'ENOENT') continue;
+                    // Leave a grace period for pre-marker versions and the mkdir-to-marker window.
+                    if (Date.now() - fs.lstatSync(work).mtimeMs < legacyCaptureGraceMs) continue;
+                }
+                if (owner !== undefined) {
+                    if (!Number.isSafeInteger(owner?.pid) || owner.pid < 1 || !Number.isFinite(owner.startedAt) || owner.startedAt <= 0) continue;
+                    try { process.kill(owner.pid, 0); continue; }
+                    catch (error) { if (error.code !== 'ESRCH') continue; }
+                }
+                fs.rmSync(work, { recursive: true, force: true });
+            } catch { /* An unreadable or OS-held folder can be checked next time. */ }
+        }
+    } catch { /* Capture housekeeping must not block server startup. */ }
+}
 
 function createNasSyncService({ dataRoot, readDatabase, memory, storage, readColdChat = async () => null, readInlay = async () => null, installInlay = async () => {}, removeInlay = async () => {}, inlayMeta = async () => null, secrets, fetch, protect, nasRoute = null, identityDir = null, secretsDir = null, transfers = null, ownsDataRoot = false, now = Date.now, hooks = {} }) {
     const root = join(dataRoot, 'nas-sync');
     fs.mkdirSync(join(root, 'apply'), { recursive: true, mode: 0o700 });
-    const captureRoot = fs.realpathSync.native(root);
-    // Legacy work folders have no owner marker; only the host holding the data-root lock can sweep them.
-    if (ownsDataRoot && fs.lstatSync(root).isDirectory() && ![...activeCaptureWork].some(work => dirname(work) === captureRoot)) {
-        for (const entry of fs.readdirSync(captureRoot, { withFileTypes: true })) {
-            if (!entry.isDirectory() || !/^(?:snapshot|plan-check)-[A-Za-z0-9]{6}$/.test(entry.name)) continue;
-            try { fs.rmSync(join(captureRoot, entry.name), { recursive: true, force: true }); } catch { /* OS-held leftovers can be retried at the next startup. */ }
-        }
-    }
+    if (ownsDataRoot) sweepCaptureWork(root);
     function startCapture(prefix) {
+        const captureRoot = fs.realpathSync.native(root);
         // Use the namespaced prefix for Windows paths over 260 characters.
         const work = join(captureRoot, basename(fs.mkdtempSync(toNamespacedPath(join(captureRoot, prefix)))));
-        activeCaptureWork.add(work);
+        try { fs.writeFileSync(join(work, captureOwnerFile), JSON.stringify(captureOwner), { flag: 'wx', mode: 0o600 }); }
+        catch (error) {
+            try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* Sweep at a later startup. */ }
+            throw error;
+        }
         return work;
     }
     async function finishCapture(work, cleanups) {
-        try {
-            for (const cleanup of cleanups) await cleanup().catch(() => {});
-            await fsp.rm(work, { recursive: true, force: true });
-        } finally { activeCaptureWork.delete(work); }
+        for (const cleanup of cleanups) await cleanup().catch(() => {});
+        await fsp.rm(work, { recursive: true, force: true });
     }
     const file = name => resolveInside(root, name);
     const manifest = createManifest({ root, name: 'service.json', initial: { version: 1, enabled: false, lineage: {}, branches: {}, plan: null, retained: [], pendingLineage: null, applied: [], incarnation: null, bootstraps: [], pendingBootstrap: null, pendingRestore: null, lineageHistory: [], role: null, vaultOrigin: null, shares: [], consumed: {}, pendingGrant: null, localApply: [] } });
@@ -817,7 +840,12 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, service().branches, work);
-            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const assets = new Map();
+            const readSnapshotAsset = path => {
+                if (!assets.has(path)) assets.set(path, storage.kvVerifiedAssetFile(path, hash => s.hasBlob(hash) ? undefined : join(work, 'asset-' + randomUUID())));
+                return assets.get(path);
+            };
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
             if (projection.missing.length) throw Object.assign(new Error('Snapshot is missing referenced material: ' + projection.missing.map(m => m.reason).join('; ')), { code: 'SNAPSHOT_MISSING', missing: projection.missing });
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));

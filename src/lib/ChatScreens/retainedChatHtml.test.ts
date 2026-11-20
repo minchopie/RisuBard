@@ -44,6 +44,23 @@ describe('retainedChatHtml', () => {
         expect(node.isEqualNode(fresh)).toBe(true)
     })
 
+    test.each([false, true])('preserves the first open details when an identical one is added (changed prefix: %s)', async changed => {
+        const node = document.createElement('span')
+        const details = '<details><summary>Panel</summary></details>'
+        const prefix = '<p>First</p>'
+        const action = retainedChatHtml(node, render(prefix + details + '<aside>End</aside>'))
+        await flush()
+        const open = node.querySelector('details')!
+        open.open = true
+        action.update(render((changed ? '<p>Changed</p>' : prefix) + details + details + '<aside>End</aside>'))
+        await flush()
+        const result = node.querySelectorAll('details')
+        expect(result).toHaveLength(2)
+        expect(result[0]).toBe(open)
+        expect(result[0].open).toBe(true)
+        expect(result[1].open).toBe(false)
+    })
+
     test('preserves live media resolution in the retained suffix and replaces a changed source', async () => {
         const node = document.createElement('span')
         const suffix = '<img src="asset.png">'

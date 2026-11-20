@@ -30,6 +30,7 @@
     import { HideIconStore, ReloadGUIPointer, selIdState } from "../../ts/stores.svelte"
     import AutoresizeArea from "../UI/GUI/TextAreaResizable.svelte"
     import ChatBody from './ChatBody.svelte'
+    import { copyChatBody, holdChatDisplay } from './retainedChatHtml'
     import { removeInlayOccurrence } from './inlayImageControls'
     import PopupButton from "../UI/PopupButton.svelte";
     import PartialEditController from './PartialEditController.svelte';
@@ -70,6 +71,7 @@
         turnNumber?: number;
         totalLength?: number;
         onInitialRenderSettled?: () => void;
+        isStreamingDisplay?: boolean;
         onReroll?: () => void;
         onNextSwipe?: () => void;
         unReroll?: () => void;
@@ -104,6 +106,7 @@
         turnNumber,
         totalLength = 0,
         onInitialRenderSettled,
+        isStreamingDisplay = false,
         onReroll = () => {},
         onNextSwipe = () => {},
         unReroll = () => {},
@@ -142,10 +145,12 @@
         streamingOptimizationMode: StreamingDisplayOptimizationMode
         rawStreamingText: string
         totalLength?: number
+        isStreamingDisplay?: boolean
         messageGenerationInfo?: MessageGenerationInfo
         memoryConfirmed?: boolean
         canonicalReceipt?: CanonicalTurnReceipt
     }){
+        isStreamingDisplay = state.isStreamingDisplay ?? false
         isOptimizedStreamingMessage = state.isOptimizedStreamingMessage
         streamingOptimizationMode = state.streamingOptimizationMode
         rawStreamingText = state.rawStreamingText
@@ -343,21 +348,14 @@
     let renderRawStreaming = $derived(isOptimizedStreamingMessage && streamingOptimizationMode === 'strong')
 
     let chatReloadPointer = $derived($ReloadGUIPointer + ($ReloadChatPointer[idx] ?? 0))
-    let totalLengthPointer = $derived((idx > totalLength - 6) ? totalLength : 0)
-    let chatBodyKey = $derived(`${totalLengthPointer}|${chatReloadPointer}`)
+    let isLastMessage = $derived(idx >= 0 && idx === totalLength - 1)
     let measuredBody: HTMLElement | null = null
     let previousBodyKey: string | undefined
-    let restoreBodyHeight: (() => void) | undefined
-    let bodySnapshot: HTMLElement | undefined
-
-    function releaseBodyHeight() {
-        restoreBodyHeight?.()
-    }
+    let releaseBodyDisplay: (() => void) | undefined
 
     function clearBodySnapshot() {
-        bodySnapshot?.remove()
-        bodySnapshot = undefined
-        releaseBodyHeight()
+        releaseBodyDisplay?.()
+        releaseBodyDisplay = undefined
     }
 
     function settleBodyRender() {
@@ -367,44 +365,30 @@
     }
 
     $effect.pre(() => {
-        const key = chatBodyKey
+        const key = chatReloadPointer
         const root = bodyRoot
         const changed = previousBodyKey !== undefined && key !== previousBodyKey && measuredBody === root
         if (measuredBody !== root) clearBodySnapshot()
         measuredBody = root
         previousBodyKey = key
 
-        if (!root || editMode || editTranslationMode || blankMessage || !message.trim() || renderRawStreaming) {
-            clearBodySnapshot()
+        if (editMode || editTranslationMode || blankMessage || renderRawStreaming) {
+            settleBodyRender()
             return
         }
-        if (!changed || bodySnapshot) return
-        const rendered = root.querySelector<HTMLElement>('[data-painter-body]')
-        if (!rendered?.hasChildNodes()) return
+        if (!root) return
+        if ((translated || retranslate) && DBState.db.showTranslationLoading) {
+            settleBodyRender()
+            return
+        }
+        if (!changed || root.querySelector('[data-chat-body-snapshot]')) return
 
-        // Keep the previous picture outside the keyed block until the fresh body commits.
-        const snapshot = rendered.cloneNode(true) as HTMLElement
-        snapshot.removeAttribute('data-painter-body')
-        snapshot.setAttribute('data-chat-body-snapshot', '')
-        snapshot.setAttribute('inert', '')
-        snapshot.setAttribute('aria-hidden', 'true')
-        for (const embed of snapshot.querySelectorAll('iframe, object, embed, script')) embed.remove()
-        for (const media of snapshot.querySelectorAll('audio, video')) {
-            media.removeAttribute('autoplay')
-            media.removeAttribute('src')
-            for (const source of media.querySelectorAll('source, track')) source.remove()
-        }
+        const snapshot = copyChatBody(root)
+        if (!snapshot) return
+        clearBodySnapshot()
         const restoreHeight = holdBodyHeight(root)
-        bodySnapshot = snapshot
         root.prepend(snapshot)
-        if (restoreHeight) {
-            const deadline = setTimeout(releaseBodyHeight, 3000)
-            restoreBodyHeight = () => {
-                clearTimeout(deadline)
-                restoreHeight()
-                restoreBodyHeight = undefined
-            }
-        }
+        releaseBodyDisplay = holdChatDisplay(snapshot, restoreHeight)
     })
 
     function holdBodyHeight(root: HTMLElement) {
@@ -429,10 +413,6 @@
         style.setProperty('min-height', '' + Math.max(0, height - inset) + 'px', priority)
         return () => style.setProperty('min-height', previous, priority)
     }
-
-    $effect(() => {
-        if (blankMessage || renderRawStreaming) settleBodyRender()
-    })
 
     onDestroy(settleBodyRender)
 
@@ -708,7 +688,7 @@
             style:font-size="{0.875 * (DBState.db.zoomsize / 100)}rem"
             style:line-height="{(DBState.db.lineHeight ?? 1.25) * (DBState.db.zoomsize / 100)}rem"
         >
-            {#key chatBodyKey}
+            {#key chatReloadPointer}
                 <ChatBody
                     {character}
                     {firstMessage}
@@ -725,6 +705,8 @@
                     bind:translating={translating}
                     bind:retranslate={retranslate}
                     {renderRawStreaming}
+                    {isStreamingDisplay}
+                    {isLastMessage}
                     {rawStreamingText}
                     onRenderSettled={settleBodyRender} />
             {/key}

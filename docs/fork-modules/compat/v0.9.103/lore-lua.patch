@@ -491,7 +491,7 @@ diff --git a/src/ts/process/lorebookRecursion.test.ts b/src/ts/process/lorebookR
 +    expect(result.actives.map(value => value.prompt).sort()).toEqual(['PRIME', 'UPDATED'])
 +})
 diff --git a/src/ts/process/scripts.ts b/src/ts/process/scripts.ts
-index 6a72dae..ed144f7 100644
+index 6a72dae..94b203d 100644
 --- a/src/ts/process/scripts.ts
 +++ b/src/ts/process/scripts.ts
 @@ -1,4 +1,5 @@
@@ -500,7 +500,22 @@ index 6a72dae..ed144f7 100644
  import { preserveOocTurnMarker } from '../risubard/oocTurns';
  import { CharEmotion, selectedCharID } from "../stores.svelte";
  import { type character, type customscript, type Database, getDatabase, getCurrentCharacter, getCurrentChat } from "../storage/database.svelte";
-@@ -122,7 +123,16 @@ async function processScriptFullInternal(char:character|simpleCharacterArgument,
+@@ -72,6 +73,14 @@ let processScriptCache = new Map<string, string>()
+ 
+ function generateScriptCacheKey(scripts: customscript[], data: string, mode: ScriptMode, chatID = -1, cbsConditions: CbsConditions = {}, characterId = '', chat?: import('../storage/database.svelte').Chat, db?:Database, chara?:character) {
+     let hash = data + '|||' + mode + '|||' + characterId + '|||' + (chat?.id ?? '') + '|||';
++    if (mode === 'editdisplay') {
++        const lastMessageId = untrack(() => {
++            const selected = chara && 'chats' in chara ? chara : getCurrentCharacter()
++            const current = chat ?? selected?.chats?.[selected.chatPage]
++            return cbsConditions.lastMessageId ?? (current ? current.message.length - 1 : '')
++        })
++        hash += `${lastMessageId ?? ''}|||`
++    }
+     for (const script of scripts) {
+         if(script.type !== mode){
+             continue
+@@ -122,7 +131,16 @@ async function processScriptFullInternal(char:character|simpleCharacterArgument,
      // Each parse is a sibling operation. The parser mutates callStack on its
      // options, so reusing one object makes sequential regex rules look recursive.
      const parserOptions = () => ({ chara: parserCharacter, chat: targetChat, chatID, cbsConditions, db })

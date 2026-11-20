@@ -187,9 +187,9 @@ function atomicWriteFile(root, relativePath, value, options = {}) {
     }
 
     try {
-        preserveBackup(target);
+        if (options.backup !== false) preserveBackup(target);
         renameAtomic(temp, target);
-        replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
+        if (options.checksumSidecar !== false) replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
         fsyncDirectory(directory);
         noteWrite(root, target);
     } catch (error) {
