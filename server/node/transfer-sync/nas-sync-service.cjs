@@ -21,7 +21,7 @@ const { createSyncStore, READER_THREAD } = require('./nas-sync-store.cjs');
 const { createVault, vaultMasterStore, REFS } = require('./nas-sync-vault.cjs');
 const { createSyncRemote, createSyncTransport } = require('./nas-sync-remote.cjs');
 const { createManifest } = require('./nas-sync-manifest.cjs');
-const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences, DEVICE_LOCAL_ROOTS, DEVICE_THEME, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields } = require('./nas-sync-projection.cjs');
+const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences, rootKeyOf, DEVICE_LOCAL_ROOTS, DEVICE_THEME, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields } = require('./nas-sync-projection.cjs');
 const { makeRevision, hashJson, rootKey } = require('./nas-sync-core.cjs');
 const { PERSONA_MIRRORS, personaSelection, personaMirrorsMatch, personaMirrorIssue, mergePersonaHeads } = require('./nas-sync-reconcile.cjs');
 const { deviceKeyStore, writeRequestArchive, writeGrantArchive, openGrant, readShareArchive, REQUEST, GRANT } = require('./nas-sync-share.cjs');
@@ -740,9 +740,57 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     /** 0.9.96-ver5: the last pull of this workspace and store incarnation left nothing waiting (see pull()). */
     const receivedFresh = s => { const mark = service().pulledMark; return !!mark && mark.workspaceId === service().workspaceId && mark.incarnation === s.identity().incarnationId && !s.waitingEntries().length; };
 
-    const readAsset = path => storage.kvVerifiedAssetFile(path);
+    function missingMediaFile(error) {
+        // A missing source can be deferred. A failed write to the capture directory still fails the operation.
+        return error.code === 'ENOENT' && (!error.dest || fs.existsSync(dirname(error.dest)));
+    }
+    const readAsset = async (path, stage) => {
+        try { return await storage.kvVerifiedAssetFile(path, stage); }
+        catch (error) { if (missingMediaFile(error)) return null; throw error; }
+    };
+    const readLocalInlay = async id => {
+        try { return await readInlay(id); }
+        catch (error) { if (missingMediaFile(error)) return null; throw error; }
+    };
+
+    // Compare missing media against its recorded dependency keys without treating it as a change of dependency identity.
+    // These hashes are for comparison only. Snapshot withholds any revision whose local media could not be read.
+    function compareWithMissingMedia(s, projection, lineage) {
+        const absent = new Map();
+        for (const item of projection.missing) {
+            const key = item.record.lineageKey;
+            if (!absent.has(key)) absent.set(key, []);
+            absent.get(key).push(item);
+        }
+        for (const d of projection.desired) {
+            const missing = absent.get(d.lineageKey);
+            if (!missing) continue;
+            const known = lineage[d.lineageKey];
+            const base = known ? s.graph.get(known) : null;
+            if (!base || base.tombstone) continue;
+            const candidate = { ...d.dependencies };
+            for (const { kind, key } of missing) {
+                for (const dep of kind === 'asset' ? ['asset:' + key] : ['inlay:' + key, 'inlay-metadata:' + key]) {
+                    if (Object.hasOwn(base.dependencies, dep)) candidate[dep] ??= base.dependencies[dep];
+                }
+            }
+            d.dependencies = candidate;
+            d.dependencyHash = hashJson(candidate);
+        }
+        return absent;
+    }
+
+    function missingMediaNotice(missing) {
+        const media = new Map();
+        for (const { kind, key, record: { type, id, name, lineageKey } } of missing) {
+            const identity = kind + ':' + key;
+            if (!media.has(identity)) media.set(identity, { kind, key, records: new Map() });
+            media.get(identity).records.set(type === 'persona' ? lineageKey + '#' + id : lineageKey, { type, id, name: typeof name === 'string' ? name : '' });
+        }
+        return media.size ? { skippedMedia: [...media.values()].map(row => ({ ...row, records: [...row.records.values()] })) } : {};
+    }
     const readInlaySource = work => async id => {
-        const inlay = await readInlay(id);
+        const inlay = await readLocalInlay(id);
         if (!inlay) return null;
         if (typeof inlay.data === 'string' || Buffer.isBuffer(inlay.data)) return inlay;
         const target = join(work, randomUUID()), digest = createHash('sha256');
@@ -842,16 +890,17 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             await normalizeCaptures(captures, db, service().branches, work);
             const assets = new Map();
             const readSnapshotAsset = path => {
-                if (!assets.has(path)) assets.set(path, storage.kvVerifiedAssetFile(path, hash => s.hasBlob(hash) ? undefined : join(work, 'asset-' + randomUUID())));
+                if (!assets.has(path)) assets.set(path, readAsset(path, hash => s.hasBlob(hash) ? undefined : join(work, 'asset-' + randomUUID())));
                 return assets.get(path);
             };
             const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
-            if (projection.missing.length) throw Object.assign(new Error('Snapshot is missing referenced material: ' + projection.missing.map(m => m.reason).join('; ')), { code: 'SNAPSHOT_MISSING', missing: projection.missing });
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
             // A restored state continues the bases recorded with it (or starts genesis roots), never this install's newest heads: a copied
             // data root carries its own lineage in this manifest; an in-place restore carries it in the mark.
-            const diff = diffProjection(s.graph, projection.desired, restoreMark ? (restoreMark.bases ?? {}) : lineage, { restore: restored, received: receivedFresh(s) });
+            const bases = restoreMark ? (restoreMark.bases ?? {}) : lineage;
+            const absent = compareWithMissingMedia(s, projection, bases), notice = missingMediaNotice(projection.missing);
+            const diff = diffProjection(s.graph, projection.desired, bases, { restore: restored, received: receivedFresh(s) });
             // Items this device knew that vanished locally become causal tombstones in one operation; a deleted character takes
             // the chats it owned (its last known membership) with it as the same deletion cohort.
             // Deletions are causal against what THIS device observed: the tombstone's base is the device's lineage head, never a
@@ -879,8 +928,44 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 }
             }
             const targets = tombstones;
+            // A v1 receiver requires all declared blobs, and a legacy sender cannot snapshot a dangling reference it just received.
+            // Keep the desired item in 'present' so withholding it never produces a tombstone or discards its recorded lineage.
+            const held = new Set(projection.desired.filter(d => absent.has(d.lineageKey)).map(d => d.key));
+            if (held.size) {
+                const changing = new Set(diff.revisions.filter(r => held.has(rootKey(r))).map(rootKey));
+                const blockedPin = key => {
+                    const [, type] = key.split(':');
+                    const id = key.slice(5 + type.length);
+                    if (['character', 'module', 'plugin'].includes(type)) return changing.has(rootKeyOf('library', type, id));
+                    const group = { persona: 'personas', preset: 'prompt-presets', 'model-preset': 'model-presets', 'model-mode': 'model-presets', 'model-bundle': 'model-presets' }[type] ?? type;
+                    return changing.has(rootKeyOf('settings', 'group', group));
+                };
+                // Keep new chat membership and changed dependency pins together with the material an older receiver needs.
+                let previous;
+                do {
+                    previous = changing.size;
+                    for (const r of diff.revisions) {
+                        const key = rootKey(r);
+                        if (changing.has(key)) continue;
+                        if (r.type === 'chat' && Object.keys(r.dependencies).some(k => k.startsWith('pin:') && blockedPin(k))) changing.add(key);
+                        if (r.type === 'character') {
+                            const base = bases[key + '#' + r.root];
+                            const previousChats = base ? s.graph.get(base)?.content?.chatIds ?? [] : [];
+                            if ((r.content.chatIds ?? []).some(id => held.has(rootKeyOf('play', 'chat', id)) && !previousChats.includes(id))) changing.add(key);
+                        }
+                        if (key === rootKeyOf('settings', 'group', 'activation')) {
+                            const { enabledModules, moduleIntergration, personaEnabledModules, pluginEnabled } = r.content;
+                            const modules = [...(enabledModules ?? []), ...(typeof moduleIntergration === 'string' ? moduleIntergration.split(',').map(id => id.trim()) : []),
+                                ...Object.values(personaEnabledModules ?? {}).flat()];
+                            if (modules.some(id => changing.has(rootKeyOf('library', 'module', id))) ||
+                                Object.keys(pluginEnabled ?? {}).some(id => changing.has(rootKeyOf('library', 'plugin', id)))) changing.add(key);
+                        }
+                    }
+                } while (previous !== changing.size);
+                diff.revisions = diff.revisions.filter(r => !held.has(rootKey(r)) && !changing.has(rootKey(r)));
+            }
             const revisions = [...diff.revisions, ...tombstones.values()];
-            if (!revisions.length) { if (restored || dropped.length) { manifest.transact(x => { for (const k of dropped) delete x.lineage[k]; if (restoreMark) for (const [k, id] of Object.entries(diff.matched)) x.lineage[k] = id; x.incarnation = s.identity().incarnationId; if (restoreMark && x.pendingRestore?.id === restoreMark.id) x.pendingRestore = null; }); recordLineage(); } return { committed: null, skipped: diff.skipped.length, excluded: projection.excluded.length, provenance: restored ? 'restored-backup' : 'edit', restore: restoreMark }; }
+            if (!revisions.length) { if (restored || dropped.length) { manifest.transact(x => { for (const k of dropped) delete x.lineage[k]; if (restoreMark) for (const [k, id] of Object.entries(diff.matched)) x.lineage[k] = id; x.incarnation = s.identity().incarnationId; if (restoreMark && x.pendingRestore?.id === restoreMark.id) x.pendingRestore = null; }); recordLineage(); } return { committed: null, skipped: diff.skipped.length, excluded: projection.excluded.length, provenance: restored ? 'restored-backup' : 'edit', restore: restoreMark, ...notice }; }
             const blobs = {};
             for (const h of new Set([...revisions.flatMap(r => Object.entries(r.dependencies).filter(([k]) => !k.startsWith('envelope:')).map(([, x]) => x)), ...projection.envelopes.values()])) {
                 const source = projection.blobs.get(h); if (!source) continue;
@@ -895,7 +980,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             await hooks.afterSnapshotCommit?.(entry);
             manifest.transact(x => { for (const [k, id] of Object.entries(intent.lineage)) x.lineage[k] = id; for (const k of intent.vanished) delete x.lineage[k]; x.pendingLineage = null; x.incarnation = s.identity().incarnationId; if (intent.restore && x.pendingRestore?.id === intent.restore.id) x.pendingRestore = null; });
             recordLineage();
-            return { committed: entry ? { sequence: entry.sequence, commitId: entry.commitId, revisions: entry.revisions.length, tombstones: targets.size } : null, skipped: diff.skipped.length, excluded: projection.excluded.length, provenance: intent.provenance, restore: intent.restore };
+            return { committed: entry ? { sequence: entry.sequence, commitId: entry.commitId, revisions: entry.revisions.length, tombstones: targets.size } : null, skipped: diff.skipped.length, excluded: projection.excluded.length, provenance: intent.provenance, restore: intent.restore, ...notice };
         } finally { await finishCapture(work, cleanups); }
     }
 
@@ -980,8 +1065,16 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const mediaFor = async (rev, rootKey) => {
             const items = [];
             for (const [k, h] of Object.entries(rev.dependencies)) {
-                if (k.startsWith('asset:')) { const key = k.slice(6); if (storage.kvGetUpdatedAt(key) !== null) { const tmp = join(work, randomUUID()); await storage.kvExportFile(key, tmp); if (await hashFile(tmp) !== h) return { collision: key }; } else items.push({ kind: 'asset', key, hash: h }); }
-                else if (k.startsWith('inlay:')) { const id = k.slice(6), existing = await readInlay(id); if (existing) { const bytes = typeof existing.data === 'string' ? Buffer.from(existing.data) : Buffer.isBuffer(existing.data) ? existing.data : Buffer.from(await existing.data.arrayBuffer()); if (sha256(bytes) !== h) return { collision: id }; } else items.push({ kind: 'inlay', id, hash: h, metadata: rev.dependencies['inlay-metadata:' + id] ?? null, owner: rootKey.startsWith('play\nchat\n') ? { root: rootKey.split('\n')[2] } : null }); }
+                if (k.startsWith('asset:')) {
+                    const key = k.slice(6);
+                    if (storage.kvGetUpdatedAt(key) !== null) {
+                        const tmp = join(work, randomUUID());
+                        try { await storage.kvExportFile(key, tmp); }
+                        catch (error) { if (missingMediaFile(error)) return { missing: key }; throw error; }
+                        if (await hashFile(tmp) !== h) return { collision: key };
+                    } else items.push({ kind: 'asset', key, hash: h });
+                }
+                else if (k.startsWith('inlay:')) { const id = k.slice(6), existing = await readLocalInlay(id); if (existing) { const bytes = typeof existing.data === 'string' ? Buffer.from(existing.data) : Buffer.isBuffer(existing.data) ? existing.data : Buffer.from(await existing.data.arrayBuffer()); if (sha256(bytes) !== h) return { collision: id }; } else items.push({ kind: 'inlay', id, hash: h, metadata: rev.dependencies['inlay-metadata:' + id] ?? null, owner: rootKey.startsWith('play\nchat\n') ? { root: rootKey.split('\n')[2] } : null }); }
             }
             return { items };
         };
@@ -1017,7 +1110,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             }
             const head = s.graph.get(c.liveHeads[0]), missing = missingMaterial(head);
             if (missing.length) { result.pending.push({ root: key, reason: 'missing material', missing }); continue; }
-            const media = await mediaFor(head, key); if (media.collision) { result.pending.push({ root: key, reason: 'media collision', item: media.collision }); continue; }
+            const media = await mediaFor(head, key);
+            if (media.missing) { result.pending.push({ root: key, reason: 'missing material', missing: ['asset:' + media.missing] }); continue; }
+            if (media.collision) { result.pending.push({ root: key, reason: 'media collision', item: media.collision }); continue; }
             const content = clone(head.content);
             if (domain === 'settings') {
                 if (rootId === 'personas' && !personaMirrorsMatch(db)) { result.pending.push({ root: key, reason: 'local-persona-edit' }); continue; }
@@ -1111,7 +1206,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 if (!characterId) { result.pending.push({ root: key, head: head.id, reason: 'owner unknown' }); rootApplied = false; continue; }
                 const knownHead = continuing ? s.graph.get(lineage[key + '#' + continuing.chat.id]) : null;
                 if (knownHead && (variant.includes(knownHead.id) || (knownHead.contentHash === head.contentHash && knownHead.dependencyHash === head.dependencyHash))) { result.lineage[key + '#' + localId] = head.id; continue; } // already at this head or equal content: nothing to apply
-                const media = await mediaFor(head, key); if (media.collision) { result.pending.push({ root: key, head: head.id, reason: 'media collision', item: media.collision }); rootApplied = false; continue; }
+                const media = await mediaFor(head, key);
+                if (media.missing) { result.pending.push({ root: key, head: head.id, reason: 'missing material', missing: ['asset:' + media.missing] }); rootApplied = false; continue; }
+                if (media.collision) { result.pending.push({ root: key, head: head.id, reason: 'media collision', item: media.collision }); rootApplied = false; continue; }
                 let content = clone(head.content); content.id = localId;
                 // Exact dependency compatibility: every pinned item must be active locally with exactly the pinned content once this
                 // plan has applied its own library/settings updates; a conflicting or pending dependency blocks the chat, not the batch.
@@ -1196,10 +1293,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         // An excluded local conversation has not been compared; do not overwrite it during a download.
         for (const key of touched.keys()) if (scoped.preserved.has(key)) edited.add(key);
         const known = [...touched.keys()].filter(key => Object.keys(lineage).some(k => k.startsWith(key + '#')));
-        if (!known.length) return edited;
         const work = startCapture('plan-check-'), captures = new Map(), cleanups = [];
         try {
-            const chatRoots = new Set(known.filter(k => k.startsWith('play\nchat\n')).map(k => k.split('\n')[2]));
+            const chatRoots = new Set([...touched.keys()].filter(k => k.startsWith('play\nchat\n')).map(k => k.split('\n')[2]));
             for (const character of db.characters ?? []) {
                 const chatIds = (character.chats ?? []).map(c => c.id).filter(id => id && (chatRoots.has(id) || chatRoots.has(branches[id]?.root)));
                 if (!chatIds.length) continue;
@@ -1207,8 +1303,20 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, branches, work);
-            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, onlyKeys: known.length ? null : touched, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const absent = compareWithMissingMedia(s, projection, lineage);
             const diff = diffProjection(s.graph, projection.desired.filter(d => known.includes(d.key)), lineage);
+            // An untracked local record with missing media may be a held edit. Apply an incoming copy only if its body
+            // matches and its material covers the local references. Chat environment pins are checked against the plan view.
+            for (const d of projection.desired) {
+                const missing = absent.get(d.lineageKey);
+                if (!missing || !touched.has(d.key) || lineage[d.lineageKey]) continue;
+                const heads = s.graph.classify(d.key);
+                const head = heads.state === 'live' ? s.graph.get(heads.liveHeads[0]) : null;
+                if (!head || head.contentHash !== d.contentHash ||
+                    missing.some(({ kind, key }) => !Object.hasOwn(head.dependencies, kind + ':' + key)) ||
+                    Object.entries(d.dependencies).some(([key, hash]) => !key.startsWith('pin:') && head.dependencies[key] !== hash)) edited.add(d.key);
+            }
             for (const r of diff.revisions) edited.add(rootKey(r));
             for (const k of diff.diverged) edited.add(k.split('#')[0]);
         } finally { await finishCapture(work, cleanups); }

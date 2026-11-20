@@ -1,5 +1,5 @@
 diff --git a/server/node/logs.cjs b/server/node/logs.cjs
-index 55a08a3..baa5d34 100644
+index 55a08a3..9b5a893 100644
 --- a/server/node/logs.cjs
 +++ b/server/node/logs.cjs
 @@ -3,8 +3,9 @@
@@ -9,7 +9,7 @@ index 55a08a3..baa5d34 100644
 -const { atomicWriteFile, atomicWriteJson, readVerifiedJson } = require('./file-store.cjs');
 +const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
  const { resolveDataRoot } = require('./data-root.cjs');
-+const { nasDiagnosticDescription, nasDiagnosticMessage } = require('../../shared/play-set/nas-diagnostic.ts');
++const { nasDiagnosticDescription, nasDiagnosticMessage, nasMediaNoticeDescription, nasMediaNoticeMessage } = require('../../shared/play-set/nas-diagnostic.ts');
  
  const MAX_ROWS = 5000;
  const MAX_DESCRIPTION_BYTES = 10 * 1024; // 10KB per entry
@@ -83,7 +83,7 @@ index 55a08a3..baa5d34 100644
      for (const { re, replacement } of MASK_PATTERNS) {
          out = out.replace(re, replacement);
      }
-@@ -197,11 +209,17 @@ function insertEntry(entry) {
+@@ -197,11 +209,20 @@ function insertEntry(entry) {
      const timestamp = typeof entry.timestamp === 'number' ? entry.timestamp : Date.now();
      const level = ['error', 'warning', 'info'].includes(entry.level) ? entry.level : 'info';
      const origin = entry.origin === 'server' ? 'server' : 'client';
@@ -91,7 +91,10 @@ index 55a08a3..baa5d34 100644
 -    const description = entry.description != null
 +    const source = entry.source ? String(entry.source).slice(0, 64) : null;
 +    const nasDiagnostic = source === 'nas-sync';
-+    const message = nasDiagnostic ? nasDiagnosticMessage : maskSensitive(String(entry.message ?? '')).slice(0, 1000);
++    const mediaNotice = nasDiagnostic && level === 'info'
++        ? /^stage=snapshot code=MEDIA_SKIPPED count=([1-9][0-9]{0,8})$/.exec(String(entry.description ?? ''))
++        : null;
++    const message = mediaNotice ? nasMediaNoticeMessage : nasDiagnostic ? nasDiagnosticMessage : maskSensitive(String(entry.message ?? '')).slice(0, 1000);
 +    let description = entry.description != null && !nasDiagnostic
          ? truncate(maskSensitive(String(entry.description)), MAX_DESCRIPTION_BYTES)
          : null;
@@ -99,16 +102,16 @@ index 55a08a3..baa5d34 100644
 +    if (nasDiagnostic) {
 +        // Older clients may still send raw messages. Persist only recognized diagnostic fields.
 +        const fields = /^stage=([a-z]+) code=([A-Z_]+)$/.exec(String(entry.description ?? ''));
-+        description = nasDiagnosticDescription(fields?.[1], fields?.[2]);
++        description = mediaNotice ? nasMediaNoticeDescription(Number(mediaNotice[1])) : nasDiagnosticDescription(fields?.[1], fields?.[2]);
 +    }
      const count = Number.isInteger(entry.count) && entry.count > 0 ? entry.count : 1;
      const platform = entry.platform ? String(entry.platform).slice(0, 128) : null;
      const clientId = entry.clientId ? String(entry.clientId).slice(0, 64) : null;
 diff --git a/server/node/logs.test.ts b/server/node/logs.test.ts
-index 3ef5c95..ce7f5c2 100644
+index 3ef5c95..11f3a2b 100644
 --- a/server/node/logs.test.ts
 +++ b/server/node/logs.test.ts
-@@ -40,6 +40,61 @@ afterEach(() => {
+@@ -40,6 +40,77 @@ afterEach(() => {
  })
  
  describe('file-native system logs', () => {
@@ -130,6 +133,22 @@ index 3ef5c95..ce7f5c2 100644
 +            ['NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=unknown code=UNKNOWN'],
 +        ])
 +    })
++    test('persists a NAS media count as info and rejects extra fields', () => {
++        const root = tempRoot()
++        const result = spawnSync(process.execPath, ['-e', `
++            const logs = require(${JSON.stringify(logsModule)})
++            const notice = { level: 'info', source: 'nas-sync', message: 'assets/private.png private card name' }
++            logs.addLog({ ...notice, description: 'stage=snapshot code=MEDIA_SKIPPED count=2' })
++            logs.addLog({ ...notice, description: 'stage=snapshot code=MEDIA_SKIPPED count=2 key=assets/private.png' })
++        `], { env: { ...process.env, RISUBARD_DATA_ROOT: root }, encoding: 'utf8' })
++        expect(result.status, result.stderr).toBe(0)
++        const rows = readFileSync(join(root, 'logs/system.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
++        expect(rows.map(({ level, message, description }) => [level, message, description])).toEqual([
++            ['info', 'NAS 동기화에서 그림을 건너뛰었습니다.', 'stage=snapshot code=MEDIA_SKIPPED count=2'],
++            ['info', 'NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=unknown code=UNKNOWN'],
++        ])
++    })
++
 +    test('recovers its own abandoned lock and retries Windows lock release', () => {
 +        const root = tempRoot()
 +        const result = spawnSync(process.execPath, ['-e', `

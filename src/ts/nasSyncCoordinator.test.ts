@@ -66,6 +66,24 @@ test.each([
     } finally { h.c.stop() }
 })
 
+test('missing media is a last-cycle notice, then publish, pull, preview and apply still run', async () => {
+    const h = harness(); await h.c.start(); h.calls.length = 0; h.setPending(1); f.addLog.mockClear()
+    const notices = [{ kind: 'asset', key: 'assets/missing.png', records: [{ type: 'module', id: 'module-id', name: 'private row name' }] }]
+    h.io.snapshot.mockImplementationOnce(async () => { h.calls.push('snapshot'); return { skippedMedia: notices } })
+    try {
+        expect(await h.c.retryNow()).toBe('applied')
+        expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview', 'apply'])
+        expect(h.c.state).toMatchObject({ skippedMedia: notices, failures: 0, lastError: '', offline: false })
+        expect(f.addLog).toHaveBeenCalledExactlyOnceWith({
+            level: 'info', source: 'nas-sync', description: 'stage=snapshot code=MEDIA_SKIPPED count=1',
+            message: 'NAS 동기화에서 그림을 건너뛰었습니다.',
+        })
+        await h.c.retryNow()
+        expect(h.c.state.skippedMedia).toEqual([])
+        expect(f.addLog).toHaveBeenCalledTimes(1)
+    } finally { h.c.stop() }
+})
+
 test.each(['retryNow', 'uploadNow', 'downloadNow'] as const)('%s retries a failed startup probe before deciding sync is idle', async action => {
     const h = harness(); h.io.status.mockRejectedValueOnce(new Error('sync network deadline'))
     await h.c.start(); h.setPending(1)

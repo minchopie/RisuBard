@@ -6,7 +6,7 @@ import { isNodeServer } from '../platform'
 import { isAnyGenerating, generationStates } from '../process/generationState'
 import { alertStore, selectedCharID } from '../stores.svelte'
 import { addLog } from '../log'
-import { nasDiagnosticDescription, nasDiagnosticMessage } from '../../../shared/play-set/nas-diagnostic'
+import { nasDiagnosticDescription, nasDiagnosticMessage, nasMediaNoticeDescription, nasMediaNoticeMessage } from '../../../shared/play-set/nas-diagnostic'
 
 /**
  * The single foreground coordinator of automatic NAS sync. It runs only on the Node/embedded runtime and only after sync was
@@ -96,7 +96,10 @@ function loadTally(stored: CadenceTally | null, now: number): CadenceTally {
     const lastAt = Number.isFinite(stored?.lastAt) && stored!.lastAt > 0 && stored!.lastAt <= now ? stored!.lastAt : now
     return { chats, lastAt }
 }
-export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number; stage?: string; stageAt?: number }
+export interface SkippedSyncMedia {
+    kind: 'asset' | 'inlay'; key: string; records: { type: string; id: string; name: string }[]
+}
+export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number; skippedMedia?: SkippedSyncMedia[]; stage?: string; stageAt?: number }
 export type SafeWindow = { window: SyncApplyGuard['window']; epoch: number }
 const DEFAULT_BACKOFF = [5_000, 15_000, 60_000, 300_000]
 let instance: ReturnType<typeof createSyncCoordinator> | null = null
@@ -221,7 +224,17 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // Settled local edits become causal revisions before anything incoming is applied; the joining device waits for the shared key
                     // before publishing its own encrypted history. The snapshot is skipped (not the publish) while a generation/import runs: the
                     // next settled save schedules it; edits made meanwhile are simply part of that later snapshot.
-                    if (!receiveOnly && !o.generating()) { enter('snapshot'); await o.snapshot(signal); boundary() }
+                    if (!receiveOnly && !o.generating()) {
+                        enter('snapshot'); const report = await o.snapshot(signal); boundary()
+                        const skipped: SkippedSyncMedia[] = report?.skippedMedia ?? []
+                        state.skippedMedia = skipped
+                        const count = skipped.length
+                        if (count) {
+                            // Record names and media keys stay in the authenticated last-cycle view.
+                            try { addLog({ level: 'info', source: 'nas-sync', message: nasMediaNoticeMessage, description: nasMediaNoticeDescription(count) }) }
+                            catch { /* Diagnostics must not interrupt sync. */ }
+                        }
+                    }
                     if (direction !== 'download') {
                         enter('publish'); const report = await o.publish(signal); boundary()
                         if (report?.rotated) attention = 'rotated'

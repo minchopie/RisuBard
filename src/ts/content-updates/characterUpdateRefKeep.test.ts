@@ -415,7 +415,7 @@ describe('Asset Maid free-created characters', () => {
         const theirs = bot({ globalLore: [customBody([{ target, forms: [{ id: 'f', label: 'New' }, { id: 'incoming', reference: {} }] }])] })
         const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, null)
         expect(presetAssetMaidMerge(plan, mine, theirs)).toBeNull()
-        const merged = apply(plan, mine, theirs, Object.fromEntries(plan.items.map(item => [item.id, 'theirs'])))
+        const merged = apply(plan, mine, theirs, Object.fromEntries<'theirs'>(plan.items.map(item => [item.id, 'theirs'])), {})
         finalize(merged, mine, theirs)
         expect(merged.additionalAssets ?? []).toEqual([])
         expect(portable(merged.globalLore[0]).features.characterForms.entries[0].forms).toEqual([{ id: 'f', label: 'New' }, { id: 'incoming', reference: {} }])
@@ -434,7 +434,7 @@ describe('Asset Maid free-created characters', () => {
         const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, null)
         const keep = presetAssetMaidMerge(plan, mine, theirs)!
         expect(keep).toMatchObject({ kept: 1, held: [] })
-        const choices = Object.fromEntries(plan.items.map(item => [item.id, item.id === keep.id ? 'edit' : 'theirs']))
+        const choices = Object.fromEntries<'edit' | 'theirs'>(plan.items.map(item => [item.id, item.id === keep.id ? 'edit' : 'theirs']))
         const merged = apply(plan, mine, theirs, choices, { [keep.id]: keep.text })
         expect(finalize(merged, mine, theirs)).toMatchObject({ kept: 1, held: [] })
         expect(portable(merged.globalLore[0]).features.characterForms.entries[0].forms).toEqual([

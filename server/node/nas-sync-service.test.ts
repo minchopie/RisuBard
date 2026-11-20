@@ -1,5 +1,5 @@
 import { test, expect, vi } from 'vitest'
-import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, stat, rename, cp, copyFile, utimes } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, readFile, readdir, writeFile, stat, rename, cp, copyFile, utimes, unlink } from 'node:fs/promises'
 import * as memoryFs from 'node:fs/promises'
 import fs, { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -222,17 +222,142 @@ test('a second service in the same process preserves an active capture and joine
     } finally { release(); lock.release() }
 })
 
-test.for(['asset', 'inlay'])('missing referenced %s prevents snapshot commit with the existing error', async (kind, t) => {
-    const db = { characters: [{ chaId: 'card', type: 'character', name: 'card',
+// This used to assert a failed snapshot and zero commits. A v1 commit cannot safely send the affected record to an old sender,
+// so only a complete independent record is committed. The local reference and its owner remain byte-identical.
+test.for(['asset', 'inlay'])('notices missing %s and commits only the independent record', async (kind, t) => {
+    const db = { loreBook: [{ name: 'independent lore', content: 'fixture' }], characters: [{ chaId: 'card', type: 'character', name: 'card',
         ...(kind === 'asset' ? { image: 'assets/missing.png', chats: [] }
             : { chats: [{ id: 'chat', name: 'chat', message: [{ role: 'char', data: '{{inlay::missing}}' }] }] }) }] }
-    const d = await device(t, fixtureDav(), 'missing-' + kind, db, MASTER, { readDatabase: async () => db })
+    const before = structuredClone(db), d = await device(t, fixtureDav(), 'missing-' + kind, db, MASTER, { readDatabase: async () => db })
     d.service.enable({ workspaceId: 'ws-fixture' })
-    await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', missing: [
-        expect.objectContaining({ reason: kind === 'asset' ? 'Missing asset: assets/missing.png' : 'Missing inlay: missing' }),
-    ] })
-    expect(d.service.store().state().commits).toEqual([])
+    const expected = [{ kind, key: kind === 'asset' ? 'assets/missing.png' : 'missing',
+        records: [{ type: kind === 'asset' ? 'character' : 'chat', id: kind === 'asset' ? 'card' : 'chat', name: kind === 'asset' ? 'card' : 'chat' }] }]
+    const next = await d.service.snapshot(), store = d.service.store()
+    expect(next.skippedMedia).toEqual(expected)
+    expect(next.committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    const [entry] = store.state().commits
+    expect(entry.commitId).toBe(next.committed.commitId)
+    expect(store.graph.get(entry.revisions[0]).content).toEqual({ loreBook: db.loreBook })
+    expect(store.graph.classify('library\ncharacter\ncard').state).toBe('absent')
+    expect(store.graph.classify('play\nchat\nchat').state).toBe('absent')
+    expect(await d.service.snapshot()).toMatchObject({ committed: null, skippedMedia: expected })
+    expect(db).toEqual(before)
 })
+
+test('authority sync continues past a new module icon and a missing card asset with pending and diverged peer changes', async t => {
+    const dav = fixtureDav(), bytes = Buffer.from('card asset on NAS and peer'), hash = sha(bytes), image = 'assets/' + hash + '.png'
+    const icon = 'assets/' + sha('never uploaded module icon') + '.png'
+    const missingModule = { id: 'new-module', name: '새 모듈', namespace: 'fixture-series', icon, assets: [] }
+    const d = await device(t, dav, 'authority-holes', { characters: [
+        { chaId: 'held-card', type: 'character', name: 'held card', image, chats: [] },
+        { chaId: 'safe-card', type: 'character', name: 'safe card', chats: [{ id: 'safe-chat', name: 'safe chat', message: [{ role: 'char', data: 'before' }] }] },
+    ], modules: [{ id: 'conflict', name: 'base' }], loreBook: [], personas: [{ id: 'persona', name: 'before' }], selectedPersona: 0, username: 'before', personaPrompt: '', personaNote: '', userIcon: '' })
+    const peer = await device(t, dav, 'peer-holes', { characters: [], modules: [], personas: [] })
+    d.storage.kvSet(image, bytes)
+    for (const side of [d, peer]) side.service.enable({ workspaceId: 'ws-fixture', role: 'authority' })
+    await d.service.snapshot()
+    expect((await d.service.publish()).failed).toEqual([])
+    await peer.service.pull()
+    await settle(peer)
+    expect(Buffer.from(peer.storage.kvGet(image))).toEqual(bytes)
+    const cardRoot = 'library\ncharacter\nheld-card', moduleRoot = 'library\nmodule\nnew-module'
+    const graph = d.service.store().graph, [oldCard] = graph.classify(cardRoot).liveHeads
+    const nasBlob = dav.paths().find(p => p.endsWith('/' + hash))!
+
+    const other = peer.db()
+    other.modules.find((m: any) => m.id === 'conflict').name = 'peer edit'
+    other.modules.push({ id: 'incoming', name: 'incoming independent' })
+    peer.save(other)
+    await peer.service.snapshot()
+    expect((await peer.service.publish()).failed).toEqual([])
+    expect((await d.service.pull()).admitted.length).toBeGreaterThan(0)
+    expect(d.service.pendingRoots().roots).toEqual(expect.arrayContaining([expect.objectContaining({ root: 'incoming' })]))
+
+    const local = d.db()
+    local.modules.find((m: any) => m.id === 'conflict').name = 'local edit'
+    local.modules.push(missingModule)
+    local.characters.find((c: any) => c.chaId === 'held-card').name = 'unsent card edit'
+    const safe = local.characters.find((c: any) => c.chaId === 'safe-card')
+    safe.name = 'safe card after'; safe.chats[0].message.push({ role: 'user', data: 'safe chat after' })
+    local.loreBook.push({ name: 'safe lore', content: 'safe lore after' })
+    local.personas[0].name = local.username = 'safe persona after'
+    d.save(local)
+    d.storage.kvDel(image)
+    const captured = await d.service.snapshot()
+    expect(captured.committed).toMatchObject({ tombstones: 0 })
+    expect(captured.committed.revisions).toBeGreaterThanOrEqual(5)
+    expect(captured.skippedMedia).toEqual(expect.arrayContaining([
+        { kind: 'asset', key: icon, records: [{ type: 'module', id: 'new-module', name: '새 모듈' }] },
+        { kind: 'asset', key: image, records: [{ type: 'character', id: 'held-card', name: 'unsent card edit' }] },
+    ]))
+    expect(captured.skippedMedia).toHaveLength(2)
+    expect(graph.classify(moduleRoot).state).toBe('absent')
+    expect(graph.classify(cardRoot).heads).toEqual([oldCard])
+    expect(graph.get(oldCard).dependencies['asset:' + image]).toBe(hash)
+    expect(d.db().modules.find((m: any) => m.id === 'new-module').icon).toBe(icon)
+    expect(d.db().characters.find((c: any) => c.chaId === 'held-card').name).toBe('unsent card edit')
+    expect(await d.service.conflicts()).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'conflict', state: 'diverged' })]))
+    const uploaded = await d.service.publish()
+    expect(uploaded.failed).toEqual([])
+    expect(uploaded.stored).toEqual(expect.arrayContaining([expect.objectContaining({ commitId: captured.committed.commitId })]))
+    expect(await d.service.pull()).toMatchObject({ waiting: [], held: [], quarantined: [], repairFailed: [] })
+    const incoming = await settle(d)
+    expect(incoming.modules).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'incoming' })]))
+    expect(incoming.pending).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'diverged' })]))
+    expect(await peer.service.pull()).toMatchObject({ waiting: [], held: [], quarantined: [], repairFailed: [] })
+    const plan = await settle(peer)
+    expect(plan.deletions).toEqual([])
+    expect(peer.db().modules.some((m: any) => m.id === 'new-module')).toBe(false)
+    expect(peer.db().characters.find((c: any) => c.chaId === 'safe-card')).toMatchObject({ name: 'safe card after', chats: [expect.objectContaining({ message: expect.arrayContaining([expect.objectContaining({ data: 'safe chat after' })]) })] })
+    expect(peer.db().personas[0].name).toBe('safe persona after')
+    expect(peer.db().loreBook).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'safe lore' })]))
+    expect(Buffer.from(peer.storage.kvGet(image))).toEqual(bytes)
+    expect(dav.files.get(nasBlob)).toEqual(bytes)
+})
+
+test('normal pull and apply install a missing icon from a matching complete incoming module and repair its cached blob by hash', async t => {
+    const dav = fixtureDav(), bytes = Buffer.from('recoverable module icon'), hash = sha(bytes), icon = 'assets/' + hash + '.png'
+    const mod = { id: 'recover', name: '복구', namespace: 'fixture-series', icon, assets: [] }
+    const d = await device(t, dav, 'repair-local', { characters: [], modules: [mod] })
+    const peer = await device(t, dav, 'repair-peer', { characters: [], modules: [mod] })
+    for (const side of [d, peer]) side.service.enable({ workspaceId: 'ws-fixture', role: 'authority' })
+    expect((await d.service.snapshot()).skippedMedia).toEqual([{ kind: 'asset', key: icon, records: [{ type: 'module', id: 'recover', name: '복구' }] }])
+    peer.storage.kvSet(icon, bytes)
+    await peer.service.snapshot()
+    expect((await peer.service.publish()).failed).toEqual([])
+    expect((await d.service.pull()).admitted).toHaveLength(1)
+    const store = d.service.store(), [head] = store.graph.classify('library\nmodule\nrecover').liveHeads
+    expect(store.graph.get(head).dependencies['asset:' + icon]).toBe(hash)
+    await unlink(store.blobFile(hash))
+    expect((await d.service.pull()).repaired).toEqual([hash])
+    expect(await readFile(store.blobFile(hash))).toEqual(bytes)
+    const plan = await settle(d)
+    expect(plan.modules).toEqual([mod])
+    expect(plan.deletions).toEqual([])
+    expect(Buffer.from(d.storage.kvGet(icon))).toEqual(bytes)
+    const next = await d.service.snapshot()
+    expect(next.skippedMedia).toBeUndefined()
+    expect(store.graph.classify('library\nmodule\nrecover').heads).toEqual([head])
+})
+
+test('a different incoming module with the same id cannot overwrite an unsent local module missing its icon', async t => {
+    const dav = fixtureDav(), icon = 'assets/missing-module.png'
+    const local = { id: 'same-id', name: 'unsent local edit', icon }
+    const d = await device(t, dav, 'local-module-hole', { characters: [], modules: [local] })
+    const peer = await device(t, dav, 'peer-same-module', { characters: [], modules: [{ ...local, name: 'different peer edit' }, { id: 'safe', name: 'safe' }] })
+    for (const side of [d, peer]) side.service.enable({ workspaceId: 'ws-fixture', role: 'authority' })
+    await d.service.snapshot()
+    peer.storage.kvSet(icon, Buffer.from('peer bytes'))
+    await peer.service.snapshot()
+    expect((await peer.service.publish()).failed).toEqual([])
+    expect((await d.service.pull()).admitted).toHaveLength(1)
+    const plan = await settle(d)
+    expect(plan.modules).toEqual([{ id: 'safe', name: 'safe' }])
+    expect(plan.pending).toEqual([{ root: 'library\nmodule\nsame-id', reason: 'local-edit' }])
+    expect(d.db().modules.find((m: any) => m.id === local.id)).toEqual(local)
+    expect(d.storage.kvGetUpdatedAt(icon)).toBeNull()
+})
+
 
 test('uploads weekly local edits from the recorded lineage with the six divergent roots present', async t => {
     const dav = fixtureDav()

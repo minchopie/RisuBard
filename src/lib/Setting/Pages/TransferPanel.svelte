@@ -161,6 +161,24 @@
                 <strong>{headline.tone === 'ok' ? '✓ ' : headline.tone === 'waiting' ? '… ' : '! '}{headline.title}</strong>
                 <span>{headline.detail}</span>
             </div>
+            {#if $coordinatorState?.skippedMedia?.length}
+                <details class="hint">
+                    <summary>건너뛴 그림 {$coordinatorState.skippedMedia.length}개 — 자세히</summary>
+                    <p>최근 「내 변경 묶기」에서 그림을 읽지 못한 자료는 이 기기에 보관 중이에요.</p>
+                    <ul>
+                        {#each $coordinatorState.skippedMedia as item}
+                            <li>
+                                <code>{item.key}</code>
+                                <ul>
+                                    {#each item.records as record}
+                                        <li>{({ character: '캐릭터', chat: '대화', module: '모듈', plugin: '플러그인', settings: '설정', persona: '페르소나' } as Record<string, string>)[record.type] ?? record.type} · {record.name || record.id} <code>{record.id}</code></li>
+                                    {/each}
+                                </ul>
+                            </li>
+                        {/each}
+                    </ul>
+                </details>
+            {/if}
             <div class="transfer-actions">
                 <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload')}>{$coordinatorState?.running && $coordinatorState.direction === 'upload' ? '업로드 중…' : 'NAS에 업로드'}</ShButton>
                 <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '이 기기에 다운로드'}</ShButton>
