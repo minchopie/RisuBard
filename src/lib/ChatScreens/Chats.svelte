@@ -66,12 +66,15 @@
             isOptimizedStreamingMessage: boolean
             streamingOptimizationMode: StreamingDisplayOptimizationMode
             rawStreamingText: string
+            totalLength: number
             messageGenerationInfo?: Message['generationInfo']
             memoryConfirmed?: boolean
             canonicalReceipt?: Message['risubardCanonicalReceipt']
         }) => void
     }
     let mountInstances: Map<number, ChatInstance> = new Map();
+    type ChatContainer = { hash: number; element: HTMLDivElement; releaseHeight?: () => void }
+    let containersByIndex = new Map<number, ChatContainer>();
 
     //Non-cryptographic hash function to generate a unique hash for each message
     function hashCode(str:string):number {
@@ -94,6 +97,7 @@
 
         let nextHash = 0;
         let currentHashes: Set<number> = new Set();
+        const nextContainers = new Map<number, ChatContainer>();
         const charImage = getCharImage(currentCharacter.image, 'css')
         const userImage = getCharImage(userIcon, 'css')
         const simpleChar = createSimpleCharacter(currentCharacter);
@@ -150,6 +154,17 @@
                 const b = document.createElement('div');
                 b.setAttribute('x-hashed', currentHash.toString());
                 b.classList.add('chat-message-container');
+                const height = containersByIndex.get(i)?.element.offsetHeight ?? 0;
+                let releaseHeight: (() => void) | undefined;
+                if (height > 0) {
+                    b.style.minHeight = height + 'px';
+                    const deadline = setTimeout(() => releaseHeight?.(), 3000);
+                    releaseHeight = () => {
+                        clearTimeout(deadline);
+                        b.style.removeProperty('min-height');
+                    };
+                }
+                nextContainers.set(i, { hash: currentHash, element: b, releaseHeight });
                 const swipes = message.swipes;
                 const swipeId = message.swipeId ?? 0;
                 const inst = mount(Chat, {
@@ -159,6 +174,7 @@
                         isLastMemory: false,
                         idx: i,
                         totalLength: messages.length,
+                        onInitialRenderSettled: releaseHeight,
                         img: message.role === 'user' ? userImage : charImage,
                         onReroll: onReroll,
                         onNextSwipe: i === lastRealCharIdx ? onNextSwipe : () => {},
@@ -198,6 +214,8 @@
                 }
             }
             else{
+                const previous = containersByIndex.get(i);
+                if (previous?.hash === currentHash) nextContainers.set(i, previous);
                 mountInstances.get(currentHash)?.updateRerollControls?.({
                     rerollIcon: isRerollTarget ? 'force' : false,
                     onNextSwipe: isRerollTarget ? onNextSwipe : () => {},
@@ -209,6 +227,7 @@
                     isOptimizedStreamingMessage: activeStreamingMessage,
                     streamingOptimizationMode: performanceMode,
                     rawStreamingText: message.data,
+                    totalLength: messages.length,
                     messageGenerationInfo: message.generationInfo,
                     memoryConfirmed: message.risubardMemoryConfirmed === true,
                     canonicalReceipt: message.risubardCanonicalReceipt,
@@ -232,12 +251,18 @@
             }
         });
 
+        for (const previous of containersByIndex.values()) {
+            if (!currentHashes.has(previous.hash)) previous.releaseHeight?.();
+        }
         hashes = currentHashes;
+        containersByIndex = nextContainers;
     };
 
     onDestroy(() => {
         console.log('Unmounting Chats');
         hashes.clear();
+        for (const container of containersByIndex.values()) container.releaseHeight?.();
+        containersByIndex.clear();
         mountInstances.forEach((inst) => {
             unmount(inst);
         });

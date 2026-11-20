@@ -77,18 +77,23 @@ function indexOf(ref: unknown, kind: 'lore' | 'asset'): number {
 }
 const entriesOf = (data: Portable): Entry[] => Array.isArray(data.features?.characterForms?.entries) ? data.features!.characterForms!.entries! : []
 const commentOf = (lore: readonly loreBook[] | undefined, target: unknown) => String(lore?.[indexOf(target, 'lore')]?.comment ?? '')
+const isCustomTarget = (target: unknown) => typeof target === 'string' && target.startsWith('custom:') && target.length > 'custom:'.length
 
 /**
  * The new body's entry for the character the user's entry points to, or why there is none. Each fingerprint, then the lore comment,
  * narrows the candidates; a test nobody passes is skipped. More than one left is ambiguous: the lore index alone proves nothing.
  */
 function locate(entry: Entry, mine: { data: Portable, lore?: loreBook[] }, theirs: { data: Portable, lore?: loreBook[] }): Entry | HeldReason {
+    if (isCustomTarget(entry.target)) {
+        const matches = entriesOf(theirs.data).filter(other => other.target === entry.target)
+        return matches.length === 1 ? matches[0] : matches.length ? 'character-ambiguous' : 'character-missing'
+    }
     const own = mine.data.entities?.lorebooks?.[entry.target ?? '']?.fingerprints ?? {}
     const tests: ((other: Entry) => boolean)[] = FINGERPRINTS.filter(kind => !!own[kind]).map(kind => (other: Entry) =>
         theirs.data.entities?.lorebooks?.[other.target ?? '']?.fingerprints?.[kind] === own[kind])
     const comment = commentOf(mine.lore, entry.target)
     if (comment) tests.push(other => commentOf(theirs.lore, other.target) === comment)
-    let candidates = entriesOf(theirs.data), narrowed = false
+    let candidates = entriesOf(theirs.data).filter(other => !isCustomTarget(other.target)), narrowed = false
     for (const test of tests) {
         const found = candidates.filter(test)
         if (!found.length) continue
@@ -214,7 +219,7 @@ function moveLore(value: unknown, map: Map<number, number>): unknown {
  * to the merged lorebook; characters that are not there are taken out and their references held. Null when either side is not Asset
  * Maid Portable data.
  */
-export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine: Partial<character>, theirs: Partial<character>, result: unknown[], map?: Map<number, number> | null): AssetMaidMerge | null {
+export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine: Partial<character>, theirs: Partial<character>, result: unknown[], map?: Map<number, number> | null): (AssetMaidMerge & { copiedEmptyReference?: true }) | null {
     const own = parse(mineEntry?.content), other = parse(theirsEntry?.content)
     if (!own || !other) return null
     let data: Portable = JSON.parse(JSON.stringify(other.data))
@@ -222,6 +227,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     const assets: Record<string, Fingerprinted> = {}
     const held: HeldReference[] = []
     let kept = 0, replaced = 0, appended = 0
+    let copiedEmptyReference = false
     const place = (reference: Reference, side: 'mine' | 'theirs'): Reference | null => {
         if (reference.asset === undefined) return { ...reference }
         const picture = (side === 'mine' ? mineAssets : theirsAssets)[indexOf(reference.asset, 'asset')]
@@ -237,7 +243,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (record) assets[`asset:${at}`] = JSON.parse(JSON.stringify(record))
         return { ...reference, asset: `asset:${at}` }
     }
-    const placed = (entry: Entry) => !map || map.has(indexOf(entry.target, 'lore'))
+    const placed = (entry: Entry) => !map || isCustomTarget(entry.target) || map.has(indexOf(entry.target, 'lore'))
     const dropped = entriesOf(data).filter(entry => !placed(entry)).map(entry => commentOf(theirs.globalLore, entry.target) || String(entry.target ?? ''))
     // The new body's own references follow their pictures to their place in the result.
     for (const entry of entriesOf(data)) for (const form of entry.forms ?? []) {
@@ -268,9 +274,17 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (!placed(target)) { note('character-missing'); continue }
         const slot = (target.forms ?? []).find(candidate => candidate?.id === form.id)
         if (!slot) { note('form-missing'); continue }
+        const custom = isCustomTarget(entry.target)
+        if (custom && Object.keys(reference).length === 0) {
+            if (slot.reference == null) {
+                slot.reference = {}
+                copiedEmptyReference = true
+            }
+            continue
+        }
         const moved = place(reference, 'mine')
         if (!moved) { note('asset-missing'); continue }
-        if (slot.reference) replaced++
+        if (slot.reference && (!custom || Object.keys(slot.reference).length > 0)) replaced++
         slot.reference = moved
         kept++
     }
@@ -289,7 +303,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     else delete entities.assets
     data.entities = entities
     if (map) data = moveLore(data, map) as Portable
-    return { content: other.prefix + JSON.stringify(data), kept, replaced, held, appended, dropped }
+    return { content: other.prefix + JSON.stringify(data), kept, replaced, held, appended, dropped, ...(copiedEmptyReference ? { copiedEmptyReference: true as const } : {}) }
 }
 
 let pending: { id: string, text: string, chaId: string, incoming: object, mineEntry: loreBook, theirsEntry: loreBook } | null = null
@@ -309,7 +323,7 @@ export function presetAssetMaidMerge(plan: UpdatePlan | null, mine: character, t
         Object.fromEntries(pictures.map(entry => [entry.id, entry.choice ?? 'mine']))).additionalAssets ?? []
     const merged = mergeAssetMaid(item.mine as loreBook, item.theirs as loreBook, mine, theirs, [...order])
     // Nothing of the user's moved (none set, or none has a place in the new body): upstream's choice as it is.
-    if (!merged || merged.kept === 0) return null
+    if (!merged || (merged.kept === 0 && !merged.copiedEmptyReference)) return null
     pending = { id: item.id, text: merged.content, chaId: mine.chaId, incoming: theirs, mineEntry: item.mine as loreBook, theirsEntry: item.theirs as loreBook }
     return { id: item.id, text: merged.content, kept: merged.kept, held: merged.held }
 }

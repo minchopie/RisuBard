@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
+import * as viewer from '../assetViewer.svelte'
 import { handleBack, installAndroidBack, type BackDeps } from './androidBack'
 
 // Each test builds the screen it needs; `hidden` marks an element as not shown (happy-dom has no layout).
@@ -369,7 +370,6 @@ test('the Android app gets a hook that answers with a boolean; a failure answers
     expect(env.__risubardAndroidBack()).toBe(false) // still starting: as before
     const stores = await import('../stores.svelte')
     const lang = await import('../../lang')
-    const viewer = await import('../assetViewer.svelte')
     const savedLang = lang.language
     const savedKey = localStorage.getItem('risu-lang')
     stores.loadedStore.set(true)

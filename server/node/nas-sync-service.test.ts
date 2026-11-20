@@ -1076,13 +1076,13 @@ test('a plan journal an older version wrote with theme values never writes them:
 })
 
 // 0.9.96-ver5 (user, 2026-11-13 16:20/16:50): every value of the Display settings page stays on each device — besides the theme and the
-// active skin, fourteen keys that were their own roots and two fields of the memory group (showMemoryLimit, memoryLimitThickness). The
+// active skin, display keys that were their own roots and two fields of the memory group (showMemoryLimit, memoryLimitThickness). The
 // group's other keys keep syncing; its wire content keeps the fields of the revision it continues, so older devices (which clear a group
 // key a received revision lacks) keep their own values.
 const WIKI_ROOT = 'settings\ngroup\nmemory'
-const SCREEN_KEYS = ['guiHTML', 'hideRealm', 'useAdditionalAssetsPreview', 'unformatQuotes', 'blockquoteStyling', 'customQuotes', 'customQuotesData', 'hideApiKey', 'menuSideBar', 'betaMobileGUI', 'useChatSticker', 'tagAutocomplete', 'useChatCopy', 'useLegacyGUI']
+const SCREEN_KEYS = ['guiHTML', 'hideRealm', 'useAdditionalAssetsPreview', 'unformatQuotes', 'blockquoteStyling', 'customQuotes', 'customQuotesData', 'hideApiKey', 'menuSideBar', 'betaMobileGUI', 'useChatSticker', 'tagAutocomplete', 'useChatCopy', 'useLegacyGUI', 'realmHomeMode', 'characterAppSkins']
 const WIKI_FIELDS = ['showMemoryLimit', 'memoryLimitThickness']
-const screenOf = (n: number): any => ({ guiHTML: `<div>${n}</div>`, hideRealm: n % 2 === 0, useAdditionalAssetsPreview: n % 2 === 1, unformatQuotes: n % 2 === 0, blockquoteStyling: n % 2 === 1, customQuotes: n % 2 === 0, customQuotesData: [`«${n}`, '»', '‹', '›'], hideApiKey: n % 2 === 1, menuSideBar: n % 2 === 0, betaMobileGUI: n % 2 === 1, useChatSticker: n % 2 === 0, tagAutocomplete: { enabled: n % 2 === 0, n }, useChatCopy: n % 2 === 1, useLegacyGUI: n % 2 === 0 })
+const screenOf = (n: number): any => ({ guiHTML: `<div>${n}</div>`, hideRealm: n % 2 === 0, useAdditionalAssetsPreview: n % 2 === 1, unformatQuotes: n % 2 === 0, blockquoteStyling: n % 2 === 1, customQuotes: n % 2 === 0, customQuotesData: [`«${n}`, '»', '‹', '›'], hideApiKey: n % 2 === 1, menuSideBar: n % 2 === 0, betaMobileGUI: n % 2 === 1, useChatSticker: n % 2 === 0, tagAutocomplete: { enabled: n % 2 === 0, n }, useChatCopy: n % 2 === 1, useLegacyGUI: n % 2 === 0, realmHomeMode: ['show', 'collapsed', 'removed'][n % 3], characterAppSkins: { bot: 'skin-' + n } })
 const fieldsOf = (n: number) => ({ showMemoryLimit: n % 2 === 0, memoryLimitThickness: 10 + n })
 const restOf = (v: string, count = 10) => ({ hypaV3PresetId: count, hypaModel: v })
 const screenDb = (n: number, rest: any = restOf('a')) => ({ characters: [], personas: [], modules: [], plugins: [], botPresets: [], loreBook: [], ...screenOf(n), ...fieldsOf(n), ...rest })
@@ -1090,7 +1090,7 @@ const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter(k => k i
 const wikiHeads = (d: any) => d.service.store().graph.classify(WIKI_ROOT).liveHeads.map((id: string) => d.service.store().graph.get(id))
 const wikiRev = (content: any, parents: string[] = []) => require('./nas-sync-core.cjs').makeRevision({ domain: 'settings', type: 'group', root: 'memory', parents, content })
 
-test('screen settings are never published: no root for the fourteen keys; the memory group carries its two device fields only as its first values on the NAS, edits to them commit nothing and later revisions keep those values, while its other keys still sync', async t => {
+test('screen settings are never published: no root for the display keys; the memory group carries its two device fields only as its first values on the NAS, edits to them commit nothing and later revisions keep those values, while its other keys still sync', async t => {
     const dav = fixtureDav(), d = await device(t, dav, 'screen-local', screenDb(1)); d.service.enable({ workspaceId: 'screen-local' })
     expect((await d.service.snapshot()).committed).not.toBeNull()
     expect(d.service.store().graph.rootKeys()).not.toContain(WIKI_ROOT) // held until a pull shows the root is new on the NAS
@@ -1120,7 +1120,7 @@ test('a pull that fails midway clears the received mark: the memory group stays 
     await d.service.pull(); await d.service.snapshot(); expect(wikiHeads(d).map((x: any) => x.content)).toEqual([{ ...restOf('a'), ...fieldsOf(1) }])
 })
 
-test('older-version screen records: the fourteen roots and the two group fields are acknowledged without applying, the group\'s other keys apply, this device\'s group revisions carry the fields of the revision they continue (an older device keeps its own), a change of only those fields upstream applies as nothing and is never echoed; a restored backup adds nothing', async t => {
+test('older-version screen records: the display roots and the two group fields are acknowledged without applying, the group\'s other keys apply, this device\'s group revisions carry the fields of the revision they continue (an older device keeps its own), a change of only those fields upstream applies as nothing and is never echoed; a restored backup adds nothing', async t => {
     const dav = fixtureDav()
     const old = await device(t, dav, 'screen-old', screenDb(1)); old.service.enable({ workspaceId: 'screen-mixed' })
     const X = wikiRev({ ...restOf('a'), ...fieldsOf(1) })
@@ -1144,21 +1144,29 @@ test('older-version screen records: the fourteen roots and the two group fields 
     // (b) An older device changes only its own memory-limit display: applied here as nothing, never echoed back.
     await old.service.pull()
     const Y = wikiRev({ ...restOf('a', 40), ...fieldsOf(3) }, [Z.id]); old.service.store().commit([Y]); await old.service.publish(); await neo.service.pull()
+    const newDisplayRoots = SCREEN_KEYS.slice(-2)
+    const updatedRoots = newDisplayRoots.map(k => require('./nas-sync-core.cjs').makeRevision({
+        domain: 'settings', type: 'group', root: k,
+        parents: [roots[SCREEN_KEYS.indexOf(k)].id], content: { [k]: screenOf(3)[k] },
+    }))
+    old.service.store().commit(updatedRoots); await old.service.publish(); await neo.service.pull()
     const next = await settle(neo)
+    expect(pick(next.settings ?? {}, newDisplayRoots)).toEqual({})
+    expect(pick(neo.db(), newDisplayRoots)).toEqual(pick(screenOf(2), newDisplayRoots))
     for (const k of WIKI_FIELDS) expect(next.settings ?? {}).not.toHaveProperty(k)
     expect(pick(neo.db(), WIKI_FIELDS)).toEqual(fieldsOf(2)); expect(neo.service.store().pendingApply()).toEqual([])
     expect((await neo.service.snapshot()).committed).toBeNull()
     neo.save({ ...neo.db(), ...fieldsOf(4), ...screenOf(4) }); clock += 1000
     expect((await neo.service.snapshot()).committed).toBeNull()
-    // The fourteen roots are never resolved or restored here.
+    // The display roots are never resolved or restored here.
     await expect(neo.service.restoreRevision({ root: 'settings\ngroup\nmenuSideBar', revision: roots[8].id, expectedHeads: [roots[8].id], confirmed: true })).rejects.toThrow(/stays on each device/)
     await expect(neo.service.resolveConflict({ root: 'settings\ngroup\nhideRealm', keep: roots[1].id })).rejects.toThrow(/stays on each device/)
-    // A restored backup whose recorded lineage names the fourteen roots and the group's current head: no revision, no error.
+    // A restored backup whose recorded lineage names the display roots and the group's current head: no revision, no error.
     neo.service.markRestore({ source: 'backup-import', restoreId: 'screen-backup', lineage: { ...Object.fromEntries(SCREEN_KEYS.map((k, i) => [`settings\ngroup\n${k}#${k}`, roots[i].id])), [WIKI_ROOT + '#memory']: Y.id } })
     expect((await neo.service.snapshot()).committed).toBeNull(); expect(neo.service.status().pendingRestore).toBeNull()
     await neo.service.publish(); await old.service.pull()
     for (const store of [neo.service.store(), old.service.store()]) {
-        expect(store.graph.revisions().filter((x: any) => SCREEN_KEYS.includes(x.root)).map((x: any) => x.id).sort()).toEqual(roots.map((x: any) => x.id).sort())
+        expect(store.graph.revisions().filter((x: any) => SCREEN_KEYS.includes(x.root)).map((x: any) => x.id).sort()).toEqual([...roots, ...updatedRoots].map((x: any) => x.id).sort())
         expect(store.graph.classify(WIKI_ROOT).liveHeads).toEqual([Y.id])
     }
 })

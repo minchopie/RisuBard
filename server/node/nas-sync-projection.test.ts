@@ -311,7 +311,7 @@ test('theme-preset entries are projected without the device-local layout fields 
 test('0.9.96-ver5: the theme (the former settings group of 20 keys), the active app skin and every other synced value of the Display settings page is device-local; the other groups (memory less its two device fields), DEVICE_LOCAL and the skin library are unchanged', async () => {
     const THEME = ['themePresets', 'themePresetsId', 'theme', 'textTheme', 'textThemeAutoContrast', 'customTextTheme', 'colorScheme', 'colorSchemeName', 'customCSS', 'customBackground', 'font', 'customFont', 'lineHeight', 'textAreaTextSize', 'textScreenColor', 'textBorder', 'textScreenRounded', 'textScreenBorder', 'roundIcons', 'classicMaxWidth']
     const WIKI_FIELDS = ['showMemoryLimit', 'memoryLimitThickness']
-    const SCREEN = ['guiHTML', 'hideRealm', 'useAdditionalAssetsPreview', 'unformatQuotes', 'blockquoteStyling', 'customQuotes', 'customQuotesData', 'hideApiKey', 'menuSideBar', 'betaMobileGUI', 'useChatSticker', 'tagAutocomplete', 'useChatCopy', 'useLegacyGUI']
+    const SCREEN = ['guiHTML', 'hideRealm', 'useAdditionalAssetsPreview', 'unformatQuotes', 'blockquoteStyling', 'customQuotes', 'customQuotesData', 'hideApiKey', 'menuSideBar', 'betaMobileGUI', 'useChatSticker', 'tagAutocomplete', 'useChatCopy', 'useLegacyGUI', 'realmHomeMode', 'characterAppSkins']
     expect([...DEVICE_THEME]).toEqual([...THEME, 'appSkinId', ...SCREEN, ...WIKI_FIELDS])
     for (const key of DEVICE_THEME) expect(ownerOf(key), key).toBe('local')
     expect([...DEVICE_LOCAL_ROOTS]).toEqual([rootKeyOf('settings', 'group', 'theme'), rootKeyOf('settings', 'group', 'appSkinId'), ...SCREEN.map(key => rootKeyOf('settings', 'group', key))])

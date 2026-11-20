@@ -69,6 +69,7 @@
         role?: string;
         turnNumber?: number;
         totalLength?: number;
+        onInitialRenderSettled?: () => void;
         onReroll?: () => void;
         onNextSwipe?: () => void;
         unReroll?: () => void;
@@ -102,6 +103,7 @@
         role = null,
         turnNumber,
         totalLength = 0,
+        onInitialRenderSettled,
         onReroll = () => {},
         onNextSwipe = () => {},
         unReroll = () => {},
@@ -139,6 +141,7 @@
         isOptimizedStreamingMessage: boolean
         streamingOptimizationMode: StreamingDisplayOptimizationMode
         rawStreamingText: string
+        totalLength?: number
         messageGenerationInfo?: MessageGenerationInfo
         memoryConfirmed?: boolean
         canonicalReceipt?: CanonicalTurnReceipt
@@ -146,6 +149,7 @@
         isOptimizedStreamingMessage = state.isOptimizedStreamingMessage
         streamingOptimizationMode = state.streamingOptimizationMode
         rawStreamingText = state.rawStreamingText
+        totalLength = state.totalLength ?? totalLength
         if (!editMode) message = state.rawStreamingText
         messageGenerationInfo = state.messageGenerationInfo ?? null
         memoryConfirmed = state.memoryConfirmed ?? false
@@ -337,6 +341,100 @@
     let blankMessage = $derived((message === '{{none}}' || message === '{{blank}}' || message === '') && idx === -1 && !altGreeting || isComment)
     let displayMessage = $derived(isOptimizedStreamingMessage ? rawStreamingText : message)
     let renderRawStreaming = $derived(isOptimizedStreamingMessage && streamingOptimizationMode === 'strong')
+
+    let chatReloadPointer = $derived($ReloadGUIPointer + ($ReloadChatPointer[idx] ?? 0))
+    let totalLengthPointer = $derived((idx > totalLength - 6) ? totalLength : 0)
+    let chatBodyKey = $derived(`${totalLengthPointer}|${chatReloadPointer}`)
+    let measuredBody: HTMLElement | null = null
+    let previousBodyKey: string | undefined
+    let restoreBodyHeight: (() => void) | undefined
+    let bodySnapshot: HTMLElement | undefined
+
+    function releaseBodyHeight() {
+        restoreBodyHeight?.()
+    }
+
+    function clearBodySnapshot() {
+        bodySnapshot?.remove()
+        bodySnapshot = undefined
+        releaseBodyHeight()
+    }
+
+    function settleBodyRender() {
+        clearBodySnapshot()
+        onInitialRenderSettled?.()
+        onInitialRenderSettled = undefined
+    }
+
+    $effect.pre(() => {
+        const key = chatBodyKey
+        const root = bodyRoot
+        const changed = previousBodyKey !== undefined && key !== previousBodyKey && measuredBody === root
+        if (measuredBody !== root) clearBodySnapshot()
+        measuredBody = root
+        previousBodyKey = key
+
+        if (!root || editMode || editTranslationMode || blankMessage || !message.trim() || renderRawStreaming) {
+            clearBodySnapshot()
+            return
+        }
+        if (!changed || bodySnapshot) return
+        const rendered = root.querySelector<HTMLElement>('[data-painter-body]')
+        if (!rendered?.hasChildNodes()) return
+
+        // Keep the previous picture outside the keyed block until the fresh body commits.
+        const snapshot = rendered.cloneNode(true) as HTMLElement
+        snapshot.removeAttribute('data-painter-body')
+        snapshot.setAttribute('data-chat-body-snapshot', '')
+        snapshot.setAttribute('inert', '')
+        snapshot.setAttribute('aria-hidden', 'true')
+        for (const embed of snapshot.querySelectorAll('iframe, object, embed, script')) embed.remove()
+        for (const media of snapshot.querySelectorAll('audio, video')) {
+            media.removeAttribute('autoplay')
+            media.removeAttribute('src')
+            for (const source of media.querySelectorAll('source, track')) source.remove()
+        }
+        const restoreHeight = holdBodyHeight(root)
+        bodySnapshot = snapshot
+        root.prepend(snapshot)
+        if (restoreHeight) {
+            const deadline = setTimeout(releaseBodyHeight, 3000)
+            restoreBodyHeight = () => {
+                clearTimeout(deadline)
+                restoreHeight()
+                restoreBodyHeight = undefined
+            }
+        }
+    })
+
+    function holdBodyHeight(root: HTMLElement) {
+        // NodeOnly has an inline body. Other themes can blockify it as a flex item.
+        let box: HTMLElement | null = root
+        let layout = getComputedStyle(box)
+        while (layout.display === 'inline' || layout.display === 'contents') {
+            box = box.parentElement
+            if (!box) return
+            layout = getComputedStyle(box)
+        }
+        if (layout.display === 'none') return
+        const height = box.offsetHeight
+        if (height <= 0) return
+        const inset = layout.boxSizing === 'content-box'
+            ? [layout.paddingTop, layout.paddingBottom, layout.borderTopWidth, layout.borderBottomWidth]
+                .reduce((sum, value) => sum + (parseFloat(value) || 0), 0)
+            : 0
+        const { style } = box
+        const previous = style.getPropertyValue('min-height')
+        const priority = style.getPropertyPriority('min-height')
+        style.setProperty('min-height', '' + Math.max(0, height - inset) + 'px', priority)
+        return () => style.setProperty('min-height', previous, priority)
+    }
+
+    $effect(() => {
+        if (blankMessage || renderRawStreaming) settleBodyRender()
+    })
+
+    onDestroy(settleBodyRender)
 
     function updateDisplayedMessage(){
         if(renderRawStreaming){
@@ -596,8 +694,6 @@
             {language.noMessage}
         </div>
     {:else}
-        {@const chatReloadPointer = $ReloadGUIPointer + ($ReloadChatPointer[idx] ?? 0)}
-        {@const totalLengthPointer = (idx > totalLength - 6) ? totalLength : 0}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span class="text chat-width chattext prose minw-0"
@@ -612,7 +708,7 @@
             style:font-size="{0.875 * (DBState.db.zoomsize / 100)}rem"
             style:line-height="{(DBState.db.lineHeight ?? 1.25) * (DBState.db.zoomsize / 100)}rem"
         >
-            {#key `${totalLengthPointer}|${chatReloadPointer}`}
+            {#key chatBodyKey}
                 <ChatBody
                     {character}
                     {firstMessage}
@@ -629,7 +725,8 @@
                     bind:translating={translating}
                     bind:retranslate={retranslate}
                     {renderRawStreaming}
-                    {rawStreamingText} />
+                    {rawStreamingText}
+                    onRenderSettled={settleBodyRender} />
             {/key}
             {#if idx >= 0 && !readOnly && !editMode && !isOptimizedStreamingMessage && partialEditEnabled && (DBState.db.enableBlockPartialEdit || DBState.db.enableDragPartialEdit)}
                 <PartialEditController

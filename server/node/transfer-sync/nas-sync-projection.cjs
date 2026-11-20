@@ -66,14 +66,15 @@ const DEVICE_LOCAL = new Set(split(`account characterVault textAreaSize sideBarS
 /** RisuBard 0.9.96-ver5 (user, 2026-11-13: phone, tablet and PC screens differ, so each device keeps its own theme): the former
  *  'theme' group and the active app skin (upstream 0.9.92 appSkinId) are never synchronized. The skin library (appSkins) still syncs
  *  as its own root. Kept apart from DEVICE_LOCAL so the theme-preset layout parity (mirror reads ∩ DEVICE_LOCAL) stays exact. */
+const DEVICE_DISPLAY_ROOTS = split('realmHomeMode characterAppSkins');
 const DEVICE_THEME = new Set([...group(`themePresets themePresetsId theme textTheme textThemeAutoContrast customTextTheme colorScheme colorSchemeName customCSS customBackground font customFont lineHeight textAreaTextSize textScreenColor textBorder textScreenRounded textScreenBorder roundIcons classicMaxWidth`), 'appSkinId',
     // (user, 2026-11-13 16:50: the whole display settings category stays on each device) every other synced value the Display settings page
     // (src/ts/setting/displaySettingsData.svelte.ts, its custom components and TagAutocompleteSettings) binds or its theme-preset selection writes (changeToThemePreset): fourteen keys that were their own roots
     // and two fields of the memory group (DEVICE_GROUP_FIELDS). The skin library (appSkins) it manages still syncs.
-    ...split(`guiHTML hideRealm useAdditionalAssetsPreview unformatQuotes blockquoteStyling customQuotes customQuotesData hideApiKey menuSideBar betaMobileGUI useChatSticker tagAutocomplete useChatCopy useLegacyGUI`), 'showMemoryLimit', 'memoryLimitThickness']);
+    ...split(`guiHTML hideRealm useAdditionalAssetsPreview unformatQuotes blockquoteStyling customQuotes customQuotesData hideApiKey menuSideBar betaMobileGUI useChatSticker tagAutocomplete useChatCopy useLegacyGUI`), ...DEVICE_DISPLAY_ROOTS, 'showMemoryLimit', 'memoryLimitThickness']);
 /** Their roots already on the NAS (published by this device before, or by older versions that still publish them): kept in history,
  *  never applied, listed, resolved or restored here, like the legacy userNote root. */
-const DEVICE_LOCAL_ROOTS = new Set(['settings\ngroup\ntheme', 'settings\ngroup\nappSkinId', ...split(`guiHTML hideRealm useAdditionalAssetsPreview unformatQuotes blockquoteStyling customQuotes customQuotesData hideApiKey menuSideBar betaMobileGUI useChatSticker tagAutocomplete useChatCopy useLegacyGUI`).map(key => 'settings\ngroup\n' + key)]);
+const DEVICE_LOCAL_ROOTS = new Set(['settings\ngroup\ntheme', 'settings\ngroup\nappSkinId', ...split(`guiHTML hideRealm useAdditionalAssetsPreview unformatQuotes blockquoteStyling customQuotes customQuotesData hideApiKey menuSideBar betaMobileGUI useChatSticker tagAutocomplete useChatCopy useLegacyGUI`).concat(DEVICE_DISPLAY_ROOTS).map(key => 'settings\ngroup\n' + key)]);
 /** Device fields of a group that still syncs (in DEVICE_THEME, so never projected from or applied to this device). Older devices still
  *  sync them INSIDE the group and clear a group key a received revision lacks, so the group's wire content keeps the values of the
  *  revision this device continues (its lineage head, else the single frontier head or heads that differ only there): an older device never

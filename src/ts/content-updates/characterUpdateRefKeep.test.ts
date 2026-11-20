@@ -373,6 +373,55 @@ describe('Asset Maid references across a card update (A2)', () => {
 })
 
 // 0.9.96-ver11: records describe the final pictures, including re-imports of an already broken card.
+describe('Asset Maid free-created characters', () => {
+    const target = 'custom:character_7f584fee-9d28-4609-8c6e-fa7b87aa9f8d'
+    const customBody = (entries: unknown[], assets?: Record<number, string>) => {
+        const entry = maidEntry([], assets)
+        const body = portable(entry)
+        body.features.characterForms.entries = entries
+        return { ...entry, content: '@@dont_activate ' + JSON.stringify(body) }
+    }
+
+    test.each([new Map<number, number>(), undefined])('keeps both sides and renumbers pictures with map %s', map => {
+        const mine = customBody([{ target, forms: [
+            { id: 'blank', reference: {} }, { id: 'incoming' }, { id: 'both', reference: {} },
+            { id: 'mine', reference: { asset: 'asset:0' } }, { id: 'replace', reference: { asset: 'asset:0' } },
+        ] }], { 0: 'mine' })
+        const theirs = customBody([{ target, forms: [
+            { id: 'blank' }, { id: 'incoming', reference: {} }, { id: 'both', reference: { asset: 'asset:0' } },
+            { id: 'mine', reference: {} }, { id: 'replace', reference: { asset: 'asset:0' } },
+        ] }], { 0: 'theirs' })
+        const pictures = [pic('other'), pic('theirs')]
+        const merged = mergeAssetMaid(mine, theirs, { additionalAssets: [pic('mine')] }, { additionalAssets: [pic('theirs')] }, pictures, map)!
+        expect(merged).toMatchObject({ kept: 2, replaced: 1, appended: 1, held: [], dropped: [] })
+        expect(portable({ ...theirs, content: merged.content }).features.characterForms.entries).toEqual([{ target, forms: [
+            { id: 'blank', reference: {} }, { id: 'incoming', reference: {} }, { id: 'both', reference: { asset: 'asset:1' } },
+            { id: 'mine', reference: { asset: 'asset:2' } }, { id: 'replace', reference: { asset: 'asset:2' } },
+        ] }])
+        expect(pictures).toEqual([pic('other'), pic('theirs'), pic('mine')])
+    })
+
+    test.each([[0, 'character-missing'], [2, 'character-ambiguous']])('holds when there are %i exact targets', (count, reason) => {
+        const forms = [{ id: 'f', reference: { asset: 'asset:0' } }]
+        const mine = customBody([{ target, forms }])
+        const theirs = customBody([{ target: target + '-other', forms }, ...Array.from({ length: count }, () => ({ target, forms }))])
+        const merged = mergeAssetMaid(mine, theirs, { additionalAssets: [pic('mine')] }, { additionalAssets: [pic('incoming')] }, [pic('incoming')], new Map())!
+        expect(merged.held).toEqual([{ side: 'mine', target, character: '', formId: 'f', reference: forms[0].reference, reason }])
+        expect(merged).toMatchObject({ kept: 0, replaced: 0, appended: 0, dropped: [] })
+    })
+
+    test('preserves an installed empty slot through preselection without counting it as kept', () => {
+        const mine = bot({ globalLore: [customBody([{ target, forms: [{ id: 'f', reference: {} }] }])] })
+        const theirs = bot({ globalLore: [customBody([{ target, forms: [{ id: 'f', label: 'New' }] }])] })
+        const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, null)
+        const keep = presetAssetMaidMerge(plan, mine, theirs)!
+        expect(keep.kept).toBe(0)
+        const merged = apply(plan, mine, theirs, { [keep.id]: 'edit' }, { [keep.id]: keep.text })
+        finalize(merged, mine, theirs)
+        expect(portable(merged.globalLore[0]).features.characterForms.entries[0].forms).toEqual([{ id: 'f', label: 'New', reference: {} }])
+    })
+})
+
 describe('Asset Maid final character picture fingerprints', () => {
     const setup = (own: [string, string, string][], next: [string, string, string][]) => {
         const mine = bot({ additionalAssets: own, globalLore: [lore('Person', 'person'), maidEntry([{ at: 0, fp: 'person', forms: [{ id: 'default', asset: 0 }] }], { 0: 'stale' })] })

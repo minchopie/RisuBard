@@ -1011,9 +1011,9 @@
       "path": "server/node/nas-sync-projection.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "83b44c8ee4feb2a1b103f527c1fb1c2d1a227fcd399456eb994ee5293f2cc3e7",
-      "contentSha256": "83b44c8ee4feb2a1b103f527c1fb1c2d1a227fcd399456eb994ee5293f2cc3e7",
-      "bytes": 46082
+      "sha256": "7967641d0b45f339ba74dbf5c09727c54fe884b207d716ecbfd0ee4cbef95619",
+      "contentSha256": "7967641d0b45f339ba74dbf5c09727c54fe884b207d716ecbfd0ee4cbef95619",
+      "bytes": 46120
     },
     {
       "path": "server/node/nas-sync-reconcile.test.ts",
@@ -1051,9 +1051,9 @@
       "path": "server/node/nas-sync-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "3a5cd2548edc59491928d8991c846cbcf608e244726a0ac92108918076bbbba9",
-      "contentSha256": "3a5cd2548edc59491928d8991c846cbcf608e244726a0ac92108918076bbbba9",
-      "bytes": 217600
+      "sha256": "c10b15ddece2087a7b3ad818a2d9c594d292e2f8f58aa24c0e89076fa8754eaf",
+      "contentSha256": "c10b15ddece2087a7b3ad818a2d9c594d292e2f8f58aa24c0e89076fa8754eaf",
+      "bytes": 218308
     },
     {
       "path": "server/node/nas-sync-share.cjs",
@@ -1251,9 +1251,9 @@
       "path": "server/node/transfer-sync/nas-sync-projection.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "6f93d51a7d46e590125236c0b2ff1768a80a45f5985c2f8f8b216b65f47cedab",
-      "contentSha256": "6f93d51a7d46e590125236c0b2ff1768a80a45f5985c2f8f8b216b65f47cedab",
-      "bytes": 42701
+      "sha256": "1092be80a49103dde4a674a2d649807379ab34f3bbcf67c242ca091ebb97a653",
+      "contentSha256": "1092be80a49103dde4a674a2d649807379ab34f3bbcf67c242ca091ebb97a653",
+      "bytes": 42827
     },
     {
       "path": "server/node/transfer-sync/nas-sync-reconcile.cjs",
@@ -1811,9 +1811,9 @@
       "path": "src/ts/transfer-sync/androidBack.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "4e91dfa5b352303f1f09d8d68e407c567e5eb96710d3bfe0dbb7690c85c0fe5e",
-      "contentSha256": "4e91dfa5b352303f1f09d8d68e407c567e5eb96710d3bfe0dbb7690c85c0fe5e",
-      "bytes": 22738
+      "sha256": "4755170a3f265081b2357d768ed59f44ffea11790c58bf78e9f865883672173c",
+      "contentSha256": "4755170a3f265081b2357d768ed59f44ffea11790c58bf78e9f865883672173c",
+      "bytes": 22729
     },
     {
       "path": "android-app/app/src/main/java/app/risubard/personal/NativeBack.kt",
@@ -1891,9 +1891,9 @@
       "path": "src/lib/ChatScreens/Chat.svelte",
       "module": "mobile-ui",
       "kind": "hosts",
-      "sha256": "105e91c119e3bb378f802c92aee6e906d2f56ba9d6b1c9d9c9a4c980024921ca",
-      "contentSha256": "375baed7b22c61a6eaf17878256a1e0b327947481d4e9794e8049d413b3a96a9",
-      "bytes": 90750
+      "sha256": "bdcc810992ecb4b22e691d2f04a193b5669984712fb3d74dfcbabff76423a0ad",
+      "contentSha256": "af315a67517012e101fe4424caf2f18062ab090cc9c8192771dd6c438c63285a",
+      "bytes": 94677
     },
     {
       "path": "src/lib/SideBars/RisuBardGallery.svelte",
@@ -1926,6 +1926,54 @@
       "sha256": "2bdf378582367cb72d7d2fb888b77a02eaa92e8c916ac8436041c18607baaf2b",
       "contentSha256": "cccd997752c906127cdbc52754489e229be46d40f794ba9446f25362c71b63c4",
       "bytes": 1806
+    },
+    {
+      "path": "src/lib/ChatScreens/ChatBody.svelte",
+      "module": "mobile-ui",
+      "kind": "hosts",
+      "sha256": "fc1cb0fedcb55e4911914fd84bd02ceee10328e071a2188e13cbb3dd5379581b",
+      "contentSha256": "fc1cb0fedcb55e4911914fd84bd02ceee10328e071a2188e13cbb3dd5379581b",
+      "bytes": 13140
+    },
+    {
+      "path": "src/lib/ChatScreens/ChatEditInteraction.test.ts",
+      "module": "mobile-ui",
+      "kind": "hosts",
+      "sha256": "7d5f75ceea626b7789ea236f9fddd2cb8b41adb7c5f709b3a0d841c5637e2d7c",
+      "contentSha256": "7d5f75ceea626b7789ea236f9fddd2cb8b41adb7c5f709b3a0d841c5637e2d7c",
+      "bytes": 24477
+    },
+    {
+      "path": "src/lib/ChatScreens/BackgroundDom.svelte",
+      "module": "mobile-ui",
+      "kind": "hosts",
+      "sha256": "001c643898b6cb3e33ff04d83e56b3b2668ac7f752111adbff3d1065f616ee62",
+      "contentSha256": "001c643898b6cb3e33ff04d83e56b3b2668ac7f752111adbff3d1065f616ee62",
+      "bytes": 1945
+    },
+    {
+      "path": "src/lib/ChatScreens/retainedChatHtml.ts",
+      "module": "mobile-ui",
+      "kind": "hosts",
+      "sha256": "e9313da676364a72cb7750a7a6a8d0866ad8a766a96e82ef539d4e6a1238a16c",
+      "contentSha256": "e9313da676364a72cb7750a7a6a8d0866ad8a766a96e82ef539d4e6a1238a16c",
+      "bytes": 4601
+    },
+    {
+      "path": "src/lib/ChatScreens/Chats.svelte",
+      "module": "mobile-ui",
+      "kind": "hosts",
+      "sha256": "9d56a52cb9a17ddf25e53cbef5bbebce7f43d0ad1d843024a85abc665996f78d",
+      "contentSha256": "9d56a52cb9a17ddf25e53cbef5bbebce7f43d0ad1d843024a85abc665996f78d",
+      "bytes": 15197
+    },
+    {
+      "path": "src/lib/ChatScreens/retainedChatHtml.test.ts",
+      "module": "mobile-ui",
+      "kind": "hosts",
+      "sha256": "7735038970756edd4537ff43642d5a267e8cf28b99bafb0d34ef814b19543045",
+      "contentSha256": "7735038970756edd4537ff43642d5a267e8cf28b99bafb0d34ef814b19543045",
+      "bytes": 4955
     },
     {
       "path": "public/fonts/KaTeX-Fonts-OFL.txt",
@@ -2022,6 +2070,14 @@
       "sha256": "c2e6894b0760a6d4523f4ad2a04abedbf1a26c8ca1fe0876eddd4fb8dbb225fc",
       "contentSha256": "c2e6894b0760a6d4523f4ad2a04abedbf1a26c8ca1fe0876eddd4fb8dbb225fc",
       "bytes": 1586
+    },
+    {
+      "path": "src/lib/ChatScreens/BackgroundDom.test.ts",
+      "module": "mobile-ui",
+      "kind": "files",
+      "sha256": "ec54dadafe730bb0945baf9aaf8ef6077788ce2165376572f0fd3faed7753f89",
+      "contentSha256": "ec54dadafe730bb0945baf9aaf8ef6077788ce2165376572f0fd3faed7753f89",
+      "bytes": 4086
     },
     {
       "path": "server/node/logs.cjs",
@@ -2328,6 +2384,14 @@
       "bytes": 61961
     },
     {
+      "path": "src/ts/process/scripts.ts",
+      "module": "lore-lua",
+      "kind": "hosts",
+      "sha256": "fe52c6b0c01b18cc924729375349336ca92be8239420bd4af90362f9d925719c",
+      "contentSha256": "fe52c6b0c01b18cc924729375349336ca92be8239420bd4af90362f9d925719c",
+      "bytes": 17912
+    },
+    {
       "path": "src/ts/parser/tests/cbs/lifestyle100.test.ts",
       "module": "lore-lua",
       "kind": "files",
@@ -2406,6 +2470,14 @@
       "sha256": "93bb5fb386be7167d3cb39f555ea52092671a7f3e6519b4efa2905e86c4e277f",
       "contentSha256": "93bb5fb386be7167d3cb39f555ea52092671a7f3e6519b4efa2905e86c4e277f",
       "bytes": 1068
+    },
+    {
+      "path": "src/ts/process/scripts.streamingMeta.test.ts",
+      "module": "lore-lua",
+      "kind": "files",
+      "sha256": "3df490457108aeac9917a667461d9b3b3eb91ebeb5938ff89f76cd8c58b50394",
+      "contentSha256": "3df490457108aeac9917a667461d9b3b3eb91ebeb5938ff89f76cd8c58b50394",
+      "bytes": 2840
     },
     {
       "path": "server/node/canonical-projection-sync.test.ts",
@@ -4552,6 +4624,54 @@
       "bytes": 2520
     },
     {
+      "path": "docs/fork-modules/compat/v0.9.102/transfer-integration.patch",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "29a8898dbba5dfac760836092f81c8d2c87c6bc186b9d4caf7438de75d22e3fc",
+      "contentSha256": "29a8898dbba5dfac760836092f81c8d2c87c6bc186b9d4caf7438de75d22e3fc",
+      "bytes": 67486
+    },
+    {
+      "path": "docs/fork-modules/compat/v0.9.102/model-compat.patch",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "bad581eac02d0589c0de4dde5b32d886d76f2b6dfd2c3aa898dfb4c9a808d9e1",
+      "contentSha256": "bad581eac02d0589c0de4dde5b32d886d76f2b6dfd2c3aa898dfb4c9a808d9e1",
+      "bytes": 83597
+    },
+    {
+      "path": "docs/fork-modules/compat/v0.9.102/distribution.patch",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "f8efdc0375e9873a27b3a50b5246739ed9d71f0c8d860df7918fb517ec788b7e",
+      "contentSha256": "f8efdc0375e9873a27b3a50b5246739ed9d71f0c8d860df7918fb517ec788b7e",
+      "bytes": 13503
+    },
+    {
+      "path": "patchnote/0.9.103-ver1.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "a9dde99ce0e6274fda80fbed58e86b556b0b84993ad7b6694a4e6884a9f5f63b",
+      "contentSha256": "a9dde99ce0e6274fda80fbed58e86b556b0b84993ad7b6694a4e6884a9f5f63b",
+      "bytes": 3682
+    },
+    {
+      "path": "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "cfe6c0a08fcc6306963c7a631c6ddd5033960022f63d8b62fc42dc6588e06678",
+      "contentSha256": "cfe6c0a08fcc6306963c7a631c6ddd5033960022f63d8b62fc42dc6588e06678",
+      "bytes": 8091
+    },
+    {
+      "path": "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "4f5e33ab85838c5e2a7cac28eb4372fc155c367b0bca6f8c63a15ebe9e9b67f1",
+      "contentSha256": "4f5e33ab85838c5e2a7cac28eb4372fc155c367b0bca6f8c63a15ebe9e9b67f1",
+      "bytes": 22201
+    },
+    {
       "path": "server/node/app-update/bootstrap.cjs",
       "module": "app-update",
       "kind": "files",
@@ -4851,17 +4971,17 @@
       "path": "src/ts/content-updates/characterUpdateRefKeep.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "fe57ff63bdcd0363a21524741ff4284e9d97b501c550d816686969d1d8ad987f",
-      "contentSha256": "fe57ff63bdcd0363a21524741ff4284e9d97b501c550d816686969d1d8ad987f",
-      "bytes": 34324
+      "sha256": "878878c042beae2210be7974edd16c31d1e7fd03d0496fe2325d03c90880088c",
+      "contentSha256": "878878c042beae2210be7974edd16c31d1e7fd03d0496fe2325d03c90880088c",
+      "bytes": 35310
     },
     {
       "path": "src/ts/content-updates/characterUpdateRefKeep.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "bf06bdf7e77b8667356e446b599621fd125fb189f4d8e99dd1b233512bf31766",
-      "contentSha256": "bf06bdf7e77b8667356e446b599621fd125fb189f4d8e99dd1b233512bf31766",
-      "bytes": 61020
+      "sha256": "8ab69cb8962fa5ffef079fec3b9dcd6ed90b7d673d4cbc1be5a54676ab2f98b2",
+      "contentSha256": "8ab69cb8962fa5ffef079fec3b9dcd6ed90b7d673d4cbc1be5a54676ab2f98b2",
+      "bytes": 64467
     }
   ],
   "modules": [
@@ -5120,7 +5240,13 @@
         "src/lib/SideBars/RisuBardGallery.svelte",
         "src/lib/SideBars/RisuBardGalleryConnections.test.ts",
         "src/main.ts",
-        "src/ts/viewportHeight.ts"
+        "src/ts/viewportHeight.ts",
+        "src/lib/ChatScreens/ChatBody.svelte",
+        "src/lib/ChatScreens/ChatEditInteraction.test.ts",
+        "src/lib/ChatScreens/BackgroundDom.svelte",
+        "src/lib/ChatScreens/retainedChatHtml.ts",
+        "src/lib/ChatScreens/Chats.svelte",
+        "src/lib/ChatScreens/retainedChatHtml.test.ts"
       ],
       "files": [
         "public/fonts/KaTeX-Fonts-OFL.txt",
@@ -5134,11 +5260,12 @@
         "public/fonts/interface/tilt-prism-vietnamese.woff2",
         "public/fonts/interface/yellowtail-latin-ext.woff2",
         "public/fonts/interface/yellowtail-latin.woff2",
-        "src/ts/viewportHeight.test.ts"
+        "src/ts/viewportHeight.test.ts",
+        "src/lib/ChatScreens/BackgroundDom.test.ts"
       ],
       "patch": {
         "path": "docs/fork-modules/patches/mobile-ui.patch",
-        "sha256": "80772f2e16f9c65627df8db974ea53a70047976732def7a36217d22bd03257cc"
+        "sha256": "08ef0fa5031c9472d205cc3567787b2a8ff6c41f06f8911be6e16ae28fb02ee5"
       }
     },
     {
@@ -5194,7 +5321,8 @@
         "src/ts/process/lorebookMatching.test.ts",
         "src/ts/process/lorebookMatching.ts",
         "src/ts/process/lorebookRecursion.test.ts",
-        "src/ts/process/scriptings.ts"
+        "src/ts/process/scriptings.ts",
+        "src/ts/process/scripts.ts"
       ],
       "files": [
         "src/ts/parser/tests/cbs/lifestyle100.test.ts",
@@ -5206,11 +5334,12 @@
         "src/ts/parser/tests/fixtures/narrative100.json",
         "src/ts/parser/tests/fixtures/core-sentinel.json",
         "src/ts/process/luaChatEntry.ts",
-        "src/ts/process/luaChatEntry.test.ts"
+        "src/ts/process/luaChatEntry.test.ts",
+        "src/ts/process/scripts.streamingMeta.test.ts"
       ],
       "patch": {
         "path": "docs/fork-modules/patches/lore-lua.patch",
-        "sha256": "93cd88ddd3ee39bdcfb904cb144bcea12f1ec580639b8b3e78e1e6ec5bcd67a2"
+        "sha256": "3b17f6e3f7096728e4c674f1b98282257b8298429c769c54eeda902cf70fe555"
       }
     },
     {
@@ -5533,7 +5662,13 @@
         "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
         "docs/fork-modules/WEEKLY-20261118.md",
         "patchnote/0.9.102-ver1.md",
-        "patchnote/0.9.102-ver2.md"
+        "patchnote/0.9.102-ver2.md",
+        "docs/fork-modules/compat/v0.9.102/transfer-integration.patch",
+        "docs/fork-modules/compat/v0.9.102/model-compat.patch",
+        "docs/fork-modules/compat/v0.9.102/distribution.patch",
+        "patchnote/0.9.103-ver1.md",
+        "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
+        "docs/fork-modules/compat/v0.9.96/lore-lua.patch"
       ],
       "patch": null
     },
@@ -5635,7 +5770,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "a796784f7da103f63e619e25d36b63fd5c855d7a2c30a4ebd84ebc9604630c11"
+      "sha256": "958086e7303620a68e247153991e71b0d231f960935dc4ef02b1b14ea64b19c2"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5668,26 +5803,26 @@
   ],
   "compatibility": [
     {
-      "tag": "v0.9.102",
-      "targetSha": "450f46b772bf9a73d2ae916bf6cb52c3535745f2",
+      "tag": "v0.9.103",
+      "targetSha": "ee433e905f711704f2175b6f92c877d7d48a3af9",
       "patches": [
         {
           "module": "transfer-integration",
-          "path": "docs/fork-modules/compat/v0.9.102/transfer-integration.patch",
+          "path": "docs/fork-modules/compat/v0.9.103/transfer-integration.patch",
           "sourceSha256": "f629bd265e9e60abacd8ca8fe9902036e3d45eef9f0fb6a1d195f930663566df",
-          "sha256": "29a8898dbba5dfac760836092f81c8d2c87c6bc186b9d4caf7438de75d22e3fc"
+          "sha256": "c2872f6809d0696a87bc628e244ec5ab765980dc1298b12dde80e9125606f0eb"
         },
         {
           "module": "mobile-ui",
-          "path": "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
-          "sourceSha256": "80772f2e16f9c65627df8db974ea53a70047976732def7a36217d22bd03257cc",
-          "sha256": "cfe6c0a08fcc6306963c7a631c6ddd5033960022f63d8b62fc42dc6588e06678"
+          "path": "docs/fork-modules/compat/v0.9.103/mobile-ui.patch",
+          "sourceSha256": "08ef0fa5031c9472d205cc3567787b2a8ff6c41f06f8911be6e16ae28fb02ee5",
+          "sha256": "22b111801dceb55f6eaf7addf9fac53433cd7c291fbb350f2df8bbe00f01c0f5"
         },
         {
           "module": "model-compat",
-          "path": "docs/fork-modules/compat/v0.9.102/model-compat.patch",
+          "path": "docs/fork-modules/compat/v0.9.103/model-compat.patch",
           "sourceSha256": "6be56fc119825094cb65df718fd70970f9047cd6c3a34cf3ad879f07ccccb384",
-          "sha256": "bad581eac02d0589c0de4dde5b32d886d76f2b6dfd2c3aa898dfb4c9a808d9e1"
+          "sha256": "068676e6a58e472191048e05874c9d3c6f9e3803c8b0584addf7952cf44f24ba"
         },
         {
           "module": "storage-recovery",
@@ -5711,15 +5846,15 @@
         },
         {
           "module": "distribution",
-          "path": "docs/fork-modules/compat/v0.9.102/distribution.patch",
+          "path": "docs/fork-modules/compat/v0.9.103/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "f8efdc0375e9873a27b3a50b5246739ed9d71f0c8d860df7918fb517ec788b7e"
+          "sha256": "5bbea40016f90af45af5770b27066c8e979615a643bbf1fadafc3eae08827ea8"
         },
         {
           "module": "lore-lua",
-          "path": "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
-          "sourceSha256": "93cd88ddd3ee39bdcfb904cb144bcea12f1ec580639b8b3e78e1e6ec5bcd67a2",
-          "sha256": "4f5e33ab85838c5e2a7cac28eb4372fc155c367b0bca6f8c63a15ebe9e9b67f1"
+          "path": "docs/fork-modules/compat/v0.9.103/lore-lua.patch",
+          "sourceSha256": "3b17f6e3f7096728e4c674f1b98282257b8298429c769c54eeda902cf70fe555",
+          "sha256": "fbc6b2d0359356ff2b8f4976a79e3b073ce0b492f02147fa6f9f7a944d035b34"
         },
         {
           "module": "host-bridges",
@@ -5732,7 +5867,7 @@
             },
             {
               "path": "src/ts/characterUpdateFlow.svelte.ts",
-              "sha256": "c61e8c744d3209e4a14a1f02866a2cf7e88b146cd2f50cb565eae23724168c2e"
+              "sha256": "baff2c80efd57738f36b1c7e1a25d1460ef1d072bc55f7546c3696dd5910e931"
             }
           ],
           "sha256": "d64cf51bd3c70b6da61434a7d71ba9ec1ebf81860e484a25919241b72e35654a"
@@ -5787,7 +5922,8 @@
         "patchnote/0.9.99.md": "docs/fork-modules/history/patchnote/0.9.99.md",
         "patchnote/0.9.100.md": "docs/fork-modules/history/patchnote/0.9.100.md",
         "patchnote/0.9.101.md": "docs/fork-modules/history/patchnote/0.9.101.md",
-        "patchnote/0.9.102.md": "docs/fork-modules/history/patchnote/0.9.102.md"
+        "patchnote/0.9.102.md": "docs/fork-modules/history/patchnote/0.9.102.md",
+        "patchnote/0.9.103.md": "docs/fork-modules/history/patchnote/0.9.103.md"
       },
       "probes": {
         "server/node/server.cjs": [
@@ -5812,7 +5948,8 @@
         ],
         "server/node/risubard-memory-analysis.ts": [
           "trailingMessagesField(canonicalTrailingMessages)",
-          "cardUpkeep.size > 0"
+          "cardUpkeep.size > 0",
+          "document.type === 'event'"
         ],
         "src/lang/help.ko.ts": [
           "리랭커 API(Cohere 방식 /rerank)"
@@ -5848,7 +5985,9 @@
           "skipNarrativeBacklogTurn",
           "prepareCurrentStoryTimeBackfill",
           "showSaveLoadToolbar",
-          "onPreviousPage={() => selectChatPage(chatBounds.page - 1)}"
+          "onPreviousPage={() => selectChatPage(chatBounds.page - 1)}",
+          "[contain:layout]",
+          "<SideBarArrow />"
         ],
         "server/node/file-kv.cjs": [
           "convertToAssetStore",
@@ -5871,7 +6010,8 @@
           "inquirySettings.risuBardSourceRerank",
           "runCurrentStoryTimeBackfill",
           "PROVIDER_OUTAGE_CATEGORIES",
-          "!PROVIDER_OUTAGE_CATEGORIES.has(canonicalFailureCategory(error))"
+          "!PROVIDER_OUTAGE_CATEGORIES.has(canonicalFailureCategory(error))",
+          "const stableLoreIndex = requestSettings.loreAlwaysActiveBeforeChat"
         ],
         "server/node/risubard-memory-runtime.cjs": [
           "setWikiDocumentGrade",
@@ -5913,14 +6053,25 @@
           "installUiSounds()"
         ],
         "src/ts/process/request/request.ts": [
-          "targ.modelInfo.format === LLMFormat.Plugin"
+          "targ.modelInfo.format === LLMFormat.Plugin",
+          "keepLaterSystemInPlace: getDatabase().keepLaterSystemInPlace === true"
         ],
         "src/lib/SideBars/SideChatList.svelte": [
           "<ModelBind minimal={DBState.db.sidebarMinimalMode} />",
-          "<Toggles bind:chara={chara} noContainer minimal>"
+          "<Toggles bind:chara={chara} noContainer minimal>",
+          "openModuleListStore.set('skins')"
         ],
         "src/lib/Setting/Pages/PluginSettings.svelte": [
           ":global([data-collection-organizer-list=\"plugins\"])"
+        ],
+        ".github/workflows/release.yml": [
+          "ONNXRUNTIME_NODE_INSTALL_CUDA: skip"
+        ],
+        "src/lib/ChatScreens/ChatScreen.svelte": [
+          "initialView={moduleListView}"
+        ],
+        "server/node/asset-store.cjs": [
+          "if (!parsed || !has(key)) return null;"
         ]
       }
     }

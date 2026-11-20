@@ -2,6 +2,7 @@ interface ChatHtmlUpdate {
     content: Promise<string>
     format: (html: string) => string
     onRender: () => void
+    onError?: () => void
     pendingHtml?: string
 }
 
@@ -19,14 +20,24 @@ function patchChildren(live: Element, previous: Node, next: Node) {
         return
     }
 
-    for (let index = 0; index < Math.max(oldChildren.length, nextChildren.length); index++) {
-        const oldChild = oldChildren[index]
-        const nextChild = nextChildren[index]
+    let oldEnd = oldChildren.length
+    let nextEnd = nextChildren.length
+    if (oldEnd !== nextEnd) {
+        // Keep equal trailing blocks aligned when body paragraphs grow or shrink.
+        while (oldEnd > 0 && nextEnd > 0 && oldChildren[oldEnd - 1].isEqualNode(nextChildren[nextEnd - 1])) {
+            oldEnd--
+            nextEnd--
+        }
+    }
+    const tail = liveChildren[oldEnd] ?? null
+    for (let index = 0; index < Math.max(oldEnd, nextEnd); index++) {
+        const oldChild = index < oldEnd ? oldChildren[index] : undefined
+        const nextChild = index < nextEnd ? nextChildren[index] : undefined
         const liveChild = liveChildren[index]
         if (!nextChild) {
             live.removeChild(liveChild)
         } else if (!oldChild) {
-            live.appendChild(nextChild.cloneNode(true))
+            live.insertBefore(nextChild.cloneNode(true), tail)
         } else if (!oldChild.isEqualNode(nextChild)) {
             patchNode(liveChild, oldChild, nextChild)
         }
@@ -91,7 +102,10 @@ export function retainedChatHtml(node: HTMLElement, initial: ChatHtmlUpdate) {
             commit(options.format(html))
             options.onRender()
         }).catch(error => {
-            if (request === revision) console.error('Failed to render chat HTML', error)
+            if (request === revision) {
+                options.onError?.()
+                console.error('Failed to render chat HTML', error)
+            }
         })
     }
 

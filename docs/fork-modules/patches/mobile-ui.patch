@@ -14,8 +14,74 @@ index 6618b8a..1c3be81 100644
      <!-- <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; object-src 'none'; require-trusted-types-for 'script'; trusted-types plugin-policy;"> -->
      <title>RisuBard</title>
    </head>
+diff --git a/src/lib/ChatScreens/BackgroundDom.svelte b/src/lib/ChatScreens/BackgroundDom.svelte
+index 3dc8ac6..a8528af 100644
+--- a/src/lib/ChatScreens/BackgroundDom.svelte
++++ b/src/lib/ChatScreens/BackgroundDom.svelte
+@@ -4,20 +4,53 @@
+     import { DBState } from 'src/ts/stores.svelte';
+     import { moduleBackgroundEmbedding, ReloadGUIPointer, selIdState } from "src/ts/stores.svelte";
+ 
++    import { onDestroy } from 'svelte';
++
+     let backgroundHTML = $derived(DBState.db?.characters?.[selIdState.selId]?.backgroundHTML)
+     let currentChar:character = $derived(DBState.db?.characters?.[selIdState.selId])
+ 
++    let renderedBackground = $state('')
++    let request = 0
++    let previousIndex: number | undefined
++    let previousCharacter: string | undefined
++
++    $effect.pre(() => {
++        const index = selIdState.selId
++        const char = currentChar
++        const charId = char?.chaId
++        const html = backgroundHTML
++        const embedding = $moduleBackgroundEmbedding
++        const current = ++request
++
++        if (index !== previousIndex || charId !== previousCharacter) {
++            renderedBackground = ''
++        }
++        previousIndex = index
++        previousCharacter = charId
++        if (index < 0 || !(html || embedding)) {
++            renderedBackground = ''
++            return
++        }
++
++        void $ReloadGUIPointer
++        void ParseMarkdown(risuChatParser((html || '') + '\n' + (embedding || ''), {chara:char}), char, 'back')
++            .then(md => {
++                if (current === request) renderedBackground = md
++            }, error => {
++                if (current !== request) return
++                renderedBackground = ''
++                console.error('Failed to render chat background', error)
++            })
++    })
++
++    onDestroy(() => { request++ })
+ </script>
+ 
+ 
+ {#if backgroundHTML || $moduleBackgroundEmbedding}
+     {#if selIdState.selId > -1}
+-        {#key $ReloadGUIPointer}
+-            <div class="absolute top-0 left-0 w-full h-full">
+-                {#await ParseMarkdown(risuChatParser((backgroundHTML || '') + '\n' + ($moduleBackgroundEmbedding || ''), {chara:currentChar}), currentChar, 'back') then md} 
+-                    {@html md}
+-                {/await}
+-            </div>
+-        {/key}
++        <div class="absolute top-0 left-0 w-full h-full">
++            {@html renderedBackground}
++        </div>
+     {/if}
+ {/if}
+\ No newline at end of file
 diff --git a/src/lib/ChatScreens/Chat.svelte b/src/lib/ChatScreens/Chat.svelte
-index facd5bc..7dbb2eb 100644
+index facd5bc..43c03cd 100644
 --- a/src/lib/ChatScreens/Chat.svelte
 +++ b/src/lib/ChatScreens/Chat.svelte
 @@ -45,6 +45,7 @@
@@ -26,7 +92,168 @@ index facd5bc..7dbb2eb 100644
  
      let viewportWidth = $state(window.innerWidth)
      let mobileActionsOpen = $state(false)
-@@ -1621,13 +1622,13 @@
+@@ -68,6 +69,7 @@
+         role?: string;
+         turnNumber?: number;
+         totalLength?: number;
++        onInitialRenderSettled?: () => void;
+         onReroll?: () => void;
+         onNextSwipe?: () => void;
+         unReroll?: () => void;
+@@ -101,6 +103,7 @@
+         role = null,
+         turnNumber,
+         totalLength = 0,
++        onInitialRenderSettled,
+         onReroll = () => {},
+         onNextSwipe = () => {},
+         unReroll = () => {},
+@@ -138,6 +141,7 @@
+         isOptimizedStreamingMessage: boolean
+         streamingOptimizationMode: StreamingDisplayOptimizationMode
+         rawStreamingText: string
++        totalLength?: number
+         messageGenerationInfo?: MessageGenerationInfo
+         memoryConfirmed?: boolean
+         canonicalReceipt?: CanonicalTurnReceipt
+@@ -145,6 +149,7 @@
+         isOptimizedStreamingMessage = state.isOptimizedStreamingMessage
+         streamingOptimizationMode = state.streamingOptimizationMode
+         rawStreamingText = state.rawStreamingText
++        totalLength = state.totalLength ?? totalLength
+         if (!editMode) message = state.rawStreamingText
+         messageGenerationInfo = state.messageGenerationInfo ?? null
+         memoryConfirmed = state.memoryConfirmed ?? false
+@@ -337,6 +342,100 @@
+     let displayMessage = $derived(isOptimizedStreamingMessage ? rawStreamingText : message)
+     let renderRawStreaming = $derived(isOptimizedStreamingMessage && streamingOptimizationMode === 'strong')
+ 
++    let chatReloadPointer = $derived($ReloadGUIPointer + ($ReloadChatPointer[idx] ?? 0))
++    let totalLengthPointer = $derived((idx > totalLength - 6) ? totalLength : 0)
++    let chatBodyKey = $derived(`${totalLengthPointer}|${chatReloadPointer}`)
++    let measuredBody: HTMLElement | null = null
++    let previousBodyKey: string | undefined
++    let restoreBodyHeight: (() => void) | undefined
++    let bodySnapshot: HTMLElement | undefined
++
++    function releaseBodyHeight() {
++        restoreBodyHeight?.()
++    }
++
++    function clearBodySnapshot() {
++        bodySnapshot?.remove()
++        bodySnapshot = undefined
++        releaseBodyHeight()
++    }
++
++    function settleBodyRender() {
++        clearBodySnapshot()
++        onInitialRenderSettled?.()
++        onInitialRenderSettled = undefined
++    }
++
++    $effect.pre(() => {
++        const key = chatBodyKey
++        const root = bodyRoot
++        const changed = previousBodyKey !== undefined && key !== previousBodyKey && measuredBody === root
++        if (measuredBody !== root) clearBodySnapshot()
++        measuredBody = root
++        previousBodyKey = key
++
++        if (!root || editMode || editTranslationMode || blankMessage || !message.trim() || renderRawStreaming) {
++            clearBodySnapshot()
++            return
++        }
++        if (!changed || bodySnapshot) return
++        const rendered = root.querySelector<HTMLElement>('[data-painter-body]')
++        if (!rendered?.hasChildNodes()) return
++
++        // Keep the previous picture outside the keyed block until the fresh body commits.
++        const snapshot = rendered.cloneNode(true) as HTMLElement
++        snapshot.removeAttribute('data-painter-body')
++        snapshot.setAttribute('data-chat-body-snapshot', '')
++        snapshot.setAttribute('inert', '')
++        snapshot.setAttribute('aria-hidden', 'true')
++        for (const embed of snapshot.querySelectorAll('iframe, object, embed, script')) embed.remove()
++        for (const media of snapshot.querySelectorAll('audio, video')) {
++            media.removeAttribute('autoplay')
++            media.removeAttribute('src')
++            for (const source of media.querySelectorAll('source, track')) source.remove()
++        }
++        const restoreHeight = holdBodyHeight(root)
++        bodySnapshot = snapshot
++        root.prepend(snapshot)
++        if (restoreHeight) {
++            const deadline = setTimeout(releaseBodyHeight, 3000)
++            restoreBodyHeight = () => {
++                clearTimeout(deadline)
++                restoreHeight()
++                restoreBodyHeight = undefined
++            }
++        }
++    })
++
++    function holdBodyHeight(root: HTMLElement) {
++        // NodeOnly has an inline body. Other themes can blockify it as a flex item.
++        let box: HTMLElement | null = root
++        let layout = getComputedStyle(box)
++        while (layout.display === 'inline' || layout.display === 'contents') {
++            box = box.parentElement
++            if (!box) return
++            layout = getComputedStyle(box)
++        }
++        if (layout.display === 'none') return
++        const height = box.offsetHeight
++        if (height <= 0) return
++        const inset = layout.boxSizing === 'content-box'
++            ? [layout.paddingTop, layout.paddingBottom, layout.borderTopWidth, layout.borderBottomWidth]
++                .reduce((sum, value) => sum + (parseFloat(value) || 0), 0)
++            : 0
++        const { style } = box
++        const previous = style.getPropertyValue('min-height')
++        const priority = style.getPropertyPriority('min-height')
++        style.setProperty('min-height', '' + Math.max(0, height - inset) + 'px', priority)
++        return () => style.setProperty('min-height', previous, priority)
++    }
++
++    $effect(() => {
++        if (blankMessage || renderRawStreaming) settleBodyRender()
++    })
++
++    onDestroy(settleBodyRender)
++
+     function updateDisplayedMessage(){
+         if(renderRawStreaming){
+             return
+@@ -595,8 +694,6 @@
+             {language.noMessage}
+         </div>
+     {:else}
+-        {@const chatReloadPointer = $ReloadGUIPointer + ($ReloadChatPointer[idx] ?? 0)}
+-        {@const totalLengthPointer = (idx > totalLength - 6) ? totalLength : 0}
+         <!-- svelte-ignore a11y_click_events_have_key_events -->
+         <!-- svelte-ignore a11y_no_static_element_interactions -->
+         <span class="text chat-width chattext prose minw-0"
+@@ -611,7 +708,7 @@
+             style:font-size="{0.875 * (DBState.db.zoomsize / 100)}rem"
+             style:line-height="{(DBState.db.lineHeight ?? 1.25) * (DBState.db.zoomsize / 100)}rem"
+         >
+-            {#key `${totalLengthPointer}|${chatReloadPointer}`}
++            {#key chatBodyKey}
+                 <ChatBody
+                     {character}
+                     {firstMessage}
+@@ -628,7 +725,8 @@
+                     bind:translating={translating}
+                     bind:retranslate={retranslate}
+                     {renderRawStreaming}
+-                    {rawStreamingText} />
++                    {rawStreamingText}
++                    onRenderSettled={settleBodyRender} />
+             {/key}
+             {#if idx >= 0 && !readOnly && !editMode && !isOptimizedStreamingMessage && partialEditEnabled && (DBState.db.enableBlockPartialEdit || DBState.db.enableDragPartialEdit)}
+                 <PartialEditController
+@@ -1621,13 +1719,13 @@
       style={isLastMemory ? `border-top:${DBState.db.memoryLimitThickness}px solid color-mix(in srgb, var(--color-borderc) 70%, transparent);` : ''}
       onpointerdowncapture={buttonTriggerActivation.pointerdown}
       onclickcapture={buttonTriggerActivation.click}>
@@ -43,6 +270,478 @@ index facd5bc..7dbb2eb 100644
                  <!-- Header: icon + name -->
                  <div class="flex items-center gap-3 mb-4">
                      {@render senderIcon({rounded: DBState.db.roundIcons})}
+diff --git a/src/lib/ChatScreens/ChatBody.svelte b/src/lib/ChatScreens/ChatBody.svelte
+index c50ff77..b148d90 100644
+--- a/src/lib/ChatScreens/ChatBody.svelte
++++ b/src/lib/ChatScreens/ChatBody.svelte
+@@ -26,6 +26,7 @@
+         modelShortName: string
+         renderRawStreaming?: boolean
+         rawStreamingText?: string
++        onRenderSettled?: () => void
+         onRemoveInlay?: (id: string, occurrence: number) => void
+     }
+ 
+@@ -42,6 +43,7 @@
+         modelShortName = '',
+         renderRawStreaming = false,
+         rawStreamingText = '',
++        onRenderSettled,
+         onRemoveInlay,
+     }: Props =  $props()
+ 
+@@ -270,7 +272,11 @@
+     <span data-painter-body style="display: contents" use:inlayImageControls={onRemoveInlay} use:retainedChatHtml={{
+         content: markParsingResult,
+         format: (html) => addMetadataToElement(trimMarkdown(html), modelShortName),
+-        onRender: onHtmlRendered,
++        onRender: () => {
++            onRenderSettled?.()
++            onHtmlRendered()
++        },
++        onError: onRenderSettled,
+         pendingHtml: (translated || retranslate) && DBState.db.showTranslationLoading ? lastParsed : undefined,
+     }}></span>
+ {/if}
+diff --git a/src/lib/ChatScreens/ChatEditInteraction.test.ts b/src/lib/ChatScreens/ChatEditInteraction.test.ts
+index 5d56b9e..c072309 100644
+--- a/src/lib/ChatScreens/ChatEditInteraction.test.ts
++++ b/src/lib/ChatScreens/ChatEditInteraction.test.ts
+@@ -1,13 +1,13 @@
+ // @vitest-environment happy-dom
+ 
+ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+-import { mount, tick, unmount } from 'svelte'
++import { mount, tick, unmount, untrack } from 'svelte'
+ import { writable } from 'svelte/store'
+ import { SvelteMap } from 'svelte/reactivity'
+ import Chat from './Chat.svelte'
+ import Chats from './Chats.svelte'
+-import { DBState, selIdState } from 'src/ts/stores.svelte'
+-import { ParseMarkdown } from 'src/ts/parser/parser.svelte'
++import { DBState, ReloadChatPointer, ReloadGUIPointer, selIdState } from 'src/ts/stores.svelte'
++import { ParseMarkdown, trimMarkdown } from 'src/ts/parser/parser.svelte'
+ 
+ vi.mock('src/ts/stores.svelte', () => ({
+     DBState: { db: {} },
+@@ -68,6 +68,185 @@ vi.mock('src/ts/storage/database.svelte', () => ({
+     setCurrentChat: vi.fn(),
+ }))
+ 
++describe('keyed chat body height', () => {
++    test.each(['commit', 'error', 'destroy', 'deadline'] as const)('restores the previous inline minimum after %s', async end => {
++        expect(document.querySelector('.chattext')).toBeNull()
++        mounted = mount(Chat, { target: document.body, props: {
++            message: '<p>Before</p>', name: 'Character', isLastMemory: false, idx: 0, role: 'char',
++        } })
++        await tick(); await tick(); await tick()
++
++        const body = document.querySelector<HTMLElement>('.chattext')!
++        const oldContent = body.querySelector('p')
++        expect(oldContent?.textContent).toBe('Before')
++        expect(body.style.minHeight).toBe('')
++        const box = body.parentElement!
++        body.style.display = 'inline'
++        box.style.display = 'block'
++        box.style.boxSizing = 'border-box'
++        box.style.setProperty('min-height', '12px', 'important')
++        Object.defineProperty(box, 'offsetHeight', { value: 216 })
++        let resolve!: (html: string) => void
++        const pending = new Promise<string>(done => { resolve = done })
++        const parser = vi.mocked(ParseMarkdown)
++        const format = vi.mocked(trimMarkdown)
++        const log = vi.spyOn(console, 'error').mockImplementation(() => {})
++        parser.mockImplementation(() => pending)
++        if (end === 'deadline') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
++        try {
++            if (end === 'commit') ReloadChatPointer.update(value => ({ ...value, 0: (value[0] ?? 0) + 1 }))
++            else ReloadGUIPointer.update(value => value + 1)
++            await tick()
++            expect(body.querySelector('[data-painter-body] p')).toBeNull()
++            const snapshot = body.querySelector('[data-chat-body-snapshot][inert][aria-hidden="true"]')
++            expect(snapshot?.querySelector('p')?.textContent).toBe('Before')
++            expect(snapshot?.querySelector('p')).not.toBe(oldContent)
++            expect(body.style.minHeight).toBe('')
++            expect(box.style.minHeight).toBe('216px')
++
++            if (end === 'destroy') {
++                await unmount(mounted!)
++                mounted = undefined
++            } else if (end === 'deadline') {
++                vi.advanceTimersByTime(3000)
++                expect(box.style.minHeight).toBe('12px')
++                expect(body.querySelector('[data-chat-body-snapshot]')).toBe(snapshot)
++                expect(body.querySelector('[data-painter-body] p')).toBeNull()
++                resolve('<p>After</p>')
++                await tick(); await tick(); await tick()
++                expect(body.querySelector('[data-painter-body]')?.innerHTML).toBe('<p>After</p>')
++            } else {
++                if (end === 'error') format.mockImplementationOnce(() => { throw new Error('bad format') })
++                resolve('<p>After</p>')
++                await tick(); await tick(); await tick()
++                if (end === 'commit') {
++                    expect(body.querySelector('p')?.textContent).toBe('After')
++                    expect(body.querySelector('p')).not.toBe(oldContent)
++                } else {
++                    expect(log).toHaveBeenCalledWith('Failed to render chat HTML', expect.any(Error))
++                }
++            }
++            expect(body.querySelector('[data-chat-body-snapshot]')).toBeNull()
++            expect(box.style.minHeight).toBe('12px')
++            expect(box.style.getPropertyPriority('min-height')).toBe('important')
++        } finally {
++            if (end === 'deadline') vi.useRealTimers()
++            log.mockRestore()
++            parser.mockImplementation(async value => value)
++        }
++    })
++
++    test('skips raw streaming content when the GUI reloads', async () => {
++        mounted = mount(Chat, { target: document.body, props: {
++            message: 'before', name: 'Character', isLastMemory: false, idx: 0, role: 'char',
++            isOptimizedStreamingMessage: true, streamingOptimizationMode: 'strong', rawStreamingText: 'raw',
++        } })
++        await tick()
++        const body = document.querySelector<HTMLElement>('.chattext')!
++        expect(body.textContent).toContain('raw')
++        const box = body.parentElement!
++        box.style.display = 'block'
++        body.style.display = 'inline'
++        Object.defineProperty(box, 'offsetHeight', { value: 216 })
++        ReloadGUIPointer.update(value => value + 1)
++        await tick()
++        expect(box.style.minHeight).toBe('')
++    })
++})
++describe('message container remount', () => {
++    test.each(['commit', 'error', 'deadline', 'unmount'] as const)('holds only the replaced index until %s', async end => {
++        const currentCharacter = DBState.db.characters[0]
++        const state = new SvelteMap<string, any>([['messages', [{ role: 'char', data: '<p>Before</p>', chatId: 'reply' }]]])
++        mounted = mount(Chats, { target: document.body, props: {
++            get messages() { return state.get('messages') },
++            get pageEnd() { return state.get('messages').length },
++            currentCharacter, currentUsername: 'User', userIcon: '', pageStart: 0,
++            onReroll: vi.fn(), unReroll: vi.fn(),
++        } })
++        await tick(); await tick(); await tick()
++
++        const container = (index: number) => document.querySelector(`[data-chat-index="${index}"]`)!
++            .closest<HTMLDivElement>('.chat-message-container')!
++        const old = container(0)
++        const height = vi.fn(() => 612)
++        Object.defineProperty(old, 'offsetHeight', { get: height })
++        const newMessage = { role: 'user', data: '<p>New index</p>', chatId: 'next' }
++        state.set('messages', [...state.get('messages'), newMessage])
++        await tick(); await tick(); await tick()
++        expect(container(1).style.minHeight).toBe('')
++        expect(container(0)).toBe(old)
++        expect(height).not.toHaveBeenCalled()
++
++        let resolve!: (html: string) => void
++        const pending = new Promise<string>(done => { resolve = done })
++        const parser = vi.mocked(ParseMarkdown)
++        const log = vi.spyOn(console, 'error').mockImplementation(() => {})
++        parser.mockImplementation(() => pending)
++        if (end === 'deadline') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
++        try {
++            ReloadChatPointer.update(value => ({ ...value, 0: (value[0] ?? 0) + 1 }))
++            await tick()
++            const fresh = container(0)
++            expect(fresh).not.toBe(old)
++            expect(height).toHaveBeenCalledOnce()
++            expect(fresh.style.minHeight).toBe('612px')
++            expect(fresh.querySelector('[data-painter-body]')?.innerHTML).toBe('')
++            expect(container(1).style.minHeight).toBe('')
++
++            if (end === 'deadline') vi.advanceTimersByTime(3000)
++            else if (end === 'unmount') {
++                await unmount(mounted!)
++                mounted = undefined
++            } else {
++                if (end === 'error') vi.mocked(trimMarkdown).mockImplementationOnce(() => { throw new Error('bad format') })
++                resolve('<p>After</p>')
++                await tick(); await tick(); await tick()
++                if (end === 'error') expect(log).toHaveBeenCalledWith('Failed to render chat HTML', expect.any(Error))
++                else expect(fresh.querySelector('[data-painter-body]')?.innerHTML).toBe('<p>After</p>')
++            }
++            expect(fresh.style.minHeight).toBe('')
++        } finally {
++            if (end === 'deadline') vi.useRealTimers()
++            log.mockRestore()
++            parser.mockImplementation(async value => value)
++        }
++    })
++})
++
++test('refreshes the former last message while keeping the latest UI unique', async () => {
++    const currentCharacter = DBState.db.characters[0]
++    const state = new SvelteMap<string, any>()
++    const messages = Array.from({ length: 8 }, (_, i) => ({ role: 'char', data: `<p>Message ${i}</p>`, chatId: 'message-' + i }))
++    state.set('messages', messages)
++    const parse = vi.mocked(ParseMarkdown)
++    const ui = '<aside class="last-message-ui">Controls</aside>'
++    parse.mockImplementation(async (value, _character, _mode, index) =>
++        value + (index === untrack(() => state.get('messages').length) - 1 ? ui : ''))
++    try {
++        mounted = mount(Chats, { target: document.body, props: {
++            get messages() { return state.get('messages') },
++            get pageEnd() { return state.get('messages').length },
++            currentCharacter, currentUsername: 'User', userIcon: '', pageStart: 0,
++            onReroll: vi.fn(), unReroll: vi.fn(),
++        } })
++        await tick(); await tick(); await tick()
++        expect(document.querySelectorAll('.last-message-ui')).toHaveLength(1)
++        const oldBodies = Array.from(document.querySelectorAll('[data-painter-body]'))
++        expect(oldBodies).toHaveLength(8)
++        parse.mockClear()
++        state.set('messages', [...messages, { role: 'char', data: '<p>Streaming reply</p>', chatId: 'stream' }])
++        await tick(); await tick(); await tick()
++        expect(parse.mock.calls.map(call => call[3]).sort()).toEqual([3, 4, 5, 6, 7, 8])
++        expect(document.querySelectorAll('.last-message-ui')).toHaveLength(1)
++        expect(document.querySelector('[data-chat-index="8"] .last-message-ui')).not.toBeNull()
++        for (const index of [0, 1, 2]) {
++            expect(document.querySelector(`[data-chat-index="${index}"] [data-painter-body]`)).toBe(oldBodies[7 - index])
++        }
++    } finally {
++        parse.mockImplementation(async value => value)
++    }
++})
++
+ let mounted: ReturnType<typeof mount> | undefined
+ 
+ beforeEach(() => {
+@@ -179,7 +358,8 @@ describe('message edit button', () => {
+         state.set('messages', [reply, { role: 'user', chatId: 'input', data: 'Next input' }])
+         await tick(); await tick(); await tick()
+         expect(document.querySelector('[data-chat-index="0"]')).toBe(previousReply)
+-        expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
++        expect(previousReply.querySelector('.chattext p')).not.toBe(paragraph)
++        expect(previousReply.querySelector('.chattext p')?.outerHTML).toBe(paragraph?.outerHTML)
+         expect(previousReply.querySelector('[data-hotkey-action="reroll"]')).toBeNull()
+         expect(document.querySelector('[data-chat-index="1"]')?.textContent).toContain('Next input')
+ 
+@@ -187,7 +367,8 @@ describe('message edit button', () => {
+         state.set('messages', [reply])
+         await tick(); await tick(); await tick()
+         expect(document.querySelector('[data-chat-index="0"]')).toBe(previousReply)
+-        expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
++        expect(previousReply.querySelector('.chattext p')).not.toBe(paragraph)
++        expect(previousReply.querySelector('.chattext p')?.outerHTML).toBe(paragraph?.outerHTML)
+         expect(previousReply.textContent).toContain('2/2')
+         previousReply.querySelector<HTMLButtonElement>('.button-icon-reroll')!.click()
+         expect(nextSwipe).toHaveBeenCalledOnce()
+diff --git a/src/lib/ChatScreens/Chats.svelte b/src/lib/ChatScreens/Chats.svelte
+index 27ef6a4..fff649b 100644
+--- a/src/lib/ChatScreens/Chats.svelte
++++ b/src/lib/ChatScreens/Chats.svelte
+@@ -66,12 +66,15 @@
+             isOptimizedStreamingMessage: boolean
+             streamingOptimizationMode: StreamingDisplayOptimizationMode
+             rawStreamingText: string
++            totalLength: number
+             messageGenerationInfo?: Message['generationInfo']
+             memoryConfirmed?: boolean
+             canonicalReceipt?: Message['risubardCanonicalReceipt']
+         }) => void
+     }
+     let mountInstances: Map<number, ChatInstance> = new Map();
++    type ChatContainer = { hash: number; element: HTMLDivElement; releaseHeight?: () => void }
++    let containersByIndex = new Map<number, ChatContainer>();
+ 
+     //Non-cryptographic hash function to generate a unique hash for each message
+     function hashCode(str:string):number {
+@@ -94,6 +97,7 @@
+ 
+         let nextHash = 0;
+         let currentHashes: Set<number> = new Set();
++        const nextContainers = new Map<number, ChatContainer>();
+         const charImage = getCharImage(currentCharacter.image, 'css')
+         const userImage = getCharImage(userIcon, 'css')
+         const simpleChar = createSimpleCharacter(currentCharacter);
+@@ -150,6 +154,17 @@
+                 const b = document.createElement('div');
+                 b.setAttribute('x-hashed', currentHash.toString());
+                 b.classList.add('chat-message-container');
++                const height = containersByIndex.get(i)?.element.offsetHeight ?? 0;
++                let releaseHeight: (() => void) | undefined;
++                if (height > 0) {
++                    b.style.minHeight = height + 'px';
++                    const deadline = setTimeout(() => releaseHeight?.(), 3000);
++                    releaseHeight = () => {
++                        clearTimeout(deadline);
++                        b.style.removeProperty('min-height');
++                    };
++                }
++                nextContainers.set(i, { hash: currentHash, element: b, releaseHeight });
+                 const swipes = message.swipes;
+                 const swipeId = message.swipeId ?? 0;
+                 const inst = mount(Chat, {
+@@ -159,6 +174,7 @@
+                         isLastMemory: false,
+                         idx: i,
+                         totalLength: messages.length,
++                        onInitialRenderSettled: releaseHeight,
+                         img: message.role === 'user' ? userImage : charImage,
+                         onReroll: onReroll,
+                         onNextSwipe: i === lastRealCharIdx ? onNextSwipe : () => {},
+@@ -198,6 +214,8 @@
+                 }
+             }
+             else{
++                const previous = containersByIndex.get(i);
++                if (previous?.hash === currentHash) nextContainers.set(i, previous);
+                 mountInstances.get(currentHash)?.updateRerollControls?.({
+                     rerollIcon: isRerollTarget ? 'force' : false,
+                     onNextSwipe: isRerollTarget ? onNextSwipe : () => {},
+@@ -209,6 +227,7 @@
+                     isOptimizedStreamingMessage: activeStreamingMessage,
+                     streamingOptimizationMode: performanceMode,
+                     rawStreamingText: message.data,
++                    totalLength: messages.length,
+                     messageGenerationInfo: message.generationInfo,
+                     memoryConfirmed: message.risubardMemoryConfirmed === true,
+                     canonicalReceipt: message.risubardCanonicalReceipt,
+@@ -232,12 +251,18 @@
+             }
+         });
+ 
++        for (const previous of containersByIndex.values()) {
++            if (!currentHashes.has(previous.hash)) previous.releaseHeight?.();
++        }
+         hashes = currentHashes;
++        containersByIndex = nextContainers;
+     };
+ 
+     onDestroy(() => {
+         console.log('Unmounting Chats');
+         hashes.clear();
++        for (const container of containersByIndex.values()) container.releaseHeight?.();
++        containersByIndex.clear();
+         mountInstances.forEach((inst) => {
+             unmount(inst);
+         });
+diff --git a/src/lib/ChatScreens/retainedChatHtml.test.ts b/src/lib/ChatScreens/retainedChatHtml.test.ts
+index 1248364..87aff2a 100644
+--- a/src/lib/ChatScreens/retainedChatHtml.test.ts
++++ b/src/lib/ChatScreens/retainedChatHtml.test.ts
+@@ -20,6 +20,64 @@ describe('retainedChatHtml', () => {
+         expect(node.querySelector('p')?.textContent).toBe('x')
+     })
+ 
++    test.each([
++        ['inserts', '<p>Alpha</p>', '<p>Alpha</p><p>New</p>'],
++        ['deletes', '<p>Alpha</p><p>Old</p>', '<p>Alpha</p>'],
++        ['inserts after a repeated tag', '<p>Tail</p>', '<p>Tail</p><p>New</p>'],
++    ])('%s paragraphs and keeps equal following nodes', async (_label, before, after) => {
++        const node = document.createElement('span')
++        const suffix = '<p>Tail</p><details><summary>Panel</summary><img src="same.png"></details><audio src="same.mp3"></audio>'
++        const action = retainedChatHtml(node, render(before + suffix))
++        await flush()
++        const tail = node.querySelector('details')!.previousElementSibling
++        const details = node.querySelector('details')!
++        const audio = node.querySelector('audio')
++        action.update(render(after + suffix))
++        await flush()
++
++        expect(details.previousElementSibling).toBe(tail)
++        expect(node.querySelector('details')).toBe(details)
++        expect(node.querySelector('audio')).toBe(audio)
++        const fresh = document.createElement('span')
++        retainedChatHtml(fresh, render(after + suffix))
++        await flush()
++        expect(node.isEqualNode(fresh)).toBe(true)
++    })
++
++    test('preserves live media resolution in the retained suffix and replaces a changed source', async () => {
++        const node = document.createElement('span')
++        const suffix = '<img src="asset.png">'
++        const action = retainedChatHtml(node, render('<p>Start</p>' + suffix))
++        await flush()
++        const img = node.querySelector('img')!
++        img.setAttribute('src', '/resolved/asset.png')
++        action.update(render('<p>Start</p><p>New</p>' + suffix))
++        await flush()
++        expect(node.querySelector('img')).toBe(img)
++        expect(img.getAttribute('src')).toBe('/resolved/asset.png')
++
++        action.update(render('<p>Start</p><p>New</p><img src="changed.png">'))
++        await flush()
++        expect(node.querySelector('img')).not.toBe(img)
++        expect(node.querySelector('img')!.getAttribute('src')).toBe('changed.png')
++    })
++
++    test('rebuilds when a renderer changes the number of live children', async () => {
++        const node = document.createElement('span')
++        const action = retainedChatHtml(node, render('<p>Before</p><aside>Tail</aside>'))
++        await flush()
++        const oldTail = node.querySelector('aside')
++        node.prepend(document.createElement('p'))
++        const html = '<p>Before</p><p>New</p><aside>Tail</aside>'
++        action.update(render(html))
++        await flush()
++        const fresh = document.createElement('span')
++        retainedChatHtml(fresh, render(html))
++        await flush()
++        expect(node.querySelector('aside')).not.toBe(oldTail)
++        expect(node.isEqualNode(fresh)).toBe(true)
++    })
++
+     test('parses comparison HTML outside the live document', async () => {
+         const parsed: Element[] = []
+         const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')!
+diff --git a/src/lib/ChatScreens/retainedChatHtml.ts b/src/lib/ChatScreens/retainedChatHtml.ts
+index 49d7c5d..d94709f 100644
+--- a/src/lib/ChatScreens/retainedChatHtml.ts
++++ b/src/lib/ChatScreens/retainedChatHtml.ts
+@@ -2,6 +2,7 @@ interface ChatHtmlUpdate {
+     content: Promise<string>
+     format: (html: string) => string
+     onRender: () => void
++    onError?: () => void
+     pendingHtml?: string
+ }
+ 
+@@ -19,14 +20,24 @@ function patchChildren(live: Element, previous: Node, next: Node) {
+         return
+     }
+ 
+-    for (let index = 0; index < Math.max(oldChildren.length, nextChildren.length); index++) {
+-        const oldChild = oldChildren[index]
+-        const nextChild = nextChildren[index]
++    let oldEnd = oldChildren.length
++    let nextEnd = nextChildren.length
++    if (oldEnd !== nextEnd) {
++        // Keep equal trailing blocks aligned when body paragraphs grow or shrink.
++        while (oldEnd > 0 && nextEnd > 0 && oldChildren[oldEnd - 1].isEqualNode(nextChildren[nextEnd - 1])) {
++            oldEnd--
++            nextEnd--
++        }
++    }
++    const tail = liveChildren[oldEnd] ?? null
++    for (let index = 0; index < Math.max(oldEnd, nextEnd); index++) {
++        const oldChild = index < oldEnd ? oldChildren[index] : undefined
++        const nextChild = index < nextEnd ? nextChildren[index] : undefined
+         const liveChild = liveChildren[index]
+         if (!nextChild) {
+             live.removeChild(liveChild)
+         } else if (!oldChild) {
+-            live.appendChild(nextChild.cloneNode(true))
++            live.insertBefore(nextChild.cloneNode(true), tail)
+         } else if (!oldChild.isEqualNode(nextChild)) {
+             patchNode(liveChild, oldChild, nextChild)
+         }
+@@ -91,7 +102,10 @@ export function retainedChatHtml(node: HTMLElement, initial: ChatHtmlUpdate) {
+             commit(options.format(html))
+             options.onRender()
+         }).catch(error => {
+-            if (request === revision) console.error('Failed to render chat HTML', error)
++            if (request === revision) {
++                options.onError?.()
++                console.error('Failed to render chat HTML', error)
++            }
+         })
+     }
+ 
 diff --git a/src/lib/SideBars/RisuBardGallery.svelte b/src/lib/SideBars/RisuBardGallery.svelte
 index c526fde..8484a43 100644
 --- a/src/lib/SideBars/RisuBardGallery.svelte

@@ -26,6 +26,7 @@
         modelShortName: string
         renderRawStreaming?: boolean
         rawStreamingText?: string
+        onRenderSettled?: () => void
         onRemoveInlay?: (id: string, occurrence: number) => void
     }
 
@@ -42,6 +43,7 @@
         modelShortName = '',
         renderRawStreaming = false,
         rawStreamingText = '',
+        onRenderSettled,
         onRemoveInlay,
     }: Props =  $props()
 
@@ -270,7 +272,11 @@
     <span data-painter-body style="display: contents" use:inlayImageControls={onRemoveInlay} use:retainedChatHtml={{
         content: markParsingResult,
         format: (html) => addMetadataToElement(trimMarkdown(html), modelShortName),
-        onRender: onHtmlRendered,
+        onRender: () => {
+            onRenderSettled?.()
+            onHtmlRendered()
+        },
+        onError: onRenderSettled,
         pendingHtml: (translated || retranslate) && DBState.db.showTranslationLoading ? lastParsed : undefined,
     }}></span>
 {/if}

@@ -255,7 +255,13 @@
         "src/lib/SideBars/RisuBardGallery.svelte",
         "src/lib/SideBars/RisuBardGalleryConnections.test.ts",
         "src/main.ts",
-        "src/ts/viewportHeight.ts"
+        "src/ts/viewportHeight.ts",
+        "src/lib/ChatScreens/ChatBody.svelte",
+        "src/lib/ChatScreens/ChatEditInteraction.test.ts",
+        "src/lib/ChatScreens/BackgroundDom.svelte",
+        "src/lib/ChatScreens/retainedChatHtml.ts",
+        "src/lib/ChatScreens/Chats.svelte",
+        "src/lib/ChatScreens/retainedChatHtml.test.ts"
       ],
       "files": [
         "public/fonts/KaTeX-Fonts-OFL.txt",
@@ -269,7 +275,8 @@
         "public/fonts/interface/tilt-prism-vietnamese.woff2",
         "public/fonts/interface/yellowtail-latin-ext.woff2",
         "public/fonts/interface/yellowtail-latin.woff2",
-        "src/ts/viewportHeight.test.ts"
+        "src/ts/viewportHeight.test.ts",
+        "src/lib/ChatScreens/BackgroundDom.test.ts"
       ]
     },
     {
@@ -321,7 +328,8 @@
         "src/ts/process/lorebookMatching.test.ts",
         "src/ts/process/lorebookMatching.ts",
         "src/ts/process/lorebookRecursion.test.ts",
-        "src/ts/process/scriptings.ts"
+        "src/ts/process/scriptings.ts",
+        "src/ts/process/scripts.ts"
       ],
       "files": [
         "src/ts/parser/tests/cbs/lifestyle100.test.ts",
@@ -333,7 +341,8 @@
         "src/ts/parser/tests/fixtures/narrative100.json",
         "src/ts/parser/tests/fixtures/core-sentinel.json",
         "src/ts/process/luaChatEntry.ts",
-        "src/ts/process/luaChatEntry.test.ts"
+        "src/ts/process/luaChatEntry.test.ts",
+        "src/ts/process/scripts.streamingMeta.test.ts"
       ]
     },
     {
@@ -640,7 +649,13 @@
         "docs/fork-modules/compat/v0.9.96/bardwiki-cache-prefix.patch",
         "docs/fork-modules/WEEKLY-20261118.md",
         "patchnote/0.9.102-ver1.md",
-        "patchnote/0.9.102-ver2.md"
+        "patchnote/0.9.102-ver2.md",
+        "docs/fork-modules/compat/v0.9.102/transfer-integration.patch",
+        "docs/fork-modules/compat/v0.9.102/model-compat.patch",
+        "docs/fork-modules/compat/v0.9.102/distribution.patch",
+        "patchnote/0.9.103-ver1.md",
+        "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
+        "docs/fork-modules/compat/v0.9.96/lore-lua.patch"
       ]
     },
     {
@@ -729,22 +744,22 @@
   "notes": "All modules assemble together; shared host bridges depend on the feature layers. No runtime toggle or automatic deployment.",
   "compatibility": [
     {
-      "tag": "v0.9.102",
-      "targetSha": "450f46b772bf9a73d2ae916bf6cb52c3535745f2",
+      "tag": "v0.9.103",
+      "targetSha": "ee433e905f711704f2175b6f92c877d7d48a3af9",
       "patches": [
         {
           "module": "transfer-integration",
-          "path": "docs/fork-modules/compat/v0.9.102/transfer-integration.patch",
+          "path": "docs/fork-modules/compat/v0.9.103/transfer-integration.patch",
           "sourceSha256": "f629bd265e9e60abacd8ca8fe9902036e3d45eef9f0fb6a1d195f930663566df"
         },
         {
           "module": "mobile-ui",
-          "path": "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
-          "sourceSha256": "80772f2e16f9c65627df8db974ea53a70047976732def7a36217d22bd03257cc"
+          "path": "docs/fork-modules/compat/v0.9.103/mobile-ui.patch",
+          "sourceSha256": "08ef0fa5031c9472d205cc3567787b2a8ff6c41f06f8911be6e16ae28fb02ee5"
         },
         {
           "module": "model-compat",
-          "path": "docs/fork-modules/compat/v0.9.102/model-compat.patch",
+          "path": "docs/fork-modules/compat/v0.9.103/model-compat.patch",
           "sourceSha256": "6be56fc119825094cb65df718fd70970f9047cd6c3a34cf3ad879f07ccccb384"
         },
         {
@@ -768,13 +783,13 @@
         },
         {
           "module": "distribution",
-          "path": "docs/fork-modules/compat/v0.9.102/distribution.patch",
+          "path": "docs/fork-modules/compat/v0.9.103/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0"
         },
         {
           "module": "lore-lua",
-          "path": "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
-          "sourceSha256": "93cd88ddd3ee39bdcfb904cb144bcea12f1ec580639b8b3e78e1e6ec5bcd67a2"
+          "path": "docs/fork-modules/compat/v0.9.103/lore-lua.patch",
+          "sourceSha256": "3b17f6e3f7096728e4c674f1b98282257b8298429c769c54eeda902cf70fe555"
         },
         {
           "module": "host-bridges",
@@ -787,7 +802,7 @@
             },
             {
               "path": "src/ts/characterUpdateFlow.svelte.ts",
-              "sha256": "c61e8c744d3209e4a14a1f02866a2cf7e88b146cd2f50cb565eae23724168c2e"
+              "sha256": "baff2c80efd57738f36b1c7e1a25d1460ef1d072bc55f7546c3696dd5910e931"
             }
           ]
         },
@@ -838,7 +853,8 @@
         "patchnote/0.9.99.md": "docs/fork-modules/history/patchnote/0.9.99.md",
         "patchnote/0.9.100.md": "docs/fork-modules/history/patchnote/0.9.100.md",
         "patchnote/0.9.101.md": "docs/fork-modules/history/patchnote/0.9.101.md",
-        "patchnote/0.9.102.md": "docs/fork-modules/history/patchnote/0.9.102.md"
+        "patchnote/0.9.102.md": "docs/fork-modules/history/patchnote/0.9.102.md",
+        "patchnote/0.9.103.md": "docs/fork-modules/history/patchnote/0.9.103.md"
       },
       "probes": {
         "server/node/server.cjs": [
@@ -863,7 +879,8 @@
         ],
         "server/node/risubard-memory-analysis.ts": [
           "trailingMessagesField(canonicalTrailingMessages)",
-          "cardUpkeep.size > 0"
+          "cardUpkeep.size > 0",
+          "document.type === 'event'"
         ],
         "src/lang/help.ko.ts": [
           "리랭커 API(Cohere 방식 /rerank)"
@@ -899,7 +916,9 @@
           "skipNarrativeBacklogTurn",
           "prepareCurrentStoryTimeBackfill",
           "showSaveLoadToolbar",
-          "onPreviousPage={() => selectChatPage(chatBounds.page - 1)}"
+          "onPreviousPage={() => selectChatPage(chatBounds.page - 1)}",
+          "[contain:layout]",
+          "<SideBarArrow />"
         ],
         "server/node/file-kv.cjs": [
           "convertToAssetStore",
@@ -922,7 +941,8 @@
           "inquirySettings.risuBardSourceRerank",
           "runCurrentStoryTimeBackfill",
           "PROVIDER_OUTAGE_CATEGORIES",
-          "!PROVIDER_OUTAGE_CATEGORIES.has(canonicalFailureCategory(error))"
+          "!PROVIDER_OUTAGE_CATEGORIES.has(canonicalFailureCategory(error))",
+          "const stableLoreIndex = requestSettings.loreAlwaysActiveBeforeChat"
         ],
         "server/node/risubard-memory-runtime.cjs": [
           "setWikiDocumentGrade",
@@ -964,14 +984,25 @@
           "installUiSounds()"
         ],
         "src/ts/process/request/request.ts": [
-          "targ.modelInfo.format === LLMFormat.Plugin"
+          "targ.modelInfo.format === LLMFormat.Plugin",
+          "keepLaterSystemInPlace: getDatabase().keepLaterSystemInPlace === true"
         ],
         "src/lib/SideBars/SideChatList.svelte": [
           "<ModelBind minimal={DBState.db.sidebarMinimalMode} />",
-          "<Toggles bind:chara={chara} noContainer minimal>"
+          "<Toggles bind:chara={chara} noContainer minimal>",
+          "openModuleListStore.set('skins')"
         ],
         "src/lib/Setting/Pages/PluginSettings.svelte": [
           ":global([data-collection-organizer-list=\"plugins\"])"
+        ],
+        ".github/workflows/release.yml": [
+          "ONNXRUNTIME_NODE_INSTALL_CUDA: skip"
+        ],
+        "src/lib/ChatScreens/ChatScreen.svelte": [
+          "initialView={moduleListView}"
+        ],
+        "server/node/asset-store.cjs": [
+          "if (!parsed || !has(key)) return null;"
         ]
       }
     }
