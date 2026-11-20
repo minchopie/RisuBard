@@ -13,8 +13,6 @@ const fsp = require('node:fs/promises');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { join, dirname, basename, relative, isAbsolute, sep, toNamespacedPath } = require('node:path');
-// fs.mkdtemp lacks Node's Windows long-path handling (>260 chars): create through the namespaced prefix, return the plain path.
-const mkdtempLong = async prefix => join(dirname(prefix), basename(await fsp.mkdtemp(toNamespacedPath(prefix))));
 const { createHash, randomUUID } = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const { atomicWriteJson, resolveInside, checksum: sha256 } = require('../file-store.cjs');
@@ -88,9 +86,31 @@ const readOnThread = (worker, root, ids) => new Promise((resolve, reject) => {
     }
 });
 
-function createNasSyncService({ dataRoot, readDatabase, memory, storage, readColdChat = async () => null, readInlay = async () => null, installInlay = async () => {}, removeInlay = async () => {}, inlayMeta = async () => null, secrets, fetch, protect, nasRoute = null, identityDir = null, secretsDir = null, transfers = null, now = Date.now, hooks = {} }) {
+const activeCaptureWork = new Set();
+
+function createNasSyncService({ dataRoot, readDatabase, memory, storage, readColdChat = async () => null, readInlay = async () => null, installInlay = async () => {}, removeInlay = async () => {}, inlayMeta = async () => null, secrets, fetch, protect, nasRoute = null, identityDir = null, secretsDir = null, transfers = null, ownsDataRoot = false, now = Date.now, hooks = {} }) {
     const root = join(dataRoot, 'nas-sync');
     fs.mkdirSync(join(root, 'apply'), { recursive: true, mode: 0o700 });
+    const captureRoot = fs.realpathSync.native(root);
+    // Legacy work folders have no owner marker; only the host holding the data-root lock can sweep them.
+    if (ownsDataRoot && fs.lstatSync(root).isDirectory() && ![...activeCaptureWork].some(work => dirname(work) === captureRoot)) {
+        for (const entry of fs.readdirSync(captureRoot, { withFileTypes: true })) {
+            if (!entry.isDirectory() || !/^(?:snapshot|plan-check)-[A-Za-z0-9]{6}$/.test(entry.name)) continue;
+            try { fs.rmSync(join(captureRoot, entry.name), { recursive: true, force: true }); } catch { /* OS-held leftovers can be retried at the next startup. */ }
+        }
+    }
+    function startCapture(prefix) {
+        // Use the namespaced prefix for Windows paths over 260 characters.
+        const work = join(captureRoot, basename(fs.mkdtempSync(toNamespacedPath(join(captureRoot, prefix)))));
+        activeCaptureWork.add(work);
+        return work;
+    }
+    async function finishCapture(work, cleanups) {
+        try {
+            for (const cleanup of cleanups) await cleanup().catch(() => {});
+            await fsp.rm(work, { recursive: true, force: true });
+        } finally { activeCaptureWork.delete(work); }
+    }
     const file = name => resolveInside(root, name);
     const manifest = createManifest({ root, name: 'service.json', initial: { version: 1, enabled: false, lineage: {}, branches: {}, plan: null, retained: [], pendingLineage: null, applied: [], incarnation: null, bootstraps: [], pendingBootstrap: null, pendingRestore: null, lineageHistory: [], role: null, vaultOrigin: null, shares: [], consumed: {}, pendingGrant: null, localApply: [] } });
     const service = () => manifest.get();
@@ -697,12 +717,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     /** 0.9.96-ver5: the last pull of this workspace and store incarnation left nothing waiting (see pull()). */
     const receivedFresh = s => { const mark = service().pulledMark; return !!mark && mark.workspaceId === service().workspaceId && mark.incarnation === s.identity().incarnationId && !s.waitingEntries().length; };
 
-    const readAsset = work => async path => {
-        if (storage.kvGetUpdatedAt(path) === null) return null;
-        const target = join(work, randomUUID());
-        if (!await storage.kvExportFile(path, target)) return null;
-        return { path: target, hash: await hashFile(target) };
-    };
+    const readAsset = path => storage.kvVerifiedAssetFile(path);
     const readInlaySource = work => async id => {
         const inlay = await readInlay(id);
         if (!inlay) return null;
@@ -793,7 +808,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const original = await readDatabase();
         if (!original) throw new Error('Database unavailable');
         const { database: db, memberships, preserved } = cardOnlyProjection(original, s);
-        const work = await mkdtempLong(join(root, 'snapshot-')), captures = new Map(), cleanups = [];
+        const work = startCapture('snapshot-'), captures = new Map(), cleanups = [];
         try {
             for (const character of db.characters ?? []) {
                 const chatIds = (character.chats ?? []).map(c => c.id).filter(Boolean);
@@ -802,7 +817,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, service().branches, work);
-            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
             if (projection.missing.length) throw Object.assign(new Error('Snapshot is missing referenced material: ' + projection.missing.map(m => m.reason).join('; ')), { code: 'SNAPSHOT_MISSING', missing: projection.missing });
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
@@ -853,7 +868,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             manifest.transact(x => { for (const [k, id] of Object.entries(intent.lineage)) x.lineage[k] = id; for (const k of intent.vanished) delete x.lineage[k]; x.pendingLineage = null; x.incarnation = s.identity().incarnationId; if (intent.restore && x.pendingRestore?.id === intent.restore.id) x.pendingRestore = null; });
             recordLineage();
             return { committed: entry ? { sequence: entry.sequence, commitId: entry.commitId, revisions: entry.revisions.length, tombstones: targets.size } : null, skipped: diff.skipped.length, excluded: projection.excluded.length, provenance: intent.provenance, restore: intent.restore };
-        } finally { for (const cleanup of cleanups) await cleanup().catch(() => {}); await fsp.rm(work, { recursive: true, force: true }); }
+        } finally { await finishCapture(work, cleanups); }
     }
 
     // ------------------------------------------------------------------ apply ------------------------------------------------------------------
@@ -1154,7 +1169,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const key of touched.keys()) if (scoped.preserved.has(key)) edited.add(key);
         const known = [...touched.keys()].filter(key => Object.keys(lineage).some(k => k.startsWith(key + '#')));
         if (!known.length) return edited;
-        const work = await mkdtempLong(join(root, 'plan-check-')), captures = new Map(), cleanups = [];
+        const work = startCapture('plan-check-'), captures = new Map(), cleanups = [];
         try {
             const chatRoots = new Set(known.filter(k => k.startsWith('play\nchat\n')).map(k => k.split('\n')[2]));
             for (const character of db.characters ?? []) {
@@ -1164,11 +1179,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, branches, work);
-            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset: readAsset(work), readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
             const diff = diffProjection(s.graph, projection.desired.filter(d => known.includes(d.key)), lineage);
             for (const r of diff.revisions) edited.add(rootKey(r));
             for (const k of diff.diverged) edited.add(k.split('#')[0]);
-        } finally { for (const cleanup of cleanups) await cleanup().catch(() => {}); await fsp.rm(work, { recursive: true, force: true }); }
+        } finally { await finishCapture(work, cleanups); }
         return edited;
     }
     /** Client echo of the normalized records it will save; only hashes are stored. Moves the write gate to this transaction. */
@@ -1434,7 +1449,13 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     const inFlight = { snapshot: null, publish: null, pull: null };
     const singleFlight = (name, run) => inFlight[name] ??= run().finally(() => { inFlight[name] = null; });
     // 2026-11-07 adoption: this device's values are being replaced; checked inside the lane so a queued snapshot sees a just-started adoption.
-    const takeSnapshot = async () => { requireEnabled(); return singleFlight('snapshot', () => exclusive(() => service().role === 'joining' && service().adopting ? { committed: null, adopting: true } : snapshot())); };
+    const takeSnapshot = async () => {
+        requireEnabled();
+        return singleFlight('snapshot', () => exclusive(() => {
+            if (service().role === 'joining' && service().adopting) return { committed: null, adopting: true };
+            return ownsDataRoot ? storage.kvWithNasAssetVerification(snapshot) : snapshot();
+        }));
+    };
     // The NAS route (home/external) is pinned for the whole run: one publish or pull never mixes endpoints mid PUT/verify/MOVE.
     const pinned = fn => nasRoute ? nasRoute.run(fn) : fn();
     // 2026-11-07: a joining device still adopting the reference device's state publishes nothing (its empty/old values would become

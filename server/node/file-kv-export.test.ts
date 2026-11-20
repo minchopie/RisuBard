@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { access, mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import fs, { mkdtempSync, rmSync } from 'node:fs'
+import { access, mkdir, mkdtemp, readFile, rm, stat, unlink, utimes, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -38,6 +38,56 @@ const hasAssetStore = (kv: any) => typeof kv.assetStoreStatus === 'function'
 const probeRoot = mkdtempSync(join(tmpdir(), 'risubard-kv-export-probe-'))
 const assetStoreSupported = hasAssetStore(createFileKv({ dataRoot: probeRoot }))
 rmSync(probeRoot, { recursive: true, force: true })
+
+test('the verified NAS source is direct and a cached digest cannot hide same-size external changes', async () => {
+    const f = await fixture()
+    const key = 'assets/legacy.png', bytes = Buffer.from('original'), hash = sha(bytes)
+    const source = f.objectPath(hash)
+    const fixed = new Date('2026-01-01T00:00:00Z')
+    expect(await f.kv.kvVerifiedAssetFile(key)).toBeNull()
+    f.kv.kvSet(key, bytes)
+    await utimes(source, fixed, fixed)
+    expect(await f.kv.kvVerifiedAssetFile(key)).toEqual({ path: source, hash })
+    expect(await f.kv.kvVerifiedAssetFile(key)).toEqual({ path: source, hash })
+    await writeFile(source, 'modified')
+    await utimes(source, fixed, fixed)
+    await expect(f.kv.kvVerifiedAssetFile(key)).rejects.toThrow(/checksum mismatch/)
+    await unlink(source)
+    await expect(f.kv.kvVerifiedAssetFile(key)).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+test('an interrupted verification checkpoint resumes with a fresh KV instance and checks changed files', async () => {
+    const f = await fixture(), { atomicWriteJson } = require('./file-store.cjs')
+    const objects = Array.from({ length: 257 }, (_, i) => {
+        const key = 'assets/file-' + i + '.png', value = Buffer.from(String(i).padStart(4, '0'))
+        return { key, value, object: sha(value) }
+    })
+    await mkdir(join(f.dataRoot, 'kv', 'objects'), { recursive: true })
+    await Promise.all(objects.map(({ object, value }) => writeFile(f.objectPath(object), value)))
+    atomicWriteJson(f.dataRoot, 'kv/manifest.json', { schemaVersion: 1, updatedAt: 1,
+        entries: Object.fromEntries(objects.map(({ key, object, value }) => [key, { object, size: value.length, updatedAt: 1 }])) })
+    const checkpoint = join(f.dataRoot, 'kv', 'nas-asset-verification.json')
+    const kv = createFileKv({ dataRoot: f.dataRoot })
+    await expect(kv.kvWithNasAssetVerification(async () => {
+        for (const entry of objects.slice(0, 256)) await kv.kvVerifiedAssetFile(entry.key)
+        throw new Error('capture interrupted')
+    })).rejects.toThrow('capture interrupted')
+    expect(JSON.parse(await readFile(checkpoint, 'utf8'))).toHaveLength(256)
+    await writeFile(f.objectPath(objects[255].object), 'oops')
+    const restarted = createFileKv({ dataRoot: f.dataRoot })
+    const reads = vi.spyOn(fs, 'createReadStream')
+    try {
+        await restarted.kvWithNasAssetVerification(async () => {
+            for (const entry of objects.slice(0, 255)) await restarted.kvVerifiedAssetFile(entry.key)
+            expect(reads).not.toHaveBeenCalled()
+            await expect(restarted.kvVerifiedAssetFile(objects[255].key)).rejects.toThrow(/checksum mismatch/)
+            await restarted.kvVerifiedAssetFile(objects[256].key)
+            expect(reads).toHaveBeenCalledTimes(2)
+        })
+    } finally { reads.mockRestore() }
+    await absent(checkpoint)
+    await absent(checkpoint + '.sha256')
+})
 
 describe('kvExportFile on KV objects', () => {
     test('exports a legacy object byte-for-byte and reports a missing key as false', async () => {
@@ -104,6 +154,7 @@ describe.skipIf(!assetStoreSupported)('kvExportFile on the upstream asset store 
         await expect(f.kv.kvExportFile(key, target)).resolves.toBe(true)
         expect(await readFile(target)).toEqual(bytes)
         expect(Buffer.from(f.kv.kvGet(key))).toEqual(bytes)
+        expect(await f.kv.kvVerifiedAssetFile(key)).toEqual({ path: f.storeFile(sha(bytes)), hash: sha(bytes) })
     })
 
     test('a manifest entry whose object is gone falls back to the same-digest store file, like kvGetOriginal', async () => {
@@ -111,7 +162,9 @@ describe.skipIf(!assetStoreSupported)('kvExportFile on the upstream asset store 
         const bytes = Buffer.from('manifest shadowed asset'), key = `assets/${sha(bytes)}.png`
         f.kv.kvSet(key, bytes) // store file
         f.kv.kvReplacePrefixes([{ key, value: bytes }], []) // manifest entry + kv object (manifest wins)
+        expect(await f.kv.kvVerifiedAssetFile(key)).toEqual({ path: f.objectPath(sha(bytes)), hash: sha(bytes) })
         await unlink(f.objectPath(sha(bytes)))
+        expect(await f.kv.kvVerifiedAssetFile(key)).toEqual({ path: f.storeFile(sha(bytes)), hash: sha(bytes) })
         const target = f.destination()
         await expect(f.kv.kvExportFile(key, target)).resolves.toBe(true)
         expect(await readFile(target)).toEqual(bytes)
@@ -127,6 +180,7 @@ describe.skipIf(!assetStoreSupported)('kvExportFile on the upstream asset store 
         await writeFile(f.storeFile(sha(bytes)), bytes)
         f.kv.reloadManifest()
         await unlink(f.objectPath(sha(bytes)))
+        expect(await f.kv.kvVerifiedAssetFile(key)).toEqual({ path: f.storeFile(sha(bytes)), hash: sha(bytes) })
         const target = f.destination()
         await expect(f.kv.kvExportFile(key, target)).resolves.toBe(true)
         expect(await readFile(target)).toEqual(bytes)
@@ -139,6 +193,7 @@ describe.skipIf(!assetStoreSupported)('kvExportFile on the upstream asset store 
         f.kv.kvSet(key, bytes)
         f.kv.kvReplacePrefixes([{ key, value: bytes }], [])
         await writeFile(f.objectPath(sha(bytes)), 'corrupt')
+        await expect(f.kv.kvVerifiedAssetFile(key)).rejects.toThrow(/checksum mismatch/)
         const target = f.destination()
         await expect(f.kv.kvExportFile(key, target)).rejects.toThrow(/checksum mismatch/)
         await absent(target)

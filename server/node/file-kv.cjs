@@ -33,6 +33,11 @@ async function inspectFileAsync(filePath) {
     return { hash: hash.digest('hex'), size };
 }
 
+function assetFileVersion(stat) {
+    if (!stat.isFile()) throw new Error('NAS asset source is not a regular file');
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+}
+
 async function mapWithConcurrency(items, concurrency, mapper) {
     const results = new Array(items.length);
     let nextIndex = 0;
@@ -241,6 +246,65 @@ function createFileKv(options = {}) {
         try { value = fs.readFileSync(objectPath); } catch { return null; }
         if (digest(value) !== entry.object) throw new Error(`Content object checksum mismatch for ${key}`);
         return value;
+    }
+
+    // Files may predate this process or have been repaired outside the writer.
+    const verifiedAssetFiles = new Map();
+    const nasCheckpoint = 'kv/nas-asset-verification.json';
+    const checkpointPath = resolveInside(dataRoot, nasCheckpoint);
+    let verifiedSinceCheckpoint = null;
+
+    // Resume interrupted captures with the same metadata checks as the in-memory cache.
+    // The NAS wire records and the committed blob store never reference this local hint.
+    async function kvWithNasAssetVerification(run) {
+        if (verifiedSinceCheckpoint !== null) return run();
+        for (const suffix of ['', '.bak']) {
+            try {
+                if (fs.statSync(checkpointPath + suffix).size > 16 * 1024 * 1024
+                    || fs.statSync(checkpointPath + suffix + '.sha256').size !== 65) continue;
+                if (!/^[a-f0-9]{64}\n$/.test(fs.readFileSync(checkpointPath + suffix + '.sha256', 'utf8'))) continue;
+                const entries = readVerifiedJson(dataRoot, nasCheckpoint + suffix);
+                if (!Array.isArray(entries) || entries.length > 50_000) continue;
+                for (const row of entries) {
+                    if (!Array.isArray(row) || typeof row[0] !== 'string' || typeof row[1]?.version !== 'string' || !/^[a-f0-9]{64}$/.test(row[1]?.hash)) continue;
+                    if (verifiedAssetFiles.size >= 50_000) break;
+                    if (!verifiedAssetFiles.has(row[0])) verifiedAssetFiles.set(row[0], row[1]);
+                }
+                break;
+            } catch { /* An interrupted or unreadable cache can always be rebuilt. */ }
+        }
+        verifiedSinceCheckpoint = 0;
+        try {
+            const result = await run();
+            for (const suffix of ['', '.sha256', '.bak', '.bak.sha256']) {
+                try { fs.rmSync(checkpointPath + suffix, { force: true }); } catch { /* Only a cache. */ }
+            }
+            return result;
+        } finally { verifiedSinceCheckpoint = null; }
+    }
+
+    async function verifyAssetSource(key, source, hash) {
+        const version = async () => assetFileVersion(await fsp.lstat(source, { bigint: true }));
+        const relativeSource = path.relative(dataRoot, source);
+        const before = await version(), cached = verifiedAssetFiles.get(relativeSource);
+        if (cached?.version !== before || cached.hash !== hash) {
+            if ((await inspectFileAsync(source)).hash !== hash) throw new Error(`Content object checksum mismatch for ${key}`);
+            if (await version() !== before) throw new Error(`Content object changed while verifying ${key}`);
+            if (verifiedAssetFiles.size >= 50_000) verifiedAssetFiles.delete(verifiedAssetFiles.keys().next().value);
+            verifiedAssetFiles.set(relativeSource, { version: before, hash });
+            if (verifiedSinceCheckpoint !== null && ++verifiedSinceCheckpoint === 256) {
+                verifiedSinceCheckpoint = 0;
+                try { atomicWriteJson(dataRoot, nasCheckpoint, [...verifiedAssetFiles]); } catch { /* Capture can proceed without a checkpoint. */ }
+            }
+        }
+        return { path: source, hash };
+    }
+
+    async function kvVerifiedAssetFile(key) {
+        const entry = entryOf(key);
+        if (entry?.updatedAt == null) return null;
+        if (!/^[a-f0-9]{64}$/.test(entry.object)) throw new Error(`Invalid content object for ${key}`);
+        return verifyAssetSource(key, resolveInside(dataRoot, path.join('kv', 'objects', entry.object)), entry.object);
     }
 
     async function kvExportFile(key, destination) {
@@ -620,6 +684,8 @@ function createFileKv(options = {}) {
     return {
         kvGet,
         kvExportFile,
+        kvVerifiedAssetFile,
+        kvWithNasAssetVerification,
         kvSet,
         kvSetMany,
         kvSetManyAsync,

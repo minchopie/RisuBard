@@ -5,6 +5,7 @@ import { transferUnavailable } from './playTransfer'
 import { isNodeServer } from '../platform'
 import { isAnyGenerating, generationStates } from '../process/generationState'
 import { alertStore, selectedCharID } from '../stores.svelte'
+import { addLog } from '../log'
 
 /**
  * The single foreground coordinator of automatic NAS sync. It runs only on the Node/embedded runtime and only after sync was
@@ -101,6 +102,20 @@ let instance: ReturnType<typeof createSyncCoordinator> | null = null
 /** Reactive snapshot of the singleton coordinator's state for the UI (the state object itself is plain). */
 export const coordinatorState = writable<CoordinatorState | null>(null)
 class Cancelled extends Error { constructor(reason: string) { super(reason); this.name = 'SyncCycleCancelled' } }
+
+function logCycleError(stage: string, code: unknown, message: string) {
+    const safeCode = typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(code) ? code : 'UNKNOWN'
+    const safeMessage = message
+        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[REDACTED]')
+        .replace(/(?:[a-z][a-z0-9+.-]*:)?\/\/[^\s<>"']+/gi, '[URL]')
+        .replace(/\b[\w-]*(?:key|token|password|passwd|credential|secret|auth(?:orization)?|cookie|username)["']?\s*[:=]\s*(?:(?:Bearer|Basic)\s+)?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;)}\]]+)/gi, '[REDACTED]')
+        .replace(/\b(?:Bearer|Basic)\s+\S+/gi, '[REDACTED]')
+        .replace(/\b(?:sk-|gh[pousr]_|github_pat_|ya29\.|eyJ)[\w.-]+|\b[A-Za-z0-9_+/=-]{32,}/g, '[REDACTED]')
+        .replace(/[\r\n\t]+/g, ' ')
+        .slice(0, 200)
+    try { addLog({ level: 'error', source: 'nas-sync', message: safeMessage, description: 'stage=' + stage + ' code=' + safeCode }) }
+    catch { /* Diagnostics must not interrupt backoff. */ }
+}
 
 export function createSyncCoordinator(options: CoordinatorOptions = {}) {
     let interactions = 0
@@ -247,6 +262,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // Large Wiki plans may take longer without blocking play. Bound client preparation after the server answers.
                     // 0.9.92-ver5: a dialog opened while the plan was prepared (e.g. a content update question) ends the safe window like a touch does.
                     const result = await o.apply(true, signal, { window: safe.window, interacted: () => interacted() || !!o.alerting?.() || o.editing(), planReady: () => { deadline = o.setTimer(() => mine.abort(new Error('sync apply deadline')), o.deadlineMs) } })
+                    if (result.error && (result.state === 'save-failed' || result.state === 'finish-pending')) logCycleError(stage, result.state.replace('-', '_').toUpperCase(), result.error)
                     if (result.state === 'deferred' && signal.aborted && /deadline/i.test(String(signal.reason))) throw signal.reason
                     if (result.state === 'deferred' && o.generating()) resumeAfterGeneration = true // the apply gave way to a model request that started meanwhile: resume when it ends, like a cycle stopped between steps
                     outcome = result.state
@@ -267,6 +283,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 // Offline/server/publish error: local play continues (an un-armed apply released its hold), retry with backoff.
                 state.failures += 1
                 const message = String(error?.message ?? error)
+                logCycleError(stage, error?.code, message)
                 state.offline = !o.online() || /deadline|abort|fetch|network/i.test(message)
                 state.lastError = message.slice(0, 200)
                 state.lastOutcome = error?.code === 'PUBLISH_FAILED' ? 'publish-failed' : error?.code === 'REPAIR_FAILED' ? 'repair-failed' : state.offline ? 'offline' : 'error'

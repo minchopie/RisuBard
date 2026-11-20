@@ -4597,6 +4597,7 @@ if (syncSecretsDir) require('node:fs').mkdirSync(syncSecretsDir, { recursive: tr
 // NAS sync: routes + client coordinator (src/ts/nasSyncCoordinator.ts) that runs only after explicit enable.
 const nasSync = require('./nas-sync-service.cjs').createNasSyncService({
     dataRoot: savePath,
+    ownsDataRoot: path.resolve(savePath) === path.resolve(processDataRoot),
     identityDir: syncSecretsDir, secretsDir: syncSecretsDir, transfers: playTransfer,
     readColdChat: key => readColdStorageJsonEntry(key)?.coldData ?? null,
     readDatabase: () => queueStorageOperation(() => loadPersistedFullDatabase()),

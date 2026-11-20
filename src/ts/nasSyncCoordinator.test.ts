@@ -6,7 +6,8 @@
 import { beforeEach, afterEach, test, expect, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
 import { readFileSync } from 'node:fs'
-const f = vi.hoisted(() => ({ unavailable: vi.fn(() => false), activity: vi.fn(() => false), alert: { type: 'none' }, chat: 'card/chat', selected: null as any }))
+const f = vi.hoisted(() => ({ unavailable: vi.fn(() => false), activity: vi.fn(() => false), addLog: vi.fn(), alert: { type: 'none' }, chat: 'card/chat', selected: null as any }))
+vi.mock('./log', () => ({ addLog: f.addLog }))
 vi.mock('./transfer-sync/playTransfer', () => ({ transferUnavailable: () => f.unavailable() }))
 vi.mock('./transfer-sync/nasSync', () => ({ activityBlocksSync: () => f.activity(), retrySyncApply: vi.fn(), applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), reportSyncNetwork: vi.fn(async () => {}), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => f.chat }))
 vi.mock('./platform', () => ({ isNodeServer: true }))
@@ -46,6 +47,21 @@ function harness(overrides: any = {}) {
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
 beforeEach(() => { vi.useFakeTimers(); canonicalSaveSettled.set(0); transferBusy.set(false); syncSaveHold.set(false); f.unavailable.mockReturnValue(false); f.activity.mockReturnValue(false); f.alert.type = 'none'; f.chat = 'card/chat'; f.selected.set(0) })
 afterEach(() => { vi.useRealTimers() })
+
+test('cycle failure records one short sanitized log and retains the existing screen message', async () => {
+    f.addLog.mockClear()
+    const h = harness(); await h.c.start()
+    const message = 'Snapshot failed https://u-fixture:p-fixture@nas.invalid/path?key=query-value\nAuthorization: Basic brief APIKey="quoted fixture" access_token=short-value ' + 'detail '.repeat(50)
+    h.io.snapshot.mockRejectedValueOnce(Object.assign(new Error(message), { code: 'SNAPSHOT_MISSING' }))
+    expect(await h.c.uploadNow()).toBe('error')
+    expect(h.c.state.lastError).toBe(message.slice(0, 200))
+    expect(f.addLog).toHaveBeenCalledTimes(1)
+    expect(f.addLog).toHaveBeenCalledWith({
+        level: 'error', source: 'nas-sync', description: 'stage=snapshot code=SNAPSHOT_MISSING',
+        message: ('Snapshot failed [URL] [REDACTED] [REDACTED] [REDACTED] ' + 'detail '.repeat(50)).slice(0, 200),
+    })
+    h.c.stop()
+})
 
 test.each(['retryNow', 'uploadNow', 'downloadNow'] as const)('%s retries a failed startup probe before deciding sync is idle', async action => {
     const h = harness(); h.io.status.mockRejectedValueOnce(new Error('sync network deadline'))

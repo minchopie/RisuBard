@@ -655,7 +655,9 @@
         "docs/fork-modules/compat/v0.9.102/distribution.patch",
         "patchnote/0.9.103-ver1.md",
         "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
-        "docs/fork-modules/compat/v0.9.96/lore-lua.patch"
+        "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
+        "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
+        "docs/fork-modules/compat/v0.9.102/host-bridges.patch"
       ]
     },
     {
@@ -764,8 +766,8 @@
         },
         {
           "module": "storage-recovery",
-          "path": "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
-          "sourceSha256": "ba8da34b6ba00080782b1800285fe96f4b5fff84ab6900836082d7a5fe567d1e",
+          "path": "docs/fork-modules/compat/v0.9.103/storage-recovery.patch",
+          "sourceSha256": "e4f6864a79d6b56dcd098d14b575a0e0c2170988e04fcb92e2697e149ed6c174",
           "targetHosts": [
             {
               "path": "server/node/risubard-story-order.test.ts",
@@ -793,8 +795,8 @@
         },
         {
           "module": "host-bridges",
-          "path": "docs/fork-modules/compat/v0.9.102/host-bridges.patch",
-          "sourceSha256": "7eb857c1a0c078292860639e4a199f057cadd69f59bd3838d2a91e4e42109694",
+          "path": "docs/fork-modules/compat/v0.9.103/host-bridges.patch",
+          "sourceSha256": "ed02d0f02fc9d2f52461061655838d34c253e4125d8808ca38d00b62649f5d86",
           "targetHosts": [
             {
               "path": "src/ts/characterUpdate.ts",

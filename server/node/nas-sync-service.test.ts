@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { threadId as mainThreadId } from 'node:worker_threads'
 import { fixtureDav } from './nas-sync-dav-fixture'
 import { resolveMemoryWorkspace } from './risubard-memory-workspace'
@@ -69,11 +71,11 @@ async function device(t: any, dav: ReturnType<typeof fixtureDav>, name: string, 
     const memory = createRuntimeMemoryService(dataRoot), storage = createFileKv({ dataRoot })
     const protect = androidProtector('11'.repeat(32)); await vaultMasterStore(dataRoot, protect).importMaster(master)
     const inlays = new Map<string, { metadata: any; data: Buffer | string }>()
-    const make = (hooks: any = {}) => createNasSyncService({ dataRoot, readDatabase: async () => repository.exportLegacyDatabase(), memory, storage, secrets: dav.secrets, fetch: dav.fetch, protect, now,
+    const make = (hooks: any = {}, overrides: any = {}) => createNasSyncService({ dataRoot, readDatabase: async () => repository.exportLegacyDatabase(), memory, storage, secrets: dav.secrets, fetch: dav.fetch, protect, now,
         readInlay: async (id: string) => inlays.get(id) ?? null,
         installInlay: async (entry: any, staging: string) => { if (inlays.has(entry.id)) throw Object.assign(new Error('EEXIST inlay'), { code: 'EEXIST' }); inlays.set(entry.id, { metadata: entry.metadata, data: await readFile(join(staging, entry.file)) }); if (entry.ownership) storage.kvSet('inlay_meta/' + entry.id, Buffer.from(JSON.stringify(entry.ownership))) },
         inlayMeta: async (id: string) => { const raw = storage.kvGet('inlay_meta/' + id); return raw ? JSON.parse(Buffer.from(raw).toString('utf8')) : null },
-        removeInlay: async (id: string) => { inlays.delete(id); storage.kvDel('inlay_meta/' + id) }, hooks, ...options })
+        removeInlay: async (id: string) => { inlays.delete(id); storage.kvDel('inlay_meta/' + id) }, hooks, ...options, ...overrides })
     const service = make()
     const save = (db: any) => repository.importLegacyDatabase(db, { mode: 'sync' })
     return { root, dataRoot, repository, memory, storage, inlays, service, make, save, db: () => repository.exportLegacyDatabase() }
@@ -114,6 +116,120 @@ test('a failed shared snapshot does not poison the retry', async t => {
     expect(reads).toBe(1)
     await expect(d.service.snapshot()).resolves.toHaveProperty('committed')
     expect(reads).toBe(2)
+})
+
+test('startup waits for the data-root owner and clears abandoned capture work after a process dies', async t => {
+    const dav = fixtureDav(), database = { characters: [{ chaId: 'card', type: 'character', name: 'card', image: 'assets/icon.png', chats: [] }] }
+    const d = await device(t, dav, 'capture-crash', database, MASTER, { readDatabase: async () => database })
+    d.storage.kvSet('assets/icon.png', Buffer.from('fixture object'))
+    d.service.enable({ workspaceId: 'ws-fixture' })
+    const root = join(d.dataRoot, 'nas-sync'), planCheck = join(root, 'plan-check-Ab12xy'), keep = join(root, 'snapshot-ABCDEF')
+    await mkdir(planCheck); await writeFile(keep, 'unrelated file')
+    const child = spawn(process.execPath, ['-e', `
+        const [dir, root, db] = process.argv.slice(1)
+        const load = file => require(require('node:path').join(dir, file))
+        load('data-root-lock.cjs').acquireDataRootLock(root)
+        const service = load('nas-sync-service.cjs').createNasSyncService({
+            dataRoot: root, ownsDataRoot: false, readDatabase: async () => JSON.parse(db),
+            memory: {}, storage: load('file-kv.cjs').createFileKv({ dataRoot: root }),
+            secrets: {}, fetch: () => { throw new Error('unexpected network') },
+            protect: load('transfer-secrets.cjs').androidProtector('11'.repeat(32)),
+            hooks: { beforeSnapshotCommit: () => { console.log('capture-ready'); return new Promise(() => setInterval(() => {}, 1000)) } },
+        })
+        service.snapshot().catch(error => { console.error(error); process.exitCode = 1 })
+    `, __dirname, d.dataRoot, JSON.stringify(database)], { windowsHide: true })
+    const closed = once(child, 'close')
+    t.onTestFinished(async () => { child.kill(); await closed })
+    await Promise.race([once(child.stdout, 'data').then(([s]) => expect(String(s)).toContain('capture-ready')), closed.then(() => { throw new Error('Child exited before capture') })])
+    const { acquireDataRootLock } = require('./data-root-lock.cjs')
+    expect(() => acquireDataRootLock(d.dataRoot)).toThrow(/DATA_ROOT_IN_USE/)
+    const staged = (await readdir(root, { withFileTypes: true })).find(x => x.isDirectory() && x.name.startsWith('snapshot-'))!
+    expect(staged).toBeDefined()
+    expect(existsSync(planCheck)).toBe(true)
+    child.kill(); await closed
+    const lock = acquireDataRootLock(d.dataRoot)
+    try {
+        const reopened = d.make({}, { ownsDataRoot: true })
+        expect(existsSync(join(root, staged.name))).toBe(false)
+        expect(existsSync(planCheck)).toBe(false)
+        expect(await readFile(keep, 'utf8')).toBe('unrelated file')
+        expect(reopened.store().state().commits).toHaveLength(0)
+        expect((await reopened.snapshot()).committed.sequence).toBe(1)
+        expect((await reopened.publish()).failed).toEqual([])
+    } finally { lock.release() }
+})
+
+test('a second service in the same process preserves an active capture and joined retries', async t => {
+    const d = await device(t, fixtureDav(), 'capture-active', { characters: [] })
+    const lock = require('./data-root-lock.cjs').acquireDataRootLock(d.dataRoot)
+    let release!: () => void, started!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve }), entered = new Promise<void>(resolve => { started = resolve })
+    const service = d.make({ beforeSnapshotCommit: async () => { started(); await gate } }, { ownsDataRoot: true })
+    service.enable({ workspaceId: 'ws-fixture' })
+    d.save({ characters: [], language: 'ja' })
+    const first = service.snapshot(), retry = service.snapshot()
+    try {
+        await entered
+        const root = join(d.dataRoot, 'nas-sync')
+        const captures = () => readdir(root).then(files => files.filter(name => name.startsWith('snapshot-')))
+        const paths = await captures()
+        expect(paths).toHaveLength(1)
+        d.make({}, { ownsDataRoot: true })
+        expect(await captures()).toEqual(paths)
+        release()
+        const [a, b] = await Promise.all([first, retry])
+        expect(a).toEqual(b)
+        expect(await captures()).toEqual([])
+    } finally { release(); lock.release() }
+})
+
+test.for(['asset', 'inlay'])('missing referenced %s prevents snapshot commit with the existing error', async (kind, t) => {
+    const db = { characters: [{ chaId: 'card', type: 'character', name: 'card',
+        ...(kind === 'asset' ? { image: 'assets/missing.png', chats: [] }
+            : { chats: [{ id: 'chat', name: 'chat', message: [{ role: 'char', data: '{{inlay::missing}}' }] }] }) }] }
+    const d = await device(t, fixtureDav(), 'missing-' + kind, db, MASTER, { readDatabase: async () => db })
+    d.service.enable({ workspaceId: 'ws-fixture' })
+    await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', missing: [
+        expect.objectContaining({ reason: kind === 'asset' ? 'Missing asset: assets/missing.png' : 'Missing inlay: missing' }),
+    ] })
+    expect(d.service.store().state().commits).toEqual([])
+})
+
+test('uploads weekly local edits from the recorded lineage with the six divergent roots present', async t => {
+    const dav = fixtureDav()
+    const makeDb = (value: string) => ({
+        characters: [{ chaId: 'card', type: 'character', name: 'card-' + value, image: 'assets/' + value + '.png',
+            chats: [] as { id: string; name: string; message: { role: string; data: string }[] }[] }],
+        loreBook: [{ name: 'lore-' + value, key: 'fixture', content: value }],
+        personas: [{ id: 'persona', name: value }], botPresets: [{ id: 'preset', name: value }], botPresetsId: 0,
+        risuBardWikiWritingLanguage: value, statics: { fixture: value },
+    })
+    const aDb = makeDb('local'), bDb = makeDb('peer')
+    const a = await device(t, dav, 'six-local', aDb, MASTER, { readDatabase: async () => aDb })
+    const b = await device(t, dav, 'six-peer', bDb, MASTER, { readDatabase: async () => bDb })
+    for (const [d, db] of [[a, aDb], [b, bDb]] as const) {
+        d.storage.kvSet(db.characters[0].image, Buffer.from(db.characters[0].name))
+        d.service.enable({ workspaceId: 'ws-fixture' })
+        await d.service.snapshot()
+        expect((await d.service.publish()).failed).toEqual([])
+    }
+    await a.service.pull()
+    const graph = a.service.store().graph
+    const roots = ['library\ncharacter\ncard', ...['lorebook', 'personas', 'prompt-presets', 'risubard-wiki', 'statics'].map(name => 'settings\ngroup\n' + name)]
+    expect(graph.rootKeys().filter((root: string) => graph.classify(root).state === 'diverged').sort()).toEqual([...roots].sort())
+    const known = a.service.state().lineage
+    const lineageKey = (root: string) => root + '#' + root.split('\n').at(-1)
+    expect(roots.every(root => !!graph.get(known[lineageKey(root)]))).toBe(true)
+    aDb.characters[0].image = 'assets/maid-edit.png'
+    a.storage.kvSet(aDb.characters[0].image, Buffer.from('edited by synthetic asset maid'))
+    aDb.characters[0].chats.push({ id: 'chat', name: 'chat', message: [{ role: 'user', data: 'new conversation' }] })
+    aDb.loreBook[0].content = 'updated lore'
+    const result = await a.service.snapshot()
+    expect(result.committed.sequence).toBe(2)
+    expect(await a.service.publish()).toMatchObject({ failed: [], stored: [expect.objectContaining({ sequence: 2, commitId: result.committed.commitId })] })
+    await b.service.pull()
+    expect(b.service.store().graph.classify(roots[0]).state).toBe('diverged')
+    expect(b.service.store().graph.get(a.service.state().lineage[lineageKey(roots[0])]).parents).toContain(known[lineageKey(roots[0])])
 })
 
 async function seedTablet(t: any, dav: ReturnType<typeof fixtureDav>) {
