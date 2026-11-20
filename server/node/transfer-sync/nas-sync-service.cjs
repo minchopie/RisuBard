@@ -180,15 +180,16 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     // A snapshot that committed to the store but crashed before recording lineage is completed from its durable intent. A crash
     // BEFORE the store commit (intent written, nothing committed) only drops the intent: lineage, vanished keys and a pending
     // restore mark stay exactly as they were, and the next snapshot does the whole thing again.
-    if (service().pendingLineage) {
-        const s = openStore(), intent = service().pendingLineage;
-        const committed = (intent.revisions ?? []).length > 0 && intent.revisions.every(id => s.graph.get(id));
+    const snapshotIntent = service().pendingLineage;
+    const snapshotStore = snapshotIntent ? openStore() : null;
+    const snapshotCommitted = snapshotIntent?.revisions?.length > 0 && snapshotIntent.revisions.every(id => snapshotStore.graph.get(id));
+    if (snapshotIntent) {
         manifest.transact(x => {
-            if (committed) applySnapshotLineage(x, intent, s.identity().incarnationId);
+            if (snapshotCommitted) applySnapshotLineage(x, snapshotIntent, snapshotStore.identity().incarnationId);
             x.pendingLineage = null;
         });
-        if (committed) recordLineage();
     }
+    if (snapshotCommitted || (service().deferredRestores && !service().pendingRestore)) recordLineage();
     // A bootstrap that committed to the store but crashed before its record was written is completed from its durable intent;
     // one that never reached the store is dropped together with its archive (nothing was resolved).
     if (service().pendingBootstrap) {
@@ -668,7 +669,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
      *  with them and read from the import staging before a restore publishes), and a bounded history of lineage blobs answers a DB
      *  snapshot restored by time. Called after every lineage change. */
     function recordLineage() {
-        const s = openStore(), lineage = service().lineage, bytes = Buffer.from(canonical({ lineage }, true)), hash = sha256(bytes);
+        const s = openStore(), { lineage: applied, deferredRestores = {} } = service();
+        const lineage = withDeferredBases(applied, deferredRestores);
+        const bytes = Buffer.from(canonical({ lineage }, true)), hash = sha256(bytes);
         if (service().lineageHistory?.at(-1)?.hash !== hash) {
             if (!s.hasBlob(hash)) { const tmp = join(root, 'lineage-' + hash); fs.writeFileSync(tmp, bytes); s.storeBlobFromFile(hash, tmp); fs.rmSync(tmp, { force: true }); }
             manifest.transact(x => { (x.lineageHistory ??= []).push({ at: now(), hash }); if (x.lineageHistory.length > 256) x.lineageHistory.splice(0, x.lineageHistory.length - 256); });
@@ -764,16 +767,23 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         if (intent.restore && state.pendingRestore?.id === intent.restore.id) state.pendingRestore = null;
     }
 
+    function withDeferredBases(lineage, marks) {
+        if (!Object.keys(marks).length) return lineage;
+        // A fresh backup's data still comes from the older restore for these roots.
+        const bases = { ...lineage };
+        for (const [key, mark] of Object.entries(marks)) {
+            if (mark.base) bases[key] = mark.base;
+            else delete bases[key];
+        }
+        return bases;
+    }
+
     function restoreContext(s) {
         const { lineage, pendingRestore, deferredRestores = {}, incarnation } = service();
         const restored = !!pendingRestore || (incarnation !== null && incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
         const marks = pendingRestore ? {} : deferredRestores;
         const restoreKeys = new Set(Object.keys(marks));
-        const bases = pendingRestore ? (pendingRestore.bases ?? {}) : restoreKeys.size ? { ...lineage } : lineage;
-        for (const [key, mark] of Object.entries(marks)) {
-            if (mark.base) bases[key] = mark.base;
-            else delete bases[key];
-        }
+        const bases = pendingRestore ? (pendingRestore.bases ?? {}) : withDeferredBases(lineage, marks);
         return { bases, restored, restoreKeys, marks, restoreMark: pendingRestore ?? null };
     }
 
@@ -831,7 +841,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 if (r.type === 'character') {
                     const base = bases[key + '#' + r.root];
                     const previousChats = base ? s.graph.get(base)?.content?.chatIds ?? [] : [];
-                    if ((r.content.chatIds ?? []).some(id => held.has(rootKeyOf('play', 'chat', id)) && !previousChats.includes(id))) held.add(key);
+                    if ((r.content.chatIds ?? []).some(id => {
+                        const child = rootKeyOf('play', 'chat', id);
+                        return held.has(child) && (!previousChats.includes(id) || s.graph.classify(child).state === 'deleted');
+                    })) held.add(key);
                 }
                 if (key === rootKeyOf('settings', 'group', 'activation')) {
                     const { enabledModules, moduleIntergration, personaEnabledModules, pluginEnabled } = r.content;
@@ -1130,9 +1143,27 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         // overwritten: it stays pending until the next snapshot turns the edit into its own causal revision (then both heads meet
         // as branches or a conflict), and the commits that touch it are not acknowledged.
         const { edited: localEdits, held: mediaHeld, matchingChats } = await unsnapshottedRoots(s, v, db, touched);
+        // Collect expectations before staging any root; one KV key cannot satisfy two hashes.
+        const assetUses = new Map(), assetConflicts = new Map();
+        for (const key of touched.keys()) {
+            if (historyOnly(key)) continue;
+            for (const head of s.graph.classify(key).liveHeads) {
+                for (const [dep, hash] of Object.entries(s.graph.get(head).dependencies)) {
+                    if (!dep.startsWith('asset:')) continue;
+                    const asset = dep.slice(6);
+                    if (!assetUses.has(asset)) assetUses.set(asset, { hash, roots: new Set() });
+                    const use = assetUses.get(asset);
+                    use.roots.add(key);
+                    if (use.hash !== hash) use.hash = null;
+                }
+            }
+        }
+        for (const [asset, { hash, roots }] of assetUses) {
+            if (hash === null) for (const key of roots) assetConflicts.set(key, asset);
+        }
         // Merge only captured revisions. Unpublished local edits, real persona conflicts and overlapping Wiki edits stay protected.
         for (const key of touched.keys()) {
-            if (localEdits.has(key)) continue;
+            if (localEdits.has(key) || assetConflicts.has(key)) continue;
             if (key === 'settings\ngroup\npersonas' && !personaMirrorsMatch(db)) continue;
             const c = s.graph.classify(key);
             if (c.state !== 'diverged') continue;
@@ -1152,8 +1183,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             for (const [k, h] of Object.entries(rev.dependencies)) {
                 if (k.startsWith('asset:')) {
                     const key = k.slice(6);
+                    const registeredHash = storage.kvObjectHash(key);
+                    if (registeredHash !== null && registeredHash !== h) return { collision: key };
                     let present = false;
-                    if (storage.kvGetUpdatedAt(key) !== null) {
+                    if (registeredHash !== null) {
                         const tmp = join(work, randomUUID());
                         try { present = await storage.kvExportFile(key, tmp); }
                         catch (error) { if (!missingMediaFile(error)) throw error; }
@@ -1183,6 +1216,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
             if (domain === 'play') continue;
             if (historyOnly(key)) { applyRoot(key); continue; }
+            if (assetConflicts.has(key)) { result.pending.push({ root: key, reason: 'media collision', item: assetConflicts.get(key) }); continue; }
             if (localEdits.has(key)) { result.pending.push({ root: key, reason: 'local-edit' }); continue; }
             if (c.state === 'diverged' && !deviceFieldsOnly(s, c)) { result.pending.push({ root: key, reason: 'diverged', variants: c.variants.length }); continue; }
             if (c.state === 'deleted') {
@@ -1191,7 +1225,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                     const operation = s.graph.get(c.tombstoneHeads[0]).tombstone.operation;
                     const existing = (db.characters ?? []).find(x => x.chaId === rootId);
                     if (s.graph.containerState(key, operation) === 'delete-pending' ||
-                        existing?.chats?.some(chat => mediaHeld.has(rootKeyOf('play', 'chat', branches[chat.id]?.root ?? chat.id)))) {
+                        existing?.chats?.some(chat => {
+                            const child = rootKeyOf('play', 'chat', branches[chat.id]?.root ?? chat.id);
+                            return mediaHeld.has(child) || localEdits.has(child) || assetConflicts.has(child);
+                        })) {
                         result.pending.push({ root: key, reason: 'delete-pending', operation }); continue;
                     }
                     if (existing) { result.deletions.push({ kind: 'character', id: rootId }); before.characters.push(clone(existing)); }
@@ -1270,6 +1307,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         for (const key of touched.keys()) {
             const [domain, type, rootId] = key.split('\n');
             if (domain !== 'play' || type !== 'chat') continue;
+            if (assetConflicts.has(key)) { result.pending.push({ root: key, reason: 'media collision', item: assetConflicts.get(key) }); continue; }
             if (localEdits.has(key)) { result.pending.push({ root: key, reason: 'local-edit' }); continue; }
             const c = s.graph.classify(key), locals = localChatsOf(rootId);
             if (c.state === 'deleted') { for (const { character, chat } of locals) { result.deletions.push({ kind: 'chat', characterId: character.chaId, id: chat.id }); before.chats.push({ characterId: character.chaId, chat: clone(chat) }); } applyRoot(key); result.lineage[key + '#' + rootId] = c.tombstoneHeads[0]; continue; }
@@ -1356,7 +1394,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 // The KV import CONSUMES its source file (file-kv moves/unlinks it). Hand it a staged copy, never the admitted blob:
                 // the blob stays pinned by the admitted revision and every later plan/verification that depends on it.
                 const copy = join(staging, 'asset-' + randomUUID()); await fsp.copyFile(s.blobFile(item.hash), copy);
-                await storage.kvReplacePrefixesFromFilesAsync([{ key: item.key, sourcePath: copy }], []); item.installed = true;
+                item.registeredAt = await storage.kvInstallNasAssetFromFile(item.key, copy, item.hash);
             }
         }
         const sealedPlan = await sealRecord(s, v, { settings: result.settings, modules: result.modules, plugins: result.plugins, characters: [...result.characters.map(r => ({ chaId: r.chaId, ...r.fields })), ...result.newCharacters] }, work);
@@ -1385,7 +1423,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         const scoped = cardOnlyProjection(db, s), memberships = scoped.memberships;
         db = scoped.database;
         // An excluded local conversation has not been compared; do not overwrite it during a download.
-        for (const key of touched.keys()) if (scoped.preserved.has(key)) edited.add(key);
+        for (const key of scoped.preserved) edited.add(key);
         const known = new Set(Object.keys(lineage).map(k => k.split('#')[0]));
         const work = startCapture('plan-check-'), captures = new Map(), cleanups = [];
         try {
@@ -1403,7 +1441,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             }
             await normalizeCaptures(captures, db, branches, work);
             const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, chatRoots, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
-            const { bases, restored, restoreKeys, restoreMark } = restoreContext(s);
+            const { bases, restored, restoreKeys } = restoreContext(s);
             const absent = compareWithMissingMedia(s, projection, bases);
             const diff = diffProjection(s.graph, projection.desired, bases, { restore: restored, restoreKeys });
             const { direct, held } = heldMediaRoots(s, projection, absent, diff, bases);
@@ -1411,9 +1449,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             for (const key of held) {
                 if (!direct.has(key) || restored || restoreRoots.has(key) || s.graph.classify(key).state === 'deleted') edited.add(key);
             }
-            // An identity rotation alone can happen before this device has published or applied anything.
-            const compareRestore = restored && (restoreMark !== null || known.size > 0 || s.state().commits.length > 0);
-            const compared = key => known.has(key) || compareRestore || restoreRoots.has(key);
+            // A matching identity permits first receipt. A sidecar rotation with only received history can be a restored data root.
+            const compared = key => known.has(key) || restored || restoreRoots.has(key);
             for (const r of diff.revisions) if (compared(rootKey(r))) edited.add(rootKey(r));
             for (const k of diff.diverged) if (compared(k.split('#')[0])) edited.add(k.split('#')[0]);
             // An untracked local record with missing media may be a held edit. Apply an incoming copy only if its body
@@ -1577,7 +1614,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 // Roll back only when every planned entity is provably still in its pre-apply state; anything mixed or unknown keeps the plan and the write gate.
                 const untouched = current.phase === 'prepared' || (current.baseline && canonical(entityHashes(current, db), true) === canonical(current.baseline, true));
                 if (!untouched) throw Object.assign(new Error('Part of the sync apply may have been saved; recovery retained'), { code: 'NAS_SYNC_PARTIAL', detail: classifySaved(current, db) });
-                for (const item of current.media) if (item.installed) { if (item.kind === 'inlay') await removeInlay(item.id).catch(() => {}); else storage.kvDel(item.key); }
+                for (const item of current.media) {
+                    if (item.kind === 'inlay' && item.installed) await removeInlay(item.id).catch(() => {});
+                    // Older journals and object repairs lack proof that the plan created the registration.
+                    if (item.kind === 'asset' && item.registeredAt != null) storage.kvRollbackNasAssetRegistration(item.key, item.hash, item.registeredAt);
+                }
                 manifest.transact(x => { x.plan = null; (x.rolledBack ??= []).push({ transaction, at: now() }); });
                 await fsp.rm(file(planPath(transaction)), { force: true }); await fsp.rm(staging, { recursive: true, force: true });
                 return { state: 'rolled-back', transaction };

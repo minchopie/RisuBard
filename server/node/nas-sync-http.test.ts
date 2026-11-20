@@ -21,6 +21,7 @@ const DEVICE_KEY = '11'.repeat(32), MASTER = Buffer.from('ab'.repeat(32), 'hex')
 
 test('sync routes: auth and default-disabled; the write gate with no plan and with a real pending plan; a DB snapshot restore marks sync', async t => {
     const root = await fs.mkdtemp(join(tmpdir(), 'bard-sync-http-')), dataRoot = join(root, 'data')
+    const noBackup = join(root, 'nobackup'), syncSecrets = join(noBackup, 'nas-sync')
     t.onTestFinished(() => fs.rm(root, { recursive: true, force: true }))
     const seed: any = { language: 'ko', botPresets: [], modules: [], personas: [], loreBook: [], plugins: [], characters: [{ chaId: 'card', type: 'character', name: '합성', chats: [{ id: 'chat', name: '보존', note: '', localLore: [], message: [{ role: 'char', data: '디스크 보존' }] }] }] }
     const repository = createUserDataRepository({ dataRoot }); repository.importLegacyDatabase(seed, { mode: 'sync' })
@@ -33,7 +34,7 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     const start = async () => {
         await fs.rm(join(dataRoot, '.android-server.json'), { force: true })
         child = spawn(process.execPath, [join(process.cwd(), 'server/node/server.cjs')], { cwd: root, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-            env: { ...process.env, RISUBARD_DATA_ROOT: dataRoot, RISUBARD_EMBEDDED_ANDROID: '1', RISUBARD_TRANSFER_KEY: DEVICE_KEY, PORT: '0', OPEN_BROWSER: '0', RISU_UPDATE_CHECK: 'false' } })
+            env: { ...process.env, RISUBARD_DATA_ROOT: dataRoot, RISUBARD_NO_BACKUP_DIR: noBackup, RISUBARD_EMBEDDED_ANDROID: '1', RISUBARD_TRANSFER_KEY: DEVICE_KEY, PORT: '0', OPEN_BROWSER: '0', RISU_UPDATE_CHECK: 'false' } })
         child.stdout!.on('data', b => { logs += b }); child.stderr!.on('data', b => { logs += b })
         for (let n = 0; n < 150; n++) {
             if (child.exitCode !== null) throw new Error(logs)
@@ -86,8 +87,9 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     await vaultMasterStore(tabletRoot, androidProtector(DEVICE_KEY)).importMaster(MASTER)
     const tablet = createNasSyncService({ dataRoot: tabletRoot, readDatabase: async () => tabletRepo.exportLegacyDatabase(), memory: createRuntimeMemoryService(tabletRoot), storage: createFileKv({ dataRoot: tabletRoot }), secrets: dav.secrets, fetch: dav.fetch, protect: androidProtector(DEVICE_KEY) })
     tablet.enable({ workspaceId: 'ws-http' }); expect((await tablet.snapshot()).committed).toMatchObject({ sequence: 1 }); expect((await tablet.publish()).failed).toEqual([])
-    await vaultMasterStore(dataRoot, androidProtector(DEVICE_KEY)).importMaster(MASTER) // same protector selection the server makes from RISUBARD_TRANSFER_KEY
-    const local = createNasSyncService({ dataRoot, readDatabase: async () => repository.exportLegacyDatabase(), memory: createRuntimeMemoryService(dataRoot), storage: kv, secrets: dav.secrets, fetch: dav.fetch, protect: androidProtector(DEVICE_KEY) })
+    // Seed the receiver using the same protected identity and vault as the server process.
+    await vaultMasterStore(syncSecrets, androidProtector(DEVICE_KEY)).importMaster(MASTER)
+    const local = createNasSyncService({ dataRoot, identityDir: syncSecrets, secretsDir: syncSecrets, readDatabase: async () => repository.exportLegacyDatabase(), memory: createRuntimeMemoryService(dataRoot), storage: kv, secrets: dav.secrets, fetch: dav.fetch, protect: androidProtector(DEVICE_KEY) })
     local.enable({ workspaceId: 'ws-http' }); expect((await local.pull()).admitted).toHaveLength(1)
 
     // ---- running server with the pending plan: plan → arm moves the gate; absent/wrong header refused, matching header accepted; finish applies ----
@@ -99,6 +101,7 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     expect((await status()).plan).toBeNull() // the preview prepared nothing
     const planned = await post('/plan'); expect(planned.ok, await planned.clone().text()).toBe(true)
     const plan = await planned.json(); expect(plan.empty).toBeUndefined(); expect(plan.settings.language).toBe('en'); expect(plan.chats).toEqual([])
+    expect(JSON.parse(await fs.readFile(join(dataRoot, 'nas-sync', 'state.json'), 'utf8')).rotations).toEqual([])
     expect(JSON.stringify(await status())).toContain(plan.transaction)
     const snapshotPending = await post('/snapshot'); expect(snapshotPending.status).toBe(400)
     expect(await snapshotPending.json()).toMatchObject({ error: 'Finish the pending sync apply before taking a snapshot', code: 'NAS_SYNC_PLAN_PENDING' })

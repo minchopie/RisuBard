@@ -254,6 +254,129 @@ const r7Send = async (source: any, target: any) => {
     expect((await target.service.pull()).admitted.length).toBeGreaterThan(0)
 }
 
+test.for(['missing', 'same'])('R9 holds differing roots after a sidecar rotation with only received history (%s local language)', async (language, t) => {
+    const dav = fixtureDav(), localLore = [{ name: 'local lore', content: 'keep me' }]
+    const local = await device(t, dav, 'peer-history', { characters: [], loreBook: localLore, ...(language === 'same' ? { language: 'en' } : {}) })
+    const beforeLore = local.db().loreBook
+    const peer = await device(t, dav, 'peer-history-source', {
+        characters: [], loreBook: [{ name: 'peer lore', content: 'incoming' }], language: 'en',
+    })
+    local.service.enable({ workspaceId: 'ws-fixture', role: 'joining' })
+    r7Enable(peer)
+    await peer.service.snapshot()
+    await r7Send(peer, local)
+    expect(local.service.state()).toMatchObject({ pendingRestore: null, lineage: {} })
+    expect(local.service.store().state().commits).toEqual([])
+    const before = local.service.store().identity()
+    await unlink(join(local.dataRoot, 'nas-sync', 'identity.json'))
+    const reopened = local.make()
+    expect(reopened.store().identity().incarnationId).not.toBe(before.incarnationId)
+    const plan = await settle({ ...local, service: reopened })
+    expect(plan.pending).toContainEqual({ root: 'settings\ngroup\nlorebook', reason: 'local-edit' })
+    expect(plan.settings).toMatchObject({ language: 'en' })
+    expect(plan.commits).toEqual([])
+    expect(local.db().loreBook).toEqual(beforeLore)
+    expect(local.db().language).toBe('en')
+})
+
+test('R9 rejects all roots that require conflicting hashes for the same unavailable asset', async t => {
+    const dav = fixtureDav(), key = 'assets/shared-r9.png'
+    const left = await device(t, dav, 'asset-left', { modules: [{ id: 'left', name: 'left', icon: key }] })
+    const right = await device(t, dav, 'asset-right', { modules: [{ id: 'right', name: 'right', icon: key }] })
+    const safe = await device(t, dav, 'asset-safe', { modules: [{ id: 'safe', name: 'safe' }] })
+    const local = await device(t, dav, 'asset-receiver', { modules: [] })
+    r7Enable(left, right, safe, local)
+    left.storage.kvSet(key, Buffer.from('left picture'))
+    right.storage.kvSet(key, Buffer.from('right picture'))
+    local.storage.kvSet(key, Buffer.from('left picture'))
+    await unlink(join(local.dataRoot, 'kv', 'objects', sha('left picture')))
+    for (const sender of [left, right, safe]) { await sender.service.snapshot(); await r7Send(sender, local) }
+    const plan = await settle(local)
+    for (const id of ['left', 'right']) {
+        expect(plan.pending).toContainEqual({ root: 'library\nmodule\n' + id, reason: 'media collision', item: key })
+    }
+    expect(plan.commits.map((row: any) => row.device)).toEqual([safe.service.store().identity().deviceId])
+    expect(local.db().modules.map((mod: any) => mod.id)).toEqual(['safe'])
+    expect(local.storage.kvGet(key)).toBeNull()
+    expect(local.service.store().pendingApply()).toHaveLength(2)
+})
+
+test.for(['same', 'different'])('R9 preserves the registered asset mapping when recovering a missing object (%s)', async (mode, t) => {
+    const dav = fixtureDav(), key = 'assets/registered-r9.png', original = Buffer.from('original picture')
+    const local = await device(t, dav, 'asset-rollback', { modules: [] })
+    const peer = await device(t, dav, 'asset-source', { modules: [{ id: 'restore', name: 'restore', icon: key }] })
+    r7Enable(local, peer)
+    local.storage.kvSet(key, original)
+    const manifest = join(local.dataRoot, 'kv', 'manifest.json')
+    const before = await readFile(manifest)
+    await unlink(join(local.dataRoot, 'kv', 'objects', sha(original)))
+    peer.storage.kvSet(key, mode === 'same' ? original : Buffer.from('other picture'))
+    await peer.service.snapshot()
+    await r7Send(peer, local)
+    if (mode === 'same') {
+        const plan = await local.service.plan()
+        expect(plan.modules).toHaveLength(1)
+        expect(local.storage.kvGet(key)).toEqual(original)
+        expect(await local.make().finish(plan.transaction)).toMatchObject({ state: 'rolled-back' })
+        expect(local.storage.kvGet(key)).toEqual(original)
+    } else {
+        const plan = await settle(local)
+        expect(plan.pending).toContainEqual({ root: 'library\nmodule\nrestore', reason: 'media collision', item: key })
+        expect(plan.commits ?? []).toEqual([])
+        expect(local.db().modules ?? []).toEqual([])
+        expect(local.storage.kvGet(key)).toBeNull()
+    }
+    expect(await readFile(manifest)).toEqual(before)
+    expect(local.service.store().pendingApply()).toHaveLength(1)
+})
+
+test.for(['cohort', 'local-only'])('R9 holds a deleted parent with an actual child excluded by card-only upload (%s)', async (mode, t) => {
+    const dav = fixtureDav(), local = await device(t, dav, 'card-only-delete-local', r7Db(mode === 'cohort' ? [r7Chat] : []))
+    const peer = await device(t, dav, 'card-only-delete-peer', { characters: [], modules: [] })
+    r7Enable(local, peer)
+    await local.service.snapshot()
+    await r7Send(local, peer)
+    await settle(peer)
+    await local.service.setCardOnlyUpload({ characterId: 'card', enabled: true })
+    const db = local.db()
+    if (mode === 'local-only') db.characters[0].chats.push(structuredClone(r7Chat))
+    db.characters[0].chats[0].message.push({ role: 'user', data: 'local-only content' })
+    local.save(db)
+    peer.save({ ...peer.db(), characters: [] })
+    expect((await peer.service.snapshot()).committed.tombstones).toBe(mode === 'cohort' ? 2 : 1)
+    await r7Send(peer, local)
+    const plan = await settle(local)
+    expect(plan).toMatchObject({ empty: true, pending: expect.arrayContaining([
+        expect.objectContaining({ root: 'library\ncharacter\ncard', reason: 'delete-pending' }),
+    ]) })
+    if (mode === 'cohort') expect(plan.pending).toContainEqual({ root: 'play\nchat\nchat', reason: 'local-edit' })
+    expect(local.db().characters[0].chats).toEqual(db.characters[0].chats)
+    expect(local.service.store().pendingApply()).toHaveLength(1)
+})
+
+test('R9 holds the prior parent membership when its restored child is still deleted and missing media', async t => {
+    const key = 'assets/chat-restore-r9.png', picture = Buffer.from('restore this picture')
+    const local = await device(t, fixtureDav(), 'restore-membership', r7Db([
+        { ...r7Chat, message: [{ role: 'char', data: key }] },
+    ]))
+    r7Enable(local)
+    local.storage.kvSet(key, picture)
+    await local.service.snapshot()
+    const backup = local.db(), lineage = local.service.state().lineage
+    local.save({ ...backup, characters: [] })
+    expect((await local.service.snapshot()).committed.tombstones).toBe(2)
+    local.service.markRestore({ source: 'backup-import', restoreId: 'prior-card', lineage })
+    local.save({ ...backup, loreBook: [{ name: 'independent' }] })
+    local.storage.kvDel(key)
+    expect((await local.service.snapshot()).committed.revisions).toBe(1)
+    const graph = local.service.store().graph
+    for (const root of ['library\ncharacter\ncard', 'play\nchat\nchat']) expect(graph.classify(root).state).toBe('deleted')
+    local.storage.kvSet(key, picture)
+    expect((await local.service.snapshot()).committed.revisions).toBe(2)
+    const parent = graph.classify('library\ncharacter\ncard')
+    expect(graph.get(parent.liveHeads[0]).content.chatIds).toEqual(['chat'])
+})
+
 test.for(['direct', 'pin'])('R7 preserves the parent and child of a %s media hold during peer deletion', async (kind, t) => {
     const dav = fixtureDav(), local = await device(t, dav, 'delete-local', r7Db())
     const peer = await device(t, dav, 'delete-peer', { characters: [], modules: [] })
@@ -288,7 +411,7 @@ test.for(['direct', 'pin'])('R7 preserves the parent and child of a %s media hol
     expect(local.db().modules.some((m: any) => m.id === 'safe')).toBe(true)
 })
 
-test.for(['no-commit', 'committed-before-crash'])('R7 resumes a held restoration from the backup base (%s)', async (mode, t) => {
+test.for(['no-commit', 'committed-before-crash', 'reimport-backup'])('R7/R9 resumes a held restoration from the backup base (%s)', async (mode, t) => {
     const dav = fixtureDav(), icon = 'assets/restored.png', bytes = Buffer.from('restored icon')
     const local = await device(t, dav, 'restore-held', { characters: [], modules: [{ id: 'mod', name: 'backup', icon }], loreBook: [] })
     const peer = await device(t, dav, 'restore-peer', { characters: [], modules: [] })
@@ -308,19 +431,25 @@ test.for(['no-commit', 'committed-before-crash'])('R7 resumes a held restoration
     const latestHead = peer.service.state().lineage[key]
     await r7Send(peer, local)
 
-    const api = mode === 'no-commit' ? local.service : local.make({ afterSnapshotCommit: async () => { throw new Error('fixture power loss') } })
+    const crash = mode === 'committed-before-crash'
+    const api = crash ? local.make({ afterSnapshotCommit: async () => { throw new Error('fixture power loss') } }) : local.service
     api.markRestore({ source: 'backup-import', restoreId: 'backup-a', lineage })
-    if (mode !== 'no-commit') backup.loreBook = [{ name: 'restored independent lore', content: 'fixture' }]
+    if (crash) backup.loreBook = [{ name: 'restored independent lore', content: 'fixture' }]
     local.save(backup)
     local.storage.kvDel(icon)
-    if (mode === 'no-commit') expect((await api.snapshot()).committed).toBeNull()
-    else await expect(api.snapshot()).rejects.toThrow('fixture power loss')
+    if (crash) await expect(api.snapshot()).rejects.toThrow('fixture power loss')
+    else expect((await api.snapshot()).committed).toBeNull()
 
     const reopened = local.make(), graph = reopened.store().graph
     expect(reopened.state().pendingRestore).toBeNull()
     expect(reopened.state().deferredRestores[key]).toMatchObject({ id: 'backup-a', base: lineage[key], basesFrom: 'recorded' })
     expect(await reopened.plan()).toMatchObject({ empty: true, pending: [expect.objectContaining({ root, reason: 'local-edit' })] })
     expect((await reopened.snapshot()).committed).toBeNull()
+    if (mode === 'reimport-backup') {
+        const freshBackup = JSON.parse(await readFile(join(local.dataRoot, 'risubard', 'nas-sync', 'lineage.json'), 'utf8'))
+        reopened.markRestore({ source: 'backup-import', restoreId: 'fresh-backup', lineage: freshBackup.lineage })
+        local.save(backup)
+    }
     local.storage.kvSet(icon, bytes)
     expect((await reopened.snapshot()).provenance).toBe('restored-backup')
     const restored = reopened.state().lineage[key]

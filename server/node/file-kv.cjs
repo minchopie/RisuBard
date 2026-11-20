@@ -108,7 +108,7 @@ async function writeObjectAsync(dataRoot, hash, data) {
     }
 }
 
-async function writeObjectFromFileAsync(dataRoot, sourcePath) {
+async function writeObjectFromFileAsync(dataRoot, sourcePath, expectedHash = null) {
     const directory = path.join(dataRoot, 'kv', 'objects');
     await fsp.mkdir(directory, { recursive: true });
     const handle = await fsp.open(sourcePath, 'r+');
@@ -119,18 +119,25 @@ async function writeObjectFromFileAsync(dataRoot, sourcePath) {
     }
 
     const inspected = await inspectFileAsync(sourcePath);
+    if (expectedHash !== null && inspected.hash !== expectedHash) throw new Error('NAS asset does not match its expected hash');
     const target = path.join(directory, inspected.hash);
+    const verifyTarget = async () => {
+        if (expectedHash === null) await fsp.access(target);
+        else if ((await inspectFileAsync(target)).hash !== expectedHash) throw new Error('NAS asset object does not match its expected hash');
+    };
     try {
-        await fsp.access(target);
+        await verifyTarget();
         await fsp.unlink(sourcePath);
         return inspected;
-    } catch {}
+    } catch (error) {
+        if (expectedHash !== null && error.code !== 'ENOENT') throw error;
+    }
 
     try {
         await fsp.rename(sourcePath, target);
     } catch (error) {
         try {
-            await fsp.access(target);
+            await verifyTarget();
             await fsp.unlink(sourcePath);
         } catch {
             throw error;
@@ -517,6 +524,32 @@ function createFileKv(options = {}) {
         return entryOf(key)?.updatedAt ?? null;
     }
 
+    function kvObjectHash(key) {
+        return entryOf(key)?.object ?? null;
+    }
+
+    async function kvInstallNasAssetFromFile(key, sourcePath, hash) {
+        const checkEntry = () => {
+            const entry = entryOf(key);
+            if (entry && entry.object !== hash) throw new Error('NAS asset key has a different registered hash');
+            return entry;
+        };
+        checkEntry();
+        const object = await writeObjectFromFileAsync(dataRoot, sourcePath, hash);
+        if (checkEntry()) return null; // Only the object was missing. Keep the original registration, including retired entries.
+        const updatedAt = Date.now();
+        manifest.entries[key] = { object: hash, size: object.size, updatedAt };
+        saveManifest();
+        return updatedAt;
+    }
+
+    function kvRollbackNasAssetRegistration(key, hash, updatedAt) {
+        const entry = manifest.entries[key];
+        if (entry?.object !== hash || entry.updatedAt !== updatedAt) return;
+        delete manifest.entries[key];
+        saveManifest();
+    }
+
     function kvCopyValue(source, destination) {
         const entry = entryOf(source);
         if (!entry) return;
@@ -718,6 +751,9 @@ function createFileKv(options = {}) {
         kvDelManyAndCollect,
         kvSize,
         kvGetUpdatedAt,
+        kvObjectHash,
+        kvInstallNasAssetFromFile,
+        kvRollbackNasAssetRegistration,
         kvCopyValue,
         kvDelPrefix,
         kvList,
