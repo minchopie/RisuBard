@@ -1,10 +1,26 @@
-import { describe, expect, test } from 'vitest'
-import { retainedChatHtml } from './retainedChatHtml'
+import { describe, expect, test, vi } from 'vitest'
+import { holdChatDisplay, retainedChatHtml } from './retainedChatHtml'
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 const render = (html: string) => ({ content: Promise.resolve(html), format: (value: string) => value, onRender: () => {} })
 
 describe('retainedChatHtml', () => {
+    test('discards the snapshot when released, even if the handle is retained', () => {
+        const snapshot = document.createElement('div')
+        const target = document.createElement('div')
+        const remove = vi.spyOn(snapshot, 'remove')
+        const restore = vi.fn()
+        const release = holdChatDisplay(snapshot, restore)
+        release.attach(target)
+        expect(target.firstChild).toBe(snapshot)
+        release()
+        release.attach(target)
+        release()
+        expect(target.firstChild).toBeNull()
+        expect(remove).toHaveBeenCalledOnce()
+        expect(restore).toHaveBeenCalledOnce()
+    })
+
     test('keeps comparison copies out of the live document and patches in place', async () => {
         const node = document.createElement('span')
         const audio = '<audio autoplay loop><source src="a.mp3"></audio>'
@@ -59,6 +75,24 @@ describe('retainedChatHtml', () => {
         expect(result[0]).toBe(open)
         expect(result[0].open).toBe(true)
         expect(result[1].open).toBe(false)
+    })
+
+    test('keeps the trailing open details and whitespace when inserting a paragraph', async () => {
+        const node = document.createElement('div')
+        const prefix = '<p>First</p>\n'
+        const suffix = '<details><summary>Panel</summary></details>\n'
+        const action = retainedChatHtml(node, render(prefix + suffix))
+        await flush()
+        const details = node.querySelector('details')!
+        const trailingNewline = node.lastChild
+        details.open = true
+
+        action.update(render(prefix + '<p>Inserted</p>\n' + suffix))
+        await flush()
+        expect(node.querySelector('details')).toBe(details)
+        expect(details.open).toBe(true)
+        expect(node.lastChild).toBe(trailingNewline)
+        expect(node.innerHTML).toBe(prefix + '<p>Inserted</p>\n' + suffix.replace('<details>', '<details open="">'))
     })
 
     test('preserves live media resolution in the retained suffix and replaces a changed source', async () => {

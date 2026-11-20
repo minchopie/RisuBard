@@ -53,7 +53,7 @@ test('direction buttons call separate actions repeatedly, list dates in Korea ti
         expect(timeline.open).toBe(false); expect(timeline.querySelector('summary')?.textContent).toBe('NAS 최신판 기록 · 최근 2개 시각 · 마지막 2026. 10. 23. 01:05')
         expect([...timeline.querySelectorAll(':scope > .remote-file > strong')].map(e => e.textContent)).toEqual(['2026. 10. 23. 01:05', '날짜 기록 없음'])
         f.coordinator.set({ skippedMedia: [{ kind: 'asset', key: 'assets/icon.png', records: [{ type: 'module', id: 'life-module', name: '라이프 모듈' }] }] }); await tick()
-        const notice = [...target.querySelectorAll('details')].find(e => e.querySelector('summary')?.textContent === '건너뛴 그림 1개 — 자세히')!
+        const notice = [...target.querySelectorAll('details')].find(e => e.querySelector('summary')?.textContent === '빠진 그림·인레이 파일 1개 — 자세히')!
         expect(notice.open).toBe(false)
         expect(notice.textContent).toContain('모듈 · 라이프 모듈')
         expect([...notice.querySelectorAll('code')].map(e => e.textContent)).toEqual(['assets/icon.png', 'life-module'])
@@ -63,6 +63,24 @@ test('direction buttons call separate actions repeatedly, list dates in Korea ti
         f.coordinator.set({ running: false, paused: true }); await tick()
         expect([...target.querySelectorAll('button')].filter(e => ['NAS에 업로드', '이 기기에 다운로드'].includes(e.textContent ?? '')).every(e => e.disabled)).toBe(true)
         expect(target.querySelector('[role="dialog"]')).toBeNull()
+    } finally { await unmount(instance); target.remove() }
+})
+
+test('shows the saved media notice and persona-group hold before a new snapshot', async () => {
+    const status = await f.status()
+    const hash = 'ab'.repeat(32)
+    f.status.mockResolvedValueOnce({ ...status, sync: { ...status.sync, profile: { kind: 'pc' } }, personasHeld: true,
+        skippedMedia: [{ kind: 'asset', key: hash, records: [{ type: 'persona', id: 'first', name: '첫 페르소나' }] }],
+    } as typeof status)
+    const target = document.createElement('div'); document.body.append(target)
+    const instance = mount(Panel, { target })
+    try {
+        for (let i = 0; i < 15; i++) { await Promise.resolve(); await tick() }
+        const notice = [...target.querySelectorAll('details')].find(e => e.textContent?.includes(hash))!
+        expect(notice.querySelector('summary')?.textContent).toBe('빠진 그림·인레이 파일 1개 — 자세히')
+        expect(notice.textContent).toContain('페르소나 묶음 전체 보류')
+        expect(notice.textContent).toContain('자료와 그림 참조는 이 기기에 남고, 독립적인 변경은 계속 동기화돼요.')
+        expect(notice.textContent).toContain('페르소나 · 첫 페르소나')
     } finally { await unmount(instance); target.remove() }
 })
 

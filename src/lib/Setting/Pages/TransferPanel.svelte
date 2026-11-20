@@ -68,6 +68,8 @@
 
     // ---- automatic NAS sync (Node/embedded runtime only; reuses the NAS connection saved above and the device picker for key sharing) ----
     let sync = $state<any>(null)
+    const skippedMedia = $derived<import('src/ts/nasSyncCoordinator').SkippedSyncMedia[]>($coordinatorState?.skippedMedia ?? sync?.skippedMedia ?? [])
+    const personasHeld = $derived($coordinatorState?.personasHeld ?? sync?.personasHeld ?? false)
     let syncConflictList = $state<any[]>([])
     let syncOverviewState = $state<any>(null)
     let syncTrashList = $state<any[]>([])
@@ -161,12 +163,13 @@
                 <strong>{headline.tone === 'ok' ? '✓ ' : headline.tone === 'waiting' ? '… ' : '! '}{headline.title}</strong>
                 <span>{headline.detail}</span>
             </div>
-            {#if $coordinatorState?.skippedMedia?.length}
+            {#if skippedMedia.length}
                 <details class="hint">
-                    <summary>건너뛴 그림 {$coordinatorState.skippedMedia.length}개 — 자세히</summary>
-                    <p>최근 「내 변경 묶기」에서 그림을 읽지 못한 자료는 이 기기에 보관 중이에요.</p>
+                    <summary>빠진 그림·인레이 파일 {skippedMedia.length}개 — 자세히</summary>
+                    <p>빠진 파일을 참조하는 자료의 새 변경과 함께 올려야 하는 변경을 보류해요. 자료와 그림 참조는 이 기기에 남고, 독립적인 변경은 계속 동기화돼요.</p>
+                    {#if personasHeld}<p>페르소나 묶음 전체 보류</p>{/if}
                     <ul>
-                        {#each $coordinatorState.skippedMedia as item}
+                        {#each skippedMedia as item}
                             <li>
                                 <code>{item.key}</code>
                                 <ul>

@@ -64,12 +64,14 @@ describe('file-native system logs', () => {
             const logs = require(${JSON.stringify(logsModule)})
             const notice = { level: 'info', source: 'nas-sync', message: 'assets/private.png private card name' }
             logs.addLog({ ...notice, description: 'stage=snapshot code=MEDIA_SKIPPED count=2' })
+            logs.addLog({ ...notice, description: 'stage=snapshot code=MEDIA_SKIPPED count=3 personas=held' })
             logs.addLog({ ...notice, description: 'stage=snapshot code=MEDIA_SKIPPED count=2 key=assets/private.png' })
         `], { env: { ...process.env, RISUBARD_DATA_ROOT: root }, encoding: 'utf8' })
         expect(result.status, result.stderr).toBe(0)
         const rows = readFileSync(join(root, 'logs/system.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
         expect(rows.map(({ level, message, description }) => [level, message, description])).toEqual([
-            ['info', 'NAS 동기화에서 그림을 건너뛰었습니다.', 'stage=snapshot code=MEDIA_SKIPPED count=2'],
+            ['info', 'NAS 동기화에서 그림 또는 인레이 파일이 빠진 자료의 변경을 보류했습니다.', 'stage=snapshot code=MEDIA_SKIPPED count=2'],
+            ['info', 'NAS 동기화에서 그림 또는 인레이 파일이 빠진 자료의 변경을 보류했습니다. 페르소나 묶음 전체 보류', 'stage=snapshot code=MEDIA_SKIPPED count=3 personas=held'],
             ['info', 'NAS 동기화 단계에서 오류가 발생했습니다.', 'stage=unknown code=UNKNOWN'],
         ])
     })

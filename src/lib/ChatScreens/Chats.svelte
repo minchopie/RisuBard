@@ -207,7 +207,7 @@
                     },
 
                 })
-                if (snapshot) b.querySelector('.chattext')?.prepend(snapshot);
+                release?.attach(b.querySelector('.chattext'));
                 mountInstances.set(currentHash, inst);
                 const nextElement = nextHash === 0 ? null : chatBody.querySelector(`[x-hashed="${nextHash}"]`);
                 if(nextElement){

@@ -758,12 +758,12 @@
         {
           "module": "mobile-ui",
           "path": "docs/fork-modules/compat/v0.9.103/mobile-ui.patch",
-          "sourceSha256": "2a67e71d089338bb17d5834291bed67ccc1b95ee3bfac92c539cd600c275e7e7"
+          "sourceSha256": "dacee44dbd0834526e87a5a8678146a856ee4e61b4d9a03dc14c266643a65d2b"
         },
         {
           "module": "model-compat",
           "path": "docs/fork-modules/compat/v0.9.103/model-compat.patch",
-          "sourceSha256": "0de69f5c4da4bf1ab55000f1744e62dea4b79b0132bae6696fc797ac47045fbd"
+          "sourceSha256": "247d5c8830d8934c58eaa10f867abffc78cf231617ca220cb5e152d5c79ab2b3"
         },
         {
           "module": "storage-recovery",

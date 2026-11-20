@@ -6,7 +6,7 @@ import { isNodeServer } from '../platform'
 import { isAnyGenerating, generationStates } from '../process/generationState'
 import { alertStore, selectedCharID } from '../stores.svelte'
 import { addLog } from '../log'
-import { nasDiagnosticDescription, nasDiagnosticMessage, nasMediaNoticeDescription, nasMediaNoticeMessage } from '../../../shared/play-set/nas-diagnostic'
+import { nasDiagnosticDescription, nasDiagnosticMessage, nasMediaNoticeDescription, nasMediaNoticeMessage, nasPersonasHeldMessage } from '../../../shared/play-set/nas-diagnostic'
 
 /**
  * The single foreground coordinator of automatic NAS sync. It runs only on the Node/embedded runtime and only after sync was
@@ -99,7 +99,7 @@ function loadTally(stored: CadenceTally | null, now: number): CadenceTally {
 export interface SkippedSyncMedia {
     kind: 'asset' | 'inlay'; key: string; records: { type: string; id: string; name: string }[]
 }
-export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number; skippedMedia?: SkippedSyncMedia[]; stage?: string; stageAt?: number }
+export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number; skippedMedia?: SkippedSyncMedia[]; personasHeld?: boolean; stage?: string; stageAt?: number }
 export type SafeWindow = { window: SyncApplyGuard['window']; epoch: number }
 const DEFAULT_BACKOFF = [5_000, 15_000, 60_000, 300_000]
 let instance: ReturnType<typeof createSyncCoordinator> | null = null
@@ -228,10 +228,11 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                         enter('snapshot'); const report = await o.snapshot(signal); boundary()
                         const skipped: SkippedSyncMedia[] = report?.skippedMedia ?? []
                         state.skippedMedia = skipped
+                        state.personasHeld = report?.personasHeld === true
                         const count = skipped.length
                         if (count) {
-                            // Record names and media keys stay in the authenticated last-cycle view.
-                            try { addLog({ level: 'info', source: 'nas-sync', message: nasMediaNoticeMessage, description: nasMediaNoticeDescription(count) }) }
+                            const message = state.personasHeld ? `${nasMediaNoticeMessage} ${nasPersonasHeldMessage}` : nasMediaNoticeMessage
+                            try { addLog({ level: 'info', source: 'nas-sync', message, description: nasMediaNoticeDescription(count, state.personasHeld) }) }
                             catch { /* Diagnostics must not interrupt sync. */ }
                         }
                     }

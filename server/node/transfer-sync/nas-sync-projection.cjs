@@ -210,14 +210,14 @@ const envelopeIdentity = env => hashJson({ epoch: env.epoch, slot: env.slot, ver
  * - `readAsset(path)` → {path, hash} | null; `readInlay(id)` → {metadata, data: Buffer|string|{path,hash}} | null; `inlayMeta(id)` → ownership | null.
  * Busy chats (streaming, Wiki rebuild, live import context) and unhydrated chats make the projection fail; they are never sanitized away.
  */
-async function projectDatabase({ database, cardOnlyMemberships = new Map(), vault, captures = new Map(), materials = null, branches = {}, onlyKeys = null, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
+async function projectDatabase({ database, cardOnlyMemberships = new Map(), vault, captures = new Map(), materials = null, branches = {}, onlyKeys = null, chatRoots = null, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
     // Hydrate before vault projection so restored data follows the same credential/material handling.
     const characters = [];
     for (const character of database.characters ?? []) {
         const chats = [];
         for (const chat of character.chats ?? []) {
             const key = rootKeyOf('play', 'chat', branches[chat.id]?.root ?? chat.id);
-            chats.push(!onlyKeys || onlyKeys.has(key) ? await hydrateSyncChat(character, chat, readColdChat) : chat);
+            chats.push((!onlyKeys || onlyKeys.has(key)) && (!chatRoots || chatRoots.has(branches[chat.id]?.root ?? chat.id)) ? await hydrateSyncChat(character, chat, readColdChat) : chat);
         }
         characters.push({ ...character, chats });
     }
@@ -265,7 +265,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
         for (const chat of character.chats ?? []) {
             if (!chat || typeof chat.id !== 'string') throw new Error('Chat without stable id: ' + chaId);
             const root = branches[chat.id]?.root ?? chat.id;
-            if (!selected('play', 'chat', root)) continue;
+            if (!selected('play', 'chat', root) || (chatRoots && !chatRoots.has(root))) continue;
             const owner = `characters/${chaId}/chats/${chat.id}`;
             const record = { type: 'chat', id: chat.id, name: chat.name, lineageKey: rootKeyOf('play', 'chat', root) + '#' + chat.id };
             if (chat.isStreaming || chat.risuBardWikiReboot || chat.risuPlayContext) throw Object.assign(new Error('Chat is busy (generation, Wiki rebuild or import in progress): ' + chat.id), { code: 'CHAT_BUSY' });
@@ -338,7 +338,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
  * this install's current frontier, so a newer head (local or remote) survives as a sibling instead of becoming the parent of
  * older content. `matched` maps every skipped item to the revision it equals, so a restore can point the lineage back there.
  */
-function diffProjection(graph, desiredList, lineage = {}, { restore = false, received = true } = {}) {
+function diffProjection(graph, desiredList, lineage = {}, { restore = false, restoreKeys = null, received = true } = {}) {
     const out = { revisions: [], skipped: [], diverged: [], matched: {} };
     // Device fields of a synced group (DEVICE_GROUP_FIELDS) take the base revision's values, in place so the caller's lineage
     // bookkeeping (matched by contentHash) sees the content that is committed.
@@ -351,6 +351,7 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false, rec
     }
     for (const d of desiredList) {
         if (held.has(d)) continue;
+        const restoring = restore || restoreKeys?.has(d.lineageKey);
         const c = graph.classify(d.key);
         const same = id => { const r = graph.get(id); return r.contentHash === d.contentHash && r.dependencyHash === d.dependencyHash; };
         const matched = id => { out.skipped.push(d.lineageKey); out.matched[d.lineageKey] = id; };
@@ -360,11 +361,11 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false, rec
         const known = lineage[d.lineageKey] && graph.get(lineage[d.lineageKey]) ? lineage[d.lineageKey] : null;
         const variantOf = id => c.variants.find(v => v.includes(id));
         // A restore brings a deleted root back with the restored content: the revision continues the tombstone, as core restore() does.
-        if (restore && c.state === 'deleted') { push(makeRevision({ ...d, parents: c.tombstoneHeads })); continue; }
+        if (restoring && c.state === 'deleted') { push(makeRevision({ ...d, parents: c.tombstoneHeads })); continue; }
         if (known && same(known)) {
             // Equal to the recorded base. In a restore, a base that is no longer a head is re-published as an explicit restored revision
             // (a live sibling of the newer heads) rather than silently pointing the lineage at an ancestor a later plan could overwrite.
-            if (restore && !variantOf(known)) push(makeRevision({ ...d, parents: [known] })); else matched(known);
+            if (restoring && !variantOf(known)) push(makeRevision({ ...d, parents: [known] })); else matched(known);
             continue;
         }
         // Unchanged since the recorded head's equal-content variant, or (without lineage) equal to the single frontier head: nothing to
@@ -374,7 +375,7 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false, rec
         if (equalHead) { matched(equalHead); continue; }
         // A restore knows only the bases recorded with the restored state: an item without one is of unknown origin and starts a new
         // genesis root rather than continuing whatever this install's frontier holds now.
-        if (!known && restore) { push(makeRevision({ ...d, parents: [] })); continue; }
+        if (!known && restoring) { push(makeRevision({ ...d, parents: [] })); continue; }
         // Without lineage this device never applied any head of this root (e.g. a joining device whose settings group stayed vault-pending
         // until its key arrived): its differing local content is of its own origin and starts a genesis sibling, never a successor of the
         // single frontier head it only received (live .78: the phone's initial presets were promoted over the tablet's and applied linearly

@@ -407,7 +407,7 @@ index c50ff77..bbd223e 100644
  <style>
      :global(.inlay-image-control) {
 diff --git a/src/lib/ChatScreens/ChatEditInteraction.test.ts b/src/lib/ChatScreens/ChatEditInteraction.test.ts
-index 5d56b9e..a1780e0 100644
+index 5d56b9e..3947f72 100644
 --- a/src/lib/ChatScreens/ChatEditInteraction.test.ts
 +++ b/src/lib/ChatScreens/ChatEditInteraction.test.ts
 @@ -1,13 +1,13 @@
@@ -663,7 +663,7 @@ index 5d56b9e..a1780e0 100644
          expect(previousReply.querySelector('[data-hotkey-action="reroll"]')).toBeNull()
          expect(document.querySelector('[data-chat-index="1"]')?.textContent).toContain('Next input')
  
-@@ -188,6 +402,7 @@ describe('message edit button', () => {
+@@ -188,11 +402,41 @@ describe('message edit button', () => {
          await tick(); await tick(); await tick()
          expect(document.querySelector('[data-chat-index="0"]')).toBe(previousReply)
          expect(previousReply.querySelector('.chattext p')).toBe(paragraph)
@@ -671,7 +671,41 @@ index 5d56b9e..a1780e0 100644
          expect(previousReply.textContent).toContain('2/2')
          previousReply.querySelector<HTMLButtonElement>('.button-icon-reroll')!.click()
          expect(nextSwipe).toHaveBeenCalledOnce()
-@@ -221,10 +436,25 @@ describe('message edit button', () => {
+     })
+ 
++    test('strong continuation replaces the old formatted body without reinserting its released snapshot', async () => {
++        DBState.db.preserveChatScrollPosition = false
++        DBState.db.streamingDisplayOptimizationMode = 'strong'
++        const character = DBState.db.characters[0]
++        const state = new SvelteMap<string, any>([['streaming', false], ['text', '<p>Before</p>']])
++        const chat = { id: 'room', get isStreaming() { return state.get('streaming') }, message: [{
++            role: 'char', chatId: 'reply', get data() { return state.get('text') },
++        }] }
++        character.chats = [chat] as any
++        mounted = mount(Chats, { target: document.body, props: {
++            messages: chat.message as any, currentCharacter: character,
++            onReroll: vi.fn(), unReroll: vi.fn(), currentUsername: 'User', userIcon: '',
++            pageStart: 0, pageEnd: 1,
++        } })
++        await tick(); await tick(); await tick()
++        const before = document.querySelector('.chattext')!
++        expect(before.querySelector('[data-painter-body] p')?.textContent).toBe('Before')
++        Object.defineProperty(before.closest('.chat-message-container')!, 'offsetHeight', { value: 216 })
++
++        state.set('streaming', true)
++        state.set('text', '<p>Before</p> continued')
++        await tick(); await tick(); await tick()
++        const after = document.querySelector('.chattext')!
++        expect(after).not.toBe(before)
++        expect(after.querySelector('[data-chat-body-snapshot]')).toBeNull()
++        expect(after.querySelector('[data-chat-raw-body]')?.textContent).toBe('<p>Before</p> continued')
++        expect(after.closest<HTMLElement>('.chat-message-container')?.style.minHeight).toBe('')
++    })
++
+     test.each([
+         ['balanced', true], ['strong', true], ['off', true], ['balanced', false],
+     ] as const)('finishes %s streaming with preserveReadingPosition=%s', async (mode, preserve) => {
+@@ -221,10 +465,25 @@ describe('message edit button', () => {
          const messageElement = document.querySelector('[data-chat-index="0"]')
          const readingParagraph = messageElement?.querySelector('.chattext p')
          expect(messageElement).not.toBeNull()
@@ -698,7 +732,7 @@ index 5d56b9e..a1780e0 100644
          if (preserve) {
              expect(completedElement).toBe(messageElement)
              if (mode !== 'strong') expect(completedElement?.querySelector('.chattext p')).toBe(readingParagraph)
-@@ -241,7 +471,7 @@ describe('message edit button', () => {
+@@ -241,7 +500,7 @@ describe('message edit button', () => {
          document.querySelector<HTMLButtonElement>('.button-icon-edit')!.click()
          await tick()
          expect(document.querySelector<HTMLTextAreaElement>('.message-edit-area')?.value)
@@ -708,7 +742,7 @@ index 5d56b9e..a1780e0 100644
              state.set('room', 'another-room')
              await tick(); await tick(); await tick()
 diff --git a/src/lib/ChatScreens/Chats.svelte b/src/lib/ChatScreens/Chats.svelte
-index 27ef6a4..fc0e1c8 100644
+index 27ef6a4..645fd30 100644
 --- a/src/lib/ChatScreens/Chats.svelte
 +++ b/src/lib/ChatScreens/Chats.svelte
 @@ -1,6 +1,7 @@
@@ -782,7 +816,7 @@ index 27ef6a4..fc0e1c8 100644
                      },
  
                  })
-+                if (snapshot) b.querySelector('.chattext')?.prepend(snapshot);
++                release?.attach(b.querySelector('.chattext'));
                  mountInstances.set(currentHash, inst);
                  const nextElement = nextHash === 0 ? null : chatBody.querySelector(`[x-hashed="${nextHash}"]`);
                  if(nextElement){
@@ -824,10 +858,39 @@ index 27ef6a4..fc0e1c8 100644
              unmount(inst);
          });
 diff --git a/src/lib/ChatScreens/retainedChatHtml.test.ts b/src/lib/ChatScreens/retainedChatHtml.test.ts
-index 1248364..ece707e 100644
+index 1248364..2cfc49c 100644
 --- a/src/lib/ChatScreens/retainedChatHtml.test.ts
 +++ b/src/lib/ChatScreens/retainedChatHtml.test.ts
-@@ -20,6 +20,81 @@ describe('retainedChatHtml', () => {
+@@ -1,10 +1,26 @@
+-import { describe, expect, test } from 'vitest'
+-import { retainedChatHtml } from './retainedChatHtml'
++import { describe, expect, test, vi } from 'vitest'
++import { holdChatDisplay, retainedChatHtml } from './retainedChatHtml'
+ 
+ const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+ const render = (html: string) => ({ content: Promise.resolve(html), format: (value: string) => value, onRender: () => {} })
+ 
+ describe('retainedChatHtml', () => {
++    test('discards the snapshot when released, even if the handle is retained', () => {
++        const snapshot = document.createElement('div')
++        const target = document.createElement('div')
++        const remove = vi.spyOn(snapshot, 'remove')
++        const restore = vi.fn()
++        const release = holdChatDisplay(snapshot, restore)
++        release.attach(target)
++        expect(target.firstChild).toBe(snapshot)
++        release()
++        release.attach(target)
++        release()
++        expect(target.firstChild).toBeNull()
++        expect(remove).toHaveBeenCalledOnce()
++        expect(restore).toHaveBeenCalledOnce()
++    })
++
+     test('keeps comparison copies out of the live document and patches in place', async () => {
+         const node = document.createElement('span')
+         const audio = '<audio autoplay loop><source src="a.mp3"></audio>'
+@@ -20,6 +36,99 @@ describe('retainedChatHtml', () => {
          expect(node.querySelector('p')?.textContent).toBe('x')
      })
  
@@ -872,6 +935,24 @@ index 1248364..ece707e 100644
 +        expect(result[1].open).toBe(false)
 +    })
 +
++    test('keeps the trailing open details and whitespace when inserting a paragraph', async () => {
++        const node = document.createElement('div')
++        const prefix = '<p>First</p>\n'
++        const suffix = '<details><summary>Panel</summary></details>\n'
++        const action = retainedChatHtml(node, render(prefix + suffix))
++        await flush()
++        const details = node.querySelector('details')!
++        const trailingNewline = node.lastChild
++        details.open = true
++
++        action.update(render(prefix + '<p>Inserted</p>\n' + suffix))
++        await flush()
++        expect(node.querySelector('details')).toBe(details)
++        expect(details.open).toBe(true)
++        expect(node.lastChild).toBe(trailingNewline)
++        expect(node.innerHTML).toBe(prefix + '<p>Inserted</p>\n' + suffix.replace('<details>', '<details open="">'))
++    })
++
 +    test('preserves live media resolution in the retained suffix and replaces a changed source', async () => {
 +        const node = document.createElement('span')
 +        const suffix = '<img src="asset.png">'
@@ -910,10 +991,10 @@ index 1248364..ece707e 100644
          const parsed: Element[] = []
          const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')!
 diff --git a/src/lib/ChatScreens/retainedChatHtml.ts b/src/lib/ChatScreens/retainedChatHtml.ts
-index 49d7c5d..be2009f 100644
+index 49d7c5d..7b7e178 100644
 --- a/src/lib/ChatScreens/retainedChatHtml.ts
 +++ b/src/lib/ChatScreens/retainedChatHtml.ts
-@@ -1,8 +1,40 @@
+@@ -1,8 +1,45 @@
  interface ChatHtmlUpdate {
 -    content: Promise<string>
 +    content?: Promise<string>
@@ -948,14 +1029,19 @@ index 49d7c5d..be2009f 100644
 +    function release() {
 +        clearTimeout(deadline)
 +        snapshot?.remove()
++        snapshot = undefined
 +        restoreHeight?.()
 +        restoreHeight = undefined
 +    }
-+    return release
++    return Object.assign(release, {
++        attach(target: Element | null) {
++            if (snapshot) target?.prepend(snapshot)
++        },
++    })
  }
  
  // Compare parser output with the previous parser output, not the live DOM:
-@@ -19,14 +51,31 @@ function patchChildren(live: Element, previous: Node, next: Node) {
+@@ -19,14 +56,33 @@ function patchChildren(live: Element, previous: Node, next: Node) {
          return
      }
  
@@ -973,7 +1059,9 @@ index 49d7c5d..be2009f 100644
 +        }
 +        // An identical block in the changed middle makes moving the trailing node ambiguous.
 +        const middle = [...oldChildren.slice(start, oldEnd), ...nextChildren.slice(start, nextEnd)]
-+        if (oldChildren.slice(oldEnd).some(tail => middle.some(node => tail.isEqualNode(node)))) {
++        if (oldChildren.slice(oldEnd).some(tail =>
++            !(tail.nodeType === Node.TEXT_NODE && !tail.nodeValue?.trim()) &&
++            middle.some(node => tail.isEqualNode(node)))) {
 +            oldEnd = oldChildren.length
 +            nextEnd = nextChildren.length
 +        }
@@ -991,7 +1079,7 @@ index 49d7c5d..be2009f 100644
          } else if (!oldChild.isEqualNode(nextChild)) {
              patchNode(liveChild, oldChild, nextChild)
          }
-@@ -76,22 +125,45 @@ export function retainedChatHtml(node: HTMLElement, initial: ChatHtmlUpdate) {
+@@ -76,22 +132,45 @@ export function retainedChatHtml(node: HTMLElement, initial: ChatHtmlUpdate) {
      let previous: Node = createParserElement()
      let revision = 0
  

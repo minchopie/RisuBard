@@ -31,10 +31,15 @@ export function holdChatDisplay(snapshot: HTMLElement | undefined, restoreHeight
     function release() {
         clearTimeout(deadline)
         snapshot?.remove()
+        snapshot = undefined
         restoreHeight?.()
         restoreHeight = undefined
     }
-    return release
+    return Object.assign(release, {
+        attach(target: Element | null) {
+            if (snapshot) target?.prepend(snapshot)
+        },
+    })
 }
 
 // Compare parser output with the previous parser output, not the live DOM:
@@ -62,7 +67,9 @@ function patchChildren(live: Element, previous: Node, next: Node) {
         }
         // An identical block in the changed middle makes moving the trailing node ambiguous.
         const middle = [...oldChildren.slice(start, oldEnd), ...nextChildren.slice(start, nextEnd)]
-        if (oldChildren.slice(oldEnd).some(tail => middle.some(node => tail.isEqualNode(node)))) {
+        if (oldChildren.slice(oldEnd).some(tail =>
+            !(tail.nodeType === Node.TEXT_NODE && !tail.nodeValue?.trim()) &&
+            middle.some(node => tail.isEqualNode(node)))) {
             oldEnd = oldChildren.length
             nextEnd = nextChildren.length
         }

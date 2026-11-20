@@ -408,6 +408,35 @@ describe('message edit button', () => {
         expect(nextSwipe).toHaveBeenCalledOnce()
     })
 
+    test('strong continuation replaces the old formatted body without reinserting its released snapshot', async () => {
+        DBState.db.preserveChatScrollPosition = false
+        DBState.db.streamingDisplayOptimizationMode = 'strong'
+        const character = DBState.db.characters[0]
+        const state = new SvelteMap<string, any>([['streaming', false], ['text', '<p>Before</p>']])
+        const chat = { id: 'room', get isStreaming() { return state.get('streaming') }, message: [{
+            role: 'char', chatId: 'reply', get data() { return state.get('text') },
+        }] }
+        character.chats = [chat] as any
+        mounted = mount(Chats, { target: document.body, props: {
+            messages: chat.message as any, currentCharacter: character,
+            onReroll: vi.fn(), unReroll: vi.fn(), currentUsername: 'User', userIcon: '',
+            pageStart: 0, pageEnd: 1,
+        } })
+        await tick(); await tick(); await tick()
+        const before = document.querySelector('.chattext')!
+        expect(before.querySelector('[data-painter-body] p')?.textContent).toBe('Before')
+        Object.defineProperty(before.closest('.chat-message-container')!, 'offsetHeight', { value: 216 })
+
+        state.set('streaming', true)
+        state.set('text', '<p>Before</p> continued')
+        await tick(); await tick(); await tick()
+        const after = document.querySelector('.chattext')!
+        expect(after).not.toBe(before)
+        expect(after.querySelector('[data-chat-body-snapshot]')).toBeNull()
+        expect(after.querySelector('[data-chat-raw-body]')?.textContent).toBe('<p>Before</p> continued')
+        expect(after.closest<HTMLElement>('.chat-message-container')?.style.minHeight).toBe('')
+    })
+
     test.each([
         ['balanced', true], ['strong', true], ['off', true], ['balanced', false],
     ] as const)('finishes %s streaming with preserveReadingPosition=%s', async (mode, preserve) => {

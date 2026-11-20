@@ -69,17 +69,18 @@ test.each([
 test('missing media is a last-cycle notice, then publish, pull, preview and apply still run', async () => {
     const h = harness(); await h.c.start(); h.calls.length = 0; h.setPending(1); f.addLog.mockClear()
     const notices = [{ kind: 'asset', key: 'assets/missing.png', records: [{ type: 'module', id: 'module-id', name: 'private row name' }] }]
-    h.io.snapshot.mockImplementationOnce(async () => { h.calls.push('snapshot'); return { skippedMedia: notices } })
+    h.io.snapshot.mockImplementationOnce(async () => { h.calls.push('snapshot'); return { skippedMedia: notices, personasHeld: true } })
     try {
         expect(await h.c.retryNow()).toBe('applied')
         expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview', 'apply'])
-        expect(h.c.state).toMatchObject({ skippedMedia: notices, failures: 0, lastError: '', offline: false })
+        expect(h.c.state).toMatchObject({ skippedMedia: notices, personasHeld: true, failures: 0, lastError: '', offline: false })
         expect(f.addLog).toHaveBeenCalledExactlyOnceWith({
-            level: 'info', source: 'nas-sync', description: 'stage=snapshot code=MEDIA_SKIPPED count=1',
-            message: 'NAS 동기화에서 그림을 건너뛰었습니다.',
+            level: 'info', source: 'nas-sync', description: 'stage=snapshot code=MEDIA_SKIPPED count=1 personas=held',
+            message: 'NAS 동기화에서 그림 또는 인레이 파일이 빠진 자료의 변경을 보류했습니다. 페르소나 묶음 전체 보류',
         })
         await h.c.retryNow()
         expect(h.c.state.skippedMedia).toEqual([])
+        expect(h.c.state.personasHeld).toBe(false)
         expect(f.addLog).toHaveBeenCalledTimes(1)
     } finally { h.c.stop() }
 })

@@ -244,6 +244,182 @@ test.for(['asset', 'inlay'])('notices missing %s and commits only the independen
     expect(db).toEqual(before)
 })
 
+const r7Chat = { id: 'chat', name: 'chat', message: [{ role: 'char', data: 'before' }] }
+const r7Db = (chats: any[] = [r7Chat], extra: any = {}) => ({
+    characters: [{ chaId: 'card', type: 'character', name: 'card', chats }], modules: [], ...extra,
+})
+const r7Enable = (...devices: any[]) => { for (const d of devices) d.service.enable({ workspaceId: 'ws-fixture', role: 'authority' }) }
+const r7Send = async (source: any, target: any) => {
+    expect((await source.service.publish()).failed).toEqual([])
+    expect((await target.service.pull()).admitted.length).toBeGreaterThan(0)
+}
+
+test.for(['direct', 'pin'])('R7 preserves the parent and child of a %s media hold during peer deletion', async (kind, t) => {
+    const dav = fixtureDav(), local = await device(t, dav, 'delete-local', r7Db())
+    const peer = await device(t, dav, 'delete-peer', { characters: [], modules: [] })
+    r7Enable(local, peer)
+    await local.service.snapshot()
+    await r7Send(local, peer)
+    await settle(peer)
+    const db = local.db(), chat = db.characters[0].chats[0]
+    chat.message.push({ role: 'user', data: kind === 'direct' ? '{{inlay::missing}}' : 'local edit' })
+    if (kind === 'pin') {
+        db.modules = [{ id: 'held', name: 'held', icon: 'assets/missing.png' }]
+        chat.modules = ['held']
+    }
+    local.save(db)
+    const held = await local.service.snapshot()
+    expect(held.skippedMedia).toHaveLength(1)
+    expect(held.committed).toBeNull()
+    const removed = peer.db()
+    removed.characters = []
+    removed.modules.push({ id: 'safe', name: 'independent' })
+    peer.save(removed)
+    expect((await peer.service.snapshot()).committed.tombstones).toBe(2)
+    await r7Send(peer, local)
+    const plan = await settle(local)
+    expect(plan.pending).toEqual(expect.arrayContaining([
+        expect.objectContaining({ root: 'library\ncharacter\ncard', reason: 'delete-pending' }),
+        expect.objectContaining({ root: 'play\nchat\nchat', reason: 'local-edit' }),
+    ]))
+    expect(plan.deletions).toEqual([])
+    expect(plan.commits).toEqual([])
+    expect(local.db().characters[0].chats[0].message).toEqual(chat.message)
+    expect(local.db().modules.some((m: any) => m.id === 'safe')).toBe(true)
+})
+
+test.for(['no-commit', 'committed-before-crash'])('R7 resumes a held restoration from the backup base (%s)', async (mode, t) => {
+    const dav = fixtureDav(), icon = 'assets/restored.png', bytes = Buffer.from('restored icon')
+    const local = await device(t, dav, 'restore-held', { characters: [], modules: [{ id: 'mod', name: 'backup', icon }], loreBook: [] })
+    const peer = await device(t, dav, 'restore-peer', { characters: [], modules: [] })
+    r7Enable(local, peer)
+    local.storage.kvSet(icon, bytes)
+    await local.service.snapshot()
+    const root = 'library\nmodule\nmod', key = root + '#mod'
+    const backup = local.db(), lineage = { ...local.service.state().lineage }
+    await r7Send(local, peer)
+    await settle(peer)
+    const newer = peer.db(); newer.modules[0].name = 'newer'; peer.save(newer)
+    await peer.service.snapshot()
+    await r7Send(peer, local)
+    await settle(local)
+    const latest = peer.db(); latest.modules[0].name = 'incoming'; peer.save(latest)
+    await peer.service.snapshot()
+    const latestHead = peer.service.state().lineage[key]
+    await r7Send(peer, local)
+
+    const api = mode === 'no-commit' ? local.service : local.make({ afterSnapshotCommit: async () => { throw new Error('fixture power loss') } })
+    api.markRestore({ source: 'backup-import', restoreId: 'backup-a', lineage })
+    if (mode !== 'no-commit') backup.loreBook = [{ name: 'restored independent lore', content: 'fixture' }]
+    local.save(backup)
+    local.storage.kvDel(icon)
+    if (mode === 'no-commit') expect((await api.snapshot()).committed).toBeNull()
+    else await expect(api.snapshot()).rejects.toThrow('fixture power loss')
+
+    const reopened = local.make(), graph = reopened.store().graph
+    expect(reopened.state().pendingRestore).toBeNull()
+    expect(reopened.state().deferredRestores[key]).toMatchObject({ id: 'backup-a', base: lineage[key], basesFrom: 'recorded' })
+    expect(await reopened.plan()).toMatchObject({ empty: true, pending: [expect.objectContaining({ root, reason: 'local-edit' })] })
+    expect((await reopened.snapshot()).committed).toBeNull()
+    local.storage.kvSet(icon, bytes)
+    expect((await reopened.snapshot()).provenance).toBe('restored-backup')
+    const restored = reopened.state().lineage[key]
+    expect(graph.get(restored).parents).toEqual([lineage[key]])
+    expect(graph.classify(root).liveHeads).toEqual(expect.arrayContaining([restored, latestHead]))
+    expect(reopened.state().deferredRestores).toBeUndefined()
+})
+
+test('R7 protects an untracked parent whose new missing chat held its membership', async t => {
+    const dav = fixtureDav(), local = await device(t, dav, 'dependent-local', r7Db([{ ...r7Chat, message: [{ role: 'char', data: '{{inlay::missing}}' }] }]))
+    const peer = await device(t, dav, 'dependent-peer', r7Db([]))
+    r7Enable(local, peer)
+    const db = peer.db(); db.characters[0].name = 'incoming fields'; peer.save(db)
+    await peer.service.snapshot()
+    await r7Send(peer, local)
+    expect((await local.service.snapshot()).committed).toBeNull()
+    const plan = await settle(local)
+    expect(plan.pending).toEqual(expect.arrayContaining([{ root: 'library\ncharacter\ncard', reason: 'local-edit' }]))
+    expect(plan.characters ?? []).toEqual([])
+    expect(local.db().characters[0]).toMatchObject({ name: 'card', chats: [{ id: 'chat' }] })
+})
+
+test('R7 holds new character membership through a chat deferred by a missing module pin', async t => {
+    const dav = fixtureDav(), local = await device(t, dav, 'membership-local',
+        r7Db([{ ...r7Chat, modules: ['held'] }], { modules: [{ id: 'held', name: 'held', icon: 'assets/missing.png' }], loreBook: [{ name: 'independent' }] }))
+    r7Enable(local)
+    const snapshot = await local.service.snapshot(), store = local.service.store()
+    expect(snapshot.committed).toMatchObject({ tombstones: 0 })
+    expect(store.graph.classify('settings\ngroup\nlorebook').state).toBe('live')
+    for (const key of ['library\ncharacter\ncard', 'play\nchat\nchat', 'library\nmodule\nheld']) expect(store.graph.classify(key).state).toBe('absent')
+})
+
+test('R7 withholds an untracked missing-media divergence and still rejects unrelated lost lineage', async t => {
+    const dav = fixtureDav()
+    const peer = async (name: string) => device(t, dav, name, { characters: [], modules: [{ id: 'held', name }, { id: 'other', name }] })
+    const left = await peer('left'), right = await peer('right')
+    const local = await device(t, dav, 'diverged-local', { characters: [], modules: [{ id: 'held', name: 'local', icon: 'assets/missing.png' }], loreBook: [{ name: 'safe lore' }] })
+    r7Enable(left, right, local)
+    for (const side of [left, right]) { await side.service.snapshot(); await r7Send(side, local) }
+    expect((await local.service.snapshot()).committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    expect(local.service.store().graph.classify('library\nmodule\nheld').state).toBe('diverged')
+    expect((await settle(local)).pending).toEqual(expect.arrayContaining([expect.objectContaining({ root: 'library\nmodule\nheld', reason: 'local-edit' })]))
+    const db = local.db(); db.modules.push({ id: 'other', name: 'local' }); local.save(db)
+    await expect(local.service.snapshot()).rejects.toMatchObject({ code: 'LINEAGE_LOST', diverged: ['library\nmodule\nother#other'] })
+})
+
+test.for(['inlay', 'missing-object', 'different-pin'])('R7 checks body, material and environment before repairing the existing untracked chat (%s)', async (scenario, t) => {
+    const dav = fixtureDav(), bytes = Buffer.from('fixture picture'), asset = 'assets/repair.png'
+    const different = scenario === 'different-pin', missingObject = scenario === 'missing-object'
+    const chat = { ...r7Chat, modules: ['mod'], message: [{ role: 'char', data: missingObject ? asset : '{{inlay::repair}}' }] }
+    const local = await device(t, dav, 'repair-chat-local', r7Db([chat], { modules: [different
+        ? { id: 'mod', name: 'local', icon: 'assets/local.png' }
+        : { id: 'mod', name: 'same' }] }))
+    const peer = await device(t, dav, 'repair-chat-peer', r7Db([chat], { modules: [{ id: 'mod', name: 'same' }] }))
+    r7Enable(local, peer)
+    if (missingObject) {
+        peer.storage.kvSet(asset, bytes)
+        local.storage.kvSet(asset, bytes)
+        await unlink(join(local.dataRoot, 'kv', 'objects', sha(bytes)))
+        expect(local.storage.kvGetUpdatedAt(asset)).not.toBeNull()
+    } else peer.inlays.set('repair', { metadata: {}, data: bytes })
+    await peer.service.snapshot()
+    await r7Send(peer, local)
+    const plan = await settle(local)
+    if (different) {
+        expect(plan.chats).toEqual([])
+        expect(plan.pending).toEqual(expect.arrayContaining([expect.objectContaining({ root: 'play\nchat\nchat', reason: 'dependency', pins: ['pin:module:mod'] })]))
+        expect(local.inlays.has('repair')).toBe(false)
+    } else {
+        expect(plan.chats).toEqual([expect.objectContaining({ chat: expect.objectContaining({ id: 'chat' }), update: true })])
+        expect(missingObject ? Buffer.from(local.storage.kvGet(asset)) : local.inlays.get('repair')?.data).toEqual(bytes)
+        expect(local.service.state().lineage['play\nchat\nchat#chat']).toBe(peer.service.state().lineage['play\nchat\nchat#chat'])
+        expect((await local.service.snapshot()).committed).toBeNull()
+    }
+    expect(local.db().characters[0].chats.map((row: any) => row.id)).toEqual(['chat'])
+})
+
+test('R7 persists the persona-group hold and only safe identifiers across restart', async t => {
+    const hash = sha('persona picture'), icon = 'assets/' + hash + '.png'
+    const unsafePath = 'assets/fixture.example/access-token.png'
+    const db = { characters: [], modules: [{ id: 'unsafe-module', name: 'https://fixture.example/?token=SENTINEL', icon: unsafePath }],
+        personas: [{ id: 'me', name: '첫 페르소나', icon }, { id: 'other', name: '기존 페르소나', icon: '' }] }
+    const local = await device(t, fixtureDav(), 'notice-personas', db, MASTER, { readDatabase: async () => db })
+    r7Enable(local)
+    expect(await local.service.snapshot()).toMatchObject({ committed: null, personasHeld: true })
+    const reopened = local.make(), expected = [
+        { kind: 'asset', key: sha(unsafePath), records: [{ type: 'module', id: 'unsafe-module', name: '' }] },
+        { kind: 'asset', key: hash, records: [{ type: 'persona', id: 'me', name: '첫 페르소나' }] },
+    ]
+    expect(reopened.status()).toMatchObject({ personasHeld: true, skippedMedia: expected })
+    const record = await readFile(join(local.dataRoot, 'nas-sync', 'service.json'), 'utf8')
+    expect(record).not.toMatch(/fixture\.example|SENTINEL|assets\//)
+    expect(reopened.store().graph.classify('settings\ngroup\npersonas').state).toBe('absent')
+    local.storage.kvSet(icon, Buffer.from('persona picture'))
+    local.storage.kvSet(unsafePath, Buffer.from('fixture module icon'))
+    expect((await reopened.snapshot()).skippedMedia).toBeUndefined()
+    expect(local.make().status().skippedMedia).toBeUndefined()
+})
+
 test('authority sync continues past a new module icon and a missing card asset with pending and diverged peer changes', async t => {
     const dav = fixtureDav(), bytes = Buffer.from('card asset on NAS and peer'), hash = sha(bytes), image = 'assets/' + hash + '.png'
     const icon = 'assets/' + sha('never uploaded module icon') + '.png'
