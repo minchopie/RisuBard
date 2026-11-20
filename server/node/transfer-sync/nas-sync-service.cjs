@@ -1403,7 +1403,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             }
             await normalizeCaptures(captures, db, branches, work);
             const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, chatRoots, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
-            const { bases, restored, restoreKeys } = restoreContext(s);
+            const { bases, restored, restoreKeys, restoreMark } = restoreContext(s);
             const absent = compareWithMissingMedia(s, projection, bases);
             const diff = diffProjection(s.graph, projection.desired, bases, { restore: restored, restoreKeys });
             const { direct, held } = heldMediaRoots(s, projection, absent, diff, bases);
@@ -1411,7 +1411,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             for (const key of held) {
                 if (!direct.has(key) || restored || restoreRoots.has(key) || s.graph.classify(key).state === 'deleted') edited.add(key);
             }
-            const compared = key => known.has(key) || restored || restoreRoots.has(key);
+            // An identity rotation alone can happen before this device has published or applied anything.
+            const compareRestore = restored && (restoreMark !== null || known.size > 0 || s.state().commits.length > 0);
+            const compared = key => known.has(key) || compareRestore || restoreRoots.has(key);
             for (const r of diff.revisions) if (compared(rootKey(r))) edited.add(rootKey(r));
             for (const k of diff.diverged) if (compared(k.split('#')[0])) edited.add(k.split('#')[0]);
             // An untracked local record with missing media may be a held edit. Apply an incoming copy only if its body
