@@ -299,7 +299,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     const deviceFieldsOnly = (s, c) => fieldsOnlyHeads(s.graph, c);
     const conflictCount = s => s.graph.rootKeys().filter(k => { if (historyOnly(k)) return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && !deviceFieldsOnly(s, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
     // `workspaceId`/`role` are reported even while disabled so a reopened panel resumes the saved setup instead of defaults.
-    const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], syncScope: syncScope(), enabled: service().enabled, role: service().role ?? null, adopting: !!service().adopting, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
+    const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], syncScope: syncScope(), scopeCatchUp: !!service().scopeCatchUp && (service().localApply ?? []).length > 0, enabled: service().enabled, role: service().role ?? null, adopting: !!service().adopting, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
         vault: { origin: service().vaultOrigin ?? null, sharedFrom: service().vaultSharedFrom ?? null, missing: !fs.existsSync(masterFile()) && (service().vaultOrigin === 'shared' || (service().enabled && (Object.keys(service().lineage).length > 0))), pendingGrant: service().pendingGrant ? { from: service().pendingGrant.from, reason: service().pendingGrant.reason } : null }, shares: (service().shares ?? []).map(({ id, kind, to, via, at }) => ({ id, kind, to, via, at })),
         lastAppliedAt: service().applied.at(-1)?.at ?? null, missingMedia: readMissingMedia(),
         localApply: (service().localApply ?? []).length, ...(service().enabled ? { sync: openTransport().status(), conflicts: conflictCount(openStore()) } : {}) });
@@ -850,7 +850,15 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     function setSyncScope({ scope } = {}) {
         if (scope !== 'all' && scope !== 'chats') throw new Error('동기화 범위는 전체 또는 채팅만이에요.');
         if (service().plan) throw new Error('진행 중인 동기화 적용이 끝난 뒤 설정해 주세요.');
-        manifest.transact(x => { if (scope === 'chats') x.syncScope = 'chats'; else delete x.syncScope; });
+        // Roots this device acknowledged without applying while in 'chats' (scopeSkipped) are applied by the next plan once it is back to
+        // 'all', through the same queue as a local resolution (localApply), so the device catches up to the NAS heads it skipped; an
+        // unpublished local edit of such a root is still protected there (local-edit) and a differing local value forks as before.
+        manifest.transact(x => {
+            // Until that plan finished, snapshot() records nothing (scopeCatchUp): chats received in 'chats' carry pins of the skipped card and
+            // module heads, so a snapshot against the older local items would publish every such chat again with stale pins.
+            if (scope === 'chats') { x.syncScope = 'chats'; delete x.scopeCatchUp; }
+            else if (x.syncScope === 'chats') { delete x.syncScope; for (const key of x.scopeSkipped ?? []) if (!(x.localApply ??= []).includes(key)) x.localApply.push(key); if (x.scopeSkipped?.length) x.scopeCatchUp = true; delete x.scopeSkipped; }
+        });
         return status();
     }
     // Omitting chat bodies is an upload preference, never a deletion or an empty-chat replacement.
@@ -885,6 +893,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     async function snapshot() {
         const s = requireEnabled(), v = await openVault();
         if (service().plan) throw Object.assign(new Error('Finish the pending sync apply before taking a snapshot'), { code: 'NAS_SYNC_PLAN_PENDING' });
+        // 2026-11-21: back to 'all' after 'chats': the skipped card/module/settings heads are applied first (see setSyncScope).
+        if (service().scopeCatchUp && (service().localApply ?? []).length) return { committed: null, skipped: 0, excluded: 0, provenance: 'edit', restore: null, scopeCatchUp: true };
         const original = await readDatabase();
         if (!original) throw new Error('Database unavailable');
         const { database: db, memberships, preserved } = cardOnlyProjection(original, s);
@@ -1031,7 +1041,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         // Merge only captured revisions. Unpublished local edits, real persona conflicts and overlapping Wiki edits stay protected.
         // 2026-11-21 chats-only scope: received card/module/plugin/settings roots are acknowledged without being merged or applied here
         // (no lineage is recorded for them). A local resolution or trash restore the user asked for (localApply) is still applied.
-        const scopedChats = chatsOnly(), localApplied = new Set(service().localApply ?? []);
+        const scopedChats = chatsOnly(), localApplied = new Set(service().localApply ?? []), skippedByScope = [];
         const outOfScope = key => scopedChats && !key.startsWith('play\n') && !localApplied.has(key);
         for (const key of touched.keys()) {
             if (outOfScope(key)) continue;
@@ -1076,7 +1086,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
             if (domain === 'play') continue;
             if (historyOnly(key)) { applyRoot(key); continue; }
-            if (outOfScope(key)) { applyRoot(key); continue; }
+            if (outOfScope(key)) { applyRoot(key); skippedByScope.push(key); continue; }
             if (localEdits.has(key)) { result.pending.push({ root: key, reason: 'local-edit' }); continue; }
             if (c.state === 'diverged' && !deviceFieldsOnly(s, c)) { result.pending.push({ root: key, reason: 'diverged', variants: c.variants.length }); continue; }
             if (c.state === 'deleted') {
@@ -1188,6 +1198,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 const pinned = unpinned ? pinOwner(head) : null, pinnedOwner = pinned && ((db.characters ?? []).some(c => c.chaId === pinned) || result.newCharacters.some(c => c.chaId === pinned)) ? pinned : undefined;
                 const characterId = continuing?.character.chaId ?? chatOwner.get(rootId) ?? chatOwner.get(localId) ?? pinnedOwner ?? await ownerFromHistory(rootId);
                 if (!characterId) { result.pending.push({ root: key, head: head.id, reason: 'owner unknown', ...(unpinned && pinned ? { characterId: pinned } : {}) }); rootApplied = false; continue; }
+                // Without the exact pins the owner key is the only identity check left: a chat this device keeps under another card waits.
+                if (unpinned && pinned && characterId !== pinned) { result.pending.push({ root: key, head: head.id, reason: 'owner mismatch', characterId: pinned, localCharacterId: characterId }); rootApplied = false; continue; }
                 const knownHead = continuing ? s.graph.get(lineage[key + '#' + continuing.chat.id]) : null;
                 const equalDeps = (a, b) => unpinned || chatsOnlyRevision(a) ? unpinnedDependencyHash(a.dependencies) === unpinnedDependencyHash(b.dependencies) : a.dependencyHash === b.dependencyHash;
                 if (knownHead && (variant.includes(knownHead.id) || (knownHead.contentHash === head.contentHash && equalDeps(knownHead, head)))) { result.lineage[key + '#' + localId] = head.id; continue; } // already at this head or equal content: nothing to apply
@@ -1228,6 +1240,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             }
             if (rootApplied) applyRoot(key);
         }
+        if (skippedByScope.length) manifest.transact(x => { x.scopeSkipped = [...new Set([...(x.scopeSkipped ?? []), ...skippedByScope])]; }); // 2026-11-21: applied after a switch back to 'all'
         const planned = result.chats.length + Object.keys(result.settings).length + result.characters.length + result.newCharacters.length + result.modules.length + result.plugins.length + result.deletions.length + (result.pluginEnabled ? 1 : 0);
         if (!planned && !result.appliedRoots.length) { await fsp.rm(staging, { recursive: true, force: true }); return { empty: true, pending: result.pending }; }
         // Only commits whose every root was planned are acknowledged at finish; the rest stay pending for a later plan.
@@ -1531,6 +1544,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             for (const d of current.expected?.deletions ?? []) for (const k of Object.keys(x.lineage)) if (k.endsWith('#' + d.id)) delete x.lineage[k];
             Object.assign(x.branches, current.branches);
             x.localApply = (x.localApply ?? []).filter(k => !current.appliedRoots.includes(k));
+            delete x.scopeCatchUp; // 2026-11-21: the first plan after a switch back to 'all' finished (see setSyncScope)
         });
         recordLineage();
         const keptRoots = new Set((current.expected?.keptDeletions ?? []).map(d => d.kind === 'chat' ? `play\nchat\n${d.id}` : `library\n${d.kind}\n${d.id}`));

@@ -2655,3 +2655,67 @@ test('chats-only scope (7): Wiki and save-slot files travel with a chats-only ch
     expect(phone.db().characters[0].chats[0].message.at(-1).data).toBe('위키와 함께')
     expect(phone.service.status().syncScope).toBe('chats')
 })
+test('chats-only scope (8, Codex r1 #2): card changes acknowledged without applying while in chats are applied once the device is back to all, and a chat pinned to the new card then applies', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await device(t, dav, 'scope8-phone', EMPTY_DB()); phone.service.enable({ workspaceId: 'ws-fixture' })
+    await applyAll(phone)
+    expect(phone.db().characters[0].description ?? '').toBe('')
+    await phone.service.setSyncScope({ scope: 'chats' })
+    const v1 = tablet.db(); v1.characters[0].description = 'card v1'; v1.modules[0].name = '모듈 v1'; tablet.save(v1)
+    await tablet.service.snapshot(); await tablet.service.publish()
+    const skipped = await applyAll(phone)
+    expect(skipped.pending).toEqual([])
+    expect(phone.db().characters[0].description ?? '').toBe('') // not applied in 'chats'
+    expect(phone.service.store().pendingApply()).toEqual([]) // but acknowledged
+    await phone.service.setSyncScope({ scope: 'all' })
+    // The tablet's card edit also re-pinned its chat; the phone took that chat head in 'chats'. Until the skipped heads are applied the
+    // snapshot records nothing, so the chat is never published again with the old card's pins.
+    expect(phone.service.status().scopeCatchUp).toBe(true)
+    const commits = phone.service.store().state().commits.length
+    expect(await phone.service.snapshot()).toMatchObject({ committed: null, scopeCatchUp: true })
+    const caught = await applyAll(phone)
+    expect(caught.pending).toEqual([])
+    expect(phone.db().characters[0].description).toBe('card v1')
+    expect(phone.db().modules[0].name).toBe('모듈 v1')
+    expect(phone.service.status().scopeCatchUp).toBe(false)
+    expect((await phone.service.snapshot()).committed).toBeNull()
+    expect(phone.service.store().state().commits.length).toBe(commits)
+    // The tablet's next chat (pinned to card v1) is no dependency hold on the phone.
+    const chat = tablet.db(); chat.characters[0].chats[0].message.push({ role: 'char', data: 'v1 카드의 답' }); tablet.save(chat)
+    await tablet.service.snapshot(); await tablet.service.publish()
+    const next = await applyAll(phone)
+    expect(next.pending).toEqual([])
+    expect(phone.db().characters[0].chats[0].message.at(-1).data).toBe('v1 카드의 답')
+    expect(phone.service.status().localApply).toBe(0)
+})
+
+test('chats-only scope (9, Codex r1 #3): the owner key still counts — a chat kept here under another card waits as owner mismatch, and moving a chat to another card is published', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    // The phone keeps the same chat id under another card.
+    const db = { ...phoneWithCard(), characters: [{ ...phoneWithCard().characters[0], chats: [] }, { chaId: 'other', type: 'character', name: '다른 카드', chatPage: 0, chats: [{ id: 'chat', name: '현재', note: '', localLore: [], message: [{ role: 'user', data: '다른 카드의 같은 id' }] }] }] }
+    const phone = await chatsOnlyPhone(t, dav, 'scope9-phone', db)
+    const plan = await applyAll(phone)
+    expect(plan.pending).toEqual([expect.objectContaining({ root: 'play\nchat\nchat', reason: 'owner mismatch', characterId: 'card', localCharacterId: 'other' })])
+    expect(phone.db().characters.find((c: any) => c.chaId === 'other').chats[0].message.at(-1).data).toBe('다른 카드의 같은 id')
+    expect(phone.db().characters.find((c: any) => c.chaId === 'card').chats).toEqual([])
+    // Sender side: a chats-only device that moves a chat to another card publishes it (same messages, new owner).
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    const moved = tablet.db(); moved.characters.push({ chaId: 'card2', type: 'character', name: '둘째 카드', chatPage: 0, chats: moved.characters[0].chats }); moved.characters[0].chats = []; tablet.save(moved)
+    const snap = await tablet.service.snapshot()
+    expect(snap.committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    expect(pinsOf(headOf(tablet, 'play\nchat\nchat'))).toEqual({ 'pin:character:card2': CHATS_ONLY_PIN })
+})
+
+test('chats-only scope (10, Codex r1 #1, documented limit): commits recorded under all before the switch are still published as they were recorded; nothing new out of scope is added', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const edit = tablet.db(); edit.characters[0].description = 'recorded under all'; tablet.save(edit)
+    await tablet.service.snapshot() // recorded, not yet published
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    expect(tablet.service.status().sync.outbox.pending.length).toBe(1)
+    await tablet.service.publish()
+    expect(tablet.service.status().sync.outbox.pending.length).toBe(0)
+    const phone = await device(t, dav, 'scope10-phone', EMPTY_DB()); phone.service.enable({ workspaceId: 'ws-fixture' })
+    await applyAll(phone)
+    expect(phone.db().characters[0].description).toBe('recorded under all')
+    expect((await tablet.service.snapshot()).committed).toBeNull()
+})

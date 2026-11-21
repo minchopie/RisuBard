@@ -244,8 +244,9 @@ function localPins(pubView, character, chat) { return pinsFor(pubView, character
 const CHATS_ONLY_PIN = hashJson({ syncScope: 'chats' });
 const pinOwner = rev => { const key = Object.keys(rev?.dependencies ?? {}).find(k => k.startsWith('pin:character:')); return key ? key.slice('pin:character:'.length) : null; };
 const chatsOnlyRevision = rev => { const pins = Object.entries(rev?.dependencies ?? {}).filter(([k]) => k.startsWith('pin:')); return pins.length === 1 && pins[0][0].startsWith('pin:character:') && pins[0][1] === CHATS_ONLY_PIN; };
-/** Dependency identity without the pins (chats-only comparison: the same conversation and material, whatever its pins say). */
-const unpinnedDependencyHash = deps => hashJson(Object.fromEntries(Object.entries(deps ?? {}).filter(([k]) => !k.startsWith('pin:'))));
+/** Dependency identity without the pin VALUES (chats-only comparison: the same conversation and material, whatever its pins say). The
+ *  owner key `pin:character:<chaId>` still counts, so a chat moved to another card is a change. */
+const unpinnedDependencyHash = deps => hashJson({ deps: Object.fromEntries(Object.entries(deps ?? {}).filter(([k]) => !k.startsWith('pin:'))), owners: Object.keys(deps ?? {}).filter(k => k.startsWith('pin:character:')).sort() });
 const desired = ({ domain, type, root, content, dependencies, item }) => ({ key: rootKeyOf(domain, type, root), lineageKey: rootKeyOf(domain, type, root) + '#' + item, domain, type, root, item, content, dependencies, contentHash: hashJson(content), dependencyHash: hashJson(dependencies) });
 /** Semantic secret identity: (epoch, slot, version, origin). Equal on every device holding the same master and value; it
  *  never depends on the randomized GCM ciphertext, which travels separately as a physical blob mapped by this id. */
