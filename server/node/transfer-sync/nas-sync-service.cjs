@@ -170,26 +170,49 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 } catch { /* Diagnostic I/O must not change the snapshot error. */ }
             }
             // Mask known opaque credentials even when they were pasted into a name without a key label.
-            const shortPasswords = new Set();
-            const secrets = [...new Set(inventory(database).flatMap(entry => {
-                if (entry.kind !== 'userinfo') return [entry.value];
+            const escapePattern = text => text.replace(/[.*+?^{}$()|[\]\\]/g, '\\$&');
+            const passwordPatterns = new Map();
+            const secrets = [...new Set(inventory(database).map(entry => {
+                if (entry.kind !== 'userinfo') return entry.value;
                 const encoded = entry.value.slice(entry.value.indexOf(':') + 1);
-                if (!encoded) return [entry.value];
+                if (!encoded) return entry.value;
                 let decoded = encoded;
                 try { decoded = decodeURIComponent(encoded); } catch { /* Keep malformed escapes literal. */ }
                 const raw = /^\s*https?:[/\\]*[^:/\\?#]*:([^/\\?#]*)@/i.exec(entry.container[entry.key])?.[1];
-                const passwords = [raw, encoded, decoded, encodeURIComponent(decoded)].filter(Boolean);
-                if ([...decoded].length >= 4) return [entry.value, ...passwords];
-                for (const password of passwords) shortPasswords.add(password);
-                return [entry.value];
+                const characters = [...decoded];
+                const spelling = characters.map(character => {
+                    const percent = Buffer.from(character).toString('hex').replace(/../g, byte =>
+                        '%' + byte.replace(/[a-f]/g, digit => '[' + digit + digit.toUpperCase() + ']'));
+                    return '(?:' + percent + '|' + escapePattern(character) + ')';
+                }).join('');
+                const alternatives = raw && raw !== encoded ? escapePattern(raw) + '|' + spelling : spelling;
+                const pattern = '(?:' + alternatives + ')';
+                passwordPatterns.set(characters.length < 4 ? '(?<![\\p{L}\\p{N}])' + pattern + '(?![\\p{L}\\p{N}])' : pattern, characters.length);
+                return entry.value;
             }).filter(Boolean))].sort((a, b) => b.length - a.length);
-            const shortAlternatives = [...shortPasswords].sort((a, b) => b.length - a.length)
-                .map(password => password.replace(/[.*+?^{}$()|[\]\\]/g, '\\$&')).join('|');
-            const shortToken = shortAlternatives && new RegExp('(?<![\\p{L}\\p{N}])(?:' + shortAlternatives + ')(?![\\p{L}\\p{N}])', 'gu');
+            const passwords = [...passwordPatterns].sort((a, b) => b[1] - a[1]).map(([pattern]) => pattern).join('|');
+            const passwordPattern = passwords && new RegExp(passwords, 'gu');
             const label = (value, limit) => {
                 if (typeof value !== 'string') return undefined;
-                for (const secret of secrets) value = value.replaceAll(secret, '[REDACTED]');
-                if (shortToken) value = value.replace(shortToken, '[REDACTED]');
+                const matches = passwordPattern ? [...value.matchAll(passwordPattern)] : [];
+                if (matches.length) {
+                    // Find both kinds of credentials in the original label so a replacement cannot split another match.
+                    const ranges = matches.map(match => [match.index, match.index + match[0].length]);
+                    for (const secret of secrets) {
+                        for (let start = value.indexOf(secret); start !== -1; start = value.indexOf(secret, start + secret.length)) {
+                            ranges.push([start, start + secret.length]);
+                        }
+                    }
+                    const redacted = [];
+                    let end = 0;
+                    for (const [start, stop] of ranges.sort((a, b) => a[0] - b[0])) {
+                        if (start >= end) redacted.push(value.slice(end, start), '[REDACTED]');
+                        end = Math.max(end, stop);
+                    }
+                    value = redacted.join('') + value.slice(end);
+                } else {
+                    for (const secret of secrets) value = value.replaceAll(secret, '[REDACTED]');
+                }
                 return maskSensitive(value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, limit);
             };
             // shortcut: show the first 200 distinct paths and 20 owners per path, expand if the panel needs larger reports.
