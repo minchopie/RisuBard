@@ -172,31 +172,33 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             // Mask known opaque credentials even when they were pasted into a name without a key label.
             // Match complete UTF-8 scalars so invalid bytes cannot prevent adjacent escapes from decoding.
             const validEscapes = /(?:%(?:[0-7][0-9a-f]|(?:c[2-9a-f]|d[0-9a-f])%[89ab][0-9a-f]|(?:e[1-9a-ce-f]%[89ab]|e0%[ab]|ed%[89])[0-9a-f]%[89ab][0-9a-f]|(?:f0%[9ab]|f[1-3]%[89ab]|f4%8)[0-9a-f](?:%[89ab][0-9a-f]){2}))+/gi;
-            const decodeEscapes = value => {
-                let decoded = value;
-                for (let pass = 0; pass < 3 && decoded.includes('%'); pass++) {
-                    const next = decoded.replace(validEscapes, decodeURIComponent);
-                    if (next === decoded) break;
-                    decoded = next;
+            const maxLabelUnits = 2000;
+            function* escapeForms(value) {
+                yield value;
+                for (let pass = 0; pass < 3 && value.includes('%'); pass++) {
+                    const next = value.replace(validEscapes, decodeURIComponent);
+                    if (next === value) break;
+                    value = next;
+                    yield value;
                 }
                 // Remaining escaped bytes compare without regard to hex case.
-                return decoded.includes('%') ? decoded.replace(/(?:%[0-9a-f]{2})+/gi, run => run.toLowerCase()) : decoded;
-            };
+                if (value.length <= maxLabelUnits && value.includes('%')) {
+                    const normalized = value.replace(/(?:%[0-9a-f]{2})+/gi, run => run.toLowerCase());
+                    if (normalized !== value) yield normalized;
+                }
+            }
             const collectSecrets = () => {
                 const candidates = new Map();
-                const add = (raw, decoded = decodeEscapes(raw)) => {
-                    if (!raw) return;
-                    candidates.set(raw, /^.{4}/su.test(raw));
-                    if (decoded !== raw) candidates.set(decoded, /^.{4}/su.test(decoded));
+                const add = (value, useTokenBoundary = false) => {
+                    if (!value) return;
+                    for (const secret of escapeForms(value)) {
+                        candidates.set(secret, candidates.get(secret) || !useTokenBoundary || /^.{4}/su.test(secret));
+                    }
                 };
                 for (const { kind, value } of inventory(database)) {
-                    if (!value) continue;
                     if (kind === 'userinfo') {
-                        const separator = value.indexOf(':');
-                        const password = value.slice(separator + 1);
-                        const decoded = decodeEscapes(password);
-                        add(password, decoded);
-                        add(value, decodeEscapes(value.slice(0, separator)) + ':' + decoded);
+                        add(value.slice(value.indexOf(':') + 1), true);
+                        add(value, true);
                     } else {
                         add(value);
                     }
@@ -206,8 +208,8 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             let secrets;
             const leftBoundary = /(?<![\p{L}\p{N}])/uy;
             const rightBoundary = /(?![\p{L}\p{N}])/uy;
-            const matches = (value, secret, long) => {
-                if (long) return value.includes(secret);
+            const matches = (value, secret, substring) => {
+                if (substring) return value.includes(secret);
                 for (let start = value.indexOf(secret); start !== -1; start = value.indexOf(secret, start + 1)) {
                     leftBoundary.lastIndex = start;
                     rightBoundary.lastIndex = start + secret.length;
@@ -215,19 +217,21 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 }
                 return false;
             };
+            const matchesSecret = value => {
+                secrets ??= collectSecrets();
+                for (const form of escapeForms(value)) {
+                    for (const [secret, substring] of secrets) {
+                        if (matches(form, secret, substring)) return true;
+                    }
+                }
+                return false;
+            };
             const label = (value, limit) => {
                 if (typeof value !== 'string') return undefined;
-                if (value.length > 1000 && (value.length > 2000 || /^.{1001}/su.test(value))) {
+                if (value.length > 1000 && (value.length > maxLabelUnits || /^.{1001}/su.test(value))) {
                     value = '[긴 이름 생략]';
-                } else {
-                    secrets ??= collectSecrets();
-                    const decoded = decodeEscapes(value);
-                    for (const [secret, long] of secrets) {
-                        if (matches(value, secret, long) || (decoded !== value && matches(decoded, secret, long))) {
-                            value = '[REDACTED]';
-                            break;
-                        }
-                    }
+                } else if (matchesSecret(value)) {
+                    value = '[REDACTED]';
                 }
                 return maskSensitive(value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, limit);
             };

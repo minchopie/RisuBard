@@ -246,17 +246,17 @@ test('missing-media diagnostics mask raw, URL-encoded and decoded URL passwords 
         koboldURL: 'https://fixture:%61%62@fixture.invalid/v1',
         comfyUiUrl: 'https://fixture:@fixture.invalid/v1',
         characters: [{ chaId: 'card', type: 'character', name: 'parent cabin ' + reencoded,
-            chats: [{ id: 'chat', name: 'chat cabin ' + decoded + ' ' + encoded,
-                message: [{ role: 'char', data: '{{inlay::absent-' + raw + '}}' }] }] }],
+            chats: [decoded, encoded].map((spelling, index) => ({
+                id: 'chat-' + index, name: 'chat cabin ' + spelling,
+                message: [{ role: 'char', data: '{{inlay::absent-' + raw + '}}' }],
+            })) }],
     }
     const d = await device(t, fixtureDav(), 'diagnostic-url-password', db, MASTER, { readDatabase: async () => db })
     d.service.enable({ workspaceId: 'ws-fixture' })
     await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
     const report = JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))
-    expect(report).toMatchObject({ count: 1, files: [{
-        path: '[REDACTED]',
-        owners: [{ kind: 'chat', name: '[REDACTED]', parent: '[REDACTED]' }],
-    }] })
+    const maskedOwner = { kind: 'chat', name: '[REDACTED]', parent: '[REDACTED]' }
+    expect(report).toMatchObject({ count: 1, files: [{ path: '[REDACTED]', owners: [maskedOwner, maskedOwner] }] })
     expect(d.make().status().missingMedia).toEqual(report)
 })
 
@@ -270,8 +270,10 @@ test.for(['한', '%61%62', '가%2b나'])('missing-media diagnostics mask short U
         forceReplaceUrl: url,
         comfyUiUrl: 'https://fixture:@fixture.invalid/v1',
         characters: [{ chaId: 'card', type: 'character', name: decoded,
-            chats: [{ id: 'chat', name: [ordinary, ...spellings, ordinary].join('_'),
-                message: [{ role: 'char', data: '{{inlay::absent-' + raw + '-' + ordinary + '}}' }] }] }],
+            chats: [...spellings.map(spelling => [ordinary, spelling, ordinary].join('_')), ordinary].map((name, index) => ({
+                id: 'chat-' + index, name,
+                message: [{ role: 'char', data: '{{inlay::absent-' + raw + '-' + ordinary + '}}' }],
+            })) }],
     }
     const d = await device(t, fixtureDav(), 'diagnostic-short-url-password', db, MASTER, { readDatabase: async () => db })
     d.service.enable({ workspaceId: 'ws-fixture' })
@@ -279,7 +281,34 @@ test.for(['한', '%61%62', '가%2b나'])('missing-media diagnostics mask short U
     const report = JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))
     expect(report).toMatchObject({ count: 1, files: [{
         path: '[REDACTED]',
-        owners: [{ kind: 'chat', name: '[REDACTED]', parent: '[REDACTED]' }],
+        owners: [
+            ...spellings.map(() => ({ kind: 'chat', name: '[REDACTED]', parent: '[REDACTED]' })),
+            { kind: 'chat', name: ordinary, parent: '[REDACTED]' },
+        ],
+    }] })
+    expect(d.make().status().missingMedia).toEqual(report)
+})
+
+const escapeEachByte = (value: string) => [...Buffer.from(value)].map(byte => '%' + byte.toString(16).padStart(2, '0')).join('')
+test.for([
+    ['label decode intermediate', '41reviewFixture', '%25' + escapeEachByte('41reviewFixture')],
+    ['secret decode intermediate', 'reviewFixture%2541', escapeEachByte('reviewFixture%41').replaceAll('%', '%2525')],
+    ['one-character setting', 'j', 'leftj42'],
+    ['two-character setting', 'Q7', 'leftQ742'],
+    ['three-character setting', 'Q7Z', 'leftQ7Z42'],
+])('missing-media diagnostics mask %s', async ([, proxyKey, name], t) => {
+    const db = {
+        proxyKey,
+        characters: [{ chaId: 'card', type: 'character', name,
+            image: 'assets/missing.png', chats: [] }],
+    }
+    const d = await device(t, fixtureDav(), 'diagnostic-opaque-setting', db, MASTER, { readDatabase: async () => db })
+    d.service.enable({ workspaceId: 'ws-fixture' })
+    await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
+    const report = JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))
+    expect(report).toMatchObject({ count: 1, files: [{
+        path: 'assets/missing.png',
+        owners: [{ kind: 'character', name: '[REDACTED]' }],
     }] })
     expect(d.make().status().missingMedia).toEqual(report)
 })
