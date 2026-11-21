@@ -264,7 +264,7 @@ test('missing media aborts before local or peer changes and clears only the chec
     const reportOnDisk = await readFile(reportPath, 'utf8')
     const reopened = local.make()
     const status = reopened.status()
-    expect(status.missingMedia).toEqual(JSON.parse(reportOnDisk))
+    expect(JSON.parse(reportOnDisk)).toEqual({ ...status.missingMedia, version: 1 })
     const files = [...status.missingMedia.files].sort((a: { path: string }, b: { path: string }) => a.path.localeCompare(b.path))
     expect({ ...status.missingMedia, files }).toEqual({
         id: expect.any(String), count: 4, files: [asset, second, 'inlay/' + inlay].map(path => ({ path })),
@@ -300,7 +300,23 @@ test('missing media aborts before local or peer changes and clears only the chec
     expect(reopened.status().missingMedia).toEqual(newer)
 })
 
-test('reopens legacy missing-media reports with only valid paths and preserves their ID and total', async t => {
+const sourcePath = 'assets/' + 'a'.repeat(64) + '.png'
+for (const [source, fields, files] of [
+    ['module name', { modules: [{ id: 'mod', name: sourcePath }] }, []],
+    ['module icon', { modules: [{ id: 'mod', name: 'fixture', icon: sourcePath }] }, [{ path: sourcePath }]],
+    ['setting', { aiModel: sourcePath }, []],
+] as const) {
+    test(`counts missing asset candidates from a ${source} and only reports media paths`, async t => {
+        const d = await device(t, fixtureDav(), 'missing-source', baseDb({ characters: [], ...fields }))
+        d.service.enable({ workspaceId: 'ws-fixture' })
+        await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
+        const report = { id: expect.any(String), count: 1, files }
+        expect(d.service.status().missingMedia).toEqual(report)
+        expect(JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))).toEqual({ ...report, version: 1 })
+    })
+}
+
+test('reopens legacy missing-media reports without unverified paths and preserves their ID and total', async t => {
     const d = await device(t, fixtureDav(), 'legacy-report', baseDb())
     const path = join(d.dataRoot, 'nas-sync', 'missing-media.json')
     const id = randomUUID()
@@ -310,9 +326,9 @@ test('reopens legacy missing-media reports with only valid paths and preserves t
         'inlay/https://synthetic.example.invalid/path', 'inlay/../escape', 'inlay/opaque-setting-value']
     await writeFile(path, JSON.stringify({ id, count: invalid.length + 1, files: [valid, ...invalid].map(path =>
         ({ path, owners: [{ name: '옛 항목 이름 ' + S('legacy') }] })) }))
-    const report = { id, count: invalid.length + 1, files: [{ path: valid }] }
+    const report = { id, count: invalid.length + 1, files: [] }
     expect(d.make().status().missingMedia).toEqual(report)
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(report)
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ ...report, version: 1 })
 })
 
 test('uploads weekly local edits from the recorded lineage with the six divergent roots present', async t => {

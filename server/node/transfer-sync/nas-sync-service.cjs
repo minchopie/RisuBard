@@ -137,17 +137,17 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     }
     const file = name => resolveInside(root, name);
     const missingMediaFile = 'missing-media.json';
-    const writeMissingMedia = report => atomicWriteJson(root, missingMediaFile, report, { backup: false, checksumSidecar: false });
+    const writeMissingMedia = report => atomicWriteJson(root, missingMediaFile, { ...report, version: 1 }, { backup: false, checksumSidecar: false });
     let checkedMissingMedia = null;
     function readMissingMedia() {
         try {
             const report = JSON.parse(fs.readFileSync(file(missingMediaFile), 'utf8'));
             if (typeof report?.id !== 'string' || !isMissingMediaPath('inlay/' + report.id)
                 || !Number.isSafeInteger(report.count) || report.count < 1 || !Array.isArray(report.files)) return null;
-            const files = report.files.map(entry => entry?.path).filter(isMissingMediaPath).map(path => ({ path }));
+            // Older reports did not record whether their paths came from media references.
+            const files = report.version === 1 ? report.files.map(entry => entry?.path).filter(isMissingMediaPath).map(path => ({ path })) : [];
             const safe = { id: report.id, count: report.count, files };
-            // Upgrade an R18 report without changing the identity used by an in-flight clear.
-            if (JSON.stringify(report) !== JSON.stringify(safe)) {
+            if (JSON.stringify(report) !== JSON.stringify({ ...safe, version: 1 })) {
                 try { writeMissingMedia(safe); } catch { /* Return the safe view even if the upgrade cannot be persisted. */ }
             }
             return safe;
@@ -161,18 +161,17 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         checkedMissingMedia = null;
         return { cleared: true };
     }
-    function missingMediaError(missing) {
+    function missingMediaError(missing, missingMedia) {
         checkedMissingMedia = null;
-        const paths = new Set(missing);
-        const count = paths.size;
+        const count = new Set(missing).size;
         // shortcut: record up to 200 valid paths, expand if the panel needs larger reports.
-        const visible = [...paths].filter(isMissingMediaPath).slice(0, 200);
+        const visible = [...missingMedia].filter(isMissingMediaPath).slice(0, 200);
         let logged = false;
         if (ownsDataRoot) {
             try {
                 const { addLog } = require('../logs.cjs');
                 addLog({ level: 'error', origin: 'server', source: 'nas-sync', message: nasDiagnosticMessage,
-                    description: nasDiagnosticDescription('snapshot', 'SNAPSHOT_MISSING', count), missingMediaPaths: visible });
+                    description: nasDiagnosticDescription('snapshot', 'SNAPSHOT_MISSING', count) });
                 logged = true;
             } catch { /* Diagnostic I/O must not change the snapshot error. */ }
         }
@@ -899,7 +898,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 return assets.get(path);
             };
             const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: readSnapshotInlay, inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
-            if (projection.missing.length) throw missingMediaError(projection.missing);
+            if (projection.missing.length) throw missingMediaError(projection.missing, projection.missingMedia);
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
             // A restored state continues the bases recorded with it (or starts genesis roots), never this install's newest heads: a copied

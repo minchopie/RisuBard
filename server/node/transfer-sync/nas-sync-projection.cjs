@@ -120,18 +120,59 @@ function deviceFieldsBase(graph, key, lineageHead) {
 const carryDeviceFields = (root, content, base) => { if (!base) return content; const out = withoutDeviceFields(root, content); for (const k of DEVICE_GROUP_FIELDS[root] ?? []) if (base?.content && Object.hasOwn(base.content, k)) out[k] = clone(base.content[k]); return out; };
 const object = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const diagnosticAssetFields = {
+    character: /^\/(?:image|(?:additionalAssets|emotionImages)\/\d+\/1|ccAssets\/\d+\/uri|personas\/\d+\/(?:image|icon|embeddedModule\/(?:icon|assets\/\d+\/1)))$/,
+    module: /^\/(?:icon|image|assets\/\d+\/1)$/,
+    plugin: /^\/(?:icon|image|assets\/\d+\/1)$/,
+    settings: /^\/(?:userIcon|personas\/\d+\/(?:icon|image|embeddedModule\/(?:icon|assets\/\d+\/1))|botPresets\/\d+\/image|characterOrder\/\d+\/imgFile|NAIImgConfig\/(?:image|character_image)|wavespeedImage\/reference_image)$/,
+};
+const settingsBodyFields = /^\/(?:loreBook\/\d+\/content|personas\/\d+\/(?:personaPrompt|note|embeddedModule\/(?:description|lorebook\/\d+\/content))|personaPrompt|userNote)$/;
+
+function bodyAssetPaths(text) {
+    const paths = new Set();
+    for (const [, path] of text.matchAll(/\{\{(?:raw|path|img|image|video|audio|bgm|bg|emotion|asset|video-img|source)::\s*(assets\/[A-Za-z0-9_.-]+)\s*\}\}/g)) paths.add(path);
+    for (const [, path] of text.matchAll(/!\[[^\]\r\n]*\]\(\s*<?(assets\/[A-Za-z0-9_.-]+)>?(?=[\s)])/g)) paths.add(path);
+    for (const [, , path] of text.matchAll(/\burl\(\s*(["']?)(assets\/[A-Za-z0-9_.-]+)\1\s*\)/gi)) paths.add(path);
+    for (const [tag] of text.matchAll(/<(?:img|audio|video|source)(?=\s)(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
+        for (const [, attribute, quoted, singleQuoted, bare] of tag.matchAll(/\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
+            if (attribute.toLowerCase() !== 'src') continue;
+            const path = quoted ?? singleQuoted ?? bare;
+            if (/^assets\/[A-Za-z0-9_.-]+$/.test(path ?? '')) paths.add(path);
+            break;
+        }
+    }
+    return paths;
+}
 /** Declared asset/inlay references, same rules as shared/play-set/snapshot.ts scan(): whole asset fields, `assets/…` substrings, inlay tokens, painter pointers. */
-function collectReferences(value, kind, pointer = '', out = { assets: new Set(), inlays: new Set() }) {
+function collectReferences(value, kind, pointer = '', out = {
+    assets: new Set(), inlays: new Set(), diagnosticAssets: new Set(), diagnosticInlays: new Set(),
+}) {
     if (typeof value === 'string') value = { text: value };
     if (!value || typeof value !== 'object') return out;
     for (const [key, field] of Object.entries(value)) {
         const p = pointer + '/' + key.replace(/~/g, '~0').replace(/\//g, '~1');
         if (typeof field === 'string') {
-            if (kind === 'chat' && /^\/bardPainter\/(?:results\/\d+\/(?:assetId|settings\/context\/referenceAssetId)|settings\/context\/referenceAssetId)$/.test(p) && field) out.inlays.add(field);
+            if (kind === 'chat' && /^\/bardPainter\/(?:results\/\d+\/(?:assetId|settings\/context\/referenceAssetId)|settings\/context\/referenceAssetId)$/.test(p) && field) {
+                out.inlays.add(field);
+                out.diagnosticInlays.add(field);
+            }
             const assetField = ['image', 'icon', 'uri'].includes(key) || /^\/(?:additionalAssets|emotionImages)\/\d+\/1$/.test(p) || kind === 'module' && /^\/assets\/\d+\/1$/.test(p);
-            if (/^assets\/[^/\\\s]+$/.test(field) || (assetField && field.startsWith('assets/'))) out.assets.add(field);
-            else for (const m of field.replace(/(?<![A-Za-z0-9_+.-])(?:[a-z][a-z0-9+.-]*:\/\/|\/\/|data:|blob:|file:)[^\s<>"']+/gi, ' ').matchAll(/assets\/[A-Za-z0-9_.-]+/g)) out.assets.add(m[0]);
-            for (const m of field.matchAll(/\{\{(?:inlay|inlayed|inlayeddata)::([^{}]+)\}\}/g)) out.inlays.add(m[1]);
+            const body = kind === 'settings' ? settingsBodyFields.test(p) : !/^(?:name|displayName|username|sourceChatName|title)$/i.test(key);
+            const structuredMedia = diagnosticAssetFields[kind]?.test(p);
+            if (/^assets\/[^/\\\s]+$/.test(field) || (assetField && field.startsWith('assets/'))) {
+                out.assets.add(field);
+                if (structuredMedia) out.diagnosticAssets.add(field);
+            } else if (field.includes('assets/')) {
+                const media = body ? bodyAssetPaths(field) : null;
+                for (const [path] of field.replace(/(?<![A-Za-z0-9_+.-])(?:[a-z][a-z0-9+.-]*:\/\/|\/\/|data:|blob:|file:)[^\s<>"']+/gi, ' ').matchAll(/assets\/[A-Za-z0-9_.-]+/g)) {
+                    out.assets.add(path);
+                    if (media?.has(path)) out.diagnosticAssets.add(path);
+                }
+            }
+            for (const m of field.matchAll(/\{\{(?:inlay|inlayed|inlayeddata)::([^{}]+)\}\}/g)) {
+                out.inlays.add(m[1]);
+                if (body) out.diagnosticInlays.add(m[1]);
+            }
         } else collectReferences(field, kind, p, out);
     }
     return out;
@@ -220,7 +261,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
     }
     database = { ...database, characters };
     const { public: pub, envelopes } = vault.project(database);
-    const blobs = new Map(), out = [], excluded = [], missing = [], envelopeMap = new Map();
+    const blobs = new Map(), out = [], excluded = [], missing = [], missingMedia = new Set(), envelopeMap = new Map();
     const addBytes = (bytes, label) => { const hash = sha256(bytes); if (!blobs.has(hash)) blobs.set(hash, { bytes, label }); return hash; };
     const addFile = (path, hash, label) => { if (!blobs.has(hash)) blobs.set(hash, { path, label }); return hash; };
     const bySlot = new Map(envelopes.map(env => [`${env.slot}:${env.version}`, env]));
@@ -240,12 +281,20 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
     const mediaDeps = async (refs, scope, deps = {}) => {
         for (const alias of [...refs.assets].sort(compare)) {
             const path = resolveAsset(scope, alias), local = await readAsset(path);
-            if (!local) { missing.push(path); continue; }
+            if (!local) {
+                missing.push(path);
+                if (refs.diagnosticAssets.has(alias)) missingMedia.add(path);
+                continue;
+            }
             deps['asset:' + path] = addFile(local.path, local.hash, path);
         }
         for (const alias of [...refs.inlays].sort(compare)) {
             const id = resolveInlay(scope, alias), inlay = await readInlay(id);
-            if (!inlay) { missing.push('inlay/' + id); continue; }
+            if (!inlay) {
+                missing.push('inlay/' + id);
+                if (refs.diagnosticInlays.has(alias)) missingMedia.add('inlay/' + id);
+                continue;
+            }
             deps['inlay:' + id] = typeof inlay.data === 'string' ? addBytes(Buffer.from(inlay.data), 'inlay') : Buffer.isBuffer(inlay.data) ? addBytes(inlay.data, 'inlay') : addFile(inlay.data.path, inlay.data.hash, 'inlay');
             deps['inlay-metadata:' + id] = addBytes(Buffer.from(canonical({ metadata: inlay.metadata, ownership: (await inlayMeta(id)) ?? null })), 'inlay-metadata');
         }
@@ -308,7 +357,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
         const shared = name === 'personas' ? personaWireContent(content) : content;
         put('settings', 'group', name, name, shared, await mediaDeps(collectReferences(shared, 'settings'), {}), Object.keys(shared).flatMap(key => refsOf('/' + key)));
     }
-    return { desired: out, blobs, envelopes: envelopeMap, excluded, missing };
+    return { desired: out, blobs, envelopes: envelopeMap, excluded, missing, missingMedia };
 }
 /** Revisions a fresh projection implies against the current graph: skip equal heads, continue each item's own lineage. */
 /**

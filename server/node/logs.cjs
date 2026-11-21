@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
 const { resolveDataRoot } = require('./data-root.cjs');
-const { isMissingMediaPath, nasDiagnosticDescription, nasDiagnosticMessage } = require('../../shared/play-set/nas-diagnostic.ts');
+const { nasDiagnosticDescription, nasDiagnosticMessage } = require('../../shared/play-set/nas-diagnostic.ts');
 
 const MAX_ROWS = 5000;
 const MAX_DESCRIPTION_BYTES = 10 * 1024; // 10KB per entry
@@ -91,6 +91,13 @@ let logState = { schemaVersion: 1, nextId: 1 };
 
 function reloadFromDisk() {
     rowsCache = readRowsFromDisk();
+    let removedMissingMediaPaths = false;
+    for (const row of rowsCache) {
+        if (row.source !== 'nas-sync' || !Object.hasOwn(row, 'missingMediaPaths')) continue;
+        delete row.missingMediaPaths;
+        removedMissingMediaPaths = true;
+    }
+    if (removedMissingMediaPaths) rewriteRowsLocked(rowsCache, { backup: false });
     logState = fs.existsSync(stateFile)
         ? readVerifiedJson(logRoot, 'state.json', { acceptExternalChanges: true })
         : { schemaVersion: 1, nextId: 1 };
@@ -136,9 +143,9 @@ function appendRowsLocked(rows) {
     atomicWriteJson(logRoot, 'state.json', logState);
 }
 
-function rewriteRowsLocked(rows) {
+function rewriteRowsLocked(rows, options) {
     rowsCache = rows;
-    atomicWriteFile(logRoot, 'system.jsonl', Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), 'utf8'));
+    atomicWriteFile(logRoot, 'system.jsonl', Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), 'utf8'), options);
 }
 
 // Sources captured by monkey-patched console / window handlers / Express
@@ -215,21 +222,17 @@ function insertEntry(entry) {
     let description = entry.description != null && !nasDiagnostic
         ? truncate(maskSensitive(String(entry.description)), MAX_DESCRIPTION_BYTES)
         : null;
-    let missingMediaPaths;
     if (nasDiagnostic) {
         // Older clients may still send raw messages. Persist only recognized diagnostic fields.
         const fields = /^stage=([a-z]+) code=([A-Z_]+)(?: missingFiles=([1-9][0-9]{0,15}))?$/.exec(String(entry.description ?? ''));
         description = nasDiagnosticDescription(fields?.[1], fields?.[2], Number(fields?.[3]));
-        if (origin === 'server' && fields?.[1] === 'snapshot' && fields[2] === 'SNAPSHOT_MISSING' && Array.isArray(entry.missingMediaPaths)) {
-            missingMediaPaths = entry.missingMediaPaths.filter(isMissingMediaPath).slice(0, 200);
-        }
     }
     const count = Number.isInteger(entry.count) && entry.count > 0 ? entry.count : 1;
     const platform = entry.platform ? String(entry.platform).slice(0, 128) : null;
     const clientId = entry.clientId ? String(entry.clientId).slice(0, 64) : null;
     const userAgent = entry.userAgent ? String(entry.userAgent).slice(0, 512) : null;
 
-    return { id: logState.nextId++, timestamp, level, origin, message, description, source, count, platform, clientId, userAgent, ...(missingMediaPaths && { missingMediaPaths }) };
+    return { id: logState.nextId++, timestamp, level, origin, message, description, source, count, platform, clientId, userAgent };
 }
 
 const insertMany = entries => withWriteLock(() => {

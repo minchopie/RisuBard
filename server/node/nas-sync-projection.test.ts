@@ -64,7 +64,40 @@ test('collectReferences follows the manual snapshot rules for assets, inlays and
     const refs = collectReferences({ image: 'assets/icon.png', note: 'see assets/bg.webp and https://cdn.example/assets/remote.png', message: [{ data: '{{inlay::draw1}} {{inlayed::draw2}}' }], bardPainter: { results: [{ assetId: 'paint1' }], settings: { context: { referenceAssetId: 'ref1' } } }, emotionImages: [['joy', 'assets/joy.png']] }, 'chat')
     expect([...refs.assets].sort()).toEqual(['assets/bg.webp', 'assets/icon.png', 'assets/joy.png'])
     expect([...refs.inlays].sort()).toEqual(['draw1', 'draw2', 'paint1', 'ref1'])
+    expect([...refs.diagnosticInlays].sort()).toEqual(['draw1', 'draw2', 'paint1', 'ref1'])
     expect([...collectReferences('plain text with assets/in-text.png', 'chat').assets]).toEqual(['assets/in-text.png'])
+})
+
+test('attributes only declared media fields and body media operands to the diagnostic', () => {
+    const library = collectReferences({
+        name: '{{img::assets/name.png}} {{inlay::label}}',
+        icon: 'assets/icon.png',
+        assets: [['assets/label.png', 'assets/module.png', 'png']],
+        description: 'assets/plain.png {{img::assets/token.png}} ![](assets/wiki.png) <img alt="assets/alt.png" data-src="assets/lazy.png" src="assets/html.png">',
+        arbitrary: { icon: 'assets/nested.png' },
+    }, 'module')
+    expect([...library.assets].sort()).toEqual([
+        'alt', 'html', 'icon', 'label', 'lazy', 'module', 'name', 'nested', 'plain', 'token', 'wiki',
+    ].map(name => 'assets/' + name + '.png'))
+    expect([...library.diagnosticAssets].sort()).toEqual(['html', 'icon', 'module', 'token', 'wiki'].map(name => 'assets/' + name + '.png'))
+    expect([...library.inlays]).toEqual(['label'])
+    expect([...library.diagnosticInlays]).toEqual([])
+    const character = collectReferences({
+        image: 'assets/character.png', additionalAssets: [['asset', 'assets/additional.png', 'png']],
+        emotionImages: [['joy', 'assets/joy.png']], ccAssets: [{ uri: 'assets/cc.png' }],
+    }, 'character')
+    expect([...character.diagnosticAssets].sort()).toEqual(['additional', 'cc', 'character', 'joy'].map(name => 'assets/' + name + '.png'))
+    const settings = collectReferences({
+        personas: [{ image: 'assets/persona.png', icon: 'assets/avatar.png', embeddedModule: { assets: [['x', 'assets/embedded.png', 'png']] } }],
+        modelPresets: [{ image: 'assets/ordinary.png' }],
+        aiModel: '{{img::assets/model.png}} {{inlay::model}}',
+        loreBook: [{ content: '<img src="assets/lore.png"> {{inlay::lore}}' }],
+    }, 'settings')
+    expect([...settings.assets]).toContain('assets/model.png')
+    expect([...settings.inlays]).toContain('model')
+    expect([...settings.diagnosticAssets].sort()).toEqual(['avatar', 'embedded', 'lore', 'persona'].map(name => 'assets/' + name + '.png'))
+    expect([...settings.diagnosticInlays]).toEqual(['lore'])
+    expect([...collectReferences({ icon: 'assets/plugin.png' }, 'plugin').diagnosticAssets]).toEqual(['assets/plugin.png'])
 })
 
 async function fixture(t: any) {

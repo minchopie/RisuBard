@@ -154,19 +154,30 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     const reportOnDisk = await fs.readFile(join(dataRoot, 'nas-sync', 'missing-media.json'), 'utf8')
     const current = await status()
     const paths = [asset, second, 'inlay/' + inlay].sort()
-    expect(current.missingMedia).toEqual(JSON.parse(reportOnDisk))
+    expect(JSON.parse(reportOnDisk)).toEqual({ ...current.missingMedia, version: 1 })
     expect({ ...current.missingMedia, files: [...current.missingMedia.files].sort((a: { path: string }, b: { path: string }) => a.path.localeCompare(b.path)) }).toEqual({
         id: expect.any(String), count: 4, files: paths.map(path => ({ path })),
     })
     const systemLog = await fs.readFile(join(dataRoot, 'logs', 'system.jsonl'), 'utf8')
     const logEntry = systemLog.trim().split('\n').map(line => JSON.parse(line)).find(row => row.description === 'stage=snapshot code=SNAPSHOT_MISSING missingFiles=4')
-    expect(logEntry?.missingMediaPaths?.slice().sort()).toEqual(paths)
+    expect(logEntry).toMatchObject({ source: 'nas-sync', origin: 'server' })
+    expect(systemLog).not.toContain('missingMediaPaths')
+    for (const path of paths) expect(systemLog).not.toContain(path)
     for (const value of [...names, opaque, url, 'inlay/' + bad]) {
         expect([reportOnDisk, JSON.stringify(current), JSON.stringify(failed), systemLog].some(text => text.includes(value))).toBe(false)
     }
-    await stop(); await start(); await handshake()
+    await stop()
+    const logPath = join(dataRoot, 'logs', 'system.jsonl')
+    const withLegacyPaths = (await fs.readFile(logPath, 'utf8')).replace(JSON.stringify(logEntry), JSON.stringify({ ...logEntry, missingMediaPaths: paths }))
+    expect(withLegacyPaths).toContain('missingMediaPaths')
+    await fs.writeFile(logPath, withLegacyPaths)
+    await start(); await handshake()
     const persisted = (await status()).missingMedia
-    expect(persisted).toEqual(JSON.parse(reportOnDisk))
+    expect(persisted).toEqual(current.missingMedia)
+    const migratedLog = await fs.readFile(logPath, 'utf8')
+    expect(migratedLog).toContain(JSON.stringify(logEntry))
+    expect(migratedLog).not.toContain('missingMediaPaths')
+    for (const path of paths) expect(migratedLog).not.toContain(path)
     expect(await (await post('/missing-media/clear', { id: persisted.id })).json()).toEqual({ cleared: false })
 
     // ---- the app's own DB snapshot restore announces itself to sync before copying; the next snapshot consumes the mark ----
