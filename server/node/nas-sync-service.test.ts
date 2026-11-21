@@ -260,6 +260,30 @@ test('missing-media diagnostics mask raw, URL-encoded and decoded URL passwords 
     expect(d.make().status().missingMedia).toEqual(report)
 })
 
+test.for(['한', '%61%62', '가%2b나'])('missing-media diagnostics mask short URL password tokens (%s)', async (raw, t) => {
+    const url = 'https://fixture:' + raw + '@fixture.invalid/v1'
+    const encoded = new URL(url).password
+    const decoded = decodeURIComponent(encoded)
+    const spellings = [...new Set([raw, encoded, decoded, encodeURIComponent(decoded)])]
+    const ordinary = '이름' + decoded + '42'
+    const db = {
+        forceReplaceUrl: url,
+        comfyUiUrl: 'https://fixture:@fixture.invalid/v1',
+        characters: [{ chaId: 'card', type: 'character', name: decoded,
+            chats: [{ id: 'chat', name: [ordinary, ...spellings, ordinary].join('_'),
+                message: [{ role: 'char', data: '{{inlay::absent-' + raw + '-' + ordinary + '}}' }] }] }],
+    }
+    const d = await device(t, fixtureDav(), 'diagnostic-short-url-password', db, MASTER, { readDatabase: async () => db })
+    d.service.enable({ workspaceId: 'ws-fixture' })
+    await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
+    const report = JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))
+    expect(report).toMatchObject({ count: 1, files: [{
+        path: 'inlay/absent-[REDACTED]-' + ordinary,
+        owners: [{ kind: 'chat', name: [ordinary, ...spellings.map(() => '[REDACTED]'), ordinary].join('_'), parent: '[REDACTED]' }],
+    }] })
+    expect(d.make().status().missingMedia).toEqual(report)
+})
+
 test('uploads weekly local edits from the recorded lineage with the six divergent roots present', async t => {
     const dav = fixtureDav()
     const makeDb = (value: string) => ({

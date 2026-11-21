@@ -170,19 +170,26 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 } catch { /* Diagnostic I/O must not change the snapshot error. */ }
             }
             // Mask known opaque credentials even when they were pasted into a name without a key label.
+            const shortPasswords = new Set();
             const secrets = [...new Set(inventory(database).flatMap(entry => {
                 if (entry.kind !== 'userinfo') return [entry.value];
                 const encoded = entry.value.slice(entry.value.indexOf(':') + 1);
+                if (!encoded) return [entry.value];
                 let decoded = encoded;
                 try { decoded = decodeURIComponent(encoded); } catch { /* Keep malformed escapes literal. */ }
-                // Match a bare password only when long enough to avoid masking ordinary labels.
-                if (decoded.length < 4) return [entry.value];
                 const raw = /^\s*https?:[/\\]*[^:/\\?#]*:([^/\\?#]*)@/i.exec(entry.container[entry.key])?.[1];
-                return [entry.value, raw, encoded, decoded, encodeURIComponent(decoded)];
+                const passwords = [raw, encoded, decoded, encodeURIComponent(decoded)].filter(Boolean);
+                if ([...decoded].length >= 4) return [entry.value, ...passwords];
+                for (const password of passwords) shortPasswords.add(password);
+                return [entry.value];
             }).filter(Boolean))].sort((a, b) => b.length - a.length);
+            const shortAlternatives = [...shortPasswords].sort((a, b) => b.length - a.length)
+                .map(password => password.replace(/[.*+?^{}$()|[\]\\]/g, '\\$&')).join('|');
+            const shortToken = shortAlternatives && new RegExp('(?<![\\p{L}\\p{N}])(?:' + shortAlternatives + ')(?![\\p{L}\\p{N}])', 'gu');
             const label = (value, limit) => {
                 if (typeof value !== 'string') return undefined;
                 for (const secret of secrets) value = value.replaceAll(secret, '[REDACTED]');
+                if (shortToken) value = value.replace(shortToken, '[REDACTED]');
                 return maskSensitive(value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, limit);
             };
             // shortcut: show the first 200 distinct paths and 20 owners per path, expand if the panel needs larger reports.

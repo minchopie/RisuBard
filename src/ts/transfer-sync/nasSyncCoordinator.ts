@@ -275,7 +275,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
                 if (!keyReady) transferStatus.set('동기화 키를 기다리는 중 · 권한 기기에 키 요청을 보내 주세요.')
                 if (generation === state.generation) schedule(routineDelay())
-                if (outcome !== 'save-failed' && outcome !== 'finish-pending') void clearMissingMedia().catch(() => {})
+                if (outcome !== 'deferred' && outcome !== 'save-failed' && outcome !== 'finish-pending') void clearMissingMedia().catch(() => {})
                 return state.lastOutcome
             } catch (error: any) {
                 if (error instanceof Cancelled && error.message === 'generating' && generation === state.generation && active()) return deferForGeneration() // stopped between steps (never inside the apply)

@@ -143,6 +143,47 @@ test('diagnostic clear failure leaves a successful receive intact and is retried
     } finally { h.c.stop() }
 })
 
+test.each([true, false])('pause during apply preparation preserves the cycle result (diagnostic checked: %s)', async checked => {
+    const h = harness(); await h.c.start(); h.setPending(1)
+    if (checked) h.io.snapshot.mockResolvedValue({ committed: null, missingMediaChecked: 'diag-id' })
+    const generation = h.c.state.generation
+    h.io.apply.mockImplementationOnce(async () => {
+        h.c.pause(true)
+        return { state: 'deferred' }
+    })
+    try {
+        expect({ result: await h.c.retryNow(), ...h.c.state }).toMatchObject({
+            result: 'deferred', lastOutcome: 'deferred', nextAt: 0, paused: true, running: false, generation: generation + 1,
+        })
+        expect(f.clearMissingMedia).not.toHaveBeenCalled()
+    } finally { h.c.stop() }
+})
+
+test.each([true, false])('generation during apply preparation preserves the next-cycle schedule (diagnostic checked: %s)', async checked => {
+    const generatingChanged = writable(false)
+    const h = harness({ generatingChanged, cadence: DEFAULT_CADENCE, cadenceStore: { load: () => null, save: () => {} }, pollMs: 30_000, debounceMs: 5_000 })
+    h.setPending(1)
+    if (checked) h.io.snapshot.mockResolvedValue({ committed: null, missingMediaChecked: 'diag-id' })
+    h.io.apply.mockImplementationOnce(async () => {
+        f.activity.mockReturnValue(true)
+        generatingChanged.set(true)
+        return { state: 'deferred' }
+    })
+    await h.c.start()
+    const generation = h.c.state.generation
+    try {
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(h.io.apply).toHaveBeenCalledTimes(1)
+        expect(h.c.state).toMatchObject({
+            lastOutcome: 'deferred', nextAt: Date.now() + DEFAULT_CADENCE.intervalMs, running: false, generation,
+        })
+        f.activity.mockReturnValue(false)
+        generatingChanged.set(false)
+        expect(h.c.state.nextAt).toBe(Date.now() + 5_000)
+        expect(f.clearMissingMedia).not.toHaveBeenCalled()
+    } finally { h.c.stop() }
+})
+
 test('interaction during a manual recovery probe still voids the captured safe window', async () => {
     const h = harness(); h.io.status.mockRejectedValueOnce(new Error('sync network deadline'))
     await h.c.start(); h.setPending(1)
