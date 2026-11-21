@@ -50,6 +50,7 @@ export const enableSync = (workspaceId: string, role: 'authority' | 'joining' = 
 export const disableSync = () => post('/disable')
 export const setCardOnlyUpload = (characterId: string, enabled: boolean) => post('/card-only-upload', { characterId, enabled })
 export const snapshotSync = (signal?: AbortSignal) => post('/snapshot', {}, signal)
+export const clearMissingSyncMedia = (id: string, signal?: AbortSignal) => post('/missing-media/clear', { id }, signal)
 export const publishSync = (signal?: AbortSignal) => post('/publish', {}, signal)
 export const pullSync = (signal?: AbortSignal) => post('/pull', {}, signal)
 /** Release a plan the server still holds in `prepared` phase (e.g. the client's bounded wait gave up before the /plan answer arrived):

@@ -1758,7 +1758,7 @@ index 8b0de8b..d1accab 100644
 +    await expect(flush(false, true)).rejects.toMatchObject({ name: 'ConflictError', currentEtag: 'revision', externalEditMode: !pending, externalChangesPending: pending })
 +})
 diff --git a/server/node/file-kv.cjs b/server/node/file-kv.cjs
-index 9f97805..ec3c49b 100644
+index 9f97805..b66defa 100644
 --- a/server/node/file-kv.cjs
 +++ b/server/node/file-kv.cjs
 @@ -34,6 +34,11 @@ async function inspectFileAsync(filePath) {
@@ -1773,45 +1773,7 @@ index 9f97805..ec3c49b 100644
  async function mapWithConcurrency(items, concurrency, mapper) {
      const results = new Array(items.length);
      let nextIndex = 0;
-@@ -104,7 +109,7 @@ async function writeObjectAsync(dataRoot, hash, data) {
-     }
- }
- 
--async function writeObjectFromFileAsync(dataRoot, sourcePath) {
-+async function writeObjectFromFileAsync(dataRoot, sourcePath, expectedHash = null) {
-     const directory = path.join(dataRoot, 'kv', 'objects');
-     await fsp.mkdir(directory, { recursive: true });
-     const handle = await fsp.open(sourcePath, 'r+');
-@@ -115,18 +120,25 @@ async function writeObjectFromFileAsync(dataRoot, sourcePath) {
-     }
- 
-     const inspected = await inspectFileAsync(sourcePath);
-+    if (expectedHash !== null && inspected.hash !== expectedHash) throw new Error('NAS asset does not match its expected hash');
-     const target = path.join(directory, inspected.hash);
-+    const verifyTarget = async () => {
-+        if (expectedHash === null) await fsp.access(target);
-+        else if ((await inspectFileAsync(target)).hash !== expectedHash) throw new Error('NAS asset object does not match its expected hash');
-+    };
-     try {
--        await fsp.access(target);
-+        await verifyTarget();
-         await fsp.unlink(sourcePath);
-         return inspected;
--    } catch {}
-+    } catch (error) {
-+        if (expectedHash !== null && error.code !== 'ENOENT') throw error;
-+    }
- 
-     try {
-         await fsp.rename(sourcePath, target);
-     } catch (error) {
-         try {
--            await fsp.access(target);
-+            await verifyTarget();
-             await fsp.unlink(sourcePath);
-         } catch {
-             throw error;
-@@ -286,6 +298,87 @@ function createFileKv(options = {}) {
+@@ -286,6 +291,87 @@ function createFileKv(options = {}) {
          return value;
      }
  
@@ -1899,41 +1861,7 @@ index 9f97805..ec3c49b 100644
      // Streams one stored value to `destination` for play-set/sync media staging.
      // The source follows kvGetOriginal: a store-only key reads its asset-store
      // file; a manifest/retired entry reads kv/objects, and only a missing object
-@@ -538,6 +631,33 @@ function createFileKv(options = {}) {
-         return entryOf(key)?.updatedAt ?? null;
-     }
- 
-+    function kvObjectHash(key) {
-+        return entryOf(key)?.object ?? null;
-+    }
-+
-+    async function kvInstallNasAssetFromFile(key, sourcePath, hash) {
-+        const checkEntry = () => {
-+            const entry = entryOf(key);
-+            if (entry && entry.object !== hash) throw new Error('NAS asset key has a different registered hash');
-+            return entry?.store && !assetStore.read(key) ? null : entry;
-+        };
-+        checkEntry();
-+        const object = await writeObjectFromFileAsync(dataRoot, sourcePath, hash);
-+        if (checkEntry()) return null; // Only the object was missing. Keep the original registration, including retired entries.
-+        const updatedAt = Date.now();
-+        manifest.entries[key] = { object: hash, size: object.size, updatedAt };
-+        try { saveManifest(); }
-+        catch (error) { delete manifest.entries[key]; throw error; }
-+        return updatedAt;
-+    }
-+
-+    function kvRollbackNasAssetRegistration(key, hash, updatedAt) {
-+        const entry = manifest.entries[key];
-+        if (entry?.object !== hash || entry.updatedAt !== updatedAt) return;
-+        delete manifest.entries[key];
-+        saveManifest();
-+    }
-+
-     function kvCopyValue(source, destination) {
-         const entry = entryOf(source);
-         if (!entry) return;
-@@ -895,6 +1015,8 @@ function createFileKv(options = {}) {
+@@ -895,6 +981,8 @@ function createFileKv(options = {}) {
      return {
          kvGet,
          kvExportFile,
@@ -1942,13 +1870,3 @@ index 9f97805..ec3c49b 100644
          kvSet,
          kvSetMany,
          kvSetManyAsync,
-@@ -910,6 +1032,9 @@ function createFileKv(options = {}) {
-         kvDelManyAndCollect,
-         kvSize,
-         kvGetUpdatedAt,
-+        kvObjectHash,
-+        kvInstallNasAssetFromFile,
-+        kvRollbackNasAssetRegistration,
-         kvCopyValue,
-         kvDelPrefix,
-         kvList,

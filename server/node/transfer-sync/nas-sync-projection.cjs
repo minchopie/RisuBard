@@ -210,15 +210,12 @@ const envelopeIdentity = env => hashJson({ epoch: env.epoch, slot: env.slot, ver
  * - `readAsset(path)` → {path, hash} | null; `readInlay(id)` → {metadata, data: Buffer|string|{path,hash}} | null; `inlayMeta(id)` → ownership | null.
  * Busy chats (streaming, Wiki rebuild, live import context) and unhydrated chats make the projection fail; they are never sanitized away.
  */
-async function projectDatabase({ database, cardOnlyMemberships = new Map(), vault, captures = new Map(), materials = null, branches = {}, onlyKeys = null, chatRoots = null, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
+async function projectDatabase({ database, cardOnlyMemberships = new Map(), vault, captures = new Map(), materials = null, branches = {}, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
     // Hydrate before vault projection so restored data follows the same credential/material handling.
     const characters = [];
     for (const character of database.characters ?? []) {
         const chats = [];
-        for (const chat of character.chats ?? []) {
-            const key = rootKeyOf('play', 'chat', branches[chat.id]?.root ?? chat.id);
-            chats.push((!onlyKeys || onlyKeys.has(key)) && (!chatRoots || chatRoots.has(branches[chat.id]?.root ?? chat.id)) ? await hydrateSyncChat(character, chat, readColdChat) : chat);
-        }
+        for (const chat of character.chats ?? []) chats.push(await hydrateSyncChat(character, chat, readColdChat));
         characters.push({ ...character, chats });
     }
     database = { ...database, characters };
@@ -240,19 +237,15 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
         }
         out.push(desired({ domain, type, root, item, content: value, dependencies }));
     };
-    const selected = (domain, type, root) => !onlyKeys || onlyKeys.has(rootKeyOf(domain, type, root));
-    const mediaDeps = async (refs, scope, owner, record, deps = {}, mediaRecords = () => [record]) => {
-        const reportMissing = (kind, key) => {
-            for (const affected of mediaRecords(kind, key)) missing.push({ path: owner, reason: 'Missing ' + kind + ': ' + key, kind, key, record: affected });
-        };
+    const mediaDeps = async (refs, scope, owners, deps = {}) => {
         for (const alias of [...refs.assets].sort(compare)) {
             const path = resolveAsset(scope, alias), local = await readAsset(path);
-            if (!local) { reportMissing('asset', path); continue; }
+            if (!local) { missing.push({ path, owners: owners('assets', alias) }); continue; }
             deps['asset:' + path] = addFile(local.path, local.hash, path);
         }
         for (const alias of [...refs.inlays].sort(compare)) {
             const id = resolveInlay(scope, alias), inlay = await readInlay(id);
-            if (!inlay) { reportMissing('inlay', id); continue; }
+            if (!inlay) { missing.push({ path: 'inlay/' + id, owners: owners('inlays', alias) }); continue; }
             deps['inlay:' + id] = typeof inlay.data === 'string' ? addBytes(Buffer.from(inlay.data), 'inlay') : Buffer.isBuffer(inlay.data) ? addBytes(inlay.data, 'inlay') : addFile(inlay.data.path, inlay.data.hash, 'inlay');
             deps['inlay-metadata:' + id] = addBytes(Buffer.from(canonical({ metadata: inlay.metadata, ownership: (await inlayMeta(id)) ?? null })), 'inlay-metadata');
         }
@@ -264,18 +257,17 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
         const chatIds = (character.chats ?? []).map(c => c.id);
         for (const chat of character.chats ?? []) {
             if (!chat || typeof chat.id !== 'string') throw new Error('Chat without stable id: ' + chaId);
-            const root = branches[chat.id]?.root ?? chat.id;
-            if (!selected('play', 'chat', root) || (chatRoots && !chatRoots.has(root))) continue;
             const owner = `characters/${chaId}/chats/${chat.id}`;
-            const record = { type: 'chat', id: chat.id, name: chat.name, lineageKey: rootKeyOf('play', 'chat', root) + '#' + chat.id };
             if (chat.isStreaming || chat.risuBardWikiReboot || chat.risuPlayContext) throw Object.assign(new Error('Chat is busy (generation, Wiki rebuild or import in progress): ' + chat.id), { code: 'CHAT_BUSY' });
             const value = clone(chat), scope = object(chat.risuTransferMedia);
             for (const key of CHAT_DISPLAY) delete value[key];
             sanitizeTransferChat(value, owner, excluded); selectTransferGallery(value, new Set(chatIds), owner, excluded, chat.id);
+            const root = branches[chat.id]?.root ?? chat.id;
             const capture = captures.get(chaId), workspace = capture?.workspaces.find(w => w.sourceChatId === chat.id);
             if (branches[chat.id]) Object.assign(value, remapBranchChat(value, workspace)); // a sibling branch publishes in root identity space
             value.id = root;
-            const deps = await mediaDeps(collectReferences(value, 'chat'), scope, owner, record);
+            const chatOwner = () => [{ kind: 'chat', name: chat.name, parent: character.name }];
+            const deps = await mediaDeps(collectReferences(value, 'chat'), scope, chatOwner);
             for (const file of workspace?.files ?? []) deps['bard:' + file.path] = addFile(capture.blocks.get(file.entry), file.hash, 'bard');
             for (const slot of workspace?.slots ?? []) {
                 for (const file of slot.files) deps[`slot:${slot.sourceId}:${file.path}`] = addFile(capture.blocks.get(file.entry), file.hash, 'slot');
@@ -284,27 +276,25 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
             // Media referenced only inside saved slots or Wiki text travels with the chat too.
             if (workspace && materials) for await (const material of materials(capture, chaId, chat.id)) {
                 const materialScope = typeof material.value === 'object' && material.value ? object(material.value.risuPlayContext ?? material.value.risuTransferMedia ?? scope) : scope;
-                await mediaDeps(collectReferences(material.value, 'chat'), materialScope, owner + '/' + material.label, record, deps);
+                await mediaDeps(collectReferences(material.value, 'chat'), materialScope, chatOwner, deps);
             }
             // Exact dependency pins: the chat may only run where these items are active with exactly this content (compatibility ≠ ancestry).
             const pins = pinsFor(pub, character, chat);
             for (const [k, h] of Object.entries(pins)) deps[k] = h;
             put('play', 'chat', root, chat.id, value, deps, refsOf(`/characters/${chaId}/chats/${chat.id}`));
         }
-        if (!selected('library', 'character', chaId)) continue;
         const meta = clone(character); delete meta.chats; for (const key of CHARACTER_LOCAL) delete meta[key];
         meta.chatIds = cardOnlyMemberships.get(chaId) ?? [...new Set(chatIds.map(id => branches[id]?.root ?? id))]; // membership/order per root (sibling branches share one root); bodies are their own roots
-        const record = { type: 'character', id: chaId, name: character.name, lineageKey: rootKeyOf('library', 'character', chaId) + '#' + chaId };
-        put('library', 'character', chaId, chaId, meta, await mediaDeps(collectReferences(meta, 'character'), {}, `characters/${chaId}`, record), refsOf(`/characters/${chaId}`).filter(r => !r.path.includes('/chats/')));
+        const characterOwner = (kind, alias) => [{ kind: 'character', name: character.name, field: kind === 'assets' && alias === meta.image ? 'image' : undefined }];
+        put('library', 'character', chaId, chaId, meta, await mediaDeps(collectReferences(meta, 'character'), {}, characterOwner), refsOf(`/characters/${chaId}`).filter(r => !r.path.includes('/chats/')));
     }
     for (const [key, type] of Object.entries(COLLECTIONS)) if (key !== 'characters') for (const item of pub[key] ?? []) {
         const id = type === 'plugin' ? item.name : item.id;
         if (typeof id !== 'string' || !id) throw new Error(`${type} without stable id cannot be synchronized`);
-        if (!selected('library', type, id)) continue;
         const value = clone(item);
         if (type === 'plugin') delete value.enabled; // owned by settings:activation
-        const record = { type, id, name: item.name ?? item.title, lineageKey: rootKeyOf('library', type, id) + '#' + id };
-        put('library', type, id, id, value, await mediaDeps(collectReferences(value, type), {}, `${key}/${id}`, record), refsOf(`/${key}/${id}`));
+        const itemOwner = (kind, alias) => [{ kind: type, name: item.name, field: kind === 'assets' && alias === value.icon ? 'icon' : undefined }];
+        put('library', type, id, id, value, await mediaDeps(collectReferences(value, type), {}, itemOwner), refsOf(`/${key}/${id}`));
     }
     const groups = new Map();
     for (const key of Object.keys(pub)) {
@@ -318,16 +308,17 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
     if (pub.plugins?.length) { if (!groups.has('settings:activation')) groups.set('settings:activation', {}); groups.get('settings:activation').pluginEnabled = Object.fromEntries(pub.plugins.map(p => [p.name, p.enabled ?? false])); }
     for (const [owner, content] of groups) {
         const name = owner.slice('settings:'.length);
-        if (!selected('settings', 'group', name)) continue;
         const shared = name === 'personas' ? personaWireContent(content) : content;
-        const record = { type: 'settings', id: name, name, lineageKey: rootKeyOf('settings', 'group', name) + '#' + name };
-        const mediaRecords = (kind, key) => {
-            if (name !== 'personas') return [record];
-            const affected = (shared.personas ?? []).filter(persona => collectReferences(persona, 'settings')[kind === 'asset' ? 'assets' : 'inlays'].has(key))
-                .map(persona => ({ ...record, type: 'persona', id: String(persona.id ?? name), name: persona.name }));
-            return affected.length ? affected : [record];
+        let personaRefs;
+        const settingsOwners = (kind, alias) => {
+            if (name === 'personas' && Array.isArray(shared.personas)) {
+                personaRefs ??= shared.personas.map(persona => ({ name: persona?.name, refs: collectReferences(persona, 'settings') }));
+                const owners = personaRefs.filter(p => p.refs[kind].has(alias)).map(p => ({ kind: 'persona', name: p.name }));
+                if (owners.length) return owners;
+            }
+            return [{ kind: 'settings' }];
         };
-        put('settings', 'group', name, name, shared, await mediaDeps(collectReferences(shared, 'settings'), {}, owner, record, {}, mediaRecords), Object.keys(shared).flatMap(key => refsOf('/' + key)));
+        put('settings', 'group', name, name, shared, await mediaDeps(collectReferences(shared, 'settings'), {}, settingsOwners), Object.keys(shared).flatMap(key => refsOf('/' + key)));
     }
     return { desired: out, blobs, envelopes: envelopeMap, excluded, missing };
 }
@@ -338,7 +329,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
  * this install's current frontier, so a newer head (local or remote) survives as a sibling instead of becoming the parent of
  * older content. `matched` maps every skipped item to the revision it equals, so a restore can point the lineage back there.
  */
-function diffProjection(graph, desiredList, lineage = {}, { restore = false, restoreKeys = null, received = true } = {}) {
+function diffProjection(graph, desiredList, lineage = {}, { restore = false, received = true } = {}) {
     const out = { revisions: [], skipped: [], diverged: [], matched: {} };
     // Device fields of a synced group (DEVICE_GROUP_FIELDS) take the base revision's values, in place so the caller's lineage
     // bookkeeping (matched by contentHash) sees the content that is committed.
@@ -351,7 +342,6 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false, res
     }
     for (const d of desiredList) {
         if (held.has(d)) continue;
-        const restoring = restore || restoreKeys?.has(d.lineageKey);
         const c = graph.classify(d.key);
         const same = id => { const r = graph.get(id); return r.contentHash === d.contentHash && r.dependencyHash === d.dependencyHash; };
         const matched = id => { out.skipped.push(d.lineageKey); out.matched[d.lineageKey] = id; };
@@ -361,11 +351,11 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false, res
         const known = lineage[d.lineageKey] && graph.get(lineage[d.lineageKey]) ? lineage[d.lineageKey] : null;
         const variantOf = id => c.variants.find(v => v.includes(id));
         // A restore brings a deleted root back with the restored content: the revision continues the tombstone, as core restore() does.
-        if (restoring && c.state === 'deleted') { push(makeRevision({ ...d, parents: c.tombstoneHeads })); continue; }
+        if (restore && c.state === 'deleted') { push(makeRevision({ ...d, parents: c.tombstoneHeads })); continue; }
         if (known && same(known)) {
             // Equal to the recorded base. In a restore, a base that is no longer a head is re-published as an explicit restored revision
             // (a live sibling of the newer heads) rather than silently pointing the lineage at an ancestor a later plan could overwrite.
-            if (restoring && !variantOf(known)) push(makeRevision({ ...d, parents: [known] })); else matched(known);
+            if (restore && !variantOf(known)) push(makeRevision({ ...d, parents: [known] })); else matched(known);
             continue;
         }
         // Unchanged since the recorded head's equal-content variant, or (without lineage) equal to the single frontier head: nothing to
@@ -375,7 +365,7 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false, res
         if (equalHead) { matched(equalHead); continue; }
         // A restore knows only the bases recorded with the restored state: an item without one is of unknown origin and starts a new
         // genesis root rather than continuing whatever this install's frontier holds now.
-        if (!known && restoring) { push(makeRevision({ ...d, parents: [] })); continue; }
+        if (!known && restore) { push(makeRevision({ ...d, parents: [] })); continue; }
         // Without lineage this device never applied any head of this root (e.g. a joining device whose settings group stayed vault-pending
         // until its key arrived): its differing local content is of its own origin and starts a genesis sibling, never a successor of the
         // single frontier head it only received (live .78: the phone's initial presets were promoted over the tablet's and applied linearly

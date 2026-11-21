@@ -127,6 +127,24 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     const idle = await post('/publish'); expect(idle.ok, await idle.clone().text()).toBe(true)
     const idleReport = await idle.json(); expect(idleReport.stored).toEqual([]); for (const f of idleReport.failed) expect(f.ack || f.checkpoint).toBeTruthy()
 
+    const opaque = 'synthetic-opaque-provider-credential'
+    const keyLike = 'sk-' + 's'.repeat(28)
+    const missing = { ...applied, openAIKey: opaque, modules: [{ id: 'r11-fixture', name: `합성 모듈 ${opaque} ${keyLike}`, icon: 'assets/missing-icon.png', lorebook: [] }] }
+    expect((await write(missing)).ok).toBe(true)
+    const failedCapture = await post('/snapshot')
+    expect(failedCapture.status).toBe(400)
+    expect(await failedCapture.json()).toEqual({ error: '빠진 그림 파일이 있어요. NAS 동기화 화면에서 확인해 주세요.', code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1, logged: true } })
+    const reportOnDisk = await fs.readFile(join(dataRoot, 'nas-sync', 'missing-media.json'), 'utf8')
+    expect(reportOnDisk.includes(opaque) || reportOnDisk.includes(keyLike)).toBe(false)
+    expect((await status()).missingMedia).toMatchObject({ count: 1, files: [{ path: 'assets/missing-icon.png', owners: [{ kind: 'module', name: '합성 모듈 [REDACTED] [REDACTED_API_KEY]', field: 'icon' }] }] })
+    const systemLog = await fs.readFile(join(dataRoot, 'logs', 'system.jsonl'), 'utf8')
+    expect(systemLog).toContain('stage=snapshot code=SNAPSHOT_MISSING missingFiles=1')
+    expect(/합성 모듈|missing-icon/.test(systemLog) || systemLog.includes(opaque) || systemLog.includes(keyLike)).toBe(false)
+    await stop(); await start(); await handshake()
+    const persisted = (await status()).missingMedia
+    expect(persisted).toEqual(JSON.parse(reportOnDisk))
+    expect(await (await post('/missing-media/clear', { id: persisted.id })).json()).toEqual({ cleared: false })
+
     // ---- the app's own DB snapshot restore announces itself to sync before copying; the next snapshot consumes the mark ----
     const restore = await fetch(base + '/api/db/snapshots/restore', { method: 'POST', headers: headers(), body: JSON.stringify({ key: 'database/dbbackup-1000.bin' }) })
     expect(restore.ok, await restore.clone().text()).toBe(true)
@@ -138,6 +156,8 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     const publish = await post('/publish'); expect(publish.ok, await publish.clone().text()).toBe(true)
     const report = await publish.json(); expect(report.stored).toEqual([])
     if (snapped.committed) expect(report.failed).toEqual(expect.arrayContaining([expect.objectContaining({ sequence: snapped.committed.sequence })]))
+    expect(snapped.missingMediaChecked).toBe(persisted.id)
+    expect((await status()).missingMedia).toEqual(persisted)
     for (const f of await fs.readdir(join(dataRoot, 'nas-sync'))) expect(f).not.toMatch(/\.part$/)
     await stop()
 }, 180_000)

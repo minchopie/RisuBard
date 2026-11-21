@@ -763,12 +763,12 @@
         {
           "module": "model-compat",
           "path": "docs/fork-modules/compat/v0.9.103/model-compat.patch",
-          "sourceSha256": "247d5c8830d8934c58eaa10f867abffc78cf231617ca220cb5e152d5c79ab2b3"
+          "sourceSha256": "0a34051070305e7a05c1056ee09e6aabdf08439562401824c48e361a260c0992"
         },
         {
           "module": "storage-recovery",
           "path": "docs/fork-modules/compat/v0.9.103/storage-recovery.patch",
-          "sourceSha256": "7128bd9d13cdaf487d256a8e5b059c950809274a8fab4da4f1b90eb6c7539993",
+          "sourceSha256": "e525c0afdc37ab774a1f953cf2e261b910dbf9cfb2eaabda43c16ca0d049f2d2",
           "targetHosts": [
             {
               "path": "server/node/risubard-story-order.test.ts",

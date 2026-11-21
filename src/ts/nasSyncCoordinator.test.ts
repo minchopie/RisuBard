@@ -6,10 +6,10 @@
 import { beforeEach, afterEach, test, expect, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
 import { readFileSync } from 'node:fs'
-const f = vi.hoisted(() => ({ unavailable: vi.fn(() => false), activity: vi.fn(() => false), addLog: vi.fn(), alert: { type: 'none' }, chat: 'card/chat', selected: null as any }))
+const f = vi.hoisted(() => ({ unavailable: vi.fn(() => false), activity: vi.fn(() => false), addLog: vi.fn(), clearMissingMedia: vi.fn(async () => ({ cleared: true })), alert: { type: 'none' }, chat: 'card/chat', selected: null as any }))
 vi.mock('./log', () => ({ addLog: f.addLog }))
 vi.mock('./transfer-sync/playTransfer', () => ({ transferUnavailable: () => f.unavailable() }))
-vi.mock('./transfer-sync/nasSync', () => ({ activityBlocksSync: () => f.activity(), retrySyncApply: vi.fn(), applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), reportSyncNetwork: vi.fn(async () => {}), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => f.chat }))
+vi.mock('./transfer-sync/nasSync', () => ({ activityBlocksSync: () => f.activity(), retrySyncApply: vi.fn(), applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), clearMissingSyncMedia: f.clearMissingMedia, reportSyncNetwork: vi.fn(async () => {}), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => f.chat }))
 vi.mock('./platform', () => ({ isNodeServer: true }))
 vi.mock('./stores.svelte', () => { const selectedCharID = writable(0); f.selected = selectedCharID; return { alertStore: writable(f.alert), selectedCharID } })
 import { createSyncCoordinator, preSendSync, pluginWindowOpen, syncCoordinator, DEFAULT_CADENCE } from './nasSyncCoordinator'
@@ -66,25 +66,6 @@ test.each([
     } finally { h.c.stop() }
 })
 
-test('missing media is a last-cycle notice, then publish, pull, preview and apply still run', async () => {
-    const h = harness(); await h.c.start(); h.calls.length = 0; h.setPending(1); f.addLog.mockClear()
-    const notices = [{ kind: 'asset', key: 'assets/missing.png', records: [{ type: 'module', id: 'module-id', name: 'private row name' }] }]
-    h.io.snapshot.mockImplementationOnce(async () => { h.calls.push('snapshot'); return { skippedMedia: notices, personasHeld: true } })
-    try {
-        expect(await h.c.retryNow()).toBe('applied')
-        expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'pull', 'preview', 'apply'])
-        expect(h.c.state).toMatchObject({ skippedMedia: notices, personasHeld: true, failures: 0, lastError: '', offline: false })
-        expect(f.addLog).toHaveBeenCalledExactlyOnceWith({
-            level: 'info', source: 'nas-sync', description: 'stage=snapshot code=MEDIA_SKIPPED count=1 personas=held',
-            message: 'NAS 동기화에서 그림 또는 인레이 파일이 빠진 자료의 변경을 보류했습니다. 페르소나 묶음 전체 보류',
-        })
-        await h.c.retryNow()
-        expect(h.c.state.skippedMedia).toEqual([])
-        expect(h.c.state.personasHeld).toBe(false)
-        expect(f.addLog).toHaveBeenCalledTimes(1)
-    } finally { h.c.stop() }
-})
-
 test.each(['retryNow', 'uploadNow', 'downloadNow'] as const)('%s retries a failed startup probe before deciding sync is idle', async action => {
     const h = harness(); h.io.status.mockRejectedValueOnce(new Error('sync network deadline'))
     await h.c.start(); h.setPending(1)
@@ -93,6 +74,27 @@ test.each(['retryNow', 'uploadNow', 'downloadNow'] as const)('%s retries a faile
     expect(h.c.state).toMatchObject({ enabled: true, probed: true, lastError: '' })
     expect(h.io.snapshot).toHaveBeenCalledTimes(1)
     h.c.stop()
+})
+
+test('missing media aborts the whole cycle and clears only when a checked retry succeeds', async () => {
+    const h = harness(); await h.c.start()
+    f.clearMissingMedia.mockClear()
+    h.calls.length = 0
+    h.io.snapshot.mockClear()
+    h.io.snapshot.mockRejectedValueOnce(Object.assign(new Error('빠진 그림'), { code: 'SNAPSHOT_MISSING', detail: { missingFiles: 3, logged: true } }))
+    try {
+        expect(await h.c.retryNow()).toBe('error')
+        expect(h.calls).toEqual(['status'])
+        expect(h.io.snapshot).toHaveBeenCalledTimes(1)
+        h.io.snapshot.mockResolvedValue({ committed: null, missingMediaChecked: 'diag-id' })
+        h.io.publish.mockResolvedValueOnce({ failed: [{ error: 'fixture offline' }] })
+        expect(await h.c.retryNow()).toBe('publish-failed')
+        h.io.pull.mockResolvedValueOnce({ repairFailed: [{ hash: 'broken', reason: 'fixture' }] })
+        expect(await h.c.retryNow()).toBe('repair-failed')
+        expect(f.clearMissingMedia).not.toHaveBeenCalled()
+        expect(await h.c.retryNow()).toBe('empty')
+        expect(f.clearMissingMedia).toHaveBeenCalledExactlyOnceWith('diag-id', expect.any(AbortSignal))
+    } finally { h.c.stop() }
 })
 
 test('interaction during a manual recovery probe still voids the captured safe window', async () => {

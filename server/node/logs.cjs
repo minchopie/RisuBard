@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
 const { resolveDataRoot } = require('./data-root.cjs');
-const { nasDiagnosticDescription, nasDiagnosticMessage, nasMediaNoticeDescription, nasMediaNoticeMessage, nasPersonasHeldMessage } = require('../../shared/play-set/nas-diagnostic.ts');
+const { nasDiagnosticDescription, nasDiagnosticMessage } = require('../../shared/play-set/nas-diagnostic.ts');
 
 const MAX_ROWS = 5000;
 const MAX_DESCRIPTION_BYTES = 10 * 1024; // 10KB per entry
@@ -211,18 +211,14 @@ function insertEntry(entry) {
     const origin = entry.origin === 'server' ? 'server' : 'client';
     const source = entry.source ? String(entry.source).slice(0, 64) : null;
     const nasDiagnostic = source === 'nas-sync';
-    const mediaNotice = nasDiagnostic && level === 'info'
-        ? /^stage=snapshot code=MEDIA_SKIPPED count=([1-9][0-9]{0,8})( personas=held)?$/.exec(String(entry.description ?? ''))
-        : null;
-    const message = mediaNotice ? (mediaNotice[2] ? `${nasMediaNoticeMessage} ${nasPersonasHeldMessage}` : nasMediaNoticeMessage)
-        : nasDiagnostic ? nasDiagnosticMessage : maskSensitive(String(entry.message ?? '')).slice(0, 1000);
+    const message = nasDiagnostic ? nasDiagnosticMessage : maskSensitive(String(entry.message ?? '')).slice(0, 1000);
     let description = entry.description != null && !nasDiagnostic
         ? truncate(maskSensitive(String(entry.description)), MAX_DESCRIPTION_BYTES)
         : null;
     if (nasDiagnostic) {
         // Older clients may still send raw messages. Persist only recognized diagnostic fields.
-        const fields = /^stage=([a-z]+) code=([A-Z_]+)$/.exec(String(entry.description ?? ''));
-        description = mediaNotice ? nasMediaNoticeDescription(Number(mediaNotice[1]), Boolean(mediaNotice[2])) : nasDiagnosticDescription(fields?.[1], fields?.[2]);
+        const fields = /^stage=([a-z]+) code=([A-Z_]+)(?: missingFiles=([1-9][0-9]{0,15}))?$/.exec(String(entry.description ?? ''));
+        description = nasDiagnosticDescription(fields?.[1], fields?.[2], Number(fields?.[3]));
     }
     const count = Number.isInteger(entry.count) && entry.count > 0 ? entry.count : 1;
     const platform = entry.platform ? String(entry.platform).slice(0, 128) : null;

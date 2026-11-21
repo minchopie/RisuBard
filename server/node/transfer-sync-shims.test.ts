@@ -22,7 +22,12 @@ test('every legacy shim shares its implementation; the module folder includes it
         for (const m of source.matchAll(/require\('(\.\.?\/[^']+)'\)/g)) {
             const target = m[1]
             if (target.startsWith('./')) expect(IMPLEMENTATIONS).toContain(target.replace(/^\.\//, '').replace(/\.cjs$/, ''))
-            else expect(target).toMatch(/^\.\.\/(file-store\.cjs|risubard-[a-z-]+\.ts)$|^\.\.\/\.\.\/\.\.\/(shared\/play-set|src\/ts\/(risubard|preset\/adapter))\//)
+            else if (name === 'nas-sync-service' && target === '../logs.cjs') {
+                const logger = readFileSync(join(__dirname, 'logs.cjs'), 'utf8')
+                for (const dependency of logger.matchAll(/require\('(\.\/[^']+)'\)/g)) {
+                    expect(dependency[1]).toMatch(/^\.\/(file-store|data-root)\.cjs$/)
+                }
+            } else expect(target).toMatch(/^\.\.\/(file-store\.cjs|risubard-[a-z-]+\.ts)$|^\.\.\/\.\.\/\.\.\/(shared\/play-set|src\/ts\/(risubard|preset\/adapter))\//)
         }
     }
 })

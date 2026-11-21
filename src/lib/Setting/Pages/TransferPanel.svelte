@@ -14,6 +14,7 @@
     import NasSyncProgress from './NasSyncProgress.svelte'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
     import { ownsServer } from 'src/ts/transfer-sync/chatDeviceLabel'
+    import type { MissingSyncMedia } from '../../../../shared/play-set/nas-diagnostic'
     let selected = $state<string[]>([])
     let selectedPersonas = $state<string[]>([])
     let compatibility = $state(false)
@@ -68,8 +69,10 @@
 
     // ---- automatic NAS sync (Node/embedded runtime only; reuses the NAS connection saved above and the device picker for key sharing) ----
     let sync = $state<any>(null)
-    const skippedMedia = $derived<import('src/ts/nasSyncCoordinator').SkippedSyncMedia[]>($coordinatorState?.skippedMedia ?? sync?.skippedMedia ?? [])
-    const personasHeld = $derived($coordinatorState?.personasHeld ?? sync?.personasHeld ?? false)
+    const missingMedia = $derived<MissingSyncMedia | null>(sync?.missingMedia ?? null)
+    const mediaOwnerLabels: Record<MissingSyncMedia['files'][number]['owners'][number]['kind'], string> = {
+        module: '모듈', character: '캐릭터', persona: '페르소나', chat: '채팅', plugin: '플러그인', settings: '설정',
+    }
     let syncConflictList = $state<any[]>([])
     let syncOverviewState = $state<any>(null)
     let syncTrashList = $state<any[]>([])
@@ -163,18 +166,17 @@
                 <strong>{headline.tone === 'ok' ? '✓ ' : headline.tone === 'waiting' ? '… ' : '! '}{headline.title}</strong>
                 <span>{headline.detail}</span>
             </div>
-            {#if skippedMedia.length}
-                <details class="hint">
-                    <summary>빠진 그림·인레이 파일 {skippedMedia.length}개 — 자세히</summary>
-                    <p>빠진 파일을 참조하는 자료의 새 변경과 함께 올려야 하는 변경을 보류해요. 자료와 그림 참조는 이 기기에 남고, 독립적인 변경은 계속 동기화돼요.</p>
-                    {#if personasHeld}<p>페르소나 묶음 전체 보류</p>{/if}
+            {#if missingMedia}
+                <details open>
+                    <summary>빠진 그림: 파일 {missingMedia.count}개</summary>
+                    <p>화면에 나온 항목을 원본 파일에서 다시 가져오면 동기화를 다시 진행할 수 있어요.</p>
+                    {#if missingMedia.count > missingMedia.files.length}<p>처음 {missingMedia.files.length}개 파일을 표시해요.</p>{/if}
                     <ul>
-                        {#each skippedMedia as item}
-                            <li>
-                                <code>{item.key}</code>
+                        {#each missingMedia.files as file}
+                            <li><code class="break-all">{file.path}</code>
                                 <ul>
-                                    {#each item.records as record}
-                                        <li>{({ character: '캐릭터', chat: '대화', module: '모듈', plugin: '플러그인', settings: '설정', persona: '페르소나' } as Record<string, string>)[record.type] ?? record.type} · {record.name || record.id} <code>{record.id}</code></li>
+                                    {#each file.owners as owner}
+                                        <li>{mediaOwnerLabels[owner.kind]}{owner.name ? ` 「${owner.name}」` : ''}{owner.parent ? ` (${owner.parent})` : ''}{owner.field ? ` · ${owner.field}` : ''}</li>
                                     {/each}
                                 </ul>
                             </li>

@@ -1,12 +1,12 @@
 import { get, writable, type Readable, type Unsubscriber } from 'svelte/store'
 import { canonicalSaveSettled, transferStatus, syncSaveHold } from './transferState'
-import { applySync, retrySyncApply, pullSync, publishSync, snapshotSync, syncStatus, activityBlocksSync, reportSyncNetwork, pendingRootsSync, activeChatSignature, releaseSyncPlan, type SyncApplyGuard } from './nasSync'
+import { applySync, retrySyncApply, pullSync, publishSync, snapshotSync, syncStatus, clearMissingSyncMedia, activityBlocksSync, reportSyncNetwork, pendingRootsSync, activeChatSignature, releaseSyncPlan, type SyncApplyGuard } from './nasSync'
 import { transferUnavailable } from './playTransfer'
 import { isNodeServer } from '../platform'
 import { isAnyGenerating, generationStates } from '../process/generationState'
 import { alertStore, selectedCharID } from '../stores.svelte'
 import { addLog } from '../log'
-import { nasDiagnosticDescription, nasDiagnosticMessage, nasMediaNoticeDescription, nasMediaNoticeMessage, nasPersonasHeldMessage } from '../../../shared/play-set/nas-diagnostic'
+import { nasDiagnosticDescription, nasDiagnosticMessage } from '../../../shared/play-set/nas-diagnostic'
 
 /**
  * The single foreground coordinator of automatic NAS sync. It runs only on the Node/embedded runtime and only after sync was
@@ -96,10 +96,7 @@ function loadTally(stored: CadenceTally | null, now: number): CadenceTally {
     const lastAt = Number.isFinite(stored?.lastAt) && stored!.lastAt > 0 && stored!.lastAt <= now ? stored!.lastAt : now
     return { chats, lastAt }
 }
-export interface SkippedSyncMedia {
-    kind: 'asset' | 'inlay'; key: string; records: { type: string; id: string; name: string }[]
-}
-export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number; skippedMedia?: SkippedSyncMedia[]; personasHeld?: boolean; stage?: string; stageAt?: number }
+export interface CoordinatorState { enabled: boolean; running: boolean; paused: boolean; offline: boolean; failures: number; lastCycleAt: number; lastError: string; nextAt: number; lastOutcome: string; generation: number; attention: string; probed: boolean; deferredForChat?: string; pendingRoots?: number; lastWindow?: string; direction?: 'both' | 'upload' | 'download'; pendingReview?: number; keptDeletions?: number; stage?: string; stageAt?: number }
 export type SafeWindow = { window: SyncApplyGuard['window']; epoch: number }
 const DEFAULT_BACKOFF = [5_000, 15_000, 60_000, 300_000]
 let instance: ReturnType<typeof createSyncCoordinator> | null = null
@@ -107,8 +104,8 @@ let instance: ReturnType<typeof createSyncCoordinator> | null = null
 export const coordinatorState = writable<CoordinatorState | null>(null)
 class Cancelled extends Error { constructor(reason: string) { super(reason); this.name = 'SyncCycleCancelled' } }
 
-function logCycleError(stage: string, code: unknown) {
-    try { addLog({ level: 'error', source: 'nas-sync', message: nasDiagnosticMessage, description: nasDiagnosticDescription(stage, code) }) }
+function logCycleError(stage: string, code: unknown, missingFiles?: unknown) {
+    try { addLog({ level: 'error', source: 'nas-sync', message: nasDiagnosticMessage, description: nasDiagnosticDescription(stage, code, missingFiles) }) }
     catch { /* Diagnostics must not interrupt backoff. */ }
 }
 
@@ -197,6 +194,10 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         let receiveOnly = direction === 'download' && o.generating()
         state.running = true; state.direction = direction; state.lastWindow = safe?.window ?? ''; counted(); publish()
         let stage = 'status', deadline: ReturnType<typeof setTimeout> | null = null
+        let missingMediaChecked: string | undefined
+        const clearMissingMedia = async () => {
+            if (missingMediaChecked && !signal.aborted) await clearMissingSyncMedia(missingMediaChecked, signal).catch(() => {})
+        }
         // 0.9.92-ver7: the cycle's current step for the progress display (NasSyncProgress.svelte); display only.
         const enter = (next: string) => { stage = next; state.stage = next; state.stageAt = o.now(); publish() }
         state.stage = 'status'; state.stageAt = o.now()
@@ -224,18 +225,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // Settled local edits become causal revisions before anything incoming is applied; the joining device waits for the shared key
                     // before publishing its own encrypted history. The snapshot is skipped (not the publish) while a generation/import runs: the
                     // next settled save schedules it; edits made meanwhile are simply part of that later snapshot.
-                    if (!receiveOnly && !o.generating()) {
-                        enter('snapshot'); const report = await o.snapshot(signal); boundary()
-                        const skipped: SkippedSyncMedia[] = report?.skippedMedia ?? []
-                        state.skippedMedia = skipped
-                        state.personasHeld = report?.personasHeld === true
-                        const count = skipped.length
-                        if (count) {
-                            const message = state.personasHeld ? `${nasMediaNoticeMessage} ${nasPersonasHeldMessage}` : nasMediaNoticeMessage
-                            try { addLog({ level: 'info', source: 'nas-sync', message, description: nasMediaNoticeDescription(count, state.personasHeld) }) }
-                            catch { /* Diagnostics must not interrupt sync. */ }
-                        }
-                    }
+                    if (!receiveOnly && !o.generating()) { enter('snapshot'); missingMediaChecked = (await o.snapshot(signal))?.missingMediaChecked; boundary() }
                     if (direction !== 'download') {
                         enter('publish'); const report = await o.publish(signal); boundary()
                         if (report?.rotated) attention = 'rotated'
@@ -244,6 +234,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 }
                 if (direction === 'upload') {
                     const remaining = keyReady ? await o.status(signal) : null; boundary()
+                    if (missingMediaChecked) { await clearMissingMedia(); boundary() }
                     // 2026-11-07 join adoption: the server withheld this device's changes; that is not an upload.
                     state.lastOutcome = !keyReady ? 'key-pending:idle' : (remaining ?? status)?.role === 'joining' && (remaining ?? status)?.adopting ? 'adopting' : attention || remaining?.sync?.outbox?.pending?.length ? 'upload-pending' : 'uploaded'
                     state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
@@ -276,6 +267,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     if (result.state === 'deferred-active-chat') state.deferredForChat = o.activeChat() || '-'
                     else if (result.state === 'applied' || result.state === 'applied-pending' || result.state === 'empty') state.deferredForChat = ''
                 }
+                if (missingMediaChecked && outcome !== 'save-failed' && outcome !== 'finish-pending') { await clearMissingMedia(); boundary() }
                 state.lastOutcome = (keyReady ? '' : 'key-pending:') + outcome
                 state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
                 if (!keyReady) transferStatus.set('동기화 키를 기다리는 중 · 권한 기기에 키 요청을 보내 주세요.')
@@ -289,7 +281,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 // Offline/server/publish error: local play continues (an un-armed apply released its hold), retry with backoff.
                 state.failures += 1
                 const message = String(error?.message ?? error)
-                logCycleError(stage, error?.code)
+                const missing = stage === 'snapshot' && error?.code === 'SNAPSHOT_MISSING'
+                if (!missing || error.detail?.logged !== true) logCycleError(stage, error?.code, missing ? error.detail?.missingFiles : undefined)
                 state.offline = !o.online() || /deadline|abort|fetch|network/i.test(message)
                 state.lastError = message.slice(0, 200)
                 state.lastOutcome = error?.code === 'PUBLISH_FAILED' ? 'publish-failed' : error?.code === 'REPAIR_FAILED' ? 'repair-failed' : state.offline ? 'offline' : 'error'
