@@ -193,7 +193,7 @@
             <p class="hint">업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기에 바로 적용. 자동 동기화는 그대로 계속돼요.</p>
             <label>동기화 범위<select value={sync.syncScope === 'chats' ? 'chats' : 'all'} disabled={$coordinatorState?.running} onchange={(event) => { const scope = event.currentTarget.value === 'chats' ? 'chats' : 'all'; void run(async () => { sync = await setSyncScope(scope); syncScopePick = scope; await refreshSync(); transferStatus.set(scope === 'chats' ? '이제 이 기기는 대화(Wiki·저장 슬롯 포함)만 동기화해요.' : '이제 이 기기는 전체를 동기화해요.') }) }}><option value="all">전체 · 카드·모듈·설정·대화 모두</option><option value="chats">채팅만 · 대화와 그 Wiki·저장 슬롯만</option></select></label>
             <p class="hint">채팅만: 대화와 그 Wiki·저장 슬롯만 올리고 받아요. 카드·모듈·설정은 NAS 배포 받기로 받고, 지우거나 덮어쓰지 않아요.</p>
-            {#if sync.scopeCatchUp}<p role="status">전체로 돌아가는 중: 채팅만일 때 건너뛴 카드·설정 변경을 먼저 받아 적용해요. 그때까지 이 기기의 새 변경은 지우지 않고 올리기만 미뤄요.</p>{/if}
+            {#if sync.syncScope !== 'chats' && sync.scopeReapply}<p role="status">전체로 돌아가는 중: 채팅만일 때 건너뛴 카드·설정 {sync.scopeReapply}건을 받아 적용해요. 이 기기 값과 다른 항목은 기기 간 차이로 보여요.</p>{/if}
             {#if working || syncActionResult}<p role="status" aria-live="polite">{working ? $transferStatus : syncActionResult}</p>{/if}
             {#if $coordinatorState?.paused}<p>전송하려면 자동 동기화를 재개해 주세요.</p>{/if}
             {#if syncOverviewState}

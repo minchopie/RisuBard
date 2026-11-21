@@ -2668,16 +2668,16 @@ test('chats-only scope (8, Codex r1 #2): card changes acknowledged without apply
     expect(phone.db().characters[0].description ?? '').toBe('') // not applied in 'chats'
     expect(phone.service.store().pendingApply()).toEqual([]) // but acknowledged
     await phone.service.setSyncScope({ scope: 'all' })
-    // The tablet's card edit also re-pinned its chat; the phone took that chat head in 'chats'. Until the skipped heads are applied the
-    // snapshot records nothing, so the chat is never published again with the old card's pins.
-    expect(phone.service.status().scopeCatchUp).toBe(true)
+    // The tablet's card edit also re-pinned its chat; the phone took that chat head in 'chats'. While the skipped heads wait, the chat that
+    // differs only in pins (older local card) is not published again; the unchanged local card and module publish nothing either.
+    expect(phone.service.status().scopeReapply).toBeGreaterThan(0)
     const commits = phone.service.store().state().commits.length
-    expect(await phone.service.snapshot()).toMatchObject({ committed: null, scopeCatchUp: true })
+    expect((await phone.service.snapshot()).committed).toBeNull()
     const caught = await applyAll(phone)
     expect(caught.pending).toEqual([])
     expect(phone.db().characters[0].description).toBe('card v1')
     expect(phone.db().modules[0].name).toBe('모듈 v1')
-    expect(phone.service.status().scopeCatchUp).toBe(false)
+    expect(phone.service.status().scopeReapply).toBe(0)
     expect((await phone.service.snapshot()).committed).toBeNull()
     expect(phone.service.store().state().commits.length).toBe(commits)
     // The tablet's next chat (pinned to card v1) is no dependency hold on the phone.
@@ -2718,4 +2718,67 @@ test('chats-only scope (10, Codex r1 #1, documented limit): commits recorded und
     await applyAll(phone)
     expect(phone.db().characters[0].description).toBe('recorded under all')
     expect((await tablet.service.snapshot()).committed).toBeNull()
+})
+test('chats-only scope (11, Codex r2 #1/#4): a skipped root edited here before the switch back is recorded first (the snapshot is never held) and meets the NAS head as a conflict; the local value is never overwritten and the chat is not re-published for its pins', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await device(t, dav, 'scope11-phone', EMPTY_DB()); phone.service.enable({ workspaceId: 'ws-fixture' })
+    await applyAll(phone)
+    await phone.service.setSyncScope({ scope: 'chats' })
+    const v1 = tablet.db(); v1.characters[0].description = 'card v1'; tablet.save(v1)
+    await tablet.service.snapshot(); await tablet.service.publish()
+    await applyAll(phone)
+    const local = phone.db(); local.characters[0].description = 'phone content update'; phone.save(local) // changed here while in 'chats'
+    await phone.service.setSyncScope({ scope: 'all' })
+    expect(phone.service.status().scopeReapply).toBe(1)
+    const snap = await phone.service.snapshot()
+    expect(snap.committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    expect(lastCommitRoots(phone)).toEqual(['library/character/card']) // the edit, never the chat
+    expect(phone.service.store().graph.classify('library\ncharacter\ncard').state).toBe('diverged')
+    await phone.service.pull(); const plan = await phone.service.plan()
+    expect(plan.empty).toBe(true)
+    expect(plan.pending).toEqual([expect.objectContaining({ root: 'library\ncharacter\ncard', reason: 'diverged' })])
+    expect(phone.db().characters[0].description).toBe('phone content update') // never overwritten
+    expect((await phone.service.snapshot()).committed).toBeNull()
+})
+test('chats-only scope (12, Codex r2 #2): a phone that was chats-only from the start and has its own card, module and settings: switching to all records them first as its own values (conflicts to resolve), never overwritten by the NAS heads', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await chatsOnlyPhone(t, dav, 'scope12-phone', phoneWithCard())
+    await applyAll(phone)
+    await phone.service.setSyncScope({ scope: 'all' })
+    const snap = await phone.service.snapshot()
+    expect(snap.committed.tombstones).toBe(0)
+    expect(lastCommitRoots(phone)).toEqual(expect.arrayContaining(['library/character/card', 'library/module/mod']))
+    expect(lastCommitRoots(phone)).not.toContain('play/chat/chat')
+    for (const key of ['library\ncharacter\ncard', 'library\nmodule\nmod']) expect(phone.service.store().graph.classify(key).state).toBe('diverged')
+    await phone.service.pull(); const plan = await phone.service.plan()
+    if (!plan.empty) { const db = applyPlanToDb(phone.db(), plan); await phone.service.arm(plan.transaction, echoOf(plan, structuredClone(db))); phone.save(db); await phone.service.finish(plan.transaction, true) }
+    expect(plan.pending).toEqual(expect.arrayContaining([expect.objectContaining({ root: 'library\ncharacter\ncard', reason: 'diverged' }), expect.objectContaining({ root: 'library\nmodule\nmod', reason: 'diverged' })]))
+    expect(phone.db().characters[0]).toMatchObject({ description: 'phone card', image: 'assets/phone-icon.png' })
+    expect(phone.db().modules[0].name).toBe('폰 모듈'); expect(phone.db().aiModel).toBe('phone-model')
+    expect(phone.db().characters[0].chats.map((c: any) => c.id)).toEqual(['chat'])
+})
+
+test('chats-only scope (13, Codex r2 #3): chats → all → chats before the skipped roots were applied takes exactly them out of the queue again; switching back queues them again', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await device(t, dav, 'scope13-phone', EMPTY_DB()); phone.service.enable({ workspaceId: 'ws-fixture' })
+    await applyAll(phone)
+    await phone.service.setSyncScope({ scope: 'chats' })
+    const v1 = tablet.db(); v1.characters[0].description = 'card v1'; v1.modules[0].name = '모듈 v1'; tablet.save(v1)
+    await tablet.service.snapshot(); await tablet.service.publish()
+    await applyAll(phone)
+    await phone.service.setSyncScope({ scope: 'all' })
+    expect(phone.service.status().localApply).toBeGreaterThan(0)
+    await phone.service.setSyncScope({ scope: 'chats' })
+    expect(phone.service.status().localApply).toBe(0)
+    expect(phone.service.status().scopeReapply).toBe(0)
+    await phone.service.pull(); const plan = await phone.service.plan()
+    expect(plan.empty).toBe(true)
+    expect(phone.db().characters[0].description ?? '').toBe('')
+    expect(phone.db().modules[0].name).toBe('모듈')
+    // And back to 'all' once more: the same roots are queued again and applied.
+    await phone.service.setSyncScope({ scope: 'all' })
+    const caught = await applyAll(phone)
+    expect(caught.pending).toEqual([])
+    expect(phone.db().characters[0].description).toBe('card v1')
+    expect(phone.db().modules[0].name).toBe('모듈 v1')
 })
