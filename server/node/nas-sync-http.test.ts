@@ -136,7 +136,7 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     expect(await failedCapture.json()).toEqual({ error: '빠진 그림 파일이 있어요. NAS 동기화 화면에서 확인해 주세요.', code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1, logged: true } })
     const reportOnDisk = await fs.readFile(join(dataRoot, 'nas-sync', 'missing-media.json'), 'utf8')
     expect(reportOnDisk.includes(opaque) || reportOnDisk.includes(keyLike)).toBe(false)
-    expect((await status()).missingMedia).toMatchObject({ count: 1, files: [{ path: 'assets/missing-icon.png', owners: [{ kind: 'module', name: '합성 모듈 [REDACTED] [REDACTED_API_KEY]', field: 'icon' }] }] })
+    expect((await status()).missingMedia).toMatchObject({ count: 1, files: [{ path: 'assets/missing-icon.png', owners: [{ kind: 'module', name: '[REDACTED]', field: 'icon' }] }] })
     const systemLog = await fs.readFile(join(dataRoot, 'logs', 'system.jsonl'), 'utf8')
     expect(systemLog).toContain('stage=snapshot code=SNAPSHOT_MISSING missingFiles=1')
     expect(/합성 모듈|missing-icon/.test(systemLog) || systemLog.includes(opaque) || systemLog.includes(keyLike)).toBe(false)

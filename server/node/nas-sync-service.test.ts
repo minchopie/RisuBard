@@ -254,8 +254,8 @@ test('missing-media diagnostics mask raw, URL-encoded and decoded URL passwords 
     await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
     const report = JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))
     expect(report).toMatchObject({ count: 1, files: [{
-        path: 'inlay/absent-[REDACTED]',
-        owners: [{ kind: 'chat', name: 'chat cabin [REDACTED] [REDACTED]', parent: 'parent cabin [REDACTED]' }],
+        path: '[REDACTED]',
+        owners: [{ kind: 'chat', name: '[REDACTED]', parent: '[REDACTED]' }],
     }] })
     expect(d.make().status().missingMedia).toEqual(report)
 })
@@ -278,8 +278,8 @@ test.for(['한', '%61%62', '가%2b나'])('missing-media diagnostics mask short U
     await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
     const report = JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))
     expect(report).toMatchObject({ count: 1, files: [{
-        path: 'inlay/absent-[REDACTED]-' + ordinary,
-        owners: [{ kind: 'chat', name: [ordinary, ...spellings.map(() => '[REDACTED]'), ordinary].join('_'), parent: '[REDACTED]' }],
+        path: '[REDACTED]',
+        owners: [{ kind: 'chat', name: '[REDACTED]', parent: '[REDACTED]' }],
     }] })
     expect(d.make().status().missingMedia).toEqual(report)
 })
