@@ -9,7 +9,7 @@
     import { playSetAvailable, androidTransferAvailable, playNative, sendNative, nativeSend } from 'src/ts/transferNative'
     import { transferBusy, transferStatus, transferQueue, refreshTransfers, queueTransferFile, exportTransfer, exportPersonaTransfer, receiveTransfer, cancelTransfer, requestRemoteTransfer, uploadLegacyChat } from 'src/ts/playTransfer'
     import { isNodeServer } from 'src/ts/platform'
-    import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, resolveAllSync, startAdoptionSync, endAdoptionSync, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
+    import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, setSyncScope, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, resolveAllSync, startAdoptionSync, endAdoptionSync, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
     import NasSyncProgress from './NasSyncProgress.svelte'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
@@ -77,6 +77,9 @@
     let syncRole = $state<'authority' | 'joining'>('authority')
     let syncWorkspace = $state('risubard')
     let syncAuthorityPick = $state('')
+    // 2026-11-21 (user decision: share chats only): this device's sync scope, chosen before enabling or changed while enabled.
+    let syncScopePick = $state<'all' | 'chats'>('all')
+    let syncScopeHydrated = false
     let syncFormHydrated = false
     let profileReported = false
     const syncSupported = isNodeServer
@@ -114,6 +117,7 @@
         // The saved workspace/role fill the form once (disabled or enabled); later polls never overwrite the user's edits.
         const hydrated = hydrateSyncForm(next, { workspace: syncWorkspace, role: syncRole }, syncFormHydrated)
         if (hydrated.hydrated && !syncFormHydrated) { syncWorkspace = hydrated.form.workspace; syncRole = hydrated.form.role; syncFormHydrated = true }
+        if (next && !syncScopeHydrated) { syncScopePick = next.syncScope === 'chats' ? 'chats' : 'all'; syncScopeHydrated = true }
         if (next?.enabled && !profileReported && ownsServer()) {
             // Display only: tell the service whether this is the PC app, a tablet or a phone so other devices can name it. Only the
             // app on its own server reports (0.9.92-ver1): a tablet browser opening the PC's server must not relabel the PC.
@@ -157,7 +161,9 @@
             <p>같은 NAS 폴더를 쓰는 내 기기끼리 대화·설정을 자동으로 맞춰요. 먼저 기준이 될 기기(보통 태블릿)를 <strong>권한 기기</strong>로 켜고, 다른 기기는 <strong>참여 기기</strong>로 켠 뒤 등록된 Wi-Fi 기기나 USB로 동기화 키를 받아요. 암호·토큰은 기기 보안 저장소에만 있고 NAS에는 암호화된 형태로만 올라가요.</p>
             <label>작업공간 이름<input bind:value={syncWorkspace} placeholder="risubard" /></label>
             <label>이 기기의 역할<select bind:value={syncRole}><option value="authority">권한 기기 · 이 기기의 자료를 기준으로 시작</option><option value="joining">참여 기기 · 권한 기기의 키를 받아 합류</option></select></label>
-            <ShButton onclick={() => run(async () => { sync = await enableSync(syncWorkspace.trim() || 'risubard', syncRole); coordinator().enabled(true); await refreshSync(); transferStatus.set(syncRole === 'authority' ? '자동 동기화를 켰어요. 다른 기기에서 참여 기기로 켜고 키를 요청해 주세요.' : '자동 동기화를 켰어요. 아래에서 키 요청을 준비해 보내 주세요.') })}>자동 동기화 켜기</ShButton>
+            <label>동기화 범위<select bind:value={syncScopePick}><option value="all">전체 · 카드·모듈·설정·대화 모두</option><option value="chats">채팅만 · 대화와 그 Wiki·저장 슬롯만</option></select></label>
+            <p class="hint">채팅만: 카드·모듈·플러그인·페르소나·프리셋은 NAS 배포 받기로 받고, 동기화는 대화만 주고받아요. 두 기기 모두 같은 판에서 「채팅만」으로 맞춰 주세요.</p>
+            <ShButton onclick={() => run(async () => { await setSyncScope(syncScopePick); sync = await enableSync(syncWorkspace.trim() || 'risubard', syncRole); coordinator().enabled(true); await refreshSync(); transferStatus.set(syncRole === 'authority' ? '자동 동기화를 켰어요. 다른 기기에서 참여 기기로 켜고 키를 요청해 주세요.' : '자동 동기화를 켰어요. 아래에서 키 요청을 준비해 보내 주세요.') })}>자동 동기화 켜기</ShButton>
         {:else}
             {@const headline = syncHeadline(sync, syncConflictList, $coordinatorState)}
             <div class="sync-headline" data-tone={headline.tone}>
@@ -185,6 +191,8 @@
             </div>
             <NasSyncProgress />
             <p class="hint">업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기에 바로 적용. 자동 동기화는 그대로 계속돼요.</p>
+            <label>동기화 범위<select value={sync.syncScope === 'chats' ? 'chats' : 'all'} disabled={$coordinatorState?.running} onchange={(event) => { const scope = event.currentTarget.value === 'chats' ? 'chats' : 'all'; void run(async () => { sync = await setSyncScope(scope); syncScopePick = scope; await refreshSync(); transferStatus.set(scope === 'chats' ? '이제 이 기기는 대화(Wiki·저장 슬롯 포함)만 동기화해요.' : '이제 이 기기는 전체를 동기화해요.') }) }}><option value="all">전체 · 카드·모듈·설정·대화 모두</option><option value="chats">채팅만 · 대화와 그 Wiki·저장 슬롯만</option></select></label>
+            <p class="hint">채팅만: 대화와 그 Wiki·저장 슬롯만 올리고 받아요. 카드·모듈·설정은 NAS 배포 받기로 받고, 지우거나 덮어쓰지 않아요.</p>
             {#if working || syncActionResult}<p role="status" aria-live="polite">{working ? $transferStatus : syncActionResult}</p>{/if}
             {#if $coordinatorState?.paused}<p>전송하려면 자동 동기화를 재개해 주세요.</p>{/if}
             {#if syncOverviewState}

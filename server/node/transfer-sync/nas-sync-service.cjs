@@ -22,7 +22,7 @@ const { createVault, vaultMasterStore, REFS } = require('./nas-sync-vault.cjs');
 const { isMissingMediaPath, nasDiagnosticDescription, nasDiagnosticMessage } = require('../../../shared/play-set/nas-diagnostic.ts');
 const { createSyncRemote, createSyncTransport } = require('./nas-sync-remote.cjs');
 const { createManifest } = require('./nas-sync-manifest.cjs');
-const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences, DEVICE_LOCAL_ROOTS, DEVICE_THEME, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields } = require('./nas-sync-projection.cjs');
+const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences, DEVICE_LOCAL_ROOTS, DEVICE_THEME, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields, pinOwner, chatsOnlyRevision, unpinnedDependencyHash } = require('./nas-sync-projection.cjs');
 const { makeRevision, hashJson, rootKey } = require('./nas-sync-core.cjs');
 const { PERSONA_MIRRORS, personaSelection, personaMirrorsMatch, personaMirrorIssue, mergePersonaHeads } = require('./nas-sync-reconcile.cjs');
 const { deviceKeyStore, writeRequestArchive, writeGrantArchive, openGrant, readShareArchive, REQUEST, GRANT } = require('./nas-sync-share.cjs');
@@ -204,6 +204,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     async function openVault() { return vault ??= createVault(await loadMaster()); }
     const openTransport = () => transport ??= createSyncTransport({ store: openStore(), remote: createSyncRemote({ secrets, fetch, route: nasRoute }), now });
     const requireEnabled = () => { if (!service().enabled) throw new Error('NAS 동기화가 꺼져 있어요.'); return openStore(); };
+    /** RisuBard 2026-11-21 (user decision: share chats only): this device's sync scope. 'chats' syncs chats with their Wiki and save slots
+     *  only; cards, modules, plugins and settings are neither projected (no asset reads), published, deleted nor applied here. Absent =
+     *  'all', the behavior before this setting. Device-local (service.json), never synchronized. */
+    const syncScope = () => service().syncScope === 'chats' ? 'chats' : 'all';
+    const chatsOnly = () => syncScope() === 'chats';
     const planPath = txn => `apply/${txn}.json`;
     const LINEAGE_FILE = 'risubard/nas-sync/lineage.json'; // declared before the open-time recovery below uses recordLineage()
     // 0.9.96-ver5: a journal an older version wrote may still plan theme values (DEVICE_THEME). They are dropped on every read, from the
@@ -294,7 +299,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     const deviceFieldsOnly = (s, c) => fieldsOnlyHeads(s.graph, c);
     const conflictCount = s => s.graph.rootKeys().filter(k => { if (historyOnly(k)) return false; const c = s.graph.classify(k); return !branchesPreserved(s, k, c) && !deviceFieldsOnly(s, c) && (c.state === 'diverged' || c.state === 'delete-pending'); }).length;
     // `workspaceId`/`role` are reported even while disabled so a reopened panel resumes the saved setup instead of defaults.
-    const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], enabled: service().enabled, role: service().role ?? null, adopting: !!service().adopting, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
+    const status = () => ({ cardOnlyUploads: service().cardOnlyUploads ?? [], syncScope: syncScope(), enabled: service().enabled, role: service().role ?? null, adopting: !!service().adopting, workspaceId: service().workspaceId ?? null, plan: service().plan, retained: service().retained.length, recovery: manifest.recovery(), pendingRestore: service().pendingRestore ?? null, pendingBootstrap: service().pendingBootstrap ?? null,
         vault: { origin: service().vaultOrigin ?? null, sharedFrom: service().vaultSharedFrom ?? null, missing: !fs.existsSync(masterFile()) && (service().vaultOrigin === 'shared' || (service().enabled && (Object.keys(service().lineage).length > 0))), pendingGrant: service().pendingGrant ? { from: service().pendingGrant.from, reason: service().pendingGrant.reason } : null }, shares: (service().shares ?? []).map(({ id, kind, to, via, at }) => ({ id, kind, to, via, at })),
         lastAppliedAt: service().applied.at(-1)?.at ?? null, missingMedia: readMissingMedia(),
         localApply: (service().localApply ?? []).length, ...(service().enabled ? { sync: openTransport().status(), conflicts: conflictCount(openStore()) } : {}) });
@@ -841,6 +846,13 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         manifest.transact(x => { x.cardOnlyUploads = [...new Set([...(x.cardOnlyUploads ?? []).filter(id => id !== characterId), ...(enabled ? [characterId] : [])])]; });
         return status();
     }
+    /** 2026-11-21: 'all' | 'chats'. Allowed while sync is off (set it before the first cycle runs) but not while an apply plan is pending. */
+    function setSyncScope({ scope } = {}) {
+        if (scope !== 'all' && scope !== 'chats') throw new Error('동기화 범위는 전체 또는 채팅만이에요.');
+        if (service().plan) throw new Error('진행 중인 동기화 적용이 끝난 뒤 설정해 주세요.');
+        manifest.transact(x => { if (scope === 'chats') x.syncScope = 'chats'; else delete x.syncScope; });
+        return status();
+    }
     // Omitting chat bodies is an upload preference, never a deletion or an empty-chat replacement.
     // A character in the app's trash (`trashTime`, the same test as checkCharacterOrder; upstream's automatic pre-update backup copy is
     // created this way) is not published at all: `trashTime` is a local field the projection strips, so publishing it would make the
@@ -897,13 +909,14 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 if (!assets.has(path)) assets.set(path, Promise.resolve().then(() => storage.kvVerifiedAssetFile(path, hash => s.hasBlob(hash) ? undefined : join(work, 'asset-' + randomUUID()))).catch(missingFile));
                 return assets.get(path);
             };
-            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: readSnapshotInlay, inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            const scoped = chatsOnly();
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: readSnapshotInlay, inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value, chatsOnly: scoped });
             if (projection.missing.length) throw missingMediaError(projection.missing, projection.missingMedia);
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
             // A restored state continues the bases recorded with it (or starts genesis roots), never this install's newest heads: a copied
             // data root carries its own lineage in this manifest; an in-place restore carries it in the mark.
-            const diff = diffProjection(s.graph, projection.desired, restoreMark ? (restoreMark.bases ?? {}) : lineage, { restore: restored, received: receivedFresh(s) });
+            const diff = diffProjection(s.graph, projection.desired, restoreMark ? (restoreMark.bases ?? {}) : lineage, { restore: restored, received: receivedFresh(s), ignorePins: scoped });
             // Items this device knew that vanished locally become causal tombstones in one operation; a deleted character takes
             // the chats it owned (its last known membership) with it as the same deletion cohort.
             // Deletions are causal against what THIS device observed: the tombstone's base is the device's lineage head, never a
@@ -912,7 +925,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             // A restored backup (store rotated its incarnation because the protected sidecar was missing) is a snapshot of an older
             // state: items absent from it are NOT deletions; their lineage is dropped and the recorded bases keep edits causal.
             if (diff.diverged.length) throw Object.assign(new Error('Local items lost their lineage; resolve before snapshot: ' + diff.diverged.join(', ')), { code: 'LINEAGE_LOST', diverged: diff.diverged });
-            const present = new Set([...projection.desired.map(d => d.lineageKey), ...Object.keys(lineage).filter(k => preserved.has(k.split('#')[0]))]), operation = `snapshot-${randomUUID()}`, tombstones = new Map();
+            // 2026-11-21 chats-only scope: every recorded card/module/plugin/settings item is kept as it is (never a deletion), and so is a chat
+            // whose owning card is not here (removing a card is outside this scope); a chat deleted under a card that is still here is a deletion.
+            const outOfScope = k => { if (!scoped) return false; if (!k.startsWith('play\n')) return true; const owner = pinOwner(s.graph.get(lineage[k])); return !owner || !(original.characters ?? []).some(c => c.chaId === owner); };
+            const present = new Set([...projection.desired.map(d => d.lineageKey), ...Object.keys(lineage).filter(k => preserved.has(k.split('#')[0]) || outOfScope(k))]), operation = `snapshot-${randomUUID()}`, tombstones = new Map();
             const vanished = restored ? [] : Object.entries(lineage).filter(([k, head]) => !present.has(k) && s.graph.get(head) && !s.graph.get(head).tombstone && !k.startsWith('settings\n'));
             const dropped = restored ? Object.keys(lineage).filter(k => !present.has(k)) : [];
             const tombstoneOf = (key, observed) => {
@@ -1013,7 +1029,12 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         // as branches or a conflict), and the commits that touch it are not acknowledged.
         const localEdits = await unsnapshottedRoots(s, v, db, touched);
         // Merge only captured revisions. Unpublished local edits, real persona conflicts and overlapping Wiki edits stay protected.
+        // 2026-11-21 chats-only scope: received card/module/plugin/settings roots are acknowledged without being merged or applied here
+        // (no lineage is recorded for them). A local resolution or trash restore the user asked for (localApply) is still applied.
+        const scopedChats = chatsOnly(), localApplied = new Set(service().localApply ?? []);
+        const outOfScope = key => scopedChats && !key.startsWith('play\n') && !localApplied.has(key);
         for (const key of touched.keys()) {
+            if (outOfScope(key)) continue;
             if (localEdits.has(key)) continue;
             if (key === 'settings\ngroup\npersonas' && !personaMirrorsMatch(db)) continue;
             const c = s.graph.classify(key);
@@ -1055,6 +1076,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const [domain, type, rootId] = key.split('\n'), c = s.graph.classify(key);
             if (domain === 'play') continue;
             if (historyOnly(key)) { applyRoot(key); continue; }
+            if (outOfScope(key)) { applyRoot(key); continue; }
             if (localEdits.has(key)) { result.pending.push({ root: key, reason: 'local-edit' }); continue; }
             if (c.state === 'diverged' && !deviceFieldsOnly(s, c)) { result.pending.push({ root: key, reason: 'diverged', variants: c.variants.length }); continue; }
             if (c.state === 'deleted') {
@@ -1159,17 +1181,23 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 const localId = continuing ? continuing.chat.id : (!taken.has(rootId) ? rootId : `${rootId}~${sha256(segment).slice(0, 8)}`);
                 if (!continuing && taken.has(localId)) { result.pending.push({ root: key, head: head.id, reason: 'local id collision', localId }); rootApplied = false; continue; }
                 taken.add(localId);
-                const characterId = continuing?.character.chaId ?? chatOwner.get(rootId) ?? chatOwner.get(localId) ?? await ownerFromHistory(rootId);
-                if (!characterId) { result.pending.push({ root: key, head: head.id, reason: 'owner unknown' }); rootApplied = false; continue; }
+                // 2026-11-21: on a chats-only device, or for a chat published by one, no exact pin is compared and the owning card is also found by
+                // the chaId its `pin:character:` key names, when that card is on this device; otherwise the chat waits (not acknowledged) and is
+                // planned again by a later apply, e.g. once the card arrived through the NAS content updates.
+                const unpinned = scopedChats || chatsOnlyRevision(head);
+                const pinned = unpinned ? pinOwner(head) : null, pinnedOwner = pinned && ((db.characters ?? []).some(c => c.chaId === pinned) || result.newCharacters.some(c => c.chaId === pinned)) ? pinned : undefined;
+                const characterId = continuing?.character.chaId ?? chatOwner.get(rootId) ?? chatOwner.get(localId) ?? pinnedOwner ?? await ownerFromHistory(rootId);
+                if (!characterId) { result.pending.push({ root: key, head: head.id, reason: 'owner unknown', ...(unpinned && pinned ? { characterId: pinned } : {}) }); rootApplied = false; continue; }
                 const knownHead = continuing ? s.graph.get(lineage[key + '#' + continuing.chat.id]) : null;
-                if (knownHead && (variant.includes(knownHead.id) || (knownHead.contentHash === head.contentHash && knownHead.dependencyHash === head.dependencyHash))) { result.lineage[key + '#' + localId] = head.id; continue; } // already at this head or equal content: nothing to apply
+                const equalDeps = (a, b) => unpinned || chatsOnlyRevision(a) ? unpinnedDependencyHash(a.dependencies) === unpinnedDependencyHash(b.dependencies) : a.dependencyHash === b.dependencyHash;
+                if (knownHead && (variant.includes(knownHead.id) || (knownHead.contentHash === head.contentHash && equalDeps(knownHead, head)))) { result.lineage[key + '#' + localId] = head.id; continue; } // already at this head or equal content: nothing to apply
                 const media = await mediaFor(head, key); if (media.collision) { result.pending.push({ root: key, head: head.id, reason: 'media collision', item: media.collision }); rootApplied = false; continue; }
                 let content = clone(head.content); content.id = localId;
                 // Exact dependency compatibility: every pinned item must be active locally with exactly the pinned content once this
                 // plan has applied its own library/settings updates; a conflicting or pending dependency blocks the chat, not the batch.
                 const ownerView = (futureView.characters ?? []).find(x => x.chaId === characterId);
                 const pins = Object.entries(head.dependencies).filter(([k]) => k.startsWith('pin:'));
-                const mismatch = ownerView ? pins.filter(([k, h]) => localPins(futureView, ownerView, content)[k] !== h).map(([k]) => k) : pins.map(([k]) => k);
+                const mismatch = unpinned ? [] : ownerView ? pins.filter(([k, h]) => localPins(futureView, ownerView, content)[k] !== h).map(([k]) => k) : pins.map(([k]) => k);
                 if (mismatch.length) { result.pending.push({ root: key, head: head.id, reason: 'dependency', pins: mismatch }); rootApplied = false; continue; }
                 // Bard workspace from dependencies; sibling branches are relinked (chat/slot identities, evidence, hashes) with the existing helper.
                 const workspace = { characterId, chatId: localId, files: [], slots: {}, pages: [], relinked: false };
@@ -1259,8 +1287,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 captures.set(character.chaId, capture); cleanups.push(capture.cleanup);
             }
             await normalizeCaptures(captures, db, branches, work);
-            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
-            const diff = diffProjection(s.graph, projection.desired.filter(d => known.includes(d.key)), lineage);
+            const scoped = chatsOnly(); // 2026-11-21: same scope as snapshot(), so a chats-only check reads no card asset either
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches, readAsset, readInlay: readInlaySource(work), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value, chatsOnly: scoped });
+            const diff = diffProjection(s.graph, projection.desired.filter(d => known.includes(d.key)), lineage, { ignorePins: scoped });
             for (const r of diff.revisions) edited.add(rootKey(r));
             for (const k of diff.diverged) edited.add(k.split('#')[0]);
         } finally { await finishCapture(work, cleanups); }
@@ -1576,6 +1605,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/enable', req => enable(req.body));
         route('post', '/disable', () => disable());
         route('post', '/card-only-upload', req => exclusive(() => setCardOnlyUpload(req.body)));
+        route('post', '/scope', req => exclusive(() => setSyncScope(req.body ?? {})));
         route('post', '/snapshot', () => takeSnapshot());
         route('post', '/missing-media/clear', req => clearMissingMedia(req.body?.id));
         route('post', '/bootstrap', req => exclusive(() => bootstrap(req.body)));
@@ -1604,7 +1634,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/open-deletion/restore', req => exclusive(() => restoreOpenDeletion(req.body)));
         route('post', '/open-deletion/accept', req => exclusive(() => acceptOpenDeletion(req.body)));
     }
-    return { assertWrite, status, pendingRoots, enable, disable, setCardOnlyUpload: input => exclusive(() => setCardOnlyUpload(input)), markRestore, clearRestore, shareRequest: () => exclusive(shareRequest), detectShare, consumed, consumedAll, receiveForeign: (...a) => exclusive(() => receiveForeign(...a)), acceptPendingGrant: (...a) => exclusive(() => acceptPendingGrant(...a)), discardShare, sweepShares,
+    return { assertWrite, status, pendingRoots, enable, disable, setCardOnlyUpload: input => exclusive(() => setCardOnlyUpload(input)), setSyncScope: input => exclusive(() => setSyncScope(input)), markRestore, clearRestore, shareRequest: () => exclusive(shareRequest), detectShare, consumed, consumedAll, receiveForeign: (...a) => exclusive(() => receiveForeign(...a)), acceptPendingGrant: (...a) => exclusive(() => acceptPendingGrant(...a)), discardShare, sweepShares,
         conflicts, overview, chatLabels, resolveConflict: (...a) => exclusive(() => resolveConflict(...a)), resolveAll: (...a) => exclusive(() => resolveAll(...a)), startAdoption: () => startAdoption(), endAdoption: () => exclusive(() => endAdoption()), restoreRevision: (...a) => exclusive(() => restoreRevision(...a)), trashList, restoreTrash: (...a) => exclusive(() => restoreTrash(...a)), restoreOpenDeletion: (...a) => exclusive(() => restoreOpenDeletion(...a)), acceptOpenDeletion, snapshot: takeSnapshot, bootstrap: (...a) => exclusive(() => bootstrap(...a)), plan: () => exclusive(plan), currentPlan: () => exclusive(currentPlan), arm: (...a) => exclusive(() => arm(...a)), finish: (...a) => exclusive(() => finish(...a)), hold: (...a) => exclusive(() => hold(...a)), recovery, publish, pull, registerRoutes,
         store: () => openStore(), transport: () => openTransport(), vault: () => openVault(), state: () => manifest.view() };
 }

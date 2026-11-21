@@ -2472,3 +2472,186 @@ test('0.9.91-ver3 chat labels: the device that first recorded a chat and the dev
     const plain = await device(t, fixtureDav(), 'label-plain', { ...EMPTY_DB(), characters: [{ chaId: 'solo', type: 'character', name: '혼자', chatPage: 0, chats: [{ id: 'solo-chat', name: 'New Chat 1', note: '', localLore: [], message: [{ role: 'user', data: '안녕' }] }] }] }); plain.service.enable({ workspaceId: 'ws-fixture' }); await plain.service.snapshot()
     expect(await plain.service.chatLabels()).toEqual({ origin: {}, branch: {}, self: null })
 })
+
+// ---------------------------------------------------------------- 2026-11-21 chats-only sync scope (user decision: share chats only) ----------------------------------------------------------------
+const { CHATS_ONLY_PIN } = require('./nas-sync-projection.cjs')
+/** Every key this device's storage exports (snapshot/plan-check asset reads go through storage.kvExportFile). */
+const countExports = (dev: any) => { const keys: string[] = []; const original = dev.storage.kvExportFile.bind(dev.storage); dev.storage.kvExportFile = async (key: string, target: string) => { keys.push(key); return original(key, target) }; return keys }
+const lastCommitRoots = (dev: any) => { const s = dev.service.store(), commit = s.state().commits.at(-1); return commit.revisions.map((id: string) => { const r = s.graph.get(id); return `${r.domain}/${r.type}/${r.root}${r.tombstone ? ' (deleted)' : ''}` }).sort() }
+const pinsOf = (rev: any) => Object.fromEntries(Object.entries(rev.dependencies).filter(([k]) => k.startsWith('pin:')))
+const headOf = (dev: any, key: string) => { const s = dev.service.store(); return s.graph.get(s.graph.classify(key).liveHeads[0]) }
+const tombstoneCount = (dev: any) => { const s = dev.service.store(); return s.graph.rootKeys().filter((k: string) => s.graph.classify(k).tombstoneHeads.length).length }
+/** A phone that already has the same card id with its own (different) card content, image, module and settings. */
+const phoneWithCard = () => ({ ...EMPTY_DB(), aiModel: 'phone-model', modules: [{ id: 'mod', name: '폰 모듈', lorebook: [] }], enabledModules: ['mod'],
+    characters: [{ chaId: 'card', type: 'character', name: '표본', description: 'phone card', image: 'assets/phone-icon.png', chatPage: 0, chats: [] }] })
+async function chatsOnlyPhone(t: any, dav: any, name: string, db: any) {
+    const phone = await device(t, dav, name, db)
+    phone.storage.kvSet('assets/phone-icon.png', Buffer.from('phone-icon-bytes'))
+    phone.service.setSyncScope({ scope: 'chats' }); phone.service.enable({ workspaceId: 'ws-fixture' })
+    return phone
+}
+
+test('chats-only scope (1): a snapshot publishes only chats, reads no card asset, pins only the owner; the setting is device-local, validated and served over HTTP', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    expect(tablet.service.status().syncScope).toBe('all')
+    // Over HTTP, an unknown scope is refused and changes nothing.
+    const routes = new Map<string, any>()
+    tablet.service.registerRoutes({ get: (path: string, handler: any) => routes.set(path, handler), post: (path: string, handler: any) => routes.set(path, handler) }, { auth: async () => true, activeSession: () => true })
+    let refused: any; await routes.get('/api/nas-sync/scope')({ body: { scope: 'cards' } }, { status: () => ({ json: (value: any) => { refused = value } }), json: () => {} })
+    expect(refused.error).toBeTruthy(); expect(tablet.service.status().syncScope).toBe('all')
+    let body: any; await routes.get('/api/nas-sync/scope')({ body: { scope: 'chats' } }, { json: (value: any) => { body = value } })
+    expect(body.syncScope).toBe('chats'); expect(tablet.make().status().syncScope).toBe('chats') // persisted in service.json
+    const reads = countExports(tablet)
+    const db = tablet.db()
+    db.characters[0].description = 'card edited on the tablet'; db.modules[0].name = '바뀐 모듈'; db.aiModel = 'other-model'
+    db.characters[0].chats[0].message.push({ role: 'user', data: '채팅만 범위의 새 메시지' })
+    tablet.save(db); tablet.storage.kvSet('assets/icon.png', Buffer.from('icon-bytes-2'))
+    const snap = await tablet.service.snapshot()
+    expect(snap.committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat'])
+    expect(reads.filter(k => k.startsWith('assets/'))).toEqual([]) // the card image is neither read nor hashed
+    expect(pinsOf(headOf(tablet, 'play\nchat\nchat'))).toEqual({ 'pin:character:card': CHATS_ONLY_PIN })
+    expect(Object.keys(headOf(tablet, 'play\nchat\nchat').dependencies).some(k => k.startsWith('bard:'))).toBe(true) // Wiki still travels with the chat
+    // Nothing else changed is ever published while the scope stays 'chats'.
+    expect((await tablet.service.snapshot()).committed).toBeNull()
+    // Back to 'all': the same edits are published as before (card, module, settings), and the card asset is read again.
+    await tablet.service.setSyncScope({ scope: 'all' })
+    const again = await tablet.service.snapshot()
+    expect(again.committed.tombstones).toBe(0)
+    expect(lastCommitRoots(tablet)).toEqual(expect.arrayContaining(['library/character/card', 'library/module/mod', 'settings/group/provider-main']))
+    expect(lastCommitRoots(tablet)).not.toContain('play/chat/chat') // a chats-only head asks for no pins: equal content is that head
+    expect(reads.filter(k => k.startsWith('assets/')).length).toBeGreaterThan(0)
+})
+test('chats-only scope (2): switching from all to chats deletes nothing — no tombstone right after the switch, nor for a card, module or plugin removed here; a chat deleted under a card that is still here is a deletion', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    expect((await tablet.service.snapshot()).committed).toBeNull() // switch alone: no revision, no tombstone
+    const added = tablet.db(); added.characters[0].chats.push({ id: 'chat2', name: '둘째', note: '', localLore: [], message: [{ role: 'user', data: '둘째 대화' }] }); tablet.save(added)
+    expect((await tablet.service.snapshot()).committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    const removedChat = tablet.db(); removedChat.characters[0].chats = removedChat.characters[0].chats.filter((c: any) => c.id !== 'chat2'); tablet.save(removedChat)
+    expect((await tablet.service.snapshot()).committed).toMatchObject({ tombstones: 1 })
+    expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat2 (deleted)'])
+    // The card, the module and the plugin vanish here (e.g. a card re-imported under another id): nothing is deleted on the NAS.
+    const gone = tablet.db(); gone.characters = []; gone.modules = []; gone.plugins = []; gone.enabledModules = []; tablet.save(gone)
+    expect((await tablet.service.snapshot()).committed).toBeNull()
+    for (const key of ['library\ncharacter\ncard', 'library\nmodule\nmod', 'library\nplugin\nplug', 'play\nchat\nchat']) expect(tablet.service.store().graph.classify(key).state).toBe('live')
+    expect(tablet.service.status().syncScope).toBe('chats')
+    // A phone in 'all' still receives the card, module and plugin.
+    const phone = await device(t, dav, 'scope2-phone', EMPTY_DB()); phone.service.enable({ workspaceId: 'ws-fixture' })
+    await tablet.service.publish(); await applyAll(phone)
+    expect(phone.db().characters.map((c: any) => c.chaId)).toEqual(['card'])
+    expect(phone.db().modules.map((m: any) => m.id)).toEqual(['mod'])
+    expect(phone.db().characters[0].chats.map((c: any) => c.id)).toEqual(['chat'])
+})
+
+test('chats-only scope (3): a chats-only phone whose card with the same id differs receives the chats (no pin compared), keeps its own card, module and settings, acknowledges everything and publishes nothing back; its plan check reads no card asset', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await chatsOnlyPhone(t, dav, 'scope3-phone', phoneWithCard())
+    const plan = await applyAll(phone)
+    expect(plan.pending).toEqual([])
+    expect(plan.characters).toEqual([]); expect(plan.newCharacters).toEqual([]); expect(plan.modules).toEqual([]); expect(plan.plugins).toEqual([]); expect(plan.settings).toEqual({})
+    const after = phone.db()
+    expect(after.characters[0]).toMatchObject({ description: 'phone card', image: 'assets/phone-icon.png' })
+    expect(after.characters[0].chats.map((c: any) => c.id)).toEqual(['chat'])
+    expect(after.modules[0].name).toBe('폰 모듈'); expect(after.aiModel).toBe('phone-model'); expect(after.plugins).toEqual([])
+    expect(phone.service.store().pendingApply()).toEqual([]) // out-of-scope roots never block the acknowledgement
+    expect((await phone.service.snapshot()).committed).toBeNull() // no echo of the received chat
+    // A later tablet edit of the chat (with a card edit in the same commit) updates the phone's chat only.
+    const edit = tablet.db(); edit.characters[0].chats[0].message.push({ role: 'char', data: '태블릿의 다음 답' }); edit.characters[0].description = 'tablet v2'; tablet.save(edit)
+    await tablet.service.snapshot(); await tablet.service.publish()
+    const reads = countExports(phone)
+    const next = await applyAll(phone)
+    expect(next.pending).toEqual([])
+    expect(phone.db().characters[0].chats[0].message.at(-1).data).toBe('태블릿의 다음 답')
+    expect(phone.db().characters[0].description).toBe('phone card')
+    expect(reads.filter(k => k.startsWith('assets/'))).toEqual([])
+    expect(phone.service.store().pendingApply()).toEqual([])
+    expect((await phone.service.snapshot()).committed).toBeNull()
+    // The phone's own reply goes back as a chat with the owner pin only, and the tablet ('all') applies it.
+    const reply = phone.db(); reply.characters[0].chats[0].message.push({ role: 'user', data: '폰에서 이어 씀' }); phone.save(reply)
+    expect((await phone.service.snapshot()).committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    expect(lastCommitRoots(phone)).toEqual(['play/chat/chat'])
+    await phone.service.publish(); const back = await applyAll(tablet)
+    expect(back.pending).toEqual([])
+    expect(tablet.db().characters[0].chats[0].message.at(-1).data).toBe('폰에서 이어 씀')
+    expect(tablet.db().characters[0].description).toBe('tablet v2')
+})
+
+test('chats-only scope (4): a chat whose card is not on this device waits as owner unknown (not acknowledged, nothing applied); once the card exists it is applied on the next plan', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await chatsOnlyPhone(t, dav, 'scope4-phone', EMPTY_DB())
+    const first = await applyAll(phone)
+    expect(first.pending).toEqual([expect.objectContaining({ root: 'play\nchat\nchat', reason: 'owner unknown', characterId: 'card' })])
+    expect(phone.db().characters).toEqual([]) // the card is not taken from the sync in this scope
+    expect(phone.service.store().pendingApply().length).toBe(1) // the commit waits
+    // The card arrives another way (NAS content update): same chaId, its own content.
+    const db = phone.db(); db.characters.push({ chaId: 'card', type: 'character', name: '표본', description: 'from content update', chatPage: 0, chats: [] }); phone.save(db)
+    const second = await applyAll(phone)
+    expect(second.pending).toEqual([])
+    expect(phone.db().characters[0].chats.map((c: any) => c.id)).toEqual(['chat'])
+    expect(phone.db().characters[0].description).toBe('from content update')
+    expect(phone.service.store().pendingApply()).toEqual([])
+})
+test('chats-only scope (5): mixed devices — an all-scope tablet applies a chats-only chat without its pins and never re-publishes it; the chats-only phone still downloads the card blobs the tablet publishes (pull knows no scope) but applies only the chat', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await chatsOnlyPhone(t, dav, 'scope5-phone', phoneWithCard())
+    await applyAll(phone)
+    const reply = phone.db(); reply.characters[0].chats[0].message.push({ role: 'user', data: '폰의 답' }); phone.save(reply)
+    await phone.service.snapshot(); await phone.service.publish()
+    const applied = await applyAll(tablet)
+    expect(applied.pending).toEqual([])
+    expect(tablet.db().characters[0].chats[0].message.at(-1).data).toBe('폰의 답')
+    expect((await tablet.service.snapshot()).committed).toBeNull() // equal content to a chats-only head: no duplicate revision
+    // The tablet changes the card image and the chat: the phone pulls the whole commit (the new image blob too) and applies the chat only.
+    const edit = tablet.db(); edit.characters[0].chats[0].message.push({ role: 'char', data: '태블릿 답' }); tablet.save(edit); tablet.storage.kvSet('assets/icon.png', Buffer.from('icon-bytes-v3'))
+    await tablet.service.snapshot(); await tablet.service.publish()
+    const got = await applyAll(phone)
+    expect(got.pending).toEqual([])
+    expect(phone.service.store().hasBlob(sha('icon-bytes-v3'))).toBe(true)
+    expect(phone.storage.kvGet('assets/icon.png')).toBeFalsy()
+    expect(phone.db().characters[0].chats[0].message.at(-1).data).toBe('태블릿 답')
+    expect(phone.db().characters[0].description).toBe('phone card')
+    expect(phone.service.store().pendingApply()).toEqual([])
+    expect((await phone.service.snapshot()).committed).toBeNull()
+})
+
+test('chats-only scope (6): chats → all round trip — no deletion, the unchanged card stays as recorded, a card edited meanwhile continues its recorded head once, chats published under chats-only are not re-published', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const cardHead = headOf(tablet, 'library\ncharacter\ncard').id
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    const one = tablet.db(); one.characters[0].chats[0].message.push({ role: 'user', data: '채팅만 동안의 메시지' }); tablet.save(one)
+    await tablet.service.snapshot(); await tablet.service.publish()
+    await tablet.service.setSyncScope({ scope: 'all' })
+    expect((await tablet.service.snapshot()).committed).toBeNull()
+    expect(headOf(tablet, 'library\ncharacter\ncard').id).toBe(cardHead)
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    const card = tablet.db(); card.characters[0].description = 'NAS 배포로 바뀐 카드'; tablet.save(card)
+    expect((await tablet.service.snapshot()).committed).toBeNull() // out of scope while 'chats'
+    await tablet.service.setSyncScope({ scope: 'all' })
+    const back = await tablet.service.snapshot()
+    expect(back.committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    expect(lastCommitRoots(tablet)).toEqual(['library/character/card'])
+    expect(headOf(tablet, 'library\ncharacter\ncard').parents).toEqual([cardHead])
+    expect(tombstoneCount(tablet)).toBe(0)
+})
+
+test('chats-only scope (7): Wiki and save-slot files travel with a chats-only chat and are applied on a chats-only phone; a plan pending blocks a scope change', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    await tablet.memory.saveMarkdownWikiTurn({ characterId: 'card', chatId: 'chat', sourceMessageIds: ['m2'], markdown: '## 새 사건\n\n채팅만 범위의 위키' })
+    const db = tablet.db(); db.characters[0].chats[0].message.push({ role: 'user', data: '위키와 함께' }); tablet.save(db)
+    expect((await tablet.service.snapshot()).committed).toMatchObject({ revisions: 1 })
+    const deps = Object.keys(headOf(tablet, 'play\nchat\nchat').dependencies)
+    expect(deps.some(k => k.startsWith('bard:'))).toBe(true); expect(deps.some(k => k.startsWith('slot:'))).toBe(true)
+    await tablet.service.publish()
+    const phone = await chatsOnlyPhone(t, dav, 'scope7-phone', phoneWithCard())
+    await phone.service.pull(); const plan = await phone.service.plan()
+    await expect(phone.service.setSyncScope({ scope: 'all' })).rejects.toThrow()
+    const applied = applyPlanToDb(phone.db(), plan); await phone.service.arm(plan.transaction, echoOf(plan, structuredClone(applied))); phone.save(applied)
+    expect((await phone.service.finish(plan.transaction, true)).state).toBe('applied')
+    expect(plan.pending).toEqual([])
+    const wiki = await walk(join(resolveMemoryWorkspace(phone.dataRoot, 'card', 'chat').directory, 'wiki'))
+    expect((await Promise.all(wiki.filter(f => f.endsWith('.md')).map(f => readFile(f, 'utf8')))).join('\n')).toContain('채팅만 범위의 위키')
+    expect(phone.db().characters[0].chats[0].message.at(-1).data).toBe('위키와 함께')
+    expect(phone.service.status().syncScope).toBe('chats')
+})

@@ -236,6 +236,16 @@ function pinsFor(pub, character, chat) {
 }
 /** Same pins on a receiving device: `pubView` must be the vault-projected (public) view of the post-plan database. */
 function localPins(pubView, character, chat) { return pinsFor(pubView, character, chat); }
+/** RisuBard 2026-11-21 (user decision: share chats only): a device whose sync scope is 'chats' publishes its chats with
+ *  ONE pin, `pin:character:<chaId>` = this fixed value, instead of the exact pins above. Cards, modules, plugins, personas and presets
+ *  then differ per device (each gets them from the NAS content updates), so exact pins would hold every chat and, published by two
+ *  such devices, would re-publish the same conversation back and forth. The key still names the owning character; the value marks a
+ *  revision that asks for no exact dependency. A real pin is the hash of {item, refs} and never equals it. */
+const CHATS_ONLY_PIN = hashJson({ syncScope: 'chats' });
+const pinOwner = rev => { const key = Object.keys(rev?.dependencies ?? {}).find(k => k.startsWith('pin:character:')); return key ? key.slice('pin:character:'.length) : null; };
+const chatsOnlyRevision = rev => { const pins = Object.entries(rev?.dependencies ?? {}).filter(([k]) => k.startsWith('pin:')); return pins.length === 1 && pins[0][0].startsWith('pin:character:') && pins[0][1] === CHATS_ONLY_PIN; };
+/** Dependency identity without the pins (chats-only comparison: the same conversation and material, whatever its pins say). */
+const unpinnedDependencyHash = deps => hashJson(Object.fromEntries(Object.entries(deps ?? {}).filter(([k]) => !k.startsWith('pin:'))));
 const desired = ({ domain, type, root, content, dependencies, item }) => ({ key: rootKeyOf(domain, type, root), lineageKey: rootKeyOf(domain, type, root) + '#' + item, domain, type, root, item, content, dependencies, contentHash: hashJson(content), dependencyHash: hashJson(dependencies) });
 /** Semantic secret identity: (epoch, slot, version, origin). Equal on every device holding the same master and value; it
  *  never depends on the randomized GCM ciphertext, which travels separately as a physical blob mapped by this id. */
@@ -251,7 +261,7 @@ const envelopeIdentity = env => hashJson({ epoch: env.epoch, slot: env.slot, ver
  * - `readAsset(path)` → {path, hash} | null; `readInlay(id)` → {metadata, data: Buffer|string|{path,hash}} | null; `inlayMeta(id)` → ownership | null.
  * Busy chats (streaming, Wiki rebuild, live import context) and unhydrated chats make the projection fail; they are never sanitized away.
  */
-async function projectDatabase({ database, cardOnlyMemberships = new Map(), vault, captures = new Map(), materials = null, branches = {}, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value }) {
+async function projectDatabase({ database, cardOnlyMemberships = new Map(), vault, captures = new Map(), materials = null, branches = {}, readAsset = async () => null, readInlay = async () => null, readColdChat = async () => null, inlayMeta = async () => null, remapBranchChat = value => value, chatsOnly = false }) {
     // Hydrate before vault projection so restored data follows the same credential/material handling.
     const characters = [];
     for (const character of database.characters ?? []) {
@@ -327,14 +337,16 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
                 await mediaDeps(collectReferences(material.value, 'chat'), materialScope, deps);
             }
             // Exact dependency pins: the chat may only run where these items are active with exactly this content (compatibility ≠ ancestry).
-            const pins = pinsFor(pub, character, chat);
+            const pins = chatsOnly ? { ['pin:character:' + chaId]: CHATS_ONLY_PIN } : pinsFor(pub, character, chat);
             for (const [k, h] of Object.entries(pins)) deps[k] = h;
             put('play', 'chat', root, chat.id, value, deps, refsOf(`/characters/${chaId}/chats/${chat.id}`));
         }
+        if (chatsOnly) continue; // 2026-11-21 chats-only scope: no card root, so none of the card's assets is read or hashed
         const meta = clone(character); delete meta.chats; for (const key of CHARACTER_LOCAL) delete meta[key];
         meta.chatIds = cardOnlyMemberships.get(chaId) ?? [...new Set(chatIds.map(id => branches[id]?.root ?? id))]; // membership/order per root (sibling branches share one root); bodies are their own roots
         put('library', 'character', chaId, chaId, meta, await mediaDeps(collectReferences(meta, 'character'), {}), refsOf(`/characters/${chaId}`).filter(r => !r.path.includes('/chats/')));
     }
+    if (chatsOnly) return { desired: out, blobs, envelopes: envelopeMap, excluded, missing }; // modules, plugins and settings groups stay out of scope
     for (const [key, type] of Object.entries(COLLECTIONS)) if (key !== 'characters') for (const item of pub[key] ?? []) {
         const id = type === 'plugin' ? item.name : item.id;
         if (typeof id !== 'string' || !id) throw new Error(`${type} without stable id cannot be synchronized`);
@@ -366,7 +378,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
  * this install's current frontier, so a newer head (local or remote) survives as a sibling instead of becoming the parent of
  * older content. `matched` maps every skipped item to the revision it equals, so a restore can point the lineage back there.
  */
-function diffProjection(graph, desiredList, lineage = {}, { restore = false, received = true } = {}) {
+function diffProjection(graph, desiredList, lineage = {}, { restore = false, received = true, ignorePins = false } = {}) {
     const out = { revisions: [], skipped: [], diverged: [], matched: {} };
     // Device fields of a synced group (DEVICE_GROUP_FIELDS) take the base revision's values, in place so the caller's lineage
     // bookkeeping (matched by contentHash) sees the content that is committed.
@@ -380,7 +392,9 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false, rec
     for (const d of desiredList) {
         if (held.has(d)) continue;
         const c = graph.classify(d.key);
-        const same = id => { const r = graph.get(id); return r.contentHash === d.contentHash && r.dependencyHash === d.dependencyHash; };
+        // 2026-11-21 chats-only scope: a chat equal to a head except for its pins is that head, never a re-publication — on a chats-only
+        // device (ignorePins), and on any device for a head a chats-only device published (it asks for no exact pin).
+        const same = id => { const r = graph.get(id); return r.contentHash === d.contentHash && ((ignorePins && d.domain === 'play') || chatsOnlyRevision(r) ? unpinnedDependencyHash(r.dependencies) === unpinnedDependencyHash(d.dependencies) : r.dependencyHash === d.dependencyHash); };
         const matched = id => { out.skipped.push(d.lineageKey); out.matched[d.lineageKey] = id; };
         // A revision whose id already exists (identical content under identical parents) is that revision, not a duplicate.
         const push = rev => { if (graph.get(rev.id)) matched(rev.id); else out.revisions.push(rev); };
@@ -415,4 +429,4 @@ function diffProjection(graph, desiredList, lineage = {}, { restore = false, rec
     }
     return out;
 }
-module.exports = { SETTINGS_GROUPS, GROUP_KEYS, DEVICE_LOCAL, DEVICE_THEME, DEVICE_LOCAL_ROOTS, DEVICE_GROUP_FIELDS, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields, COLLECTIONS, CHARACTER_LOCAL, THEME_PRESET_LOCAL, syncedThemePresets, CHAT_DISPLAY, MIRROR, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity, pinsFor, localPins, characterPinContent };
+module.exports = { SETTINGS_GROUPS, GROUP_KEYS, DEVICE_LOCAL, DEVICE_THEME, DEVICE_LOCAL_ROOTS, DEVICE_GROUP_FIELDS, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields, COLLECTIONS, CHARACTER_LOCAL, THEME_PRESET_LOCAL, syncedThemePresets, CHAT_DISPLAY, MIRROR, ownerOf, collectReferences, projectDatabase, diffProjection, rootKeyOf, envelopeIdentity, pinsFor, localPins, characterPinContent, CHATS_ONLY_PIN, pinOwner, chatsOnlyRevision, unpinnedDependencyHash };

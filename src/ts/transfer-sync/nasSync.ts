@@ -49,6 +49,8 @@ export const syncStatus = async (signal?: AbortSignal) => (await syncRequest('/s
 export const enableSync = (workspaceId: string, role: 'authority' | 'joining' = 'authority') => post('/enable', { workspaceId, role })
 export const disableSync = () => post('/disable')
 export const setCardOnlyUpload = (characterId: string, enabled: boolean) => post('/card-only-upload', { characterId, enabled })
+/** 2026-11-21 (user decision: share chats only): this device's sync scope, 'all' (default) or 'chats'. Allowed while sync is off. */
+export const setSyncScope = (scope: 'all' | 'chats') => post('/scope', { scope })
 export const snapshotSync = (signal?: AbortSignal) => post('/snapshot', {}, signal)
 export const clearMissingSyncMedia = (id: string, signal?: AbortSignal) => post('/missing-media/clear', { id }, signal)
 export const publishSync = (signal?: AbortSignal) => post('/publish', {}, signal)
