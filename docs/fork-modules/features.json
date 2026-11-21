@@ -763,7 +763,7 @@
         {
           "module": "model-compat",
           "path": "docs/fork-modules/compat/v0.9.103/model-compat.patch",
-          "sourceSha256": "0a34051070305e7a05c1056ee09e6aabdf08439562401824c48e361a260c0992"
+          "sourceSha256": "7668e7ba939e54200f19aecb43460cfb753e906036367efb15395444c29aef39"
         },
         {
           "module": "storage-recovery",

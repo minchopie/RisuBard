@@ -14,7 +14,7 @@
     import NasSyncProgress from './NasSyncProgress.svelte'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
     import { ownsServer } from 'src/ts/transfer-sync/chatDeviceLabel'
-    import type { MissingSyncMedia } from '../../../../shared/play-set/nas-diagnostic'
+    import { isMissingMediaPath, type MissingSyncMedia } from '../../../../shared/play-set/nas-diagnostic'
     let selected = $state<string[]>([])
     let selectedPersonas = $state<string[]>([])
     let compatibility = $state(false)
@@ -70,9 +70,7 @@
     // ---- automatic NAS sync (Node/embedded runtime only; reuses the NAS connection saved above and the device picker for key sharing) ----
     let sync = $state<any>(null)
     const missingMedia = $derived<MissingSyncMedia | null>(sync?.missingMedia ?? null)
-    const mediaOwnerLabels: Record<MissingSyncMedia['files'][number]['owners'][number]['kind'], string> = {
-        module: '모듈', character: '캐릭터', persona: '페르소나', chat: '채팅', plugin: '플러그인', settings: '설정',
-    }
+    const missingMediaFiles = $derived(missingMedia?.files.filter(file => isMissingMediaPath(file.path)) ?? [])
     let syncConflictList = $state<any[]>([])
     let syncOverviewState = $state<any>(null)
     let syncTrashList = $state<any[]>([])
@@ -169,19 +167,15 @@
             {#if missingMedia}
                 <details open>
                     <summary>빠진 그림: 파일 {missingMedia.count}개</summary>
-                    <p>화면에 나온 항목을 원본 파일에서 다시 가져오면 동기화를 다시 진행할 수 있어요.</p>
-                    {#if missingMedia.count > missingMedia.files.length}<p>처음 {missingMedia.files.length}개 파일을 표시해요.</p>{/if}
-                    <ul>
-                        {#each missingMedia.files as file}
-                            <li><code class="break-all">{file.path}</code>
-                                <ul>
-                                    {#each file.owners as owner}
-                                        <li>{mediaOwnerLabels[owner.kind]}{owner.name ? ` 「${owner.name}」` : ''}{owner.parent ? ` (${owner.parent})` : ''}{owner.field ? ` · ${owner.field}` : ''}</li>
-                                    {/each}
-                                </ul>
-                            </li>
-                        {/each}
-                    </ul>
+                    <p>빠진 그림 파일이 있어 이번 동기화를 멈췄어요. 아래 파일을 쓰는 모듈·캐릭터 등을 그림이 들어 있는 원본 파일에서 다시 가져오세요.</p>
+                    {#if missingMedia.count > missingMediaFiles.length}<p>전체 파일 중 {missingMediaFiles.length}개의 이름을 표시해요.</p>{/if}
+                    {#if missingMediaFiles.length}
+                        <ul>
+                            {#each missingMediaFiles as file}
+                                <li><code class="break-all">{file.path}</code></li>
+                            {/each}
+                        </ul>
+                    {/if}
                 </details>
             {/if}
             <div class="transfer-actions">

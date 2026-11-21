@@ -17,23 +17,26 @@ import Panel from '../lib/Setting/Pages/TransferPanel.svelte'
 import { requestRemoteTransfer, receiveTransfer } from './playTransfer'
 import { parseNasListing } from './transferNas'
 import { downloadFile } from './globalApi.svelte'
-test('shows persisted missing paths and owners, then removes the list after a successful retry', async () => {
+test('shows only usable missing paths and the full count, then removes the list after a successful retry', async () => {
     const status = await f.status()
-    f.status.mockResolvedValueOnce({ ...status, sync: { ...status.sync, profile: { kind: 'pc' } }, missingMedia: { count: 2, files: [
-        { path: 'assets/absent-icon.png', owners: [{ kind: 'module', name: '라이프 모듈 v.7.2-mge.1', field: 'icon' }] },
-        { path: 'inlay/absent-draw', owners: [{ kind: 'chat', name: '합성 대화', parent: '표본' }] },
-    ] } } as typeof status)
+    const asset = 'assets/' + 'a'.repeat(64) + '.png'
+    const inlay = 'inlay/12345678-abcd-4321-8abc-9876543210ab'
+    f.status.mockResolvedValueOnce({ ...status, sync: { ...status.sync, profile: { kind: 'pc' } }, missingMedia: {
+        count: 3, files: [{ path: asset, owners: [{ name: '합성 모듈' }] }, { path: inlay },
+            { path: 'assets/synthetic-setting-value.png' }],
+    } } as typeof status)
     const target = document.createElement('div'); document.body.append(target)
     const instance = mount(Panel, { target })
     const settle = async () => { for (let i = 0; i < 20; i++) { await Promise.resolve(); await tick() } }
     try {
         await settle()
-        expect(target.textContent).toContain('빠진 그림: 파일 2개')
-        expect(target.textContent).toContain('assets/absent-icon.png')
-        expect(target.textContent).toContain('모듈 「라이프 모듈 v.7.2-mge.1」 · icon')
-        expect(target.textContent).toContain('inlay/absent-draw')
-        expect(target.textContent).toContain('채팅 「합성 대화」 (표본)')
-        expect(target.textContent).toContain('화면에 나온 항목을 원본 파일에서 다시 가져오면 동기화를 다시 진행할 수 있어요.')
+        const diagnostic = [...target.querySelectorAll('details')].find(el => el.querySelector('summary')?.textContent === '빠진 그림: 파일 3개')
+        expect(diagnostic).toBeDefined()
+        expect([...diagnostic!.querySelectorAll('li')].map(el => el.textContent)).toEqual([asset, inlay])
+        expect(diagnostic!.textContent).toContain('아래 파일을 쓰는 모듈·캐릭터 등을 그림이 들어 있는 원본 파일에서 다시 가져오세요.')
+        expect(diagnostic!.textContent).toContain('전체 파일 중 2개의 이름을 표시해요.')
+        expect(diagnostic!.textContent).not.toContain('합성 모듈')
+        expect(diagnostic!.textContent).not.toContain('synthetic-setting-value')
         ;[...target.querySelectorAll('button')].find(e => e.textContent === 'NAS에 업로드')!.click()
         await settle()
         expect(target.textContent).not.toContain('빠진 그림')

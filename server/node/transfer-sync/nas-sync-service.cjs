@@ -18,8 +18,8 @@ const { Worker } = require('node:worker_threads');
 const { atomicWriteJson, resolveInside, checksum: sha256 } = require('../file-store.cjs');
 const { canonical } = require('../../../shared/play-set/protocol.ts');
 const { createSyncStore, READER_THREAD } = require('./nas-sync-store.cjs');
-const { createVault, vaultMasterStore, inventory, REFS } = require('./nas-sync-vault.cjs');
-const { nasDiagnosticDescription, nasDiagnosticMessage } = require('../../../shared/play-set/nas-diagnostic.ts');
+const { createVault, vaultMasterStore, REFS } = require('./nas-sync-vault.cjs');
+const { isMissingMediaPath, nasDiagnosticDescription, nasDiagnosticMessage } = require('../../../shared/play-set/nas-diagnostic.ts');
 const { createSyncRemote, createSyncTransport } = require('./nas-sync-remote.cjs');
 const { createManifest } = require('./nas-sync-manifest.cjs');
 const { projectDatabase, diffProjection, envelopeIdentity, GROUP_KEYS, localPins, collectReferences, DEVICE_LOCAL_ROOTS, DEVICE_THEME, sharedContentHash, fieldsOnlyHeads, deviceFieldsBase, carryDeviceFields } = require('./nas-sync-projection.cjs');
@@ -137,13 +137,23 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     }
     const file = name => resolveInside(root, name);
     const missingMediaFile = 'missing-media.json';
+    const writeMissingMedia = report => atomicWriteJson(root, missingMediaFile, report, { backup: false, checksumSidecar: false });
     let checkedMissingMedia = null;
     function readMissingMedia() {
         try {
             const report = JSON.parse(fs.readFileSync(file(missingMediaFile), 'utf8'));
-            return typeof report?.id === 'string' && Number.isSafeInteger(report.count) && Array.isArray(report.files) ? report : null;
+            if (typeof report?.id !== 'string' || !isMissingMediaPath('inlay/' + report.id)
+                || !Number.isSafeInteger(report.count) || report.count < 1 || !Array.isArray(report.files)) return null;
+            const files = report.files.map(entry => entry?.path).filter(isMissingMediaPath).map(path => ({ path }));
+            const safe = { id: report.id, count: report.count, files };
+            // Upgrade an R18 report without changing the identity used by an in-flight clear.
+            if (JSON.stringify(report) !== JSON.stringify(safe)) {
+                try { writeMissingMedia(safe); } catch { /* Return the safe view even if the upgrade cannot be persisted. */ }
+            }
+            return safe;
         } catch { return null; }
     }
+    if (ownsDataRoot) readMissingMedia();
     function clearMissingMedia(id) {
         // A delayed completion must never erase a newer failure.
         if (!checkedMissingMedia || id !== checkedMissingMedia || id !== readMissingMedia()?.id) return { cleared: false };
@@ -151,77 +161,23 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         checkedMissingMedia = null;
         return { cleared: true };
     }
-    function missingMediaError(database, missing) {
+    function missingMediaError(missing) {
         checkedMissingMedia = null;
-        const paths = new Map();
-        for (const { path, owners } of missing) {
-            if (!paths.has(path)) paths.set(path, new Map());
-            const entries = paths.get(path);
-            for (const owner of owners) entries.set(JSON.stringify(owner), owner);
-        }
+        const paths = new Set(missing);
         const count = paths.size;
+        // shortcut: record up to 200 valid paths, expand if the panel needs larger reports.
+        const visible = [...paths].filter(isMissingMediaPath).slice(0, 200);
         let logged = false;
+        if (ownsDataRoot) {
+            try {
+                const { addLog } = require('../logs.cjs');
+                addLog({ level: 'error', origin: 'server', source: 'nas-sync', message: nasDiagnosticMessage,
+                    description: nasDiagnosticDescription('snapshot', 'SNAPSHOT_MISSING', count), missingMediaPaths: visible });
+                logged = true;
+            } catch { /* Diagnostic I/O must not change the snapshot error. */ }
+        }
         try {
-            const { addLog, maskSensitive } = require('../logs.cjs');
-            if (ownsDataRoot) {
-                try {
-                    addLog({ level: 'error', origin: 'server', source: 'nas-sync', message: nasDiagnosticMessage, description: nasDiagnosticDescription('snapshot', 'SNAPSHOT_MISSING', count) });
-                    logged = true;
-                } catch { /* Diagnostic I/O must not change the snapshot error. */ }
-            }
-            // Mask known opaque credentials even when they were pasted into a name without a key label.
-            // Match complete UTF-8 scalars so invalid bytes cannot prevent adjacent escapes from decoding.
-            const validEscapes = /(?:%(?:[0-7][0-9a-f]|(?:c[2-9a-f]|d[0-9a-f])%[89ab][0-9a-f]|(?:e[1-9a-ce-f]%[89ab]|e0%[ab]|ed%[89])[0-9a-f]%[89ab][0-9a-f]|(?:f0%[9ab]|f[1-3]%[89ab]|f4%8)[0-9a-f](?:%[89ab][0-9a-f]){2}))+/gi;
-            const maxLabelUnits = 2000;
-            function* escapeForms(value) {
-                for (let pass = 0; ; pass++) {
-                    yield value;
-                    if (!value.includes('%')) break;
-                    const normalized = value.replace(/(?:%[0-9a-f]{2})+/gi, run => run.toLowerCase());
-                    if (normalized !== value) yield normalized;
-                    if (pass === 3) break;
-                    const next = value.replace(validEscapes, decodeURIComponent);
-                    if (next === value) break;
-                    value = next;
-                }
-            }
-            const collectSecrets = () => {
-                const candidates = new Set();
-                const add = value => {
-                    if (!value) return;
-                    for (const secret of escapeForms(value)) candidates.add(secret);
-                };
-                for (const { kind, value } of inventory(database)) {
-                    add(value);
-                    if (kind === 'userinfo') add(value.slice(value.indexOf(':') + 1));
-                }
-                return candidates;
-            };
-            let secrets;
-            const matchesSecret = value => {
-                secrets ??= collectSecrets();
-                for (const form of escapeForms(value)) {
-                    for (const secret of secrets) {
-                        if (form.includes(secret)) return true;
-                    }
-                }
-                return false;
-            };
-            const label = (value, limit) => {
-                if (typeof value !== 'string') return undefined;
-                if (value.length > 1000 && (value.length > maxLabelUnits || /^.{1001}/su.test(value))) {
-                    value = '[긴 이름 생략]';
-                } else if (matchesSecret(value)) {
-                    value = '[REDACTED]';
-                }
-                return maskSensitive(value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, limit);
-            };
-            // shortcut: show the first 200 distinct paths and 20 owners per path, expand if the panel needs larger reports.
-            const files = [...paths].slice(0, 200).map(([path, owners]) => ({
-                path: label(path, 500),
-                owners: [...owners.values()].slice(0, 20).map(({ kind, name, parent, field }) => ({ kind, name: label(name, 300), parent: label(parent, 300), field })),
-            }));
-            atomicWriteJson(root, missingMediaFile, { id: randomUUID(), count, files }, { backup: false, checksumSidecar: false });
+            writeMissingMedia({ id: randomUUID(), count, files: visible.map(path => ({ path })) });
         } catch { /* Diagnostic I/O must not change the snapshot error. */ }
         return Object.assign(new Error('빠진 그림 파일이 있어요. NAS 동기화 화면에서 확인해 주세요.'), { code: 'SNAPSHOT_MISSING', detail: { missingFiles: count, logged } });
     }
@@ -932,13 +888,18 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             await normalizeCaptures(captures, db, service().branches, work);
             const assets = new Map();
             const missingFile = error => { if (error.code === 'ENOENT') return null; throw error; };
-            const readSnapshotInlay = readInlaySource(work);
+            const readLocalInlay = readInlaySource(work);
+            const readSnapshotInlay = id => {
+                // Invalid storage IDs (server.cjs isSafeInlayId) have no local file to read.
+                if (!id || id === '.' || id === '..' || /[/\\\0]/.test(id)) return null;
+                return readLocalInlay(id).catch(missingFile);
+            };
             const readSnapshotAsset = path => {
                 if (!assets.has(path)) assets.set(path, Promise.resolve().then(() => storage.kvVerifiedAssetFile(path, hash => s.hasBlob(hash) ? undefined : join(work, 'asset-' + randomUUID()))).catch(missingFile));
                 return assets.get(path);
             };
-            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: id => readSnapshotInlay(id).catch(missingFile), inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
-            if (projection.missing.length) throw missingMediaError(original, projection.missing);
+            const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: readSnapshotInlay, inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value });
+            if (projection.missing.length) throw missingMediaError(projection.missing);
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
             // A restored state continues the bases recorded with it (or starts genesis roots), never this install's newest heads: a copied

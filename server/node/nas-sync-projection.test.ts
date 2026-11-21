@@ -167,7 +167,7 @@ test('busy or unhydrated chats make the projection fail instead of being sanitiz
     const cold = f.database(); cold.characters[0].chats[0].message = [{ role: 'char', data: 'COLDSTORAGEkey' } as any]
     await expect(projectDatabase({ database: cold, vault, ...f.readers })).rejects.toThrow(expect.objectContaining({ code: 'CHAT_NOT_HYDRATED' }))
     const missing = await projectDatabase({ database: f.database(), vault, readAsset: async () => null, readInlay: async () => null })
-    expect(missing.missing.map((m: any) => m.path)).toEqual(expect.arrayContaining(['assets/icon.png', 'inlay/actual-inlay', 'inlay/draw1']))
+    expect(missing.missing).toEqual(expect.arrayContaining(['assets/icon.png', 'inlay/actual-inlay', 'inlay/draw1']))
 })
 
 test('cold storage projects the same chat without mutating saved data or timestamps', async t => {

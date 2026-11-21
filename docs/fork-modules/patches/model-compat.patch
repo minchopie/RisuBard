@@ -1,5 +1,5 @@
 diff --git a/server/node/logs.cjs b/server/node/logs.cjs
-index 55a08a3..dc93462 100644
+index 55a08a3..216de19 100644
 --- a/server/node/logs.cjs
 +++ b/server/node/logs.cjs
 @@ -3,8 +3,9 @@
@@ -9,7 +9,7 @@ index 55a08a3..dc93462 100644
 -const { atomicWriteFile, atomicWriteJson, readVerifiedJson } = require('./file-store.cjs');
 +const { atomicWriteFile, atomicWriteJson, readVerifiedJson, retryWindowsSharing } = require('./file-store.cjs');
  const { resolveDataRoot } = require('./data-root.cjs');
-+const { nasDiagnosticDescription, nasDiagnosticMessage } = require('../../shared/play-set/nas-diagnostic.ts');
++const { isMissingMediaPath, nasDiagnosticDescription, nasDiagnosticMessage } = require('../../shared/play-set/nas-diagnostic.ts');
  
  const MAX_ROWS = 5000;
  const MAX_DESCRIPTION_BYTES = 10 * 1024; // 10KB per entry
@@ -83,7 +83,7 @@ index 55a08a3..dc93462 100644
      for (const { re, replacement } of MASK_PATTERNS) {
          out = out.replace(re, replacement);
      }
-@@ -197,11 +209,17 @@ function insertEntry(entry) {
+@@ -197,17 +209,27 @@ function insertEntry(entry) {
      const timestamp = typeof entry.timestamp === 'number' ? entry.timestamp : Date.now();
      const level = ['error', 'warning', 'info'].includes(entry.level) ? entry.level : 'info';
      const origin = entry.origin === 'server' ? 'server' : 'client';
@@ -96,14 +96,25 @@ index 55a08a3..dc93462 100644
          ? truncate(maskSensitive(String(entry.description)), MAX_DESCRIPTION_BYTES)
          : null;
 -    const source = entry.source ? String(entry.source).slice(0, 64) : null;
++    let missingMediaPaths;
 +    if (nasDiagnostic) {
 +        // Older clients may still send raw messages. Persist only recognized diagnostic fields.
 +        const fields = /^stage=([a-z]+) code=([A-Z_]+)(?: missingFiles=([1-9][0-9]{0,15}))?$/.exec(String(entry.description ?? ''));
 +        description = nasDiagnosticDescription(fields?.[1], fields?.[2], Number(fields?.[3]));
++        if (origin === 'server' && fields?.[1] === 'snapshot' && fields[2] === 'SNAPSHOT_MISSING' && Array.isArray(entry.missingMediaPaths)) {
++            missingMediaPaths = entry.missingMediaPaths.filter(isMissingMediaPath).slice(0, 200);
++        }
 +    }
      const count = Number.isInteger(entry.count) && entry.count > 0 ? entry.count : 1;
      const platform = entry.platform ? String(entry.platform).slice(0, 128) : null;
      const clientId = entry.clientId ? String(entry.clientId).slice(0, 64) : null;
+     const userAgent = entry.userAgent ? String(entry.userAgent).slice(0, 512) : null;
+ 
+-    return { id: logState.nextId++, timestamp, level, origin, message, description, source, count, platform, clientId, userAgent };
++    return { id: logState.nextId++, timestamp, level, origin, message, description, source, count, platform, clientId, userAgent, ...(missingMediaPaths && { missingMediaPaths }) };
+ }
+ 
+ const insertMany = entries => withWriteLock(() => {
 diff --git a/server/node/logs.test.ts b/server/node/logs.test.ts
 index 3ef5c95..ce7f5c2 100644
 --- a/server/node/logs.test.ts

@@ -10,9 +10,16 @@ const codes = new Set([
 export const nasDiagnosticMessage = 'NAS 동기화 단계에서 오류가 발생했습니다.'
 
 export interface MissingSyncMedia {
+    id: string
     count: number
-    files: { path: string; owners: { kind: 'module' | 'character' | 'persona' | 'chat' | 'plugin' | 'settings'; name?: string; parent?: string; field?: string }[] }[]
+    files: { path: string }[]
 }
+
+// Restrict diagnostics to generated storage keys. Storage also accepts custom IDs.
+const assetPath = /^assets\/[0-9a-f]{64}\.[A-Za-z0-9]{1,16}$/
+const inlayPath = /^inlay\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+export const isMissingMediaPath = (value: unknown): value is string =>
+    typeof value === 'string' && (assetPath.test(value) || (value.startsWith('inlay/') && inlayPath.test(value)))
 
 export function nasDiagnosticDescription(stage: unknown, code: unknown, missingFiles?: unknown) {
     const safeStage = typeof stage === 'string' && stages.has(stage) ? stage : 'unknown'

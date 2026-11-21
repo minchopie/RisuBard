@@ -128,18 +128,42 @@ test('sync routes: auth and default-disabled; the write gate with no plan and wi
     const idleReport = await idle.json(); expect(idleReport.stored).toEqual([]); for (const f of idleReport.failed) expect(f.ack || f.checkpoint).toBeTruthy()
 
     const opaque = 'synthetic-opaque-provider-credential'
-    const keyLike = 'sk-' + 's'.repeat(28)
-    const missing = { ...applied, openAIKey: opaque, modules: [{ id: 'r11-fixture', name: `합성 모듈 ${opaque} ${keyLike}`, icon: 'assets/missing-icon.png', lorebook: [] }] }
+    const url = 'https://synthetic:' + opaque + '@fixture.invalid/v1'
+    const names = ['합성 모듈 첫째', '합성 모듈 둘째', '합성 채팅', '합성 캐릭터']
+    const asset = 'assets/' + 'a'.repeat(64) + '.png'
+    const second = 'assets/' + 'b'.repeat(64) + '.webp'
+    const inlay = '12345678-abcd-4321-8abc-9876543210ab'
+    const bad = url
+    const missing = structuredClone(applied)
+    Object.assign(missing, { openAIKey: opaque, forceReplaceUrl: url,
+        modules: [{ id: 'r20-first', name: names[0], icon: asset, lorebook: [] },
+            { id: 'r20-second', name: names[1], icon: second, lorebook: [] }] })
+    missing.characters[0].name = names[3]
+    Object.assign(missing.characters[0].chats[0], { name: names[2], message: [{ role: 'char', data: '{{inlay::' + inlay + '}} {{inlay::' + bad + '}}' }] })
     expect((await write(missing)).ok).toBe(true)
+    const chatWrite = await fetch(base + '/api/chat-content/card/0', {
+        method: 'POST', headers: headers({ 'x-chat-id': 'chat' }), body: JSON.stringify(missing.characters[0].chats[0]),
+    })
+    expect(chatWrite.ok, await chatWrite.clone().text()).toBe(true)
+    const flushed = await fetch(base + '/api/db/flush?mode=canonical', { method: 'POST', headers: headers() })
+    expect(flushed.ok, await flushed.clone().text()).toBe(true)
     const failedCapture = await post('/snapshot')
     expect(failedCapture.status).toBe(400)
-    expect(await failedCapture.json()).toEqual({ error: '빠진 그림 파일이 있어요. NAS 동기화 화면에서 확인해 주세요.', code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1, logged: true } })
+    const failed = await failedCapture.json()
+    expect(failed).toEqual({ error: '빠진 그림 파일이 있어요. NAS 동기화 화면에서 확인해 주세요.', code: 'SNAPSHOT_MISSING', detail: { missingFiles: 4, logged: true } })
     const reportOnDisk = await fs.readFile(join(dataRoot, 'nas-sync', 'missing-media.json'), 'utf8')
-    expect(reportOnDisk.includes(opaque) || reportOnDisk.includes(keyLike)).toBe(false)
-    expect((await status()).missingMedia).toMatchObject({ count: 1, files: [{ path: 'assets/missing-icon.png', owners: [{ kind: 'module', name: '[REDACTED]', field: 'icon' }] }] })
+    const current = await status()
+    const paths = [asset, second, 'inlay/' + inlay].sort()
+    expect(current.missingMedia).toEqual(JSON.parse(reportOnDisk))
+    expect({ ...current.missingMedia, files: [...current.missingMedia.files].sort((a: { path: string }, b: { path: string }) => a.path.localeCompare(b.path)) }).toEqual({
+        id: expect.any(String), count: 4, files: paths.map(path => ({ path })),
+    })
     const systemLog = await fs.readFile(join(dataRoot, 'logs', 'system.jsonl'), 'utf8')
-    expect(systemLog).toContain('stage=snapshot code=SNAPSHOT_MISSING missingFiles=1')
-    expect(/합성 모듈|missing-icon/.test(systemLog) || systemLog.includes(opaque) || systemLog.includes(keyLike)).toBe(false)
+    const logEntry = systemLog.trim().split('\n').map(line => JSON.parse(line)).find(row => row.description === 'stage=snapshot code=SNAPSHOT_MISSING missingFiles=4')
+    expect(logEntry?.missingMediaPaths?.slice().sort()).toEqual(paths)
+    for (const value of [...names, opaque, url, 'inlay/' + bad]) {
+        expect([reportOnDisk, JSON.stringify(current), JSON.stringify(failed), systemLog].some(text => text.includes(value))).toBe(false)
+    }
     await stop(); await start(); await handshake()
     const persisted = (await status()).missingMedia
     expect(persisted).toEqual(JSON.parse(reportOnDisk))

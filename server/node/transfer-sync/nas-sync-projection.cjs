@@ -237,15 +237,15 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
         }
         out.push(desired({ domain, type, root, item, content: value, dependencies }));
     };
-    const mediaDeps = async (refs, scope, owners, deps = {}) => {
+    const mediaDeps = async (refs, scope, deps = {}) => {
         for (const alias of [...refs.assets].sort(compare)) {
             const path = resolveAsset(scope, alias), local = await readAsset(path);
-            if (!local) { missing.push({ path, owners: owners('assets', alias) }); continue; }
+            if (!local) { missing.push(path); continue; }
             deps['asset:' + path] = addFile(local.path, local.hash, path);
         }
         for (const alias of [...refs.inlays].sort(compare)) {
             const id = resolveInlay(scope, alias), inlay = await readInlay(id);
-            if (!inlay) { missing.push({ path: 'inlay/' + id, owners: owners('inlays', alias) }); continue; }
+            if (!inlay) { missing.push('inlay/' + id); continue; }
             deps['inlay:' + id] = typeof inlay.data === 'string' ? addBytes(Buffer.from(inlay.data), 'inlay') : Buffer.isBuffer(inlay.data) ? addBytes(inlay.data, 'inlay') : addFile(inlay.data.path, inlay.data.hash, 'inlay');
             deps['inlay-metadata:' + id] = addBytes(Buffer.from(canonical({ metadata: inlay.metadata, ownership: (await inlayMeta(id)) ?? null })), 'inlay-metadata');
         }
@@ -266,8 +266,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
             const capture = captures.get(chaId), workspace = capture?.workspaces.find(w => w.sourceChatId === chat.id);
             if (branches[chat.id]) Object.assign(value, remapBranchChat(value, workspace)); // a sibling branch publishes in root identity space
             value.id = root;
-            const chatOwner = () => [{ kind: 'chat', name: chat.name, parent: character.name }];
-            const deps = await mediaDeps(collectReferences(value, 'chat'), scope, chatOwner);
+            const deps = await mediaDeps(collectReferences(value, 'chat'), scope);
             for (const file of workspace?.files ?? []) deps['bard:' + file.path] = addFile(capture.blocks.get(file.entry), file.hash, 'bard');
             for (const slot of workspace?.slots ?? []) {
                 for (const file of slot.files) deps[`slot:${slot.sourceId}:${file.path}`] = addFile(capture.blocks.get(file.entry), file.hash, 'slot');
@@ -276,7 +275,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
             // Media referenced only inside saved slots or Wiki text travels with the chat too.
             if (workspace && materials) for await (const material of materials(capture, chaId, chat.id)) {
                 const materialScope = typeof material.value === 'object' && material.value ? object(material.value.risuPlayContext ?? material.value.risuTransferMedia ?? scope) : scope;
-                await mediaDeps(collectReferences(material.value, 'chat'), materialScope, chatOwner, deps);
+                await mediaDeps(collectReferences(material.value, 'chat'), materialScope, deps);
             }
             // Exact dependency pins: the chat may only run where these items are active with exactly this content (compatibility ≠ ancestry).
             const pins = pinsFor(pub, character, chat);
@@ -285,16 +284,14 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
         }
         const meta = clone(character); delete meta.chats; for (const key of CHARACTER_LOCAL) delete meta[key];
         meta.chatIds = cardOnlyMemberships.get(chaId) ?? [...new Set(chatIds.map(id => branches[id]?.root ?? id))]; // membership/order per root (sibling branches share one root); bodies are their own roots
-        const characterOwner = (kind, alias) => [{ kind: 'character', name: character.name, field: kind === 'assets' && alias === meta.image ? 'image' : undefined }];
-        put('library', 'character', chaId, chaId, meta, await mediaDeps(collectReferences(meta, 'character'), {}, characterOwner), refsOf(`/characters/${chaId}`).filter(r => !r.path.includes('/chats/')));
+        put('library', 'character', chaId, chaId, meta, await mediaDeps(collectReferences(meta, 'character'), {}), refsOf(`/characters/${chaId}`).filter(r => !r.path.includes('/chats/')));
     }
     for (const [key, type] of Object.entries(COLLECTIONS)) if (key !== 'characters') for (const item of pub[key] ?? []) {
         const id = type === 'plugin' ? item.name : item.id;
         if (typeof id !== 'string' || !id) throw new Error(`${type} without stable id cannot be synchronized`);
         const value = clone(item);
         if (type === 'plugin') delete value.enabled; // owned by settings:activation
-        const itemOwner = (kind, alias) => [{ kind: type, name: item.name, field: kind === 'assets' && alias === value.icon ? 'icon' : undefined }];
-        put('library', type, id, id, value, await mediaDeps(collectReferences(value, type), {}, itemOwner), refsOf(`/${key}/${id}`));
+        put('library', type, id, id, value, await mediaDeps(collectReferences(value, type), {}), refsOf(`/${key}/${id}`));
     }
     const groups = new Map();
     for (const key of Object.keys(pub)) {
@@ -309,16 +306,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
     for (const [owner, content] of groups) {
         const name = owner.slice('settings:'.length);
         const shared = name === 'personas' ? personaWireContent(content) : content;
-        let personaRefs;
-        const settingsOwners = (kind, alias) => {
-            if (name === 'personas' && Array.isArray(shared.personas)) {
-                personaRefs ??= shared.personas.map(persona => ({ name: persona?.name, refs: collectReferences(persona, 'settings') }));
-                const owners = personaRefs.filter(p => p.refs[kind].has(alias)).map(p => ({ kind: 'persona', name: p.name }));
-                if (owners.length) return owners;
-            }
-            return [{ kind: 'settings' }];
-        };
-        put('settings', 'group', name, name, shared, await mediaDeps(collectReferences(shared, 'settings'), {}, settingsOwners), Object.keys(shared).flatMap(key => refsOf('/' + key)));
+        put('settings', 'group', name, name, shared, await mediaDeps(collectReferences(shared, 'settings'), {}), Object.keys(shared).flatMap(key => refsOf('/' + key)));
     }
     return { desired: out, blobs, envelopes: envelopeMap, excluded, missing };
 }
