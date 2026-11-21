@@ -2475,8 +2475,16 @@ test('0.9.91-ver3 chat labels: the device that first recorded a chat and the dev
 
 // ---------------------------------------------------------------- 2026-11-21 chats-only sync scope (user decision: share chats only) ----------------------------------------------------------------
 const { CHATS_ONLY_PIN } = require('./nas-sync-projection.cjs')
-/** Every key this device's storage exports (snapshot/plan-check asset reads go through storage.kvExportFile). */
-const countExports = (dev: any) => { const keys: string[] = []; const original = dev.storage.kvExportFile.bind(dev.storage); dev.storage.kvExportFile = async (key: string, target: string) => { keys.push(key); return original(key, target) }; return keys }
+/** Every asset key this device's storage reads for a projection: storage.kvExportFile (v0.9.102-ver2 snapshot/plan check) and
+ *  storage.kvVerifiedAssetFile (0.9.103-ver1 N1: snapshot and plan check read assets through it, no temporary copy). */
+const countExports = (dev: any) => {
+    const keys: string[] = []
+    for (const name of ['kvExportFile', 'kvVerifiedAssetFile']) {
+        const original = dev.storage[name]?.bind(dev.storage)
+        if (original) dev.storage[name] = async (key: string, ...rest: any[]) => { keys.push(key); return original(key, ...rest) }
+    }
+    return keys
+}
 const lastCommitRoots = (dev: any) => { const s = dev.service.store(), commit = s.state().commits.at(-1); return commit.revisions.map((id: string) => { const r = s.graph.get(id); return `${r.domain}/${r.type}/${r.root}${r.tombstone ? ' (deleted)' : ''}` }).sort() }
 const pinsOf = (rev: any) => Object.fromEntries(Object.entries(rev.dependencies).filter(([k]) => k.startsWith('pin:')))
 const headOf = (dev: any, key: string) => { const s = dev.service.store(); return s.graph.get(s.graph.classify(key).liveHeads[0]) }
