@@ -2808,3 +2808,19 @@ test('chats-only scope (14, Codex r3 #1): a user resolution of a re-queued root 
     expect(plan.appliedRoots ?? []).toContain(key) // applied although the scope is 'chats': the user asked for it
     expect(plan.modules).toEqual([]); expect(plan.settings).toEqual({}) // nothing else out of scope
 })
+test('chats-only scope (15, 0.9.103-ver1 R21): a picture missing from a chats-only chat fails the cycle with the missing-media report like all, listing only that chat file; the missing card image is never read', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    const inlay = '12345678-abcd-4321-8abc-9876543210ac', cardImage = 'assets/' + 'c'.repeat(64) + '.png'
+    const db = tablet.db()
+    db.characters[0].image = cardImage
+    db.characters[0].chats[0].message.push({ role: 'char', data: '{{inlay::' + inlay + '}}' })
+    tablet.save(db)
+    const reads = countExports(tablet)
+    await expect(tablet.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
+    expect(tablet.service.status().missingMedia).toMatchObject({ count: 1, files: [{ path: 'inlay/' + inlay }] })
+    expect(reads.filter(k => k.startsWith('assets/'))).toEqual([])
+    tablet.inlays.set(inlay, { data: Buffer.from('chat inlay fixture'), metadata: {} })
+    expect((await tablet.service.snapshot()).committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat'])
+})

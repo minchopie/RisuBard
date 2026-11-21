@@ -347,7 +347,7 @@ async function projectDatabase({ database, cardOnlyMemberships = new Map(), vaul
         meta.chatIds = cardOnlyMemberships.get(chaId) ?? [...new Set(chatIds.map(id => branches[id]?.root ?? id))]; // membership/order per root (sibling branches share one root); bodies are their own roots
         put('library', 'character', chaId, chaId, meta, await mediaDeps(collectReferences(meta, 'character'), {}), refsOf(`/characters/${chaId}`).filter(r => !r.path.includes('/chats/')));
     }
-    if (chatsOnly) return { desired: out, blobs, envelopes: envelopeMap, excluded, missing }; // modules, plugins and settings groups stay out of scope
+    if (chatsOnly) return { desired: out, blobs, envelopes: envelopeMap, excluded, missing, missingMedia }; // modules, plugins and settings groups stay out of scope
     for (const [key, type] of Object.entries(COLLECTIONS)) if (key !== 'characters') for (const item of pub[key] ?? []) {
         const id = type === 'plugin' ? item.name : item.id;
         if (typeof id !== 'string' || !id) throw new Error(`${type} without stable id cannot be synchronized`);
