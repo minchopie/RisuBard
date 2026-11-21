@@ -174,54 +174,35 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             const validEscapes = /(?:%(?:[0-7][0-9a-f]|(?:c[2-9a-f]|d[0-9a-f])%[89ab][0-9a-f]|(?:e[1-9a-ce-f]%[89ab]|e0%[ab]|ed%[89])[0-9a-f]%[89ab][0-9a-f]|(?:f0%[9ab]|f[1-3]%[89ab]|f4%8)[0-9a-f](?:%[89ab][0-9a-f]){2}))+/gi;
             const maxLabelUnits = 2000;
             function* escapeForms(value) {
-                yield value;
-                for (let pass = 0; pass < 3 && value.includes('%'); pass++) {
+                for (let pass = 0; ; pass++) {
+                    yield value;
+                    if (!value.includes('%')) break;
+                    const normalized = value.replace(/(?:%[0-9a-f]{2})+/gi, run => run.toLowerCase());
+                    if (normalized !== value) yield normalized;
+                    if (pass === 3) break;
                     const next = value.replace(validEscapes, decodeURIComponent);
                     if (next === value) break;
                     value = next;
-                    yield value;
-                }
-                // Remaining escaped bytes compare without regard to hex case.
-                if (value.length <= maxLabelUnits && value.includes('%')) {
-                    const normalized = value.replace(/(?:%[0-9a-f]{2})+/gi, run => run.toLowerCase());
-                    if (normalized !== value) yield normalized;
                 }
             }
             const collectSecrets = () => {
-                const candidates = new Map();
-                const add = (value, useTokenBoundary = false) => {
+                const candidates = new Set();
+                const add = value => {
                     if (!value) return;
-                    for (const secret of escapeForms(value)) {
-                        candidates.set(secret, candidates.get(secret) || !useTokenBoundary || /^.{4}/su.test(secret));
-                    }
+                    for (const secret of escapeForms(value)) candidates.add(secret);
                 };
                 for (const { kind, value } of inventory(database)) {
-                    if (kind === 'userinfo') {
-                        add(value.slice(value.indexOf(':') + 1), true);
-                        add(value, true);
-                    } else {
-                        add(value);
-                    }
+                    add(value);
+                    if (kind === 'userinfo') add(value.slice(value.indexOf(':') + 1));
                 }
                 return candidates;
             };
             let secrets;
-            const leftBoundary = /(?<![\p{L}\p{N}])/uy;
-            const rightBoundary = /(?![\p{L}\p{N}])/uy;
-            const matches = (value, secret, substring) => {
-                if (substring) return value.includes(secret);
-                for (let start = value.indexOf(secret); start !== -1; start = value.indexOf(secret, start + 1)) {
-                    leftBoundary.lastIndex = start;
-                    rightBoundary.lastIndex = start + secret.length;
-                    if (leftBoundary.test(value) && rightBoundary.test(value)) return true;
-                }
-                return false;
-            };
             const matchesSecret = value => {
                 secrets ??= collectSecrets();
                 for (const form of escapeForms(value)) {
-                    for (const [secret, substring] of secrets) {
-                        if (matches(form, secret, substring)) return true;
+                    for (const secret of secrets) {
+                        if (form.includes(secret)) return true;
                     }
                 }
                 return false;

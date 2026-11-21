@@ -243,7 +243,6 @@ test('missing-media diagnostics mask raw, URL-encoded and decoded URL passwords 
     const reencoded = encodeURIComponent(decoded)
     const db = {
         forceReplaceUrl: url,
-        koboldURL: 'https://fixture:%61%62@fixture.invalid/v1',
         comfyUiUrl: 'https://fixture:@fixture.invalid/v1',
         characters: [{ chaId: 'card', type: 'character', name: 'parent cabin ' + reencoded,
             chats: [decoded, encoded].map((spelling, index) => ({
@@ -260,19 +259,19 @@ test('missing-media diagnostics mask raw, URL-encoded and decoded URL passwords 
     expect(d.make().status().missingMedia).toEqual(report)
 })
 
-test.for(['한', '%61%62', '가%2b나'])('missing-media diagnostics mask short URL password tokens (%s)', async (raw, t) => {
+test.for(['한', '%61%62', '가%2b나'])('missing-media diagnostics mask embedded short URL passwords (%s)', async (raw, t) => {
     const url = 'https://fixture:' + raw + '@fixture.invalid/v1'
     const encoded = new URL(url).password
     const decoded = decodeURIComponent(encoded)
     const spellings = [...new Set([raw, encoded, decoded, encodeURIComponent(decoded)])]
-    const ordinary = '이름' + decoded + '42'
+    const ordinary = '달빛 기록 42'
     const db = {
         forceReplaceUrl: url,
         comfyUiUrl: 'https://fixture:@fixture.invalid/v1',
         characters: [{ chaId: 'card', type: 'character', name: decoded,
-            chats: [...spellings.map(spelling => [ordinary, spelling, ordinary].join('_')), ordinary].map((name, index) => ({
+            chats: [...spellings.map(spelling => '이름' + spelling + '42'), ordinary].map((name, index) => ({
                 id: 'chat-' + index, name,
-                message: [{ role: 'char', data: '{{inlay::absent-' + raw + '-' + ordinary + '}}' }],
+                message: [{ role: 'char', data: '{{inlay::missing-' + raw + '}}' }],
             })) }],
     }
     const d = await device(t, fixtureDav(), 'diagnostic-short-url-password', db, MASTER, { readDatabase: async () => db })
@@ -289,10 +288,28 @@ test.for(['한', '%61%62', '가%2b나'])('missing-media diagnostics mask short U
     expect(d.make().status().missingMedia).toEqual(report)
 })
 
+test('missing-media diagnostics mask embedded URL userinfo', async t => {
+    const db = {
+        forceReplaceUrl: 'https://q:j@fixture.invalid/v1',
+        comfyUiUrl: 'https://z:@fixture.invalid/v1',
+        characters: ['leftq:j42', 'leftz:42'].map((name, index) => ({
+            chaId: 'card-' + index, type: 'character', name, image: 'assets/missing.png', chats: [],
+        })),
+    }
+    const d = await device(t, fixtureDav(), 'diagnostic-userinfo', db, MASTER, { readDatabase: async () => db })
+    d.service.enable({ workspaceId: 'ws-fixture' })
+    await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
+    const report = JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))
+    const maskedOwner = { kind: 'character', name: '[REDACTED]' }
+    expect(report).toMatchObject({ count: 1, files: [{ path: 'assets/missing.png', owners: [maskedOwner, maskedOwner] }] })
+    expect(d.make().status().missingMedia).toEqual(report)
+})
+
 const escapeEachByte = (value: string) => [...Buffer.from(value)].map(byte => '%' + byte.toString(16).padStart(2, '0')).join('')
 test.for([
     ['label decode intermediate', '41reviewFixture', '%25' + escapeEachByte('41reviewFixture')],
     ['secret decode intermediate', 'reviewFixture%2541', escapeEachByte('reviewFixture%41').replaceAll('%', '%2525')],
+    ['intermediate escape hex case', 'reviewFixture%254A', 'left-reviewFixture%2525254a-right'],
     ['one-character setting', 'j', 'leftj42'],
     ['two-character setting', 'Q7', 'leftQ742'],
     ['three-character setting', 'Q7Z', 'leftQ7Z42'],

@@ -1051,9 +1051,9 @@
       "path": "server/node/nas-sync-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "c74b3f7d184138e16bfbe1eb8c658ce0b178a33d85c21402315b6063b72046ea",
-      "contentSha256": "c74b3f7d184138e16bfbe1eb8c658ce0b178a33d85c21402315b6063b72046ea",
-      "bytes": 233208
+      "sha256": "aafc3c1b71fd9c5545459d7ec7965c7161fba030df1a94e9d66efc9b7076ba6b",
+      "contentSha256": "aafc3c1b71fd9c5545459d7ec7965c7161fba030df1a94e9d66efc9b7076ba6b",
+      "bytes": 234261
     },
     {
       "path": "server/node/nas-sync-share.cjs",
@@ -1275,9 +1275,9 @@
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "04a18c896a3e9bdae699b50d183a7346559feb57cb485f9efe7aea5c729badec",
-      "contentSha256": "04a18c896a3e9bdae699b50d183a7346559feb57cb485f9efe7aea5c729badec",
-      "bytes": 165487
+      "sha256": "647473f316e29b27bdf25c3c0ad1fa5c9970e0ea1ba22dc55943bf637c5b3910",
+      "contentSha256": "647473f316e29b27bdf25c3c0ad1fa5c9970e0ea1ba22dc55943bf637c5b3910",
+      "bytes": 164407
     },
     {
       "path": "server/node/transfer-sync/nas-sync-share.cjs",
