@@ -171,48 +171,120 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             }
             // Mask known opaque credentials even when they were pasted into a name without a key label.
             const escapePattern = text => text.replace(/[.*+?^{}$()|[\]\\]/g, '\\$&');
-            const passwordPatterns = new Map();
-            const secrets = [...new Set(inventory(database).map(entry => {
-                if (entry.kind !== 'userinfo') return entry.value;
+            const percentPattern = character => Buffer.from(character).toString('hex').replace(/../g, byte =>
+                '%' + byte.replace(/[a-f]/g, digit => '[' + digit + digit.toUpperCase() + ']'));
+            const spellings = new Map();
+            const characterPatterns = (character, alternate = character) => {
+                const key = character + alternate;
+                if (!spellings.has(key)) {
+                    const forms = character === alternate ? [character] : [character, alternate];
+                    spellings.set(key, [escapePattern, percentPattern].map(form => new RegExp(forms.map(form).join('|'), 'gu')));
+                }
+                return spellings.get(key);
+            };
+            const secrets = new Set();
+            const passwords = new Map();
+            const rawPasswords = new Map();
+            for (const entry of inventory(database)) {
+                if (!entry.value) continue;
+                secrets.add(entry.value);
+                if (entry.kind !== 'userinfo') continue;
                 const encoded = entry.value.slice(entry.value.indexOf(':') + 1);
-                if (!encoded) return entry.value;
-                let decoded = encoded;
-                try { decoded = decodeURIComponent(encoded); } catch { /* Keep malformed escapes literal. */ }
-                const raw = /^\s*https?:[/\\]*[^:/\\?#]*:([^/\\?#]*)@/i.exec(entry.container[entry.key])?.[1];
-                const characters = [...decoded];
-                const spelling = characters.map(character => {
-                    const percent = Buffer.from(character).toString('hex').replace(/../g, byte =>
-                        '%' + byte.replace(/[a-f]/g, digit => '[' + digit + digit.toUpperCase() + ']'));
-                    return '(?:' + percent + '|' + escapePattern(character) + ')';
-                }).join('');
-                const alternatives = raw && raw !== encoded ? escapePattern(raw) + '|' + spelling : spelling;
-                const pattern = '(?:' + alternatives + ')';
-                passwordPatterns.set(characters.length < 4 ? '(?<![\\p{L}\\p{N}])' + pattern + '(?![\\p{L}\\p{N}])' : pattern, characters.length);
-                return entry.value;
-            }).filter(Boolean))].sort((a, b) => b.length - a.length);
-            const passwords = [...passwordPatterns].sort((a, b) => b[1] - a[1]).map(([pattern]) => pattern).join('|');
-            const passwordPattern = passwords && new RegExp(passwords, 'gu');
-            const label = (value, limit) => {
-                if (typeof value !== 'string') return undefined;
-                const matches = passwordPattern ? [...value.matchAll(passwordPattern)] : [];
-                if (matches.length) {
-                    // Find both kinds of credentials in the original label so a replacement cannot split another match.
-                    const ranges = matches.map(match => [match.index, match.index + match[0].length]);
-                    for (const secret of secrets) {
-                        for (let start = value.indexOf(secret); start !== -1; start = value.indexOf(secret, start + secret.length)) {
-                            ranges.push([start, start + secret.length]);
+                if (!encoded) continue;
+                if (!passwords.has(encoded)) {
+                    const parts = encoded.match(/%[0-9a-f]{2}|./gisu);
+                    const password = [];
+                    for (let index = 0; index < parts.length; index++) {
+                        const part = parts[index];
+                        if (part.length !== 3) {
+                            password.push(characterPatterns(part));
+                            continue;
+                        }
+                        const byte = parseInt(part.slice(1), 16);
+                        const width = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+                        const run = parts.slice(index, index + width).join('');
+                        if (run.length === width * 3) {
+                            try {
+                                const character = decodeURIComponent(run);
+                                password.push(characterPatterns(character));
+                                index += width - 1;
+                                continue;
+                            } catch (error) {
+                                if (!(error instanceof URIError)) throw error;
+                            }
+                        }
+                        for (const character of part.toLowerCase()) {
+                            password.push(characterPatterns(character, character.toUpperCase()));
                         }
                     }
-                    const redacted = [];
-                    let end = 0;
-                    for (const [start, stop] of ranges.sort((a, b) => a[0] - b[0])) {
-                        if (start >= end) redacted.push(value.slice(end, start), '[REDACTED]');
-                        end = Math.max(end, stop);
-                    }
-                    value = redacted.join('') + value.slice(end);
-                } else {
-                    for (const secret of secrets) value = value.replaceAll(secret, '[REDACTED]');
+                    passwords.set(encoded, password);
                 }
+                const raw = /^\s*https?:[/\\]*[^:/\\?#]*:([^/\\?#]*)@/i.exec(entry.container[entry.key])?.[1];
+                if (raw && raw !== encoded) rawPasswords.set(raw, passwords.get(encoded).length < 4);
+            }
+            const leftBoundary = /(?<![\p{L}\p{N}])/uy;
+            const rightBoundary = /(?![\p{L}\p{N}])/uy;
+            const atBoundary = (pattern, value, index) => {
+                pattern.lastIndex = index;
+                return pattern.test(value);
+            };
+            const label = (value, limit) => {
+                if (typeof value !== 'string') return undefined;
+                const ends = new Int32Array(value.length);
+                const matchLiteral = (secret, short) => {
+                    for (let start = value.indexOf(secret); start !== -1; start = value.indexOf(secret, start + 1)) {
+                        const end = start + secret.length;
+                        if (!short || (atBoundary(leftBoundary, value, start) && atBoundary(rightBoundary, value, end))) {
+                            ends[start] = Math.max(ends[start], end);
+                        }
+                    }
+                };
+                for (const secret of secrets) matchLiteral(secret, false);
+                for (const [raw, short] of rawPasswords) matchLiteral(raw, short);
+                const spellingMatches = new Map();
+                let suffix = new Int32Array(value.length + 1);
+                let current = new Int32Array(value.length + 1);
+                for (const password of passwords.values()) {
+                    if (password.length > value.length) continue;
+                    const short = password.length < 4;
+                    for (let end = 1; end <= value.length; end++) {
+                        suffix[end] = !short || atBoundary(rightBoundary, value, end) ? end : 0;
+                    }
+                    // Keep the furthest complete end at every start, without backtracking over spelling choices.
+                    for (let index = password.length - 1; index >= 0; index--) {
+                        current.fill(0);
+                        let found = false;
+                        for (const spelling of password[index]) {
+                            if (!spellingMatches.has(spelling)) {
+                                const positions = [];
+                                for (const match of value.matchAll(spelling)) positions.push(match.index, match.index + match[0].length);
+                                spellingMatches.set(spelling, positions);
+                            }
+                            const positions = spellingMatches.get(spelling);
+                            for (let pair = 0; pair < positions.length; pair += 2) {
+                                const start = positions[pair], end = suffix[positions[pair + 1]];
+                                if (!end) continue;
+                                current[start] = Math.max(current[start], end);
+                                found = true;
+                            }
+                        }
+                        [suffix, current] = [current, suffix];
+                        if (!found) break;
+                    }
+                    for (let start = 0; start < ends.length; start++) {
+                        if (suffix[start] && (!short || atBoundary(leftBoundary, value, start))) {
+                            ends[start] = Math.max(ends[start], suffix[start]);
+                        }
+                    }
+                }
+                const redacted = [];
+                let end = 0;
+                for (let start = 0; start < ends.length; start++) {
+                    if (!ends[start]) continue;
+                    if (!redacted.length || start > end) redacted.push(value.slice(end, start), '[REDACTED]');
+                    end = Math.max(end, ends[start]);
+                }
+                value = redacted.join('') + value.slice(end);
                 return maskSensitive(value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, limit);
             };
             // shortcut: show the first 200 distinct paths and 20 owners per path, expand if the panel needs larger reports.
