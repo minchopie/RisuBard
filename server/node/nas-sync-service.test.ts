@@ -2782,3 +2782,21 @@ test('chats-only scope (13, Codex r2 #3): chats → all → chats before the ski
     expect(phone.db().characters[0].description).toBe('card v1')
     expect(phone.db().modules[0].name).toBe('모듈 v1')
 })
+test('chats-only scope (14, Codex r3 #1): a user resolution of a re-queued root is the user\'s request from then on — a switch back to chats keeps it queued; only the roots the switch itself queued leave the queue', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const phone = await chatsOnlyPhone(t, dav, 'scope14-phone', phoneWithCard())
+    await applyAll(phone)
+    await phone.service.setSyncScope({ scope: 'all' })
+    await phone.service.snapshot()
+    const reapply = phone.service.status().scopeReapply, key = 'library\ncharacter\ncard'
+    expect(reapply).toBeGreaterThan(1)
+    const variants = phone.service.store().graph.classify(key).variants
+    await phone.service.resolveConflict({ root: key, keep: variants[0][0] })
+    expect(phone.service.status().scopeReapply).toBe(reapply - 1)
+    await phone.service.setSyncScope({ scope: 'chats' })
+    expect(phone.service.status().scopeReapply).toBe(0)
+    expect(phone.service.status().localApply).toBe(1) // the resolved card stays queued
+    await phone.service.pull(); const plan = await phone.service.plan()
+    expect(plan.appliedRoots ?? []).toContain(key) // applied although the scope is 'chats': the user asked for it
+    expect(plan.modules).toEqual([]); expect(plan.settings).toEqual({}) // nothing else out of scope
+})

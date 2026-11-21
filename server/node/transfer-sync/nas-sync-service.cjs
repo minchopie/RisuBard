@@ -661,13 +661,16 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     /** Local revisions the plan must materialize: the intent is durable BEFORE the store commit (a crash in between is recovered by
      *  the next plan). Only roots this call added are withdrawn, and only when the commit provably did not happen: an error after
      *  the revisions became durable (ambiguous write) keeps the intent. Never advances the applied lineage. */
-    async function commitWithIntent(s, revisions, keys) {
+    async function commitWithIntent(s, revisions, keys, { explicit = true } = {}) {
         const added = keys.filter(k => !(service().localApply ?? []).includes(k));
-        manifest.transact(x => { for (const key of keys) if (!x.localApply.includes(key)) x.localApply.push(key); });
+        // 2026-11-21: a user's resolution/restore of a root that a switch back to 'all' queued (scopeReapply) is the user's request from now on:
+        // a later switch to 'chats' keeps it queued. The automatic persona merge (explicit: false) does not change that mark.
+        const promoted = explicit ? keys.filter(k => (service().scopeReapply ?? []).includes(k)) : [];
+        manifest.transact(x => { for (const key of keys) if (!x.localApply.includes(key)) x.localApply.push(key); if (promoted.length) { x.scopeReapply = x.scopeReapply.filter(k => !promoted.includes(k)); if (!x.scopeReapply.length) delete x.scopeReapply; } });
         try { s.commit(revisions); }
         catch (error) {
             const durable = revisions.every(r => s.graph.get(r.id));
-            if (!durable) manifest.transact(x => { x.localApply = x.localApply.filter(k => !added.includes(k)); });
+            if (!durable) manifest.transact(x => { x.localApply = x.localApply.filter(k => !added.includes(k)); if (promoted.length) x.scopeReapply = [...new Set([...(x.scopeReapply ?? []), ...promoted])]; });
             throw error;
         }
     }
@@ -1059,7 +1062,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             if (c.state !== 'diverged') continue;
             const heads = c.liveHeads.map(id => s.graph.get(id));
             const merged = key === 'settings\ngroup\npersonas' ? mergePersonaHeads(s.graph, heads, undefined, collectReferences) : null;
-            if (merged) { const [domain, type, rootId] = key.split('\n'); await commitWithIntent(s, [makeRevision({ domain, type, root: rootId, parents: c.heads, ...merged })], [key]); }
+            if (merged) { const [domain, type, rootId] = key.split('\n'); await commitWithIntent(s, [makeRevision({ domain, type, root: rootId, parents: c.heads, ...merged })], [key], { explicit: false }); }
         }
         const result = { transaction, workspaceId: s.identity().workspaceId, phase: 'preparing', createdAt: now(), commits: [], appliedRoots: [], pending: [],
             settings: {}, pluginEnabled: null, modules: [], plugins: [], characters: [], newCharacters: [], chats: [], deletions: [], before: null, lineage: {}, branches: {}, workspaces: [], media: [], expected: null, progress: { workspaces: {}, acked: [] } };
