@@ -6,7 +6,7 @@
 import { beforeEach, afterEach, test, expect, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
 import { readFileSync } from 'node:fs'
-const f = vi.hoisted(() => ({ unavailable: vi.fn(() => false), activity: vi.fn(() => false), addLog: vi.fn(), clearMissingMedia: vi.fn(async () => ({ cleared: true })), alert: { type: 'none' }, chat: 'card/chat', selected: null as any }))
+const f = vi.hoisted(() => ({ unavailable: vi.fn(() => false), activity: vi.fn(() => false), addLog: vi.fn(), clearMissingMedia: vi.fn(async (_id: string, _signal?: AbortSignal) => ({ cleared: true })), alert: { type: 'none' }, chat: 'card/chat', selected: null as any }))
 vi.mock('./log', () => ({ addLog: f.addLog }))
 vi.mock('./transfer-sync/playTransfer', () => ({ transferUnavailable: () => f.unavailable() }))
 vi.mock('./transfer-sync/nasSync', () => ({ activityBlocksSync: () => f.activity(), retrySyncApply: vi.fn(), applySync: vi.fn(), pullSync: vi.fn(), publishSync: vi.fn(), snapshotSync: vi.fn(), syncStatus: vi.fn(), clearMissingSyncMedia: f.clearMissingMedia, reportSyncNetwork: vi.fn(async () => {}), pendingRootsSync: vi.fn(), releaseSyncPlan: vi.fn(), activeChatSignature: () => f.chat }))
@@ -45,7 +45,7 @@ function harness(overrides: any = {}) {
     return { c, calls, guards, io, step, setVisible: (v: boolean) => { visible = v }, setOnline: (v: boolean) => { online = v }, interact: () => { interactions += 1 }, setPending: (n: number) => { pending = n } }
 }
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
-beforeEach(() => { vi.useFakeTimers(); canonicalSaveSettled.set(0); transferBusy.set(false); syncSaveHold.set(false); f.unavailable.mockReturnValue(false); f.activity.mockReturnValue(false); f.alert.type = 'none'; f.chat = 'card/chat'; f.selected.set(0) })
+beforeEach(() => { vi.useFakeTimers(); f.clearMissingMedia.mockReset(); canonicalSaveSettled.set(0); transferBusy.set(false); syncSaveHold.set(false); f.unavailable.mockReturnValue(false); f.activity.mockReturnValue(false); f.alert.type = 'none'; f.chat = 'card/chat'; f.selected.set(0) })
 afterEach(() => { vi.useRealTimers() })
 
 test.each([
@@ -94,6 +94,52 @@ test('missing media aborts the whole cycle and clears only when a checked retry 
         expect(f.clearMissingMedia).not.toHaveBeenCalled()
         expect(await h.c.retryNow()).toBe('empty')
         expect(f.clearMissingMedia).toHaveBeenCalledExactlyOnceWith('diag-id', expect.any(AbortSignal))
+    } finally { h.c.stop() }
+})
+
+test.each([9_900, 10_100])('finalizes an apply at %d ms even while the diagnostic clear is slow', async applyMs => {
+    const h = harness(); await h.c.start(); h.setPending(1)
+    h.io.snapshot.mockResolvedValue({ committed: null, missingMediaChecked: 'diag-id' })
+    let applySignal: AbortSignal | undefined
+    h.io.apply.mockImplementationOnce(async (_auto, signal, guard) => {
+        applySignal = signal
+        guard.planReady()
+        await new Promise(resolve => setTimeout(resolve, applyMs))
+        return { state: 'applied' }
+    })
+    let diagnosticSignal: AbortSignal | undefined
+    f.clearMissingMedia.mockImplementationOnce((_id, signal) => {
+        diagnosticSignal = signal
+        return new Promise((resolve, reject) => {
+            const finish = setTimeout(() => resolve({ cleared: true }), 5_000)
+            signal?.addEventListener('abort', () => { clearTimeout(finish); reject(signal.reason) }, { once: true })
+        })
+    })
+    try {
+        let finished: string | undefined
+        const cycle = h.c.retryNow().then(outcome => { finished = outcome })
+        await vi.advanceTimersByTimeAsync(applyMs)
+        const atApply = finished
+        await vi.advanceTimersByTimeAsync(5_001)
+        await cycle
+        expect(finished).toBe('applied')
+        expect(atApply).toBe('applied')
+        expect(diagnosticSignal).toBeInstanceOf(AbortSignal)
+        expect(diagnosticSignal).not.toBe(applySignal)
+        expect(diagnosticSignal?.aborted).toBe(true)
+        expect(h.c.state).toMatchObject({ lastOutcome: 'applied', failures: 0, offline: false, lastError: '', running: false })
+    } finally { h.c.stop() }
+})
+
+test('diagnostic clear failure leaves a successful receive intact and is retried on the next successful cycle', async () => {
+    const h = harness(); await h.c.start(); h.setPending(1)
+    h.io.snapshot.mockResolvedValue({ committed: null, missingMediaChecked: 'diag-id' })
+    f.clearMissingMedia.mockRejectedValueOnce(new Error('diagnostic request failed'))
+    try {
+        expect(await h.c.cycle('timer')).toBe('pulled')
+        expect(h.c.state).toMatchObject({ lastOutcome: 'pulled', failures: 0, offline: false, lastError: '' })
+        expect(await h.c.retryNow()).toBe('applied')
+        expect(f.clearMissingMedia).toHaveBeenCalledTimes(2)
     } finally { h.c.stop() }
 })
 

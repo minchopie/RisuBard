@@ -196,7 +196,11 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         let stage = 'status', deadline: ReturnType<typeof setTimeout> | null = null
         let missingMediaChecked: string | undefined
         const clearMissingMedia = async () => {
-            if (missingMediaChecked && !signal.aborted) await clearMissingSyncMedia(missingMediaChecked, signal).catch(() => {})
+            if (!missingMediaChecked || generation !== state.generation || !active()) return
+            const cleanup = new AbortController()
+            const timeout = o.setTimer(() => cleanup.abort(), 2_000)
+            try { await clearMissingSyncMedia(missingMediaChecked, cleanup.signal) }
+            finally { o.clearTimer(timeout) }
         }
         // 0.9.92-ver7: the cycle's current step for the progress display (NasSyncProgress.svelte); display only.
         const enter = (next: string) => { stage = next; state.stage = next; state.stageAt = o.now(); publish() }
@@ -234,11 +238,11 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 }
                 if (direction === 'upload') {
                     const remaining = keyReady ? await o.status(signal) : null; boundary()
-                    if (missingMediaChecked) { await clearMissingMedia(); boundary() }
                     // 2026-11-07 join adoption: the server withheld this device's changes; that is not an upload.
                     state.lastOutcome = !keyReady ? 'key-pending:idle' : (remaining ?? status)?.role === 'joining' && (remaining ?? status)?.adopting ? 'adopting' : attention || remaining?.sync?.outbox?.pending?.length ? 'upload-pending' : 'uploaded'
                     state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
                     schedule(routineDelay())
+                    void clearMissingMedia().catch(() => {})
                     return state.lastOutcome
                 }
                 enter('pull'); const pulled = await o.pull(signal); boundary()
@@ -267,11 +271,11 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     if (result.state === 'deferred-active-chat') state.deferredForChat = o.activeChat() || '-'
                     else if (result.state === 'applied' || result.state === 'applied-pending' || result.state === 'empty') state.deferredForChat = ''
                 }
-                if (missingMediaChecked && outcome !== 'save-failed' && outcome !== 'finish-pending') { await clearMissingMedia(); boundary() }
                 state.lastOutcome = (keyReady ? '' : 'key-pending:') + outcome
                 state.attention = attention; state.failures = 0; state.offline = false; state.lastError = ''; state.lastCycleAt = o.now()
                 if (!keyReady) transferStatus.set('동기화 키를 기다리는 중 · 권한 기기에 키 요청을 보내 주세요.')
                 if (generation === state.generation) schedule(routineDelay())
+                if (outcome !== 'save-failed' && outcome !== 'finish-pending') void clearMissingMedia().catch(() => {})
                 return state.lastOutcome
             } catch (error: any) {
                 if (error instanceof Cancelled && error.message === 'generating' && generation === state.generation && active()) return deferForGeneration() // stopped between steps (never inside the apply)

@@ -235,6 +235,31 @@ test.for(['asset', 'inlay'])('missing referenced %s prevents snapshot commit wit
     expect(d.service.store().state().commits).toEqual([])
 })
 
+test('missing-media diagnostics mask raw, URL-encoded and decoded URL passwords in each label', async t => {
+    const raw = '검수%3dqa-result'
+    const url = 'https://fixture:' + raw + '@fixture.invalid/v1'
+    const encoded = new URL(url).password
+    const decoded = decodeURIComponent(encoded)
+    const reencoded = encodeURIComponent(decoded)
+    const db = {
+        forceReplaceUrl: url,
+        koboldURL: 'https://fixture:%61%62@fixture.invalid/v1',
+        comfyUiUrl: 'https://fixture:@fixture.invalid/v1',
+        characters: [{ chaId: 'card', type: 'character', name: 'parent cabin ' + reencoded,
+            chats: [{ id: 'chat', name: 'chat cabin ' + decoded + ' ' + encoded,
+                message: [{ role: 'char', data: '{{inlay::absent-' + raw + '}}' }] }] }],
+    }
+    const d = await device(t, fixtureDav(), 'diagnostic-url-password', db, MASTER, { readDatabase: async () => db })
+    d.service.enable({ workspaceId: 'ws-fixture' })
+    await expect(d.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
+    const report = JSON.parse(await readFile(join(d.dataRoot, 'nas-sync', 'missing-media.json'), 'utf8'))
+    expect(report).toMatchObject({ count: 1, files: [{
+        path: 'inlay/absent-[REDACTED]',
+        owners: [{ kind: 'chat', name: 'chat cabin [REDACTED] [REDACTED]', parent: 'parent cabin [REDACTED]' }],
+    }] })
+    expect(d.make().status().missingMedia).toEqual(report)
+})
+
 test('uploads weekly local edits from the recorded lineage with the six divergent roots present', async t => {
     const dav = fixtureDav()
     const makeDb = (value: string) => ({

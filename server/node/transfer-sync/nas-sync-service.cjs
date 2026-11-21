@@ -170,7 +170,16 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
                 } catch { /* Diagnostic I/O must not change the snapshot error. */ }
             }
             // Mask known opaque credentials even when they were pasted into a name without a key label.
-            const secrets = [...new Set(inventory(database).map(entry => entry.value).filter(Boolean))].sort((a, b) => b.length - a.length);
+            const secrets = [...new Set(inventory(database).flatMap(entry => {
+                if (entry.kind !== 'userinfo') return [entry.value];
+                const encoded = entry.value.slice(entry.value.indexOf(':') + 1);
+                let decoded = encoded;
+                try { decoded = decodeURIComponent(encoded); } catch { /* Keep malformed escapes literal. */ }
+                // Match a bare password only when long enough to avoid masking ordinary labels.
+                if (decoded.length < 4) return [entry.value];
+                const raw = /^\s*https?:[/\\]*[^:/\\?#]*:([^/\\?#]*)@/i.exec(entry.container[entry.key])?.[1];
+                return [entry.value, raw, encoded, decoded, encodeURIComponent(decoded)];
+            }).filter(Boolean))].sort((a, b) => b.length - a.length);
             const label = (value, limit) => {
                 if (typeof value !== 'string') return undefined;
                 for (const secret of secrets) value = value.replaceAll(secret, '[REDACTED]');
