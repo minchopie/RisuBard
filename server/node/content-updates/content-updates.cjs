@@ -35,9 +35,11 @@ const KINDS = new Set(['character', 'persona', 'preset', 'plugin', 'module']);
 // preset (0.9.92-ver1): a prompt preset as exported by the app (.risup / .risupreset) or its JSON form.
 // plugin (0.9.92-ver11): a plugin script (.js), at most PLUGIN_LIMIT.
 // module (0.9.96-ver4): a module file (.risum) with its assets, at most MODULE_LIMIT (the client reads it whole into memory).
+// 2026-11-24 (user decision): MODULE_LIMIT is the card limit FILE_LIMIT (512 MiB; 64 MiB before), so a picture module as large as a
+// card can be published. A device with the older 64 MiB limit skips such a record as invalid (validItem): not listed, never asked.
 const EXTENSIONS = { character: new Set(['charx', 'png', 'json']), persona: new Set(['png']), preset: new Set(['risup', 'risupreset', 'json']), plugin: new Set(['js']), module: new Set(['risum']) };
 const PLUGIN_LIMIT = 8 * 1024 * 1024;
-const MODULE_LIMIT = 64 * 1024 * 1024;
+const MODULE_LIMIT = FILE_LIMIT;
 const sizeLimit = kind => kind === 'plugin' ? PLUGIN_LIMIT : kind === 'module' ? MODULE_LIMIT : FILE_LIMIT;
 // The kinds a client that does not list its own (`kinds` in the overview request; 0.9.92-ver10 and older) can import: those clients
 // would ask about any other kind as a persona and import it as a character card, so it is not listed to them. A client that lists its

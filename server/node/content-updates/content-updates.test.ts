@@ -259,7 +259,7 @@ describe('content updates: modules', () => {
 
     test('a module must be a .risum file under the module size limit (above the plugin limit), published under a module: name', async () => {
         const { updates } = device()
-        expect(MODULE_LIMIT).toBe(64 * 1024 * 1024)
+        expect(MODULE_LIMIT).toBe(512 * 1024 * 1024) // 2026-11-24: the card limit (64 MiB before)
         expect(MODULE_LIMIT).toBeGreaterThan(PLUGIN_LIMIT)
         await expect(updates.publish(Readable.from([risum]), { ...moduleMeta, fileName: 'life.json' })).rejects.toThrow(/형식/)
         await expect(updates.publish(Readable.from([risum]), { ...moduleMeta, key: 'plugin:삶은계란' })).rejects.toThrow(/배포 이름/)
@@ -271,6 +271,38 @@ describe('content updates: modules', () => {
         expect(() => validItem({ ...good, file: `${'a'.repeat(64)}.js`, fileName: 'a.js' })).toThrow()
         expect(() => validItem({ ...good, kind: 'plugin' })).toThrow()
     })
+    // 2026-11-24 (user decision): the module limit is the card limit, 512 MiB (64 MiB before); the other kinds' limits are unchanged.
+    test('a module over the old 64 MiB limit is accepted up to the card limit (512 MiB); one byte more is refused; other kinds keep their limits', async () => {
+        const OLD = 64 * 1024 * 1024, CARD = 512 * 1024 * 1024
+        const record = (kind: string, ext: string, bytes: number) => ({ key: `${kind}:x`, kind, title: 'x', version: '', file: `${'a'.repeat(64)}.${ext}`, fileName: `x.${ext}`, sha256: 'a'.repeat(64), bytes, publishedAt: new Date().toISOString() })
+        expect(validItem(record('module', 'risum', OLD + 1))).toMatchObject({ kind: 'module', bytes: OLD + 1 })
+        expect(validItem(record('module', 'risum', 100 * 1024 * 1024))).toMatchObject({ bytes: 100 * 1024 * 1024 })
+        expect(validItem(record('module', 'risum', CARD))).toMatchObject({ bytes: CARD })
+        expect(() => validItem(record('module', 'risum', CARD + 1))).toThrow(/size/)
+        for (const [kind, ext] of [['character', 'charx'], ['persona', 'png'], ['preset', 'risup']]) {
+            expect(validItem(record(kind, ext, CARD))).toMatchObject({ kind })
+            expect(() => validItem(record(kind, ext, CARD + 1))).toThrow(/size/)
+        }
+        expect(PLUGIN_LIMIT).toBe(8 * 1024 * 1024)
+        expect(validItem(record('plugin', 'js', PLUGIN_LIMIT))).toMatchObject({ kind: 'plugin' })
+        expect(() => validItem(record('plugin', 'js', PLUGIN_LIMIT + 1))).toThrow(/size/)
+    })
+
+    test('a 70 MiB module (over the old 64 MiB limit) is published in 1 MiB chunks, listed to a module client, hidden from older clients and downloaded with its hash check', async () => {
+        const big = Buffer.concat([Buffer.from([111, 0]), Buffer.alloc(4), Buffer.alloc(70 * 1024 * 1024, 7), Buffer.from([0])])
+        const chunks = function* () { for (let at = 0; at < big.length; at += 1024 * 1024) yield big.subarray(at, at + 1024 * 1024) }
+        const dav = fixtureDav(), pc = device(dav, 'pc'), tablet = device(dav, 'tablet')
+        const mapMeta = { key: 'module:mge_map', kind: 'module', title: '마물소녀도감 지도 v1.0.1', version: '1.0.1', fileName: 'MGE_지도_v1.0.1.risum' }
+        const item = await pc.updates.publish(Readable.from(chunks()), mapMeta)
+        expect(item).toMatchObject({ ...mapMeta, bytes: big.length, sha256: sha(big), file: `${sha(big)}.risum` })
+        expect((await tablet.updates.overview(FIVE)).pending.map((x: any) => x.key)).toEqual(['module:mge_map'])
+        expect((await tablet.updates.overview(FOUR)).items).toEqual([])
+        expect((await tablet.updates.overview()).items).toEqual([])
+        const { file } = await tablet.updates.download(mapMeta.key, item.sha256)
+        expect(fs.statSync(file).size).toBe(big.length)
+        expect(sha(fs.readFileSync(file))).toBe(item.sha256)
+        fs.rmSync(file)
+    }, 120_000)
     const pluginLike = () => ({ key: 'plugin:x', kind: 'plugin', title: 'x', version: '', fileName: 'x.js' })
 
     test('older clients — none (0.9.92-ver10 and older) or four kinds (0.9.92-ver11 … 0.9.96-ver3) — are not shown module items, also through the HTTP route', async () => {
