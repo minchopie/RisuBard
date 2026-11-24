@@ -4664,6 +4664,14 @@
       "bytes": 5299
     },
     {
+      "path": "patchnote/0.9.103-ver2.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "87973579dea78d22aaf60a16404d6efd1a8c9ff8b6838d49254728dddbd37c5d",
+      "contentSha256": "87973579dea78d22aaf60a16404d6efd1a8c9ff8b6838d49254728dddbd37c5d",
+      "bytes": 2810
+    },
+    {
       "path": "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
       "module": "history-docs",
       "kind": "files",
@@ -5692,6 +5700,7 @@
         "docs/fork-modules/compat/v0.9.102/model-compat.patch",
         "docs/fork-modules/compat/v0.9.102/distribution.patch",
         "patchnote/0.9.103-ver1.md",
+        "patchnote/0.9.103-ver2.md",
         "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
         "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
@@ -5797,7 +5806,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "97c35e0c9f3080b5b645b0f6bd53d39ef56a2fb127f5baa56230ecefb83cf3a4"
+      "sha256": "a807a2dfac24dfd7f3c18786ae73b781224dc764adc29267f2467f1779b97f22"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5875,7 +5884,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.103/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "5bbea40016f90af45af5770b27066c8e979615a643bbf1fadafc3eae08827ea8"
+          "sha256": "03dc0cc4c4667c6b69fa0b93243940d9d7f1fe737bab4a2a566cf03d1b86c63a"
         },
         {
           "module": "lore-lua",

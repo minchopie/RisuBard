@@ -655,6 +655,7 @@
         "docs/fork-modules/compat/v0.9.102/model-compat.patch",
         "docs/fork-modules/compat/v0.9.102/distribution.patch",
         "patchnote/0.9.103-ver1.md",
+        "patchnote/0.9.103-ver2.md",
         "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
         "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
