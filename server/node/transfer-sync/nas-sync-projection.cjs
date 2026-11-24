@@ -127,6 +127,13 @@ const diagnosticAssetFields = {
     settings: /^\/(?:userIcon|personas\/\d+\/(?:icon|image|embeddedModule\/(?:icon|assets\/\d+\/1))|botPresets\/\d+\/image|characterOrder\/\d+\/imgFile|NAIImgConfig\/(?:image|character_image)|wavespeedImage\/reference_image)$/,
 };
 const settingsBodyFields = /^\/(?:loreBook\/\d+\/content|personas\/\d+\/(?:personaPrompt|note|embeddedModule\/(?:description|lorebook\/\d+\/content))|personaPrompt|userNote)$/;
+/** rv15C: body text of each library item kind (allow-list). Names, asset labels and plugin settings are not body: their references still count as missing, but are never listed. */
+const diagnosticBodyFields = {
+    character: /^\/(?:firstMessage|desc|notes|personality|scenario|exampleMessage|systemPrompt|postHistoryInstructions|creatorNotes|additionalText|replaceGlobalNote|backgroundHTML|backgroundCSS|virtualscript|translatorNote|risuBardWikiGuide|(?:alternateGreetings|group_only_greetings)\/\d+|globalLore\/\d+\/content|customscript\/\d+\/out|triggerscript\/\d+\/effect\/\d+\/(?:code|value)|depth_prompt\/prompt|personas\/\d+\/(?:personaPrompt|note|embeddedModule\/(?:description|lorebook\/\d+\/content)))$/,
+    module: /^\/(?:description|backgroundEmbedding|cjs|lorebook\/\d+\/content|regex\/\d+\/out|trigger\/\d+\/effect\/\d+\/(?:code|value))$/,
+    plugin: /^\/script$/,
+    settings: settingsBodyFields,
+};
 
 function bodyAssetPaths(text) {
     const paths = new Set();
@@ -157,7 +164,7 @@ function collectReferences(value, kind, pointer = '', out = {
                 out.diagnosticInlays.add(field);
             }
             const assetField = ['image', 'icon', 'uri'].includes(key) || /^\/(?:additionalAssets|emotionImages)\/\d+\/1$/.test(p) || kind === 'module' && /^\/assets\/\d+\/1$/.test(p);
-            const body = kind === 'settings' ? settingsBodyFields.test(p) : !/^(?:name|displayName|username|sourceChatName|title)$/i.test(key);
+            const body = kind === 'chat' ? !/^(?:name|displayName|username|sourceChatName|title)$/i.test(key) : !!diagnosticBodyFields[kind]?.test(p);
             const structuredMedia = diagnosticAssetFields[kind]?.test(p);
             if (/^assets\/[^/\\\s]+$/.test(field) || (assetField && field.startsWith('assets/'))) {
                 out.assets.add(field);

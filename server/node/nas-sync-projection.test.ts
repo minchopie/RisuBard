@@ -100,6 +100,22 @@ test('attributes only declared media fields and body media operands to the diagn
     expect([...collectReferences({ icon: 'assets/plugin.png' }, 'plugin').diagnosticAssets]).toEqual(['assets/plugin.png'])
 })
 
+test('rv15C: asset labels and plugin settings stay out of the diagnostic list; their references still count as missing', async () => {
+    const asset = (c: string) => 'assets/' + c.repeat(64) + '.png'
+    const inlay = (c: string) => c.repeat(8) + '-abcd-4321-8abc-9876543210ab'
+    const tokens = (a: string, i: string) => '{{img::' + asset(a) + '}} {{inlay::' + inlay(i) + '}}'
+    const database = {
+        characters: [{ chaId: 'card', name: 'card', chats: [], firstMessage: tokens('c', '3'), emotionImages: [[tokens('e', '5'), asset('f')]] }],
+        modules: [{ id: 'mod', name: 'module', description: tokens('g', '6'), assets: [[tokens('a', '1'), asset('d'), 'png']] }],
+        plugins: [{ name: 'plugin', script: '', arguments: { mode: 'string' }, realArg: { mode: tokens('b', '2') }, argMeta: {}, customLink: [], enabled: true }],
+    }
+    const projected = await projectDatabase({ database, vault: createVault(master) })
+    expect([...new Set(projected.missing)].sort()).toEqual([
+        ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(asset), ...['1', '2', '3', '5', '6'].map(i => 'inlay/' + inlay(i)),
+    ].sort())
+    expect([...projected.missingMedia].sort()).toEqual([...['c', 'd', 'f', 'g'].map(asset), ...['3', '6'].map(i => 'inlay/' + inlay(i))].sort())
+})
+
 async function fixture(t: any) {
     const root = await temp(t), data = join(root, 'data'), tmp = join(root, 'tmp'); await mkdir(data); await mkdir(tmp)
     const memory = createRuntimeMemoryService(data)
