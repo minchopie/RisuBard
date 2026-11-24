@@ -173,7 +173,7 @@
             {#if missingMedia}
                 <details open>
                     <summary>빠진 그림: 파일 {missingMedia.count}개</summary>
-                    <p>빠진 그림 파일이 있어 이번 동기화를 멈췄어요. 아래 파일을 쓰는 모듈·캐릭터 등을 그림이 들어 있는 원본 파일에서 다시 가져오세요.</p>
+                    <p>빠진 그림 파일이 있어 이 기기의 변경을 NAS에 올리지 않았어요. NAS의 변경은 받아서 보관하지만, 그림을 되살릴 때까지 이 기기에 적용하지 않아요. 아래 파일을 쓰는 모듈·캐릭터 등을 그림이 들어 있는 원본 파일에서 다시 가져오세요.</p>
                     {#if missingMedia.count > missingMediaFiles.length}<p>전체 파일 중 {missingMediaFiles.length}개의 이름을 표시해요.</p>{/if}
                     {#if missingMediaFiles.length}
                         <ul>

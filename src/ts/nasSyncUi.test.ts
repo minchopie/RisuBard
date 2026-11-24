@@ -147,6 +147,8 @@ test('the trash shows one named row per deletion, newest first; the headline sum
     expect(syncHeadline(incoming, [], { lastOutcome: 'pulled' } as any)).toMatchObject({ tone: 'waiting', title: '받은 변경 2건 적용 대기' })
     expect(syncHeadline(status, [], { offline: true, lastOutcome: 'offline', lastError: 'network fetch failed' } as any)).toMatchObject({ tone: 'attention', title: '연결 안 됨 · 재시도 예정' })
     expect(syncHeadline(status, [], { lastOutcome: 'error', lastError: 'x' } as any)).toMatchObject({ tone: 'attention', title: '오류 · 재시도 예정' })
+    // 2026-11-25 A1: a missing picture stopped only the upload; what was received is kept, not applied.
+    expect(syncHeadline(status, [], { lastOutcome: 'missing-media', lastError: 'x' } as any)).toMatchObject({ tone: 'attention', title: '빠진 그림 때문에 업로드만 멈춤 · 받은 자료는 보관하고 적용하지 않음 · 재시도 예정' })
     expect(syncHeadline({ ...status, plan: { phase: 'saving' } }, [], { lastOutcome: 'recovery-pending' } as any).tone).toBe('attention')
     expect(syncHeadline({ ...status, sync: { ...status.sync, incoming: { 'tablet-device/i': { held: 1 } } } }, []).title).toBe('확인이 필요한 항목 1건')
     expect(syncHeadline(status, [], { paused: true } as any)).toMatchObject({ tone: 'waiting', title: '잠시 중지됨' })

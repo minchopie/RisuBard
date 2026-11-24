@@ -76,7 +76,7 @@ test.each(['retryNow', 'uploadNow', 'downloadNow'] as const)('%s retries a faile
     h.c.stop()
 })
 
-test.each([true, false])('missing media aborts the whole cycle and clears only when a checked retry succeeds (server logged: %s)', async logged => {
+test.each([true, false])('missing media stops only the upload: the cycle still receives (no publish, preview or apply), and the report clears only when a checked retry succeeds (server logged: %s)', async logged => {
     const h = harness(); await h.c.start()
     f.clearMissingMedia.mockClear()
     h.calls.length = 0
@@ -85,15 +85,25 @@ test.each([true, false])('missing media aborts the whole cycle and clears only w
     const message = '빠진 그림 파일이 있어요. NAS 동기화 화면에서 확인해 주세요.'
     h.io.snapshot.mockRejectedValueOnce(Object.assign(new Error(message), { code: 'SNAPSHOT_MISSING', detail: { missingFiles: 4, logged } }))
     try {
-        expect(await h.c.retryNow()).toBe('error')
-        expect(h.calls).toEqual(['status'])
+        expect(await h.c.retryNow()).toBe('missing-media')
+        expect(h.calls).toEqual(['status', 'pull'])
         expect(h.io.snapshot).toHaveBeenCalledTimes(1)
         expect(h.c.state.lastError).toBe(message)
+        expect(h.c.state.failures).toBe(1)
         if (logged) expect(f.addLog).not.toHaveBeenCalled()
         else expect(f.addLog).toHaveBeenCalledExactlyOnceWith({
             level: 'error', source: 'nas-sync', message: 'NAS 동기화 단계에서 오류가 발생했습니다.',
             description: 'stage=snapshot code=SNAPSHOT_MISSING missingFiles=4',
         })
+        // 2026-11-25 A1: the download button receives too; the upload button fails as before.
+        h.calls.length = 0
+        h.io.snapshot.mockRejectedValueOnce(Object.assign(new Error(message), { code: 'SNAPSHOT_MISSING', detail: { missingFiles: 4, logged: true } }))
+        expect(await h.c.downloadNow()).toBe('missing-media')
+        expect(h.calls).toEqual(['status', 'pull'])
+        h.calls.length = 0
+        h.io.snapshot.mockRejectedValueOnce(Object.assign(new Error(message), { code: 'SNAPSHOT_MISSING', detail: { missingFiles: 4, logged: true } }))
+        expect(await h.c.uploadNow()).toBe('error')
+        expect(h.calls).toEqual(['status'])
         h.io.snapshot.mockResolvedValue({ committed: null, missingMediaChecked: 'diag-id' })
         h.io.publish.mockResolvedValueOnce({ failed: [{ error: 'fixture offline' }] })
         expect(await h.c.retryNow()).toBe('publish-failed')

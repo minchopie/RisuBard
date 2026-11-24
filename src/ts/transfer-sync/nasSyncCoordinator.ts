@@ -195,6 +195,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         state.running = true; state.direction = direction; state.lastWindow = safe?.window ?? ''; counted(); publish()
         let stage = 'status', deadline: ReturnType<typeof setTimeout> | null = null
         let missingMediaChecked: string | undefined
+        let snapshotMissing: any = null // 2026-11-25 A1: the snapshot's missing-picture error, kept while this cycle still receives
         const clearMissingMedia = async () => {
             if (!missingMediaChecked || generation !== state.generation || !active()) return
             const cleanup = new AbortController()
@@ -229,8 +230,15 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // Settled local edits become causal revisions before anything incoming is applied; the joining device waits for the shared key
                     // before publishing its own encrypted history. The snapshot is skipped (not the publish) while a generation/import runs: the
                     // next settled save schedules it; edits made meanwhile are simply part of that later snapshot.
-                    if (!receiveOnly && !o.generating()) { enter('snapshot'); missingMediaChecked = (await o.snapshot(signal))?.missingMediaChecked; boundary() }
-                    if (direction !== 'download') {
+                    if (!receiveOnly && !o.generating()) {
+                        enter('snapshot')
+                        try { missingMediaChecked = (await o.snapshot(signal))?.missingMediaChecked }
+                        // 2026-11-25 (user decision A1): a missing picture/inlay stops only the upload. The cycle still receives (pull, kept in the
+                        // store); nothing is published or applied and the diagnostic stays. The upload button and every other error fail as before.
+                        catch (error: any) { if (error?.code !== 'SNAPSHOT_MISSING' || direction === 'upload') throw error; snapshotMissing = error }
+                        boundary()
+                    }
+                    if (direction !== 'download' && !snapshotMissing) {
                         enter('publish'); const report = await o.publish(signal); boundary()
                         if (report?.rotated) attention = 'rotated'
                         if (report?.failed?.length) throw Object.assign(new Error('publish failed: ' + report.failed.map((x: any) => x.error ?? x.sequence ?? x).join('; ')), { code: 'PUBLISH_FAILED', report })
@@ -246,6 +254,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     return state.lastOutcome
                 }
                 enter('pull'); const pulled = await o.pull(signal); boundary()
+                if (snapshotMissing) throw snapshotMissing // A1: received and kept; no preview or apply until the picture is back (diagnostic and backoff as before)
                 // A blob pinned by an admitted revision could not be re-fetched: that is lost material, not an "up to date" cycle. Like a failed
                 // publish it fails the cycle (no apply) and backs off; the next pull retries the repair.
                 if (pulled?.repairFailed?.length) throw Object.assign(new Error('blob repair failed: ' + pulled.repairFailed.map((x: any) => `${String(x.hash).slice(0, 8)} ${x.reason}`).join('; ')), { code: 'REPAIR_FAILED', report: pulled })
@@ -285,11 +294,11 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                 // Offline/server/publish error: local play continues (an un-armed apply released its hold), retry with backoff.
                 state.failures += 1
                 const message = String(error?.message ?? error)
-                const missing = stage === 'snapshot' && error?.code === 'SNAPSHOT_MISSING'
-                if (!missing || error.detail?.logged !== true) logCycleError(stage, error?.code, missing ? error.detail?.missingFiles : undefined)
+                const missing = (stage === 'snapshot' || error === snapshotMissing) && error?.code === 'SNAPSHOT_MISSING'
+                if (!missing || error.detail?.logged !== true) logCycleError(missing ? 'snapshot' : stage, error?.code, missing ? error.detail?.missingFiles : undefined)
                 state.offline = !o.online() || /deadline|abort|fetch|network/i.test(message)
                 state.lastError = message.slice(0, 200)
-                state.lastOutcome = error?.code === 'PUBLISH_FAILED' ? 'publish-failed' : error?.code === 'REPAIR_FAILED' ? 'repair-failed' : state.offline ? 'offline' : 'error'
+                state.lastOutcome = error === snapshotMissing ? 'missing-media' : error?.code === 'PUBLISH_FAILED' ? 'publish-failed' : error?.code === 'REPAIR_FAILED' ? 'repair-failed' : state.offline ? 'offline' : 'error'
                 schedule(o.backoffMs[Math.min(state.failures, o.backoffMs.length) - 1])
                 return state.lastOutcome
             } finally {
