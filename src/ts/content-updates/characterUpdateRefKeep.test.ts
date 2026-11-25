@@ -1279,6 +1279,15 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
             expect(noForms.features.assetSelection.characterReferences.map((ref: any) => [ref.target, noFormsName(ref.asset)])).toEqual([['self', 'b']])
         })
 
+        test('of the new body\'s character references of one target only the last counts, even when its picture is left out', () => {
+            const C: [string, string, string] = pic('c')
+            const mineEntry = body({ assetSelection: { characterReferences: [{ target: 'description:self', asset: 'asset:1' }] } }, { assets: { 'asset:1': record(C) } })
+            const theirsEntry = body({ assetSelection: { characterReferences: [{ target: 'self', asset: 'asset:0' }, { target: 'self', asset: 'asset:1' }] } }, { assets: { 'asset:0': record(A), 'asset:1': record(B) } })
+            const { merged, data, name } = merge(mineEntry, theirsEntry, { mine: [A, C], theirs: [A, B] }, [A, C])
+            expect(data.features.assetSelection.characterReferences.map((ref: any) => [ref.target, name(ref.asset)])).toEqual([['description:self', 'c']])
+            expect(merged.held.map(held => [held.side, held.target, held.reference.asset, held.reason])).toEqual([['theirs', 'self', 'asset:1', 'asset-missing']])
+        })
+
         test('form references on "self" move like any other same target', () => {
             const forms = (asset: string) => ({ characterForms: { entries: [{ target: 'self', defaultFormId: 'form_default', forms: [{ id: 'form_default', label: 'd', reference: { asset } }] }] } })
             const { merged, data, name } = merge(body(forms('asset:0'), { assets: { 'asset:0': record(A) } }), body(forms('asset:4'), { assets: { 'asset:4': record(B) } }), { mine: [A], theirs: [B] }, [A, B])

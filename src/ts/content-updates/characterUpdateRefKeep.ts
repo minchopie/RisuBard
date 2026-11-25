@@ -434,8 +434,10 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
             }
             rows.set(row.target, tokens)
         }
-        for (const reference of Array.isArray(selection?.characterReferences) ? selection.characterReferences : []) {
+        const theirsCharacterReferences = Array.isArray(selection?.characterReferences) ? selection.characterReferences : []
+        for (const [index, reference] of theirsCharacterReferences.entries()) {
             if (typeof reference?.target !== 'string') continue
+            if (theirsCharacterReferences.slice(index + 1).some(later => later?.target === reference.target)) continue // the last one is in use
             if (!placed(reference)) { drop(reference.target); continue }
             const moved = place(reference, 'theirs')
             if (moved) references.set(reference.target, moved)
