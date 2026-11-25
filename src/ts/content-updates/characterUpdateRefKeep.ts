@@ -237,8 +237,9 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     const own = parse(mineEntry?.content), other = parse(theirsEntry?.content)
     if (!own || !other) return null
     // 0.9.103-ver4: Asset Maid trims every target ("wr"); both bodies are read that way, so " lore:0 " and "lore:0" are one target below.
-    const trimmed = (key: string, value: unknown) => key === 'target' && typeof value === 'string' ? value.trim() : value
-    const sameId = (a: unknown, b: unknown) => a === b || (typeof a === 'string' && typeof b === 'string' && a.trim() === b.trim()) // form ids too
+    const text = (value: unknown) => value == null ? '' : String(value).trim() // Asset Maid's wr()
+    const trimmed = (key: string, value: unknown) => key === 'target' && value != null ? text(value) : value
+    const sameId = (a: unknown, b: unknown) => a === b || text(a) === text(b) // form ids too
     own.data = JSON.parse(JSON.stringify(own.data), trimmed)
     let data: Portable = JSON.parse(JSON.stringify(other.data), trimmed)
     const mineAssets = (mine.additionalAssets ?? []) as Asset[], theirsAssets = (theirs.additionalAssets ?? []) as Asset[]
@@ -354,7 +355,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     // characters that land on one new character cannot both be right: both held.
     const candidates = { data: { ...data, features: { characterForms: { entries: [...new Set([...entriesOf(data).map(entry => entry.target),
         ...Object.keys(data.entities?.lorebooks ?? {})])].map(target => ({ target })) } } }, lore: theirs.globalLore }
-    const customIds = new Set(((data.features?.characters as { entries?: { id?: unknown }[] } | undefined)?.entries ?? []).map(entry => entry?.id))
+    const customIds = new Set(((data.features?.characters as { entries?: { id?: unknown }[] } | undefined)?.entries ?? []).map(entry => text(entry?.id)))
     const members = (data.entities?.members ?? {}) as Record<string, unknown>
     const sameLore = (target: string) => {
         const before = own.data.entities?.lorebooks?.[target]?.fingerprints, after = data.entities?.lorebooks?.[target]?.fingerprints

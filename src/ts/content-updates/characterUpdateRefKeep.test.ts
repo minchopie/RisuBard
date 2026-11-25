@@ -1378,6 +1378,18 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
             expect(formPictures(second.entry, [A])).toEqual(['self/f=a'])
         })
 
+        test('targets, form ids and custom ids are read as Asset Maid reads them (as text, trimmed)', () => {
+            const C: [string, string, string] = pic('c')
+            const refEntry = body({ assetSelection: { characterReferences: [{ target: 'self', asset: 'asset:0' }] } }, { assets: { 'asset:0': record(A) } })
+            const formsEntry = body({ characterForms: { entries: [{ target: ['self'], defaultFormId: 2, forms: [{ id: 'f1', label: 'f1', reference: { asset: 'asset:1' } }, { id: '2', label: '2', reference: { asset: 'asset:2' } }] }] } }, { assets: { 'asset:1': record(B), 'asset:2': record(C) } })
+            const first = merge(refEntry, formsEntry, { mine: [A], theirs: [B, C] }, [B, C, A])
+            expect(first.merged).toMatchObject({ held: [], selected: 1 })
+            expect(formPictures(first.entry, [B, C, A])).toEqual(['self/2=a', 'self/f1=b'])
+            const picks = body({ assetSelection: { selections: [{ target: 'custom:character_c', assets: ['asset:0'] }] } }, { assets: { 'asset:0': record(A) } })
+            const second = merge(picks, body({ characters: { entries: [{ id: ' character_c ' }] } }), { mine: [A], theirs: [A] }, [A])
+            expect(second.merged).toMatchObject({ held: [], selected: 1 })
+        })
+
         test('form references on "self" move like any other same target', () => {
             const forms = (asset: string) => ({ characterForms: { entries: [{ target: 'self', defaultFormId: 'form_default', forms: [{ id: 'form_default', label: 'd', reference: { asset } }] }] } })
             const { merged, data, name } = merge(body(forms('asset:0'), { assets: { 'asset:0': record(A) } }), body(forms('asset:4'), { assets: { 'asset:4': record(B) } }), { mine: [A], theirs: [B] }, [A, B])
