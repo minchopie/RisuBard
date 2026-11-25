@@ -72,3 +72,12 @@
 
 - 배포로 받은 캐릭터는 원작 「설치된 봇 업데이트」로 적용된다. 그 합치기에서 Asset Maid 전용 로어 항목(`__ASSET_MAID_DATA__`)이 양쪽에서 다르면(충돌, 또는 기준 기록이 없는 '다름') 그리고 내 레퍼런스를 하나라도 새 판으로 옮길 수 있으면, `src/ts/content-updates/characterUpdateRefKeep.ts`(+test)가 새 판 본문에 내 레퍼런스를 같은 인물·폼으로 옮긴 값을 원작 「직접 고침」 선택으로 미리 골라 둔다(`applyAssetMaidPreset`, 기준 파일로 다시 비교할 때는 손대지 않은 미리 고른 값만 새로 만듦). 그 값이 그대로 적용됐을 때만 `finalizeAssetMaidMerge`가 최종 로어·그림 순서에 맞춰 `lore:N`·`asset:N`과 지문 키를 다시 매기고, 가리키는 그림·자르기 그림을 남기며, 옮기지 못한 레퍼런스는 알림·앱 기록(보류)으로 남긴다. 사용자가 내 버전·새 버전을 직접 고르거나 글을 고치면 원작 그대로다.
 - 연결(host-bridges, v0.9.96 어댑터의 대상 전용 호스트): `src/ts/characterUpdateFlow.svelte.ts`에 import 1줄과 호출 3곳, `src/ts/characterUpdate.ts` `canon()`에 카드 형식 사본(`extentions`의 `risu_id`·`risu_loreCache`·`risu_bookVersion`)을 비교에서 빼는 함수 1개.
+
+## 0.9.103-ver4: 카드 업데이트 때 Asset Maid 에셋 선택(assetSelection) 유지, 그림은 기록(지문)으로 찾기
+
+- 위 합치기(`mergeAssetMaid`의 `place`)는 그림을 `asset:N` 번호의 위치가 아니라 그 번호의 기록(`entities.assets`의 지문 `descriptor`·`occurrence`, 옛 지문 포함)으로 찾는다. Asset Maid가 그림을 찾는 방식과 같다. 기록이 그쪽 그림을 가리키지 않으면 이전처럼 번호의 위치를 쓴다. 번호가 위치와 같은 본문의 결과는 바이트까지 이전과 같다. (1.4.3 카드처럼 번호가 위치와 다른 본문에서 ver3까지는 레퍼런스가 다른 그림으로 옮겨졌다.)
+- `features.assetSelection`(Asset Maid 에셋 분석 탭의 인물별 그림 줄 `selections[]`, 인물 기준 그림 `characterReferences[]`)도 같은 `place`로 옮겨, 본문의 모든 번호가 `entities.assets` 기록을 갖는다(기록 없는 번호가 하나라도 있으면 Asset Maid가 본문 전체를 손상으로 본다).
+  - 줄은 인물별 합집합이다. 새 판 그림 먼저, 그다음 이 기기에서 고른 그림 중 아직 없는 것. 내 줄의 인물은 레퍼런스와 같은 `locate`(로어 지문 → 로어 이름)로 새 판 인물을 찾고, 둘 이상이 한 인물에 모이면 둘 다 보류한다.
+  - 합친 뒤 그림이 남지 않는 선택은 뺀다(선택 때문에 그림을 다시 붙이지 않는다). 빈 줄은 버린다. 같은 인물의 `characterReferences`는 내 것이 이긴다(폼 레퍼런스와 같음, 그림은 레퍼런스처럼 필요하면 끝에 붙인다).
+  - 옮기지 못한 선택은 레퍼런스와 같은 알림·앱 기록에 「에셋 선택 (내 선택/새 판 선택: 사유)」로 남는다.
+  - 내 선택만 있고 레퍼런스가 없어도 미리 고른 합치기를 만든다. 양쪽 모두 `assetSelection`이 없으면 본문에 키를 만들지 않는다.

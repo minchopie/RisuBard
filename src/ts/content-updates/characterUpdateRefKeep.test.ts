@@ -936,3 +936,142 @@ describe('character pictures referenced by installed chats', async () => {
         expect(toast.warning).toHaveBeenCalledOnce()
     })
 })
+
+// 0.9.103-ver4: pictures are found by their records, and Asset Maid's picture picks (features.assetSelection) take the same way.
+
+describe('Asset Maid picture picks (assetSelection) across a card update', () => {
+    type Picks = { selections?: { target: string, assets: string[] }[], characterReferences?: Record<string, unknown>[] }
+    /** The entry with Asset Maid picture picks and records for the named pictures ("asset:N" need not be the picture's position). */
+    const withPicks = (entry: loreBook, picks: Picks | null, assets: Record<number, string> = {}): loreBook => {
+        const data = portable(entry)
+        if (picks) data.features.assetSelection = picks
+        data.entities.assets = { ...data.entities.assets, ...Object.fromEntries(Object.entries(assets).map(([index, name]) => [`asset:${index}`, { fingerprints: { descriptor: assetMaidCharacterLocators([pic(name)])[0]!.descriptor } }])) }
+        return { ...entry, content: '@@dont_activate ' + JSON.stringify(data) }
+    }
+    /** A number of the body -> the picture Asset Maid finds for it (descriptor and occurrence), or MISSING. */
+    const named = (entry: loreBook | undefined, pictures: readonly unknown[]) => {
+        const data = portable(entry), locators = assetMaidCharacterLocators(pictures)
+        return (token: string) => {
+            const record = data.entities.assets?.[token]
+            const at = record ? locators.findIndex(locator => locator?.descriptor === record.fingerprints?.descriptor && locator?.occurrence === (record.occurrence ?? 0)) : -1
+            return at < 0 ? `MISSING ${token}` : (pictures[at] as string[])[0]
+        }
+    }
+    const rows = (entry: loreBook | undefined, pictures: readonly unknown[]) => {
+        const name = named(entry, pictures)
+        return Object.fromEntries((portable(entry).features.assetSelection?.selections ?? []).map((row: any) => [row.target, row.assets.map(name)]))
+    }
+    const formPictures = (entry: loreBook | undefined, pictures: readonly unknown[]) => {
+        const name = named(entry, pictures)
+        return portable(entry).features.characterForms.entries.flatMap((e: any) => e.forms.filter((f: any) => f.reference?.asset).map((f: any) => `${e.target}/${f.id}=${name(f.reference.asset)}`)).sort()
+    }
+    /** Every "asset:N" anywhere in the features has its record (Asset Maid rejects the whole body otherwise). */
+    const dangling = (entry: loreBook | undefined) => {
+        const data = portable(entry)
+        return [...JSON.stringify(data.features).matchAll(/"(asset:\d+)"/g)].map(match => match[1]).filter(token => !data.entities.assets?.[token])
+    }
+    const maid = (char: character) => char.globalLore.find(entry => entry.comment === ASSET_MAID_COMMENT)
+    const run = (mine: character, theirs: character, base: character | null, picks: (plan: UpdatePlan, id: string) => Record<string, 'mine' | 'theirs' | 'edit'> = (_plan, id) => ({ [id]: 'edit' })) => {
+        const plan = planUpdate(CHARACTER_UPDATE, mine, theirs, base)
+        const keep = presetAssetMaidMerge(plan, mine, theirs)!
+        const merged = apply(plan, mine, theirs, picks(plan, keep.id), { [keep.id]: keep.text })
+        const result = finalize(merged, mine, theirs)
+        return { keep, merged, result, entry: maid(merged) }
+    }
+    const everything = (side: 'mine' | 'theirs') => (plan: UpdatePlan, id: string) => {
+        const picks: Record<string, 'mine' | 'theirs' | 'edit'> = { [id]: 'edit' }
+        for (const item of plan.items) if (picks[item.id] !== 'edit') picks[item.id] = side // chooseCharacterUpdateMany skips 'edit'
+        return picks
+    }
+
+    test('the user references follow the picture their record names, not the picture at their number', () => {
+        const { mine, theirs, base } = scenario()
+        // Numbers written elsewhere (Asset Maid counts other pictures too): asset:1 names u2 and asset:2 names u1.
+        mine.globalLore[2] = maidEntry([{ at: 0, fp: 'aria', forms: [{ id: 'f1', asset: 1 }, { id: 'f2', asset: 2 }] }, { at: 1, fp: 'bea', forms: [{ id: 'g1', asset: 1 }] }], { 1: 'u2', 2: 'u1' })
+        const { result, merged, entry } = run(mine, theirs, base)
+        expect(result).toMatchObject({ kept: 3, held: [], selected: 0 })
+        expect(formPictures(entry, merged.additionalAssets!)).toEqual(['lore:0/g1=u2', 'lore:1/f1=u2', 'lore:1/f2=u1'])
+        expect(dangling(entry)).toEqual([])
+    })
+
+    test('rows are joined by character: the new body\'s pictures first, then the user\'s own picks; every number keeps its record', () => {
+        const { mine, theirs, base } = scenario()
+        mine.globalLore[2] = withPicks(mine.globalLore[2], { selections: [{ target: 'lore:0', assets: ['asset:1', 'asset:0'] }, { target: 'lore:1', assets: ['asset:2'] }] }, { 0: 'card1' })
+        // The new body numbers card2 as asset:7 (its position is 1) and picks card1 for Aria too.
+        theirs.globalLore[2] = withPicks(theirs.globalLore[2], { selections: [{ target: 'lore:1', assets: ['asset:7', 'asset:3'] }] }, { 7: 'card2', 3: 'card1' })
+        const { keep, result, merged, entry } = run(mine, theirs, base)
+        expect(rows({ content: keep.text } as loreBook, ['card1', 'u1', 'u2', '__asset_maid_crop_x1', 'card2'].map(pic))).toEqual({ 'lore:1': ['card2', 'card1', 'u1'], 'lore:0': ['u2'] })
+        expect(result).toMatchObject({ kept: 3, held: [], selected: 3 })
+        expect(merged.additionalAssets!.map(asset => asset[0])).toEqual(['card1', 'u1', 'u2', '__asset_maid_crop_x1', 'card2'])
+        expect(rows(entry, merged.additionalAssets!)).toEqual({ 'lore:1': ['card2', 'card1', 'u1'], 'lore:0': ['u2'] })
+        expect(Object.keys(portable(entry).features.assetSelection)).toEqual(['selections'])
+        expect(dangling(entry)).toEqual([])
+    })
+
+    test('the user\'s picks are carried when the new body has none, even without references', () => {
+        const { mine, theirs, base } = scenario()
+        mine.globalLore[2] = withPicks(maidEntry([{ at: 0, fp: 'aria', forms: [{ id: 'f1' }] }, { at: 1, fp: 'bea', forms: [{ id: 'g1' }] }], { 1: 'u1' }), { selections: [{ target: 'lore:0', assets: ['asset:1'] }] })
+        const { keep, result, merged, entry } = run(mine, theirs, base)
+        expect(keep.kept).toBe(0)
+        expect(result).toMatchObject({ kept: 0, held: [], selected: 1 })
+        expect(rows(entry, merged.additionalAssets!)).toEqual({ 'lore:1': ['u1'] })
+        expect(dangling(entry)).toEqual([])
+        // Without any pick or reference of the user's, nothing is preselected (as before).
+        mine.globalLore[2] = maidEntry([{ at: 0, fp: 'aria', forms: [{ id: 'f1' }] }])
+        expect(presetAssetMaidMerge(planUpdate(CHARACTER_UPDATE, mine, theirs, base), mine, theirs)).toBeNull()
+    })
+
+    test('a pick whose picture the new card removed is left out and reported; a row left empty is dropped', () => {
+        const { mine, theirs, base } = scenario()
+        mine.globalLore[2] = withPicks(mine.globalLore[2], { selections: [{ target: 'lore:0', assets: ['asset:0', 'asset:1'] }, { target: 'lore:1', assets: ['asset:0'] }] }, { 0: 'card1' })
+        theirs.additionalAssets = [pic('card2')]
+        const { result, merged, entry } = run(mine, theirs, base)
+        expect(merged.additionalAssets!.map(asset => asset[0])).not.toContain('card1')
+        expect(rows(entry, merged.additionalAssets!)).toEqual({ 'lore:1': ['u1'] })
+        expect(result!.held.map(held => [held.side, held.character, held.reason, held.selection])).toEqual([
+            ['mine', 'Character: Aria', 'asset-missing', true], ['mine', 'Character: Bea', 'asset-missing', true],
+        ])
+        expect(String(vi.mocked(toast.warning).mock.calls[0][0])).toContain('선택 그림 2개')
+        expect(dangling(entry)).toEqual([])
+    })
+
+    test('"모두 새 버전" drops the picks of pictures it removes and keeps the rest; "내 버전" keeps the installed body as it is', () => {
+        const { mine, theirs, base } = scenario()
+        mine.additionalAssets = [...mine.additionalAssets!, pic('u3')]
+        mine.globalLore[2] = withPicks(mine.globalLore[2], { selections: [{ target: 'lore:0', assets: ['asset:1'] }, { target: 'lore:1', assets: ['asset:4'] }] }, { 4: 'u3' })
+        theirs.globalLore[2] = withPicks(theirs.globalLore[2], { selections: [{ target: 'lore:0', assets: ['asset:1'] }] }, { 1: 'card2' })
+        const all = run(mine, theirs, base, everything('theirs'))
+        // u1 stays because a reference needs it; u3 (only picked) goes with the user's choice.
+        expect(all.merged.additionalAssets!.map(asset => asset[0])).toEqual(['card1', 'card2', 'u1', 'u2', '__asset_maid_crop_x1'])
+        expect(rows(all.entry, all.merged.additionalAssets!)).toEqual({ 'lore:0': ['card2'], 'lore:1': ['u1'] })
+        expect(all.result!.held.map(held => [held.character, held.reason])).toEqual([['Character: Bea', 'asset-missing']])
+        expect(dangling(all.entry)).toEqual([])
+        // "모두 내 버전" for the rest: the new card2 is not added, so the new body's pick of it goes and the user's u3 stays.
+        const keepMine = run(mine, theirs, base, everything('mine'))
+        const byName = Object.entries(rows(keepMine.entry, keepMine.merged.additionalAssets!)).map(([target, names]) => [keepMine.merged.globalLore[Number(target.slice(5))].comment, names])
+        expect(byName).toEqual([['Character: Bea', ['u3']], ['Character: Aria', ['u1']]]) // the new body's row first
+        expect(keepMine.result!.held.map(held => [held.side, held.character, held.reason])).toEqual([['theirs', 'Character: Bea', 'asset-missing']])
+        expect(dangling(keepMine.entry)).toEqual([])
+        const own = run(mine, theirs, base, (_plan, id) => ({ [id]: 'mine' }))
+        expect(own.result).toBeNull()
+        expect(own.entry!.content).toBe(mine.globalLore[2].content)
+    })
+
+    test('character references: the new body\'s follow their pictures, the user\'s win on the same character', () => {
+        const { mine, theirs, base } = scenario()
+        mine.globalLore[2] = withPicks(mine.globalLore[2], { characterReferences: [{ target: 'lore:1', asset: 'asset:2', enabled: true }] })
+        theirs.globalLore[2] = withPicks(theirs.globalLore[2], { characterReferences: [{ target: 'lore:0', asset: 'asset:9' }, { target: 'lore:1', analysisEnabled: false }] }, { 9: 'card2' })
+        const { result, merged, entry } = run(mine, theirs, base)
+        expect(result).toMatchObject({ held: [], selected: 1 })
+        const name = named(entry, merged.additionalAssets!)
+        expect(portable(entry).features.assetSelection.characterReferences.map((ref: any) => ({ ...ref, asset: ref.asset && name(ref.asset) })))
+            .toEqual([{ target: 'lore:0', asset: 'u2', enabled: true }, { target: 'lore:1', analysisEnabled: false }])
+        expect(dangling(entry)).toEqual([])
+    })
+
+    test('without picks on either side the body has no assetSelection, as before', () => {
+        const { mine, theirs, base } = scenario()
+        const { entry } = run(mine, theirs, base)
+        expect('assetSelection' in portable(entry).features).toBe(false)
+    })
+})
