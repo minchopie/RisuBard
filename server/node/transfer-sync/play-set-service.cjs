@@ -361,8 +361,10 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             // match). A card that already exists gets the name entries of that chat's Asset Maid pictures it does not have yet — names compared
             // like the renderer (case-insensitive), nothing existing replaced — also for a chat received before (duplicate), so a chat that came
             // without its pictures (0.9.103-ver3) is repaired by receiving the same file again. `needed`: the pictures those entries point to.
-            // Module pictures share the renderer's name list too: any module's picture name counts as taken (the existing one keeps showing).
-            const characterAssets = [], needed = new Map(), moduleNames = (db.modules ?? []).flatMap(m => (m?.assets ?? []).map(row => String(row?.[0] ?? '').toLocaleLowerCase()));
+            // Module pictures share the renderer's name list too: any module's (or persona's embedded module's) picture name counts as taken
+            // (the existing one keeps showing).
+            const characterAssets = [], needed = new Map();
+            const moduleNames = [...(db.modules ?? []), ...(db.personas ?? []).map(p => p?.embeddedModule)].flatMap(m => (m?.assets ?? []).map(row => String(row?.[0] ?? '').toLocaleLowerCase()));
             for (const entry of incomingCharacters(archive.manifest, archive.records)) {
                 const candidates = matchingCharacters(db, entry.name, entry.id, entry.originalId);
                 const card = targets[entry.id] ? candidates.find(c => c.chaId === targets[entry.id]) : candidates.length === 1 ? candidates[0] : undefined;
