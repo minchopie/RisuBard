@@ -237,7 +237,8 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     // "asset:N" is only the number the body was written with and need not be the picture's position. The position is used as before
     // when the record names no character picture of that side.
     // A module picture is none of the card's pictures: it keeps its record under a number past every card picture the result can get
-    // (one number per module picture, whichever side names it). A number without a record of its side is not placed: it could only
+    // (one number per module picture, whichever side names it and however its record is written). A number without a record of its
+    // side is not placed: it could only
     // point at some other picture.
     const sideLocators: Partial<Record<'mine' | 'theirs', ReturnType<typeof characterLocators>>> = {}
     const moduleTokens = new Map<string, string>(), moduleBase = result.length + mineAssets.length
@@ -247,12 +248,12 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         const record = (side === 'mine' ? own.data : other.data).entities?.assets?.[reference.asset]
         if (!record) return null
         if ('module' in record) {
-            const key = JSON.stringify(record)
+            const key = JSON.stringify([record.module, record.fingerprints?.descriptor, record.occurrence ?? 0])
             let token = moduleTokens.get(key)
             if (!token) {
                 token = `asset:${moduleBase + moduleTokens.size}`
                 moduleTokens.set(key, token)
-                assets[token] = JSON.parse(key)
+                assets[token] = JSON.parse(JSON.stringify(record))
             }
             return { ...reference, asset: token }
         }
@@ -278,13 +279,17 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     // Only lore targets follow the lore map; "custom:…", "self", "description:self" and member targets stay.
     const placed = (entry: Entry) => !map || indexOf(entry.target, 'lore') < 0 || map.has(indexOf(entry.target, 'lore'))
     const dropped = entriesOf(data).filter(entry => !placed(entry)).map(entry => commentOf(theirs.globalLore, entry.target) || String(entry.target ?? ''))
-    // The new body's own references follow their pictures to their place in the result.
+    const droppedTargets = new Set(entriesOf(data).filter(entry => !placed(entry)).map(entry => String(entry.target ?? '')))
+    // The new body's own references follow their pictures to their place in the result. One whose picture is not there yet is looked
+    // for again after the user's references brought their pictures back (below).
+    const missing: [Entry, Form, Reference][] = []
     for (const entry of entriesOf(data)) for (const form of entry.forms ?? []) {
         if (!form?.reference) continue
         const moved = placed(entry) ? place(form.reference, 'theirs') : null
         if (moved) form.reference = moved
         else {
-            held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(form.id ?? ''), reference: form.reference, reason: placed(entry) ? 'asset-missing' : 'character-missing' })
+            if (placed(entry)) missing.push([entry, form, form.reference])
+            else held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(form.id ?? ''), reference: form.reference, reason: 'character-missing' })
             delete form.reference
         }
     }
@@ -331,13 +336,19 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         character: commentOf(side === 'mine' ? mine.globalLore : theirs.globalLore, target), formId: '', reference: { asset: String(asset ?? '') }, reason, selection: true })
     // Where each of the user's rows (and references) goes: a lore target to the same character of the new body (any of its lore
     // targets, with or without forms); "self", "description:self", custom characters and members stay when the new body has them
-    // (Asset Maid's own target check). Rows of two different characters that land on one new character cannot both be right: both held.
+    // (Asset Maid's own target check), a member's lore target when the new body's record of it is the same entry. Rows of two different
+    // characters that land on one new character cannot both be right: both held.
     const candidates = { data: { ...data, features: { characterForms: { entries: [...new Set([...entriesOf(data).map(entry => entry.target),
         ...Object.keys(data.entities?.lorebooks ?? {})])].map(target => ({ target })) } } }, lore: theirs.globalLore }
     const customIds = new Set(((data.features?.characters as { entries?: { id?: unknown }[] } | undefined)?.entries ?? []).map(entry => entry?.id))
     const members = (data.entities?.members ?? {}) as Record<string, unknown>
+    const sameLore = (target: string) => {
+        const before = own.data.entities?.lorebooks?.[target]?.fingerprints, after = data.entities?.lorebooks?.[target]?.fingerprints
+        return !!before && !!after && FINGERPRINTS.some(kind => !!before[kind] && before[kind] === after[kind])
+    }
     const targetKept = (target: string) => isCustomTarget(target) ? customIds.has(target.slice('custom:'.length))
         : target === 'self' || target === 'description:self' || !!members[target] || !!members[/^(member:\d+)\/description:self$/u.exec(target)?.[1] ?? '']
+            || sameLore(target)
     const where = (list: unknown) => {
         const items = (Array.isArray(list) ? list : []).filter(item => typeof item?.target === 'string') as Entry[]
         const found = items.map((item): Entry | HeldReason => indexOf(item.target, 'lore') >= 0 ? locate(item, { data: own.data, lore: mine.globalLore }, candidates)
@@ -355,6 +366,13 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }
         ownReferences.push({ ...moved, target: target.target })
         selected++
+    }
+    // The new body's form references that missed their picture, now that every picture the user's references need is back; a form
+    // the user's reference took stays the user's (the new body's reference is reported as before).
+    for (const [entry, form, reference] of missing) {
+        const moved = form.reference ? null : place(reference, 'theirs')
+        if (moved) form.reference = moved
+        else held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(form.id ?? ''), reference, reason: 'asset-missing' })
     }
     // The new body's outfit references (forms[].outfits[], features.outfits) follow their pictures too, or their numbers would be left
     // without a record.
@@ -376,8 +394,9 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         const pick = (token: unknown, side: 'mine' | 'theirs') => typeof token === 'string' ? place({ asset: token }, side, false)?.asset : undefined
         // A row or reference of the new body whose lore entry is left out goes with it (reported with the dropped characters).
         const drop = (target: string) => {
-            const name = commentOf(theirs.globalLore, target) || target
-            if (!dropped.includes(name)) dropped.push(name)
+            if (droppedTargets.has(target)) return
+            droppedTargets.add(target)
+            dropped.push(commentOf(theirs.globalLore, target) || target)
         }
         for (const row of Array.isArray(selection?.selections) ? selection.selections : []) {
             if (typeof row?.target !== 'string') continue

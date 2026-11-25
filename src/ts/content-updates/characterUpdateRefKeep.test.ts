@@ -1198,6 +1198,42 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
             expect(merged.dropped).toEqual(['Character: Aria'])
             expect(data.features.assetSelection).toEqual({ selections: [] })
         })
+
+        test('one module picture is one number however each side wrote its record', () => {
+            const mineEntry = body({ assetSelection: { selections: [{ target: 'self', assets: ['asset:3'] }] } }, { assets: { 'asset:3': { module: 'module:map', fingerprints: { descriptor: 'am2:map-a', content: 'am2:c' } } } })
+            const theirsEntry = body({ assetSelection: { selections: [{ target: 'self', assets: ['asset:7'] }] } }, { assets: { 'asset:7': { fingerprints: { descriptor: 'am2:map-a' }, module: 'module:map' } } })
+            const { data } = merge(mineEntry, theirsEntry, { mine: [A], theirs: [A] }, [A])
+            expect(data.features.assetSelection.selections[0].assets).toHaveLength(1)
+        })
+
+        test('a new-body form reference finds a picture the user\'s character reference brought back', () => {
+            const old: [string, string, string] = ['old', 'assets/a.png', 'png'], renamed: [string, string, string] = ['new', 'assets/a.png', 'png']
+            const mineEntry = body({ assetSelection: { characterReferences: [{ target: 'self', asset: 'asset:0' }] } }, { assets: { 'asset:0': record(old) } })
+            const theirsEntry = body({ characterForms: { entries: [{ target: 'self', defaultFormId: 'f', forms: [{ id: 'f', label: 'f', reference: { asset: 'asset:0' } }] }] } }, { assets: { 'asset:0': record(renamed) } })
+            const result: unknown[] = []
+            const { merged, data, name } = merge(mineEntry, theirsEntry, { mine: [old], theirs: [renamed] }, result)
+            expect(result).toEqual([old])
+            expect(merged.held).toEqual([])
+            expect(name(data.features.characterForms.entries[0].forms[0].reference.asset)).toBe('old')
+            expect(dangling(entry_(data))).toEqual([])
+        })
+
+        test('a member\'s lore target stays when the new body\'s record of it is the same entry', () => {
+            const lorebooks = { 'lore:0': fp('aria'), 'member:0/lore:0': fp('member-lore') }
+            const mineEntry = body({ assetSelection: { selections: [{ target: 'member:0/lore:0', assets: ['asset:0'] }] } }, { assets: { 'asset:0': record(A) }, members: { 'member:0': {} } }, lorebooks)
+            const { merged, data, name } = merge(mineEntry, body({}, { members: { 'member:0': {} } }, lorebooks), { mine: [A], theirs: [A] }, [A])
+            expect(merged).toMatchObject({ held: [], selected: 1 })
+            expect(data.features.assetSelection.selections.map((row: any) => [row.target, row.assets.map(name)])).toEqual([['member:0/lore:0', ['a']]])
+            const { merged: other } = merge(mineEntry, body({}, { members: { 'member:0': {} } }, { 'lore:0': fp('aria'), 'member:0/lore:0': fp('someone-else') }), { mine: [A], theirs: [A] }, [A])
+            expect(other.held.map(held => held.reason)).toEqual(['character-missing'])
+        })
+
+        test('two left-out entries with the same name are reported as two', () => {
+            const theirsEntry = body({ assetSelection: { selections: [{ target: 'lore:0', assets: ['asset:0'] }, { target: 'lore:1', assets: ['asset:0'] }] } }, { assets: { 'asset:0': record(A) } }, { 'lore:0': fp('a'), 'lore:1': fp('b') })
+            const mine = bot({ globalLore: [lore('Same', 'a'), lore('Same', 'b'), body({})], additionalAssets: [A] })
+            const theirs = bot({ globalLore: [lore('Same', 'a'), lore('Same', 'b'), theirsEntry], additionalAssets: [A] })
+            expect(mergeAssetMaid(mine.globalLore[2], theirsEntry, mine, theirs, [A], new Map())!.dropped).toEqual(['Same', 'Same'])
+        })
     })
     const entry_ = (data: unknown) => ({ content: '@@dont_activate ' + JSON.stringify(data) }) as loreBook
 
