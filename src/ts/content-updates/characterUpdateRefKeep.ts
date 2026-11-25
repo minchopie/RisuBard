@@ -201,6 +201,8 @@ const DROP = Symbol('drop')
 /**
  * Every "lore:N" value and key of the body moved by the map. Something that points at an entry not in the merged lorebook is taken
  * out (an object whose target it is, a list item, a key), so no number is left to point at another character.
+ * 0.9.103-ver4: as in Asset Maid, a lore number is a "target", a list item or a key; another text field ("label", "description", …)
+ * stays as written even when it reads "lore:N".
  */
 function moveLore(value: unknown, map: Map<number, number>): unknown {
     const move = (text: string): string | typeof DROP => {
@@ -214,7 +216,7 @@ function moveLore(value: unknown, map: Map<number, number>): unknown {
     const out: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
         const name = move(key)
-        const moved = moveLore(item, map)
+        const moved = typeof item === 'string' && key !== 'target' ? item : moveLore(item, map)
         if (name !== DROP && moved !== DROP) out[name] = moved
     }
     return out
@@ -364,9 +366,9 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     }
     const ownReferences: CharacterReference[] = []
     // Asset Maid ignores a character reference of a character that has forms: such a reference of the installed body was never in use.
-    const ownFormTargets = new Set(entriesOf(own.data).map(entry => entry.target))
+    const ownFormTargets = new Set(entriesOf(own.data).map(entry => String(entry.target ?? '').trim())) // Asset Maid trims targets
     const ownCharacterReferences = where((Array.isArray(ownSelection?.characterReferences) ? ownSelection.characterReferences : [])
-        .filter(reference => !ownFormTargets.has(reference?.target)))
+        .filter(reference => !ownFormTargets.has(String(reference?.target ?? '').trim())))
     for (const [index, [reference, target]] of ownCharacterReferences.entries()) {
         // Asset Maid takes the last reference of a target: an earlier one of the same target was never in use.
         if (ownCharacterReferences.slice(index + 1).some(([later]) => later.target === reference.target)) continue
