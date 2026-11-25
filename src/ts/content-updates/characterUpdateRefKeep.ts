@@ -303,6 +303,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         located.set(entry, target)
         if (typeof target !== 'string') claims.set(target, (claims.get(target) ?? new Set()).add(entry))
     }
+    const ownSlots = new Set<Form>() // forms of the new body that took a reference of the user's
     for (const entry of entriesOf(own.data)) for (const form of entry.forms ?? []) {
         const reference = form?.reference
         if (!reference) continue
@@ -325,6 +326,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (!moved) { note('asset-missing'); continue }
         if (slot.reference && (!custom || Object.keys(slot.reference).length > 0)) replaced++
         slot.reference = moved
+        ownSlots.add(slot)
         kept++
     }
     // Asset Maid's picture picks (the rows of its asset analysis tab and the character references) take the same way, so every number
@@ -363,18 +365,21 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     const ownReferences: CharacterReference[] = []
     for (const [reference, target] of where(ownSelection?.characterReferences)) {
         if (typeof target === 'string') { hold('mine', reference.target, (reference as CharacterReference).asset, target); continue }
-        const moved = place(reference as CharacterReference, 'mine')
-        if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }
-        selected++
         // Asset Maid uses a character reference only for a character without forms: where the new body gave the character forms the
-        // installed body did not have, the user's reference goes to its default form, as a form reference of the user's would.
+        // installed body did not have, the user's reference goes to its default form, as a form reference of the user's would. A form
+        // that already took another reference of the user's (from another installed character) keeps it; this one is held.
         const forms = entriesOf(data).find(entry => entry.target === target.target)
         const slot = forms && !entriesOf(own.data).some(entry => entry.target === reference.target)
             ? (forms.forms ?? []).find(form => form?.id === forms.defaultFormId) ?? forms.forms?.[0] : undefined
+        if (slot && ownSlots.has(slot)) { hold('mine', reference.target, (reference as CharacterReference).asset, 'character-ambiguous'); continue }
+        const moved = place(reference as CharacterReference, 'mine')
+        if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }
+        selected++
         if (slot) {
             const copy: Reference = { ...moved }
             delete copy.target
             slot.reference = copy
+            ownSlots.add(slot)
             continue
         }
         ownReferences.push({ ...moved, target: target.target })
