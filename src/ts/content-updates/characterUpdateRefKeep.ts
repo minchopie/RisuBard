@@ -90,7 +90,8 @@ const isCustomTarget = (target: unknown) => typeof target === 'string' && target
  * narrows the candidates; a test nobody passes is skipped. More than one left is ambiguous: the lore index alone proves nothing.
  */
 function locate(entry: Entry, mine: { data: Portable, lore?: loreBook[] }, theirs: { data: Portable, lore?: loreBook[] }): Entry | HeldReason {
-    if (isCustomTarget(entry.target)) {
+    // 0.9.103-ver4: every target that is not "lore:N" ("custom:…", "self", "description:self", member targets) is the same target.
+    if (typeof entry.target === 'string' && indexOf(entry.target, 'lore') < 0) {
         const matches = entriesOf(theirs.data).filter(other => other.target === entry.target)
         return matches.length === 1 ? matches[0] : matches.length ? 'character-ambiguous' : 'character-missing'
     }
@@ -364,13 +365,25 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (typeof target === 'string') { hold('mine', reference.target, (reference as CharacterReference).asset, target); continue }
         const moved = place(reference as CharacterReference, 'mine')
         if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }
-        ownReferences.push({ ...moved, target: target.target })
         selected++
+        // Asset Maid uses a character reference only for a character without forms: where the new body gave the character forms the
+        // installed body did not have, the user's reference goes to its default form, as a form reference of the user's would.
+        const forms = entriesOf(data).find(entry => entry.target === target.target)
+        const slot = forms && !entriesOf(own.data).some(entry => entry.target === reference.target)
+            ? (forms.forms ?? []).find(form => form?.id === forms.defaultFormId) ?? forms.forms?.[0] : undefined
+        if (slot) {
+            const copy: Reference = { ...moved }
+            delete copy.target
+            slot.reference = copy
+            continue
+        }
+        ownReferences.push({ ...moved, target: target.target })
     }
     // The new body's form references that missed their picture, now that every picture the user's references need is back; a form
-    // the user's reference took stays the user's (the new body's reference is reported as before).
+    // the user's reference took stays the user's (as on any form the user set), only a picture still missing is reported.
     for (const [entry, form, reference] of missing) {
-        const moved = form.reference ? null : place(reference, 'theirs')
+        if (form.reference && (!isCustomTarget(entry.target) || Object.keys(form.reference).length > 0)) continue // as for the user's own
+        const moved = place(reference, 'theirs')
         if (moved) form.reference = moved
         else held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(form.id ?? ''), reference, reason: 'asset-missing' })
     }
@@ -392,6 +405,9 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     if (selection || ownSelection) {
         const rows = new Map<string, string[]>(), references = new Map<string, CharacterReference>()
         const pick = (token: unknown, side: 'mine' | 'theirs') => typeof token === 'string' ? place({ asset: token }, side, false)?.asset : undefined
+        // A pick named twice for one character (in one row or two) counts once.
+        const seen = new Set<string>()
+        const first = (side: 'mine' | 'theirs', target: string, token: unknown) => !seen.has(JSON.stringify([side, target, token])) && !!seen.add(JSON.stringify([side, target, token]))
         // A row or reference of the new body whose lore entry is left out goes with it (reported with the dropped characters).
         const drop = (target: string) => {
             if (droppedTargets.has(target)) return
@@ -403,6 +419,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
             if (!placed(row)) { drop(row.target); continue }
             const tokens = rows.get(row.target) ?? []
             for (const token of Array.isArray(row.assets) ? row.assets : []) {
+                if (!first('theirs', row.target, token)) continue
                 const moved = pick(token, 'theirs')
                 if (!moved) hold('theirs', row.target, token, 'asset-missing')
                 else if (!tokens.includes(moved)) tokens.push(moved)
@@ -419,9 +436,10 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         for (const reference of ownReferences) references.set(reference.target!, reference)
         for (const [row, target] of where(ownSelection?.selections)) {
             const assets = Array.isArray(row.assets) ? row.assets : []
-            if (typeof target === 'string') { for (const token of assets) hold('mine', row.target, token, target); continue }
+            if (typeof target === 'string') { for (const token of assets) if (first('mine', row.target!, token)) hold('mine', row.target, token, target); continue }
             const tokens = rows.get(target.target!) ?? []
             for (const token of assets) {
+                if (!first('mine', target.target!, token)) continue
                 const moved = pick(token, 'mine')
                 if (!moved) { hold('mine', row.target, token, 'asset-missing'); continue }
                 if (!tokens.includes(moved)) tokens.push(moved)
