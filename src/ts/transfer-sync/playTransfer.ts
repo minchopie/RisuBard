@@ -253,17 +253,23 @@ export async function receiveTransfer(key: string, automatic = false) {
         transferStatus.set('채팅을 저장하는 중…')
         db.characters.push(...plan.newCharacters)
         for (const addition of plan.added) db.characters.find(c => c.chaId === addition.characterId)!.chats.push(addition.chat)
-        // 0.9.103-ver4: Asset Maid pictures of a chat received into an existing card: add only the names the card does not have yet.
+        // 0.9.103-ver4: Asset Maid pictures of a chat received into an existing card: add only the names the card does not have yet
+        // (compared like the renderer, case-insensitive). The card is saved with the chats (or on its own when the chats were received before).
+        const pictured: string[] = []
+        let pictureCount = 0
         for (const row of (plan.characterAssets ?? []) as { characterId: string; name: string; path: string; ext: string }[]) {
             const target = db.characters.find(c => c.chaId === row.characterId)
-            if (target && !(target.additionalAssets ?? []).some(entry => entry?.[0] === row.name)) (target.additionalAssets ??= []).push([row.name, row.path, row.ext])
+            if (!target || (target.additionalAssets ?? []).some(entry => String(entry?.[0] ?? '').toLocaleLowerCase() === row.name.toLocaleLowerCase())) continue
+            ;(target.additionalAssets ??= []).push([row.name, row.path, row.ext]); pictureCount++
+            if (!pictured.includes(row.characterId)) pictured.push(row.characterId)
         }
         Object.assign(db, { risuPlaySets: plan.registry })
         checkCharOrder()
-        await requestImmediateSave({ chats: plan.added.map((row: { characterId: string; chat: Chat }) => [row.characterId, row.chat.id!]), flushServer: 'canonical', rejectOnFailure: true })
+        await requestImmediateSave({ chats: plan.added.map((row: { characterId: string; chat: Chat }) => [row.characterId, row.chat.id!]), ...(pictured.length ? { characters: pictured } : {}), flushServer: 'canonical', rejectOnFailure: true })
         await post(`/${key}/finish`, { confirmed: true })
         stopProgress()
-        transferStatus.set(plan.duplicate ? '이미 받은 동일한 자료예요. 중복으로 추가하지 않았어요.' : '가져오기 완료 · 기존 캐릭터 목록에서 확인해 주세요.')
+        const pictures = pictureCount ? ` 에셋메이드 그림 ${pictureCount}개를 캐릭터에 더했어요.` : ''
+        transferStatus.set((plan.duplicate ? '이미 받은 동일한 자료예요. 중복으로 추가하지 않았어요.' : '가져오기 완료 · 기존 캐릭터 목록에서 확인해 주세요.') + pictures)
     } catch (error) {
         stopProgress()
         transferStatus.set(String(error))

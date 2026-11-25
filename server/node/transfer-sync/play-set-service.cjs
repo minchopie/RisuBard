@@ -63,7 +63,8 @@ function assetMaidPictures(manifest, records) {
         if (!lore) continue;
         let data;
         try { data = JSON.parse(lore.content.slice(lore.content.indexOf('{'))); } catch { continue; }
-        const context = byId.get(chatItem.references.find(ref => ref.pointer === '/playContext')?.target);
+        // Same context choice as applyPlaySet: the chat's /playContext, or the single shared context of a legacy set.
+        const context = byId.get(chatItem.references.find(ref => ref.pointer === '/playContext')?.target) ?? manifest.items.find(item => item.kind === 'context');
         const aliases = context ? decode(records.get(context.entry))?.assets ?? {} : {};
         const pictures = new Map();
         const walk = value => {
@@ -134,6 +135,8 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         }
     };
     const read = async key => JSON.parse(await fs.readFile(join(directory(key), 'state.json'), 'utf8'));
+    /** 0.9.103-ver4: this device's value under `key` is readable and has exactly these bytes (sha256 `expected`). */
+    const holds = (key, expected) => { try { const bytes = storage.kvGet(key); return !!bytes && createHash('sha256').update(bytes).digest('hex') === expected; } catch { return false; } };
     async function list() {
         await fs.mkdir(root, { recursive: true, mode: 0o700 });
         const result = [];
@@ -332,10 +335,18 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         const shown = track('verify');
         try {
             archive = await openPlaySetArchive(join(dir, 'incoming.risuplay'), dir, shown.bytes);
-            // 0.9.103-ver4: an Asset Maid picture whose savedPath is the app's own content-addressed key for these exact bytes keeps that
-            // key, so Asset Maid's savedPath stays valid here and a picture this device already has is not stored twice. Others: as before.
-            const maid = assetMaidPictures(archive.manifest, archive.records), sameKey = new Map();
-            for (const pictures of maid.values()) for (const picture of pictures) if (picture.path === `assets/${picture.item.hash}.${picture.path.split('.').at(-1)}`) sameKey.set(picture.item.id, picture.path);
+            // 0.9.103-ver4: an Asset Maid picture whose savedPath is the app's own content-addressed key for its bytes keeps that key, so
+            // Asset Maid's savedPath stays valid here; when this device already holds that key WITH those bytes it is reused, not stored again.
+            // A key that holds other (or unreadable) bytes, a picture an inlay also uses, or a savedPath that is not content-addressed: a new
+            // key, as before.
+            const maid = assetMaidPictures(archive.manifest, archive.records), sameKey = new Map(), reused = new Set();
+            const inlayData = new Set(archive.manifest.items.filter(i => i.kind === 'inlay').flatMap(i => i.references.filter(r => r.pointer === '/data').map(r => r.target)));
+            for (const pictures of maid.values()) for (const picture of pictures) {
+                const item = picture.item;
+                if (sameKey.has(item.id) || inlayData.has(item.id) || picture.path !== `assets/${item.hash}.${picture.path.split('.').at(-1)}`) continue;
+                if (storage.kvGetUpdatedAt(picture.path) === null) sameKey.set(item.id, picture.path);
+                else if (holds(picture.path, item.hash)) { sameKey.set(item.id, picture.path); reused.add(item.id); }
+            }
             const assets = new Map(archive.manifest.items.filter(i => i.kind === 'asset').map(i => [i.id, sameKey.get(i.id) ?? `assets/${randomUUID()}.${(i.media?.name?.split('.').at(-1) || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 12) || 'bin'}`]));
             const fingerprints = await bardFingerprints(archive.manifest, archive.records, async block => {
                 const path = join(staging, randomUUID());
@@ -346,8 +357,26 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             const before = new Set(db.characters.flatMap(c => (c.chats ?? []).map(ch => ch.id)));
             const added = result.database.characters.flatMap(c => c.chats.filter(ch => !before.has(ch.id)).map(chat => ({ characterId: c.chaId, chat })));
             const newCharacters = result.database.characters.filter(c => !db.characters.some(old => old.chaId === c.chaId)).map(c => ({ ...c, chats: [] }));
+            // 0.9.103-ver4: each received chat's card on this device (the same choice as applyCharacterChats: the picked target or the one
+            // match). A card that already exists gets the name entries of that chat's Asset Maid pictures it does not have yet — names compared
+            // like the renderer (case-insensitive), nothing existing replaced — also for a chat received before (duplicate), so a chat that came
+            // without its pictures (0.9.103-ver3) is repaired by receiving the same file again. `needed`: the pictures those entries point to.
+            const characterAssets = [], needed = new Map();
+            for (const entry of incomingCharacters(archive.manifest, archive.records)) {
+                const candidates = matchingCharacters(db, entry.name, entry.id, entry.originalId);
+                const card = targets[entry.id] ? candidates.find(c => c.chaId === targets[entry.id]) : candidates.length === 1 ? candidates[0] : undefined;
+                if (!card) continue;
+                const names = new Set((card.additionalAssets ?? []).map(row => String(row?.[0] ?? '').toLocaleLowerCase()));
+                const owner = archive.manifest.items.find(i => i.id === entry.id);
+                for (const ref of owner.references.filter(r => /^\/chats\/\d+$/.test(r.pointer))) for (const picture of maid.get(ref.target) ?? []) {
+                    const lower = picture.name.toLocaleLowerCase();
+                    if (names.has(lower)) continue;
+                    names.add(lower); needed.set(picture.item.id, picture.item);
+                    characterAssets.push({ characterId: card.chaId, name: picture.name, path: assets.get(picture.item.id), ext: picture.ext });
+                }
+            }
             const plan = { transaction, staging: transaction, phase: 'preparing', added, newCharacters, registry: result.database.risuPlaySets,
-                assetKeys: [], inlayIds: [], workspaces: [], pages: [], result: result.instanceId, characterAssets: [] };
+                assetKeys: [], inlayIds: [], workspaces: [], pages: [], result: result.instanceId, characterAssets };
             record.plan = plan; record.state = 'applying'; delete record.error; write(record);
             if (result.generation) {
                 const ids = result.generation.ids;
@@ -377,20 +406,12 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                 const assetItems = archive.manifest.items.filter(i => i.kind === 'asset');
                 shown.next('copy', { itemsTotal: assetItems.length, bytesTotal: assetItems.reduce((total, item) => total + item.bytes, 0) });
                 for (const item of assetItems) {
-                    // 0.9.103-ver4: the same content-addressed key already here = the same bytes: keep it, copy and install nothing.
-                    if (sameKey.has(item.id) && storage.kvGetUpdatedAt(sameKey.get(item.id)) !== null) { shown.add(item.bytes, 1); continue; }
+                    // 0.9.103-ver4: a reused picture (this device already holds its key with these bytes): copy and install nothing.
+                    // `shared` = a content-addressed key (not unique to this import): arm checks its bytes, a rollback never deletes it.
+                    if (reused.has(item.id)) { shown.add(item.bytes, 1); continue; }
                     const name = randomUUID(), path = join(staging, name); await archive.copyEntry(item.entry, path);
-                    plan.assetKeys.push({ key: assets.get(item.id), file: name });
+                    plan.assetKeys.push({ key: assets.get(item.id), file: name, ...(sameKey.has(item.id) ? { shared: item.hash } : {}) });
                     shown.add(item.bytes, 1);
-                }
-                // 0.9.103-ver4: a received chat added to a card this device already has: the card gets the name entries of that chat's
-                // Asset Maid pictures (only names it does not have yet; nothing existing is replaced), so `{{raw::<name>}}` finds them.
-                for (const [chatItem, pictures] of maid) {
-                    const row = added.find(r => r.chat.id === ids[chatItem]);
-                    const target = row && db.characters.find(c => c.chaId === row.characterId);
-                    if (!target) continue;
-                    const names = new Set([...(target.additionalAssets ?? []).map(entry => entry?.[0]), ...plan.characterAssets.filter(r => r.characterId === row.characterId).map(r => r.name)]);
-                    for (const picture of pictures) if (!names.has(picture.name)) { names.add(picture.name); plan.characterAssets.push({ characterId: row.characterId, name: picture.name, path: assets.get(picture.item.id), ext: picture.ext }); }
                 }
                 for (const item of archive.manifest.items.filter(i => i.kind === 'inlay')) {
                     const mapped = remapRecord(archive.records.get(item.entry), item.references, new Map(Object.entries(ids)));
@@ -409,6 +430,16 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                         for (const page of slot.pages) plan.pages.push({ characterId: target.characterId, hash: page.hash, source: `${rel}/pages/${page.hash.slice(0, 2)}/${page.hash}` });
                     }
                     shown.add(0, 1);
+                }
+            } else if (needed.size) {
+                // 0.9.103-ver4: nothing new to import (duplicate), but the name entries above still need their pictures on this device.
+                shown.next('copy', { itemsTotal: needed.size, bytesTotal: [...needed.values()].reduce((total, item) => total + item.bytes, 0) });
+                for (const item of needed.values()) {
+                    if (!reused.has(item.id)) {
+                        const name = randomUUID(); await archive.copyEntry(item.entry, join(staging, name));
+                        plan.assetKeys.push({ key: assets.get(item.id), file: name, ...(sameKey.has(item.id) ? { shared: item.hash } : {}) });
+                    }
+                    shown.add(item.bytes, 1);
                 }
             }
             plan.phase = 'prepared'; write(record);
@@ -432,6 +463,8 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             for (const inlay of plan.inlayIds) { await installInlay(inlay, join(directory(key), plan.staging)); shown.add(0, 1); }
             for (const asset of plan.assetKeys) {
                 const sourcePath = join(directory(key), plan.staging, asset.file);
+                // 0.9.103-ver4: a content-addressed picture stored meanwhile with the same bytes is kept as it is (not ours to replace).
+                if (asset.shared && storage.kvGetUpdatedAt(asset.key) !== null && holds(asset.key, asset.shared)) { shown.add(0, 1); continue; }
                 if (storage.kvGetUpdatedAt(asset.key) !== null) throw new Error('Transfer asset identity already exists');
                 await storage.kvReplacePrefixesFromFilesAsync([{ key: asset.key, sourcePath }], []);
                 shown.add(0, 1);
@@ -486,8 +519,9 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             record.state = 'applied';
         } else {
             if (confirmed || plan.added.some(row => db.characters.some(c => c.chaId === row.characterId && c.chats?.some(ch => ch.id === row.chat.id)))) throw new Error('Application save has not completed; recovery retained');
-            // No DB rollback: the client published nothing durable. Remove only this plan's unique media.
-            for (const asset of plan.assetKeys) storage.kvDel(asset.key);
+            // No DB rollback: the client published nothing durable. Remove only this plan's unique media. A content-addressed picture
+            // (0.9.103-ver4 `shared`) is never removed here: another chat or writer may use the same key; an unused one only takes space.
+            for (const asset of plan.assetKeys) if (!asset.shared) storage.kvDel(asset.key);
             for (const inlay of plan.inlayIds) await removeInlay(inlay.id);
             record.state = 'waiting';
         }

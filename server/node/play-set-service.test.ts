@@ -383,7 +383,7 @@ test('progress: export and receive show their running step with bytes and total,
 
 const assetMaidLore = (pictures: { name: string; path: string }[]) => ({ key: '', secondkey: '', comment: '__ASSET_MAID_CHAT_DATA__', mode: 'normal', insertorder: 100, alwaysActive: false, selective: false,
     content: '@@dont_activate ' + JSON.stringify({ messages: Object.fromEntries(pictures.map((p, i) => [`m${i}`, { kind: 'illustration', requestedCount: 1, generations: [{ id: `revision:${i}`, slots: { [String(i)]: [{ assetName: p.name, savedPath: p.path, extension: 'png', width: 2, height: 3 }] } }] }])) }) })
-test('Asset Maid pictures of a chat received into an existing card: name entries for new names only, same content-addressed key, no second copy, rollback keeps what was already there', async t => {
+test('Asset Maid pictures of a chat received into an existing card: name entries for new names only (case-insensitive), same content-addressed key, no second copy, rollback keeps shared pictures, a repeat repairs a chat received without names', async t => {
     const root = await mkdtemp(join(tmpdir(), 'bard-transfer-assetmaid-'))
     t.onTestFinished(() => rm(root, { recursive: true, force: true }))
     const first = Buffer.from('asset-maid-picture-one'), second = Buffer.from('asset-maid-picture-two'), card = Buffer.from('card-art')
@@ -402,38 +402,66 @@ test('Asset Maid pictures of a chat received into an existing card: name entries
     const sent = await from.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat' })
     expect(sent.missing).toEqual([])
     // receiver: the same card without the PC pictures; it already has picture one's bytes and its own entry named like picture two
-    const receiver = { characters: [{ chaId: 'local-card', name: '같은 카드', image: 'assets/card.png', additionalAssets: [['카드 그림', 'assets/card.png', 'png'], ['pc.__am__.chat.2', 'assets/edited-on-tablet.png', 'png']], chats: [{ id: 'keep', message: [] }] }] }
+    const receiver = { characters: [{ chaId: 'local-card', name: '같은 카드', image: 'assets/card.png', additionalAssets: [['카드 그림', 'assets/card.png', 'png'], ['PC.__AM__.chat.2', 'assets/edited-on-tablet.png', 'png']], chats: [{ id: 'keep', message: [] }] }] }
     const to = await make('receiver', receiver, [['assets/card.png', card], [one, first]])
     const entry = await to.service.ingest(createReadStream(await from.service.file(sent.id)))
     const plan = await to.service.prepare(entry.id)
     expect(plan.characterAssets).toEqual([{ characterId: 'local-card', name: 'pc.__am__.chat.1', path: one, ext: 'png' }])
     const staged = JSON.parse(await readFile(join(root, 'receiver/play-transfer', entry.id, 'state.json'), 'utf8')).plan
-    expect(staged.assetKeys.map((a: any) => a.key)).toContain(two)
+    expect(staged.assetKeys.find((a: any) => a.key === two)).toMatchObject({ shared: sha256(second) })
     expect(staged.assetKeys.map((a: any) => a.key)).not.toContain(one)
+    expect(staged.characterAssets).toEqual(plan.characterAssets)
     // the chat text and Asset Maid's own data are kept as sent: its savedPath is the key used here
     expect(plan.added[0].chat.localLore[0].content).toBe(chat.localLore[0].content)
     expect(plan.added[0].chat.risuTransferMedia.assets[one]).toBe(one)
-    // restart before the save: only this plan's new picture goes; the bytes that were already here stay
+    // restart before the save: the import is rolled back, but content-addressed pictures stay (another chat or writer may use the key)
     await to.service.arm(entry.id, plan.transaction, plan.added)
     expect(Buffer.from(to.storage.kvGet(two)).equals(second)).toBe(true)
     const fresh = await make('receiver', receiver, [])
     expect((await fresh.service.finish(entry.id)).state).toBe('waiting')
-    expect(fresh.storage.kvGetUpdatedAt(one)).not.toBeNull(); expect(fresh.storage.kvGetUpdatedAt(two)).toBeNull()
+    expect(fresh.storage.kvGetUpdatedAt(one)).not.toBeNull(); expect(Buffer.from(fresh.storage.kvGet(two)).equals(second)).toBe(true)
     // the import itself, then the card gets the new name and every message name resolves to the picture's own bytes
     const again = await fresh.service.prepare(entry.id)
+    // the second prepare finds both pictures already here with their bytes: nothing copied or installed for them
+    const keysAgain = JSON.parse(await readFile(join(root, 'receiver/play-transfer', entry.id, 'state.json'), 'utf8')).plan.assetKeys.map((a: any) => a.key)
+    expect(keysAgain).not.toContain(one); expect(keysAgain).not.toContain(two)
     await fresh.service.arm(entry.id, again.transaction, again.added)
     const target = receiver.characters[0] as any
     target.chats.push(again.added[0].chat)
     for (const row of again.characterAssets) if (!target.additionalAssets.some((a: any) => a[0] === row.name)) target.additionalAssets.push([row.name, row.path, row.ext])
     ;(receiver as any).risuPlaySets = again.registry
     expect((await fresh.service.finish(entry.id, true)).state).toBe('applied')
-    expect(target.additionalAssets.filter((a: any) => a[0] === 'pc.__am__.chat.2')).toEqual([['pc.__am__.chat.2', 'assets/edited-on-tablet.png', 'png']])
+    expect(target.additionalAssets.filter((a: any) => a[0].toLowerCase() === 'pc.__am__.chat.2')).toEqual([['PC.__AM__.chat.2', 'assets/edited-on-tablet.png', 'png']])
     const byName = new Map(target.additionalAssets.map((a: any) => [a[0], a[1]]))
     expect(sha256(Buffer.from(fresh.storage.kvGet(byName.get('pc.__am__.chat.1'))))).toBe(sha256(first))
+    // a chat received before without its picture names (0.9.103-ver3): receiving the same file again adds only the names (duplicate)
+    target.additionalAssets = target.additionalAssets.filter((a: any) => a[0] !== 'pc.__am__.chat.1')
+    const repeat = await fresh.service.ingest(createReadStream(await from.service.file(sent.id)))
+    const repair = await fresh.service.prepare(repeat.id)
+    expect(repair).toMatchObject({ duplicate: true, added: [], characterAssets: [{ characterId: 'local-card', name: 'pc.__am__.chat.1', path: one, ext: 'png' }] })
+    await fresh.service.arm(repeat.id, repair.transaction, repair.added)
+    ;(receiver as any).risuPlaySets = repair.registry
+    expect((await fresh.service.finish(repeat.id, true)).state).toBe('applied')
+    // a key that holds other bytes is never reused or replaced: the picture gets its own new key
+    const odd = await make('mismatch', { characters: [{ chaId: 'm-card', name: '같은 카드', additionalAssets: [], chats: [] }] }, [[one, Buffer.from('different bytes')]])
+    const oddEntry = await odd.service.ingest(createReadStream(await from.service.file(sent.id)))
+    const oddPlan = await odd.service.prepare(oddEntry.id)
+    const oddOne = oddPlan.characterAssets.find((r: any) => r.name === 'pc.__am__.chat.1')
+    expect(oddOne.path).not.toBe(one); expect(oddOne.path).toMatch(/^assets\/[0-9a-f-]{36}\.png$/)
+    expect(Buffer.from(odd.storage.kvGet(one)).toString()).toBe('different bytes')
     // a card new to this device brings its own entries; nothing is added to it twice
     const other = await make('other', { characters: [] }, [])
     const otherEntry = await other.service.ingest(createReadStream(await from.service.file(sent.id)))
     const otherPlan = await other.service.prepare(otherEntry.id)
     expect(otherPlan.characterAssets).toEqual([])
     expect(otherPlan.newCharacters[0].additionalAssets.filter((a: any) => a[0].includes('__am__'))).toEqual(pictures.map(p => [p.name, p.path, 'png']))
+})
+test('Asset Maid pictures are found through the single shared context of a legacy set too (no /playContext), and only for pictures the archive carries', () => {
+    const { assetMaidPictures } = require('./play-set-service.cjs')
+    const lore = assetMaidLore([{ name: 'a.__am__.chat.1', path: 'assets/h1.png' }, { name: 'a.__am__.chat.2', path: 'assets/absent.png' }])
+    const manifest: any = { items: [{ id: 'chat', kind: 'chat', entry: 'records/chat', references: [] }, { id: 'ctx', kind: 'context', entry: 'records/ctx', references: [] }, { id: 'pic', kind: 'asset', hash: 'h1', bytes: 1, entry: 'blobs/h1', references: [] }] }
+    const records = new Map<string, any>([['records/chat', { localLore: [lore] }], ['records/ctx', { assets: { 'assets/h1.png': 'pic' } }]])
+    expect([...assetMaidPictures(manifest, records)]).toEqual([['chat', [{ name: 'a.__am__.chat.1', path: 'assets/h1.png', ext: 'png', item: manifest.items[2] }]]])
+    records.set('records/chat', { localLore: [{ comment: 'other', content: lore.content }] })
+    expect(assetMaidPictures(manifest, records).size).toBe(0)
 })

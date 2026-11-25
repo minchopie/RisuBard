@@ -218,5 +218,18 @@ test('Asset Maid pictures of a received chat are added to the existing card by n
     })
     await receiveTransfer('in')
     expect(f.db.characters[0].additionalAssets).toEqual([['mine.__am__.chat.a', 'assets/keep.png', 'png'], ['pc.__am__.chat.b', 'assets/b.png', 'png']])
-    expect(f.save).toHaveBeenLastCalledWith({ chats: [['existing', 'incoming']], flushServer: 'canonical', rejectOnFailure: true })
+    expect(f.save).toHaveBeenLastCalledWith({ chats: [['existing', 'incoming']], characters: ['existing'], flushServer: 'canonical', rejectOnFailure: true })
+})
+test('a chat received before (duplicate) still gets its missing Asset Maid names, compared case-insensitively, and the card alone is saved', async () => {
+    f.db.characters[0].additionalAssets = [['Mine.__AM__.chat.a', 'assets/keep.png', 'png']]
+    f.request.mockImplementation(async (path: string) => {
+        if (path.endsWith('/inspect')) return reply({ characters: [] })
+        if (path.endsWith('/prepare')) return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {}, duplicate: true,
+            characterAssets: [{ characterId: 'existing', name: 'mine.__am__.chat.a', path: 'assets/other.png', ext: 'png' }, { characterId: 'existing', name: 'pc.__am__.chat.b', path: 'assets/b.png', ext: 'png' }] })
+        return reply([])
+    })
+    await receiveTransfer('in')
+    expect(f.db.characters[0].additionalAssets).toEqual([['Mine.__AM__.chat.a', 'assets/keep.png', 'png'], ['pc.__am__.chat.b', 'assets/b.png', 'png']])
+    expect(f.save).toHaveBeenLastCalledWith({ chats: [], characters: ['existing'], flushServer: 'canonical', rejectOnFailure: true })
+    expect(get(transferStatus)).toBe('이미 받은 동일한 자료예요. 중복으로 추가하지 않았어요. 에셋메이드 그림 1개를 캐릭터에 더했어요.')
 })
