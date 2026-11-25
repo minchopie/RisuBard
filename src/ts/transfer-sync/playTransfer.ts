@@ -98,12 +98,12 @@ export function transferProgressView(progress: TransferProgress | null, native: 
     }
     if (native) {
         const total = native.total ?? 0, sent = Math.min(native.sent ?? 0, total)
-        const finished = ['delivered', 'applied'].includes(native.state), failed = ['failed', 'cancelled', 'unknown'].includes(native.state)
+        const finished = ['delivered', 'applied'].includes(native.state), failed = ['failed', 'cancelled'].includes(native.state), unknown = native.state === 'unknown'
         // Direction-neutral: the Windows USB 「기기에서 받기」 loop writes the same store. `unknown` = the state could not be read, not a failure.
         const label = native.state === 'applied' ? '받는 쪽에서 가져오기 완료' : native.state === 'delivered' ? '전달 완료 · 받는 쪽에서 가져오기 대기'
             : native.state === 'unknown' ? '상대 기기 상태를 확인하지 못했어요' : failed ? '전송 실패' : native.state === 'ready' ? 'USB 전송 준비 완료 · PC 전송기에서 받아 주세요' : native.state === 'preparing' ? 'USB 전송 준비 중' : 'Wi-Fi·USB로 전송 중'
-        return { label, percent: finished ? 100 : total ? Math.min(100, Math.floor(sent / total * 100)) : null, detail: failed ? native.error ?? '' : total ? `${mb(sent)}/${mb(total)} MB` : '',
-            tone: finished ? 'done' as const : failed ? 'failed' as const : 'running' as const }
+        return { label, percent: finished ? 100 : total ? Math.min(100, Math.floor(sent / total * 100)) : null, detail: failed || unknown ? native.error ?? '' : total ? `${mb(sent)}/${mb(total)} MB` : '',
+            tone: finished ? 'done' as const : failed ? 'failed' as const : unknown ? 'unknown' as const : 'running' as const }
     }
     return { label: fallback || '처리 중', percent: null, detail: '', tone: 'running' as const }
 }
@@ -255,11 +255,13 @@ export async function receiveTransfer(key: string, automatic = false) {
         for (const addition of plan.added) db.characters.find(c => c.chaId === addition.characterId)!.chats.push(addition.chat)
         // 0.9.103-ver4: Asset Maid pictures of a chat received into an existing card: add only the names the card does not have yet
         // (compared like the renderer, case-insensitive). The card is saved with the chats (or on its own when the chats were received before).
+        // Module pictures share the renderer's name list: a name any module uses also counts as taken.
         const pictured: string[] = []
         let pictureCount = 0
+        const moduleNames = new Set((db.modules ?? []).flatMap((m: any) => (m?.assets ?? []).map((entry: any) => String(entry?.[0] ?? '').toLocaleLowerCase())))
         for (const row of (plan.characterAssets ?? []) as { characterId: string; name: string; path: string; ext: string }[]) {
             const target = db.characters.find(c => c.chaId === row.characterId)
-            if (!target || (target.additionalAssets ?? []).some(entry => String(entry?.[0] ?? '').toLocaleLowerCase() === row.name.toLocaleLowerCase())) continue
+            if (!target || moduleNames.has(row.name.toLocaleLowerCase()) || (target.additionalAssets ?? []).some(entry => String(entry?.[0] ?? '').toLocaleLowerCase() === row.name.toLocaleLowerCase())) continue
             ;(target.additionalAssets ??= []).push([row.name, row.path, row.ext]); pictureCount++
             if (!pictured.includes(row.characterId)) pictured.push(row.characterId)
         }

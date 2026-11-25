@@ -443,9 +443,11 @@ test('Asset Maid pictures of a chat received into an existing card: name entries
     ;(receiver as any).risuPlaySets = repair.registry
     expect((await fresh.service.finish(repeat.id, true)).state).toBe('applied')
     // a key that holds other bytes is never reused or replaced: the picture gets its own new key
-    const odd = await make('mismatch', { characters: [{ chaId: 'm-card', name: '같은 카드', additionalAssets: [], chats: [] }] }, [[one, Buffer.from('different bytes')]])
+    // and a name a module's picture already uses (the renderer shares that name list) is left alone
+    const odd = await make('mismatch', { characters: [{ chaId: 'm-card', name: '같은 카드', additionalAssets: [], chats: [] }], modules: [{ id: 'mod', name: 'mod', assets: [['PC.__AM__.CHAT.2', 'assets/module.png', 'png']] }] }, [[one, Buffer.from('different bytes')]])
     const oddEntry = await odd.service.ingest(createReadStream(await from.service.file(sent.id)))
     const oddPlan = await odd.service.prepare(oddEntry.id)
+    expect(oddPlan.characterAssets.map((r: any) => r.name)).toEqual(['pc.__am__.chat.1'])
     const oddOne = oddPlan.characterAssets.find((r: any) => r.name === 'pc.__am__.chat.1')
     expect(oddOne.path).not.toBe(one); expect(oddOne.path).toMatch(/^assets\/[0-9a-f-]{36}\.png$/)
     expect(Buffer.from(odd.storage.kvGet(one)).toString()).toBe('different bytes')

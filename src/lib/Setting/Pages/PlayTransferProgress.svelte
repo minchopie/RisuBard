@@ -63,7 +63,7 @@
         {#if !final}
             <span class="label">{view.tone === 'done' ? '✓ ' : view.tone === 'failed' ? '✕ ' : ''}{view.label}</span>
             <div class="track" role="progressbar" aria-label="전송 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow={view.percent ?? undefined}>
-                {#if view.percent !== null}<div class="fill" style="width: {view.percent}%"></div>{:else}<div class="fill moving"></div>{/if}
+                {#if view.percent !== null}<div class="fill" style="width: {view.percent}%"></div>{:else if running}<div class="fill moving"></div>{/if}
             </div>
             <span class="detail">{view.percent !== null ? `${view.percent}%` : ''}{view.percent !== null && detail ? ' · ' : ''}{detail}</span>
         {:else}

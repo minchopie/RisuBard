@@ -151,7 +151,7 @@ test('progress line: native send states, finished and failed, and the text bar f
     expect(transferProgressView(null, { state: 'sending', sent: 50_000_000, total: 200_000_000 })).toMatchObject({ label: 'Wi-Fi·USB로 전송 중', percent: 25, detail: '50/200 MB', tone: 'running' })
     expect(transferProgressView(null, { state: 'delivered', sent: 0, total: 200_000_000 })).toMatchObject({ percent: 100, tone: 'done' })
     expect(transferProgressView(null, { state: 'applied' })).toMatchObject({ label: '받는 쪽에서 가져오기 완료', tone: 'done' })
-    expect(transferProgressView(null, { state: 'unknown', error: '상태 조회 시간 초과' })).toMatchObject({ label: '상대 기기 상태를 확인하지 못했어요', detail: '상태 조회 시간 초과' })
+    expect(transferProgressView(null, { state: 'unknown', error: '상태 조회 시간 초과' })).toMatchObject({ label: '상대 기기 상태를 확인하지 못했어요', detail: '상태 조회 시간 초과', tone: 'unknown', percent: null })
     expect(transferProgressView(null, { state: 'failed', error: 'x' })).toMatchObject({ label: '전송 실패', tone: 'failed', percent: null, detail: 'x' })
     expect(transferProgressView(null, null, '채팅을 저장하는 중…')).toMatchObject({ label: '채팅을 저장하는 중…', percent: null })
     expect(transferProgressText({ stage: 'pack', bytes: 42, bytesTotal: 100, items: 0, itemsTotal: null, elapsedMs: 3_000, stageElapsedMs: 1_000 })).toBe('전송 파일로 묶는 중 ████░░░░░░ 42% · 0.0/0.0 MB · 경과 3초')
@@ -190,7 +190,7 @@ test('a progress request that hangs is cut after 5 s so the overlay line keeps u
         f.request.mockImplementation(async (path: string, init: any = {}) => {
             if (path === '/progress') {
                 signals.push(init.signal)
-                if (signals.length === 1) return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))))
+                if (signals.length !== 2) return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))))
                 return reply({ stage: 'copy', bytes: 0, bytesTotal: null, items: 2, itemsTotal: 4, elapsedMs: 8000, stageElapsedMs: 1000 })
             }
             if (path.endsWith('/inspect')) return reply({ characters: [] })
@@ -203,8 +203,10 @@ test('a progress request that hangs is cut after 5 s so the overlay line keeps u
         await vi.advanceTimersByTimeAsync(4000)
         expect(signals[0].aborted).toBe(true); expect(signals.length).toBeGreaterThan(1)
         expect(get(transferStatus)).toBe('그림 꺼내는 중 █████░░░░░ 50% · 2/4개 · 경과 8초')
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(signals).toHaveLength(3); expect(signals[2].aborted).toBe(false)
         release(); await running
-        expect(signals.at(-1)!.aborted || signals.length >= 2).toBe(true)
+        expect(signals[2].aborted).toBe(true)
         expect(get(transferStatus)).toBe('가져오기 완료 · 기존 캐릭터 목록에서 확인해 주세요.')
     } finally { vi.useRealTimers() }
 })
@@ -222,10 +224,11 @@ test('Asset Maid pictures of a received chat are added to the existing card by n
 })
 test('a chat received before (duplicate) still gets its missing Asset Maid names, compared case-insensitively, and the card alone is saved', async () => {
     f.db.characters[0].additionalAssets = [['Mine.__AM__.chat.a', 'assets/keep.png', 'png']]
+    f.db.modules = [{ id: 'mod', assets: [['module.taken', 'assets/module.png', 'png']] }]
     f.request.mockImplementation(async (path: string) => {
         if (path.endsWith('/inspect')) return reply({ characters: [] })
         if (path.endsWith('/prepare')) return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {}, duplicate: true,
-            characterAssets: [{ characterId: 'existing', name: 'mine.__am__.chat.a', path: 'assets/other.png', ext: 'png' }, { characterId: 'existing', name: 'pc.__am__.chat.b', path: 'assets/b.png', ext: 'png' }] })
+            characterAssets: [{ characterId: 'existing', name: 'mine.__am__.chat.a', path: 'assets/other.png', ext: 'png' }, { characterId: 'existing', name: 'pc.__am__.chat.b', path: 'assets/b.png', ext: 'png' }, { characterId: 'existing', name: 'Module.Taken', path: 'assets/t.png', ext: 'png' }] })
         return reply([])
     })
     await receiveTransfer('in')
