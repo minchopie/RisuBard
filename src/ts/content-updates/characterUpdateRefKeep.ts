@@ -236,12 +236,23 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     // Asset Maid finds a picture by its record (descriptor and occurrence among the character's pictures, legacy fingerprint too);
     // "asset:N" is only the number the body was written with and need not be the picture's position. The position is used as before
     // when the record names no picture of that side.
+    // A module picture is none of the card's pictures: it keeps its record under a number past every card picture the result can get.
     const sideLocators: Partial<Record<'mine' | 'theirs', ReturnType<typeof characterLocators>>> = {}
+    const moduleTokens = new Map<string, string>(), moduleBase = result.length + mineAssets.length
     const place = (reference: Reference, side: 'mine' | 'theirs', append = side === 'mine'): Reference | null => {
         if (reference.asset === undefined) return { ...reference }
         const list = side === 'mine' ? mineAssets : theirsAssets, number = indexOf(reference.asset, 'asset')
         const record = (side === 'mine' ? own.data : other.data).entities?.assets?.[reference.asset]
-        const descriptor = record && !('module' in record) ? record.fingerprints?.descriptor : undefined
+        if (record && 'module' in record) {
+            let token = moduleTokens.get(`${side} ${reference.asset}`)
+            if (!token) {
+                token = `asset:${moduleBase + moduleTokens.size}`
+                moduleTokens.set(`${side} ${reference.asset}`, token)
+                assets[token] = JSON.parse(JSON.stringify(record))
+            }
+            return { ...reference, asset: token }
+        }
+        const descriptor = record?.fingerprints?.descriptor
         let picture: unknown = list[number]
         if (descriptor) {
             const found = sideLocators[side] ??= characterLocators(list)
@@ -260,7 +271,8 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (record) assets[`asset:${at}`] = JSON.parse(JSON.stringify(record))
         return { ...reference, asset: `asset:${at}` }
     }
-    const placed = (entry: Entry) => !map || isCustomTarget(entry.target) || map.has(indexOf(entry.target, 'lore'))
+    // Only lore targets follow the lore map; "custom:…", "self", "description:self" and member targets stay.
+    const placed = (entry: Entry) => !map || indexOf(entry.target, 'lore') < 0 || map.has(indexOf(entry.target, 'lore'))
     const dropped = entriesOf(data).filter(entry => !placed(entry)).map(entry => commentOf(theirs.globalLore, entry.target) || String(entry.target ?? ''))
     // The new body's own references follow their pictures to their place in the result.
     for (const entry of entriesOf(data)) for (const form of entry.forms ?? []) {
@@ -270,6 +282,20 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         else {
             held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(form.id ?? ''), reference: form.reference, reason: placed(entry) ? 'asset-missing' : 'character-missing' })
             delete form.reference
+        }
+    }
+    // So do its outfit references (forms[].outfits[], features.outfits), or their numbers would be left without a record.
+    const outfits = data.features?.outfits as { entries?: Entry[] } | undefined
+    for (const [entry, list] of [...entriesOf(data).flatMap(entry => (entry.forms ?? []).map(form => [entry, form?.outfits] as const)),
+        ...(Array.isArray(outfits?.entries) ? outfits.entries : []).map(entry => [entry, entry?.outfits] as const)]) {
+        for (const outfit of (Array.isArray(list) ? list : []) as Form[]) {
+            if (!outfit?.reference) continue
+            const moved = placed(entry) ? place(outfit.reference, 'theirs') : null
+            if (moved) outfit.reference = moved
+            else {
+                held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(outfit.id ?? ''), reference: outfit.reference, reason: placed(entry) ? 'asset-missing' : 'character-missing' })
+                delete outfit.reference
+            }
         }
     }
     // Where each installed entry goes. Two installed entries that land on the same new entry cannot both be right: both are held.
@@ -308,17 +334,22 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     // Asset Maid's picture picks (the rows of its asset analysis tab and the character references) take the same way, so every number
     // of the body keeps its record. Rows are joined by character: the new body's pictures first, then the user's picks not there yet.
     // A pick whose picture is not in the result is left out (no picture is added for a pick) and a row left empty is dropped; the user's
-    // character reference wins on the same character, as a form reference does.
+    // character reference wins on the same character, as a form reference does (its picture is settled before the rows are).
     const selection = data.features?.assetSelection, ownSelection = own.data.features?.assetSelection
     if (selection || ownSelection) {
         const rows = new Map<string, string[]>(), references = new Map<string, CharacterReference>()
         const hold = (side: 'mine' | 'theirs', target: unknown, asset: unknown, reason: HeldReason) => held.push({ side, target: String(target ?? ''),
             character: commentOf(side === 'mine' ? mine.globalLore : theirs.globalLore, target), formId: '', reference: { asset: String(asset ?? '') }, reason, selection: true })
+        // A pick without a record of its side is not carried: its number could only point at some other picture.
+        const pick = (token: unknown, side: 'mine' | 'theirs') => typeof token === 'string' && (side === 'mine' ? own.data : other.data).entities?.assets?.[token]
+            ? place({ asset: token }, side, false)?.asset : undefined
+        const carry = (reference: CharacterReference, side: 'mine' | 'theirs') => reference.asset === undefined || (side === 'mine' ? own.data : other.data).entities?.assets?.[reference.asset]
+            ? place(reference, side) : null
         for (const row of Array.isArray(selection?.selections) ? selection.selections : []) {
             if (typeof row?.target !== 'string' || !placed(row)) continue
             const tokens = rows.get(row.target) ?? []
             for (const token of Array.isArray(row.assets) ? row.assets : []) {
-                const moved = place({ asset: String(token) }, 'theirs')?.asset
+                const moved = pick(token, 'theirs')
                 if (!moved) hold('theirs', row.target, token, 'asset-missing')
                 else if (!tokens.includes(moved)) tokens.push(moved)
             }
@@ -326,38 +357,44 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         }
         for (const reference of Array.isArray(selection?.characterReferences) ? selection.characterReferences : []) {
             if (typeof reference?.target !== 'string' || !placed(reference)) continue
-            const moved = place(reference, 'theirs')
+            const moved = carry(reference, 'theirs')
             if (moved) references.set(reference.target, moved)
             else hold('theirs', reference.target, reference.asset, 'asset-missing')
         }
-        // Where each of the user's rows (and references) goes; two of them on the same new character cannot both be right: both held.
+        // Where each of the user's rows (and references) goes: a lore target to the same character of the new body (any of its lore
+        // targets, with or without forms); "self" and "description:self" stay, as does a member the new body has. Rows of two
+        // different characters that land on one new character cannot both be right: both are held.
+        const candidates = { data: { ...data, features: { characterForms: { entries: [...new Set([...entriesOf(data).map(entry => entry.target),
+            ...Object.keys(data.entities?.lorebooks ?? {})])].map(target => ({ target })) } } }, lore: theirs.globalLore }
         const where = (list: unknown) => {
             const items = (Array.isArray(list) ? list : []).filter(item => typeof item?.target === 'string') as Entry[]
-            const found = items.map(item => locate(item, { data: own.data, lore: mine.globalLore }, { data, lore: theirs.globalLore }))
+            const found = items.map((item): Entry | HeldReason => indexOf(item.target, 'lore') >= 0 || isCustomTarget(item.target)
+                ? locate(item, { data: own.data, lore: mine.globalLore }, candidates)
+                : item.target === 'self' || item.target === 'description:self' || (data.entities?.members as Record<string, unknown> | undefined)?.[item.target!] ? { target: item.target } : 'character-missing')
             return items.map((item, index): [Entry, Entry | HeldReason] => {
                 const target = found[index]
                 if (typeof target === 'string') return [item, target]
-                return [item, found.filter(other => other === target).length > 1 ? 'character-ambiguous' : placed(target) ? target : 'character-missing']
+                return [item, found.some((other, at) => other === target && items[at].target !== item.target) ? 'character-ambiguous' : placed(target) ? target : 'character-missing']
             })
+        }
+        for (const [reference, target] of where(ownSelection?.characterReferences)) {
+            if (typeof target === 'string') { hold('mine', reference.target, (reference as CharacterReference).asset, target); continue }
+            const moved = carry(reference as CharacterReference, 'mine')
+            if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }
+            references.set(target.target!, { ...moved, target: target.target })
+            selected++
         }
         for (const [row, target] of where(ownSelection?.selections)) {
             const assets = Array.isArray(row.assets) ? row.assets : []
             if (typeof target === 'string') { for (const token of assets) hold('mine', row.target, token, target); continue }
             const tokens = rows.get(target.target!) ?? []
             for (const token of assets) {
-                const moved = place({ asset: String(token) }, 'mine', false)?.asset
+                const moved = pick(token, 'mine')
                 if (!moved) { hold('mine', row.target, token, 'asset-missing'); continue }
                 if (!tokens.includes(moved)) tokens.push(moved)
                 selected++
             }
             rows.set(target.target!, tokens)
-        }
-        for (const [reference, target] of where(ownSelection?.characterReferences)) {
-            if (typeof target === 'string') { hold('mine', reference.target, (reference as CharacterReference).asset, target); continue }
-            const moved = place(reference as CharacterReference, 'mine')
-            if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }
-            references.set(target.target!, { ...moved, target: target.target })
-            selected++
         }
         const next: Selection = { ...selection }
         const filled = [...rows].filter(([, tokens]) => tokens.length).map(([target, assets]) => ({ target, assets }))

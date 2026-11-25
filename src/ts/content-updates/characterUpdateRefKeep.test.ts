@@ -486,7 +486,9 @@ describe('Asset Maid final character picture fingerprints', () => {
             const body = portable(mine.globalLore[1])
             if (module) body.entities.assets['asset:0'].module = 'module:0'
             mine.globalLore[1].content = '@@dont_activate ' + JSON.stringify(body)
-            expect(merge(mine, theirs).data.entities.assets['asset:0']).toEqual(body.entities.assets['asset:0'])
+            // 0.9.103-ver4: a module record keeps its record under its own number (past the card pictures)
+            const { data } = merge(mine, theirs)
+            expect(data.entities.assets[data.features.characterForms.entries[0].forms[0].reference.asset]).toEqual(body.entities.assets['asset:0'])
         }
     })
     test('normalization, extension fallback, generated assets and duplicate occurrences match fixed plugin vectors', () => {
@@ -1066,6 +1068,72 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
         const name = named(entry, merged.additionalAssets!)
         expect(portable(entry).features.assetSelection.characterReferences.map((ref: any) => ({ ...ref, asset: ref.asset && name(ref.asset) })))
             .toEqual([{ target: 'lore:0', asset: 'u2', enabled: true }, { target: 'lore:1', analysisEnabled: false }])
+        expect(dangling(entry)).toEqual([])
+    })
+
+    test('a module picture keeps its own record and number; it never takes over a card picture\'s number', () => {
+        const { mine, theirs, base } = scenario()
+        const data = portable(theirs.globalLore[2])
+        data.features.characterForms.entries[0].forms[0].reference = { asset: 'asset:9' } // Aria f1 -> card2
+        data.entities.assets = { 'asset:9': { fingerprints: { descriptor: assetMaidCharacterLocators([pic('card2')])[0]!.descriptor } }, 'asset:1': { module: 'module:0', fingerprints: { descriptor: 'am2:map' } } }
+        data.features.assetSelection = { selections: [{ target: 'lore:1', assets: ['asset:1', 'asset:9'] }] }
+        theirs.globalLore[2] = { ...theirs.globalLore[2], content: '@@dont_activate ' + JSON.stringify(data) }
+        mine.globalLore[2] = maidEntry([{ at: 0, fp: 'aria', forms: [{ id: 'f2', asset: 2 }] }], { 2: 'u2' })
+        const { result, merged, entry } = run(mine, theirs, base)
+        const body = portable(entry)
+        const [moduleToken, cardToken] = body.features.assetSelection.selections[0].assets
+        expect(body.entities.assets[moduleToken]).toEqual({ module: 'module:0', fingerprints: { descriptor: 'am2:map' } })
+        expect(Number(moduleToken.slice(6))).toBeGreaterThanOrEqual(merged.additionalAssets!.length)
+        expect(named(entry, merged.additionalAssets!)(cardToken)).toBe('card2')
+        expect(formPictures(entry, merged.additionalAssets!)).toEqual(['lore:1/f1=card2', 'lore:1/f2=u2'])
+        expect(result!.held).toEqual([])
+        expect(dangling(entry)).toEqual([])
+    })
+
+    test('rows of lore entries without forms, "self" rows and two rows of one character are joined; a pick without a record is held', () => {
+        const { mine, theirs, base } = scenario()
+        const cleo = lore('Character: Cleo', 'cleo')
+        base.globalLore = [...base.globalLore, cleo]
+        mine.globalLore = [mine.globalLore[0], mine.globalLore[1], cleo, mine.globalLore[2]]
+        theirs.globalLore = [theirs.globalLore[0], theirs.globalLore[1], cleo, theirs.globalLore[2]]
+        const withCleo = (entry: loreBook, picks: Picks, assets: Record<number, string>) => {
+            const data = portable(withPicks(entry, picks, assets))
+            data.entities.lorebooks['lore:2'] = fp('cleo') // Cleo has no forms on either side
+            return { ...entry, content: '@@dont_activate ' + JSON.stringify(data) }
+        }
+        mine.globalLore[3] = withCleo(mine.globalLore[3], { selections: [{ target: 'lore:2', assets: ['asset:1'] }, { target: 'lore:2', assets: ['asset:2'] }, { target: 'self', assets: ['asset:1', 'asset:5'] }] }, {})
+        theirs.globalLore[3] = withCleo(theirs.globalLore[3], { selections: [{ target: 'self', assets: ['asset:4'] }] }, { 4: 'card2' })
+        const { result, merged, entry } = run(mine, theirs, base)
+        const byName = Object.fromEntries(Object.entries(rows(entry, merged.additionalAssets!)).map(([target, names]) => [target === 'self' ? 'self' : merged.globalLore[Number(target.slice(5))].comment, names]))
+        expect(byName).toEqual({ self: ['card2', 'u1'], 'Character: Cleo': ['u1', 'u2'] })
+        expect(result!.held.map(held => [held.side, held.target, held.reason, held.reference.asset])).toEqual([['mine', 'self', 'asset-missing', 'asset:5']])
+        expect(dangling(entry)).toEqual([])
+    })
+
+    test('a picture the user\'s character reference brings back keeps the user\'s picks of it', () => {
+        const { mine, theirs, base } = scenario()
+        mine.additionalAssets = [...mine.additionalAssets!, pic('u3')]
+        mine.globalLore[2] = withPicks(mine.globalLore[2], { selections: [{ target: 'lore:1', assets: ['asset:4'] }], characterReferences: [{ target: 'lore:1', asset: 'asset:4' }] }, { 4: 'u3' })
+        const { result, merged, entry } = run(mine, theirs, base, everything('theirs'))
+        expect(merged.additionalAssets!.map(asset => asset[0])).toContain('u3')
+        const name = named(entry, merged.additionalAssets!)
+        expect(Object.values(rows(entry, merged.additionalAssets!))).toEqual([['u3']])
+        expect(portable(entry).features.assetSelection.characterReferences.map((ref: any) => name(ref.asset))).toEqual(['u3'])
+        expect(result!.held).toEqual([])
+        expect(dangling(entry)).toEqual([])
+    })
+
+    test('the new body\'s outfit references follow their pictures too', () => {
+        const { mine, theirs, base } = scenario()
+        const data = portable(theirs.globalLore[2])
+        data.features.characterForms.entries[0].forms[0].outfits = [{ id: 'o1', label: 'o1', description: '', parts: {}, reference: { asset: 'asset:6' } }]
+        data.features.outfits = { entries: [{ target: 'lore:0', outfits: [{ id: 'o2', label: 'o2', description: '', parts: {}, reference: { asset: 'asset:6' } }] }] }
+        data.entities.assets = { 'asset:6': { fingerprints: { descriptor: assetMaidCharacterLocators([pic('card2')])[0]!.descriptor } } }
+        theirs.globalLore[2] = { ...theirs.globalLore[2], content: '@@dont_activate ' + JSON.stringify(data) }
+        const { merged, entry } = run(mine, theirs, base)
+        const body = portable(entry), name = named(entry, merged.additionalAssets!)
+        expect(name(body.features.characterForms.entries[0].forms[0].outfits[0].reference.asset)).toBe('card2')
+        expect(name(body.features.outfits.entries[0].outfits[0].reference.asset)).toBe('card2')
         expect(dangling(entry)).toEqual([])
     })
 
