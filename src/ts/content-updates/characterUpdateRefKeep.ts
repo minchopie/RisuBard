@@ -78,7 +78,8 @@ function parse(content: unknown): { prefix: string, data: Portable } | null {
 }
 
 function indexOf(ref: unknown, kind: 'lore' | 'asset'): number {
-    const match = typeof ref === 'string' ? (kind === 'lore' ? /^lore:(\d+)$/ : /^asset:(\d+)$/).exec(ref) : null
+    // 0.9.103-ver4: Asset Maid trims a target, so " lore:3 " is lore:3 (a moved target is written without the spaces).
+    const match = typeof ref === 'string' ? (kind === 'lore' ? /^lore:(\d+)$/.exec(ref.trim()) : /^asset:(\d+)$/.exec(ref)) : null
     return match ? Number(match[1]) : -1
 }
 const entriesOf = (data: Portable): Entry[] => Array.isArray(data.features?.characterForms?.entries) ? data.features!.characterForms!.entries! : []

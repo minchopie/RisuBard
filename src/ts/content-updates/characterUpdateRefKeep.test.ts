@@ -1331,6 +1331,18 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
             expect(Object.keys(data.entities.lorebooks)).toEqual(['lore:3'])
         })
 
+        test('a lore target written with spaces moves with its record (Asset Maid trims targets)', () => {
+            const theirsEntry = body({ characterForms: { entries: [{ target: ' lore:0 ', defaultFormId: 'f', forms: [{ id: 'f', label: 'f' }] }] } })
+            const mine = bot({ globalLore: [lore('Character: Aria', 'aria'), body({})], additionalAssets: [] })
+            const theirs = bot({ globalLore: [lore('Character: Aria', 'aria'), theirsEntry], additionalAssets: [] })
+            const merged = mergeAssetMaid(mine.globalLore[1], theirsEntry, mine, theirs, [], new Map([[0, 1]]))!
+            const data = portable({ content: merged.content } as loreBook)
+            expect(data.features.characterForms.entries.map((entry: any) => entry.target)).toEqual(['lore:1'])
+            expect(Object.keys(data.entities.lorebooks)).toEqual(['lore:1'])
+            expect(merged.dropped).toEqual([])
+            expect(mergeAssetMaid(mine.globalLore[1], theirsEntry, mine, theirs, [], new Map())!.dropped).toEqual(['Character: Aria'])
+        })
+
         test('form references on "self" move like any other same target', () => {
             const forms = (asset: string) => ({ characterForms: { entries: [{ target: 'self', defaultFormId: 'form_default', forms: [{ id: 'form_default', label: 'd', reference: { asset } }] }] } })
             const { merged, data, name } = merge(body(forms('asset:0'), { assets: { 'asset:0': record(A) } }), body(forms('asset:4'), { assets: { 'asset:4': record(B) } }), { mine: [A], theirs: [B] }, [A, B])
