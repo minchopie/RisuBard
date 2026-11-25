@@ -198,11 +198,13 @@ function loreMap(plan: UpdatePlan, choices: Record<string, UpdateChoice>, mine: 
 }
 
 const DROP = Symbol('drop')
+const TARGET_LISTS = new Set(['selectedTargets', 'workspaceDisabledTargets'])
 /**
  * Every "lore:N" value and key of the body moved by the map. Something that points at an entry not in the merged lorebook is taken
  * out (an object whose target it is, a list item, a key), so no number is left to point at another character.
- * 0.9.103-ver4: as in Asset Maid, a lore number is a "target", a list item or a key; another text field ("label", "description", …)
- * stays as written even when it reads "lore:N".
+ * 0.9.103-ver4: as in Asset Maid, a lore number is a "target", an item of a target list (sourceSelection's selectedTargets and
+ * workspaceDisabledTargets) or a key; other text ("label", "description", matching keys and aliases, …) stays as written even when it
+ * reads "lore:N".
  */
 function moveLore(value: unknown, map: Map<number, number>): unknown {
     const move = (text: string): string | typeof DROP => {
@@ -216,7 +218,9 @@ function moveLore(value: unknown, map: Map<number, number>): unknown {
     const out: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
         const name = move(key)
-        const moved = typeof item === 'string' && key !== 'target' ? item : moveLore(item, map)
+        const moved = typeof item === 'string' && key !== 'target' ? item
+            : Array.isArray(item) && !TARGET_LISTS.has(key) ? item.map(entry => typeof entry === 'string' ? entry : moveLore(entry, map)).filter(entry => entry !== DROP)
+            : moveLore(item, map)
         if (name !== DROP && moved !== DROP) out[name] = moved
     }
     return out

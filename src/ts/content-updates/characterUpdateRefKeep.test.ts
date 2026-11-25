@@ -1315,16 +1315,19 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
             expect(data.features.assetSelection.characterReferences.map((ref: any) => [ref.target, name(ref.asset)])).toEqual([['self', 'c']])
         })
 
-        test('text that reads like a lore number stays; targets, list items and keys move', () => {
-            const forms = { characterForms: { entries: [{ target: 'lore:0', defaultFormId: 'f', forms: [{ id: 'f', label: 'lore:88', description: 'lore:0' }] }] },
-                sourceSelection: { selectedTargets: ['lore:0'] } }
+        test('text that reads like a lore number stays (also in matching keys and aliases); targets, target lists and keys move', () => {
+            const forms = { characterForms: { entries: [{ target: 'lore:0', defaultFormId: 'f', matchingKeys: { mode: 'replace', values: ['lore:88', 'lore:0', 'ordinary'] }, forms: [{ id: 'f', label: 'lore:88', description: 'lore:0' }] }] },
+                assetMatching: { entries: [{ target: 'lore:0', result: { kind: 'aliases', values: ['lore:0', 'ordinary'] } }] },
+                sourceSelection: { selectedTargets: ['lore:0'], workspaceDisabledTargets: ['lore:0'] } }
             const theirsEntry = body(forms)
             const mine = bot({ globalLore: [lore('Character: Aria', 'aria'), body({})], additionalAssets: [] })
             const theirs = bot({ globalLore: [lore('Character: Aria', 'aria'), theirsEntry], additionalAssets: [] })
             const merged = mergeAssetMaid(mine.globalLore[1], theirsEntry, mine, theirs, [], new Map([[0, 3]]))!
             const data = portable({ content: merged.content } as loreBook)
             expect(data.features.characterForms.entries[0]).toMatchObject({ target: 'lore:3', forms: [{ id: 'f', label: 'lore:88', description: 'lore:0' }] })
-            expect(data.features.sourceSelection.selectedTargets).toEqual(['lore:3'])
+            expect(data.features.characterForms.entries[0].matchingKeys.values).toEqual(['lore:88', 'lore:0', 'ordinary'])
+            expect(data.features.assetMatching.entries[0]).toEqual({ target: 'lore:3', result: { kind: 'aliases', values: ['lore:0', 'ordinary'] } })
+            expect(data.features.sourceSelection).toEqual({ selectedTargets: ['lore:3'], workspaceDisabledTargets: ['lore:3'] })
             expect(Object.keys(data.entities.lorebooks)).toEqual(['lore:3'])
         })
 
