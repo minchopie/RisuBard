@@ -363,7 +363,10 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         })
     }
     const ownReferences: CharacterReference[] = []
-    const ownCharacterReferences = where(ownSelection?.characterReferences)
+    // Asset Maid ignores a character reference of a character that has forms: such a reference of the installed body was never in use.
+    const ownFormTargets = new Set(entriesOf(own.data).map(entry => entry.target))
+    const ownCharacterReferences = where((Array.isArray(ownSelection?.characterReferences) ? ownSelection.characterReferences : [])
+        .filter(reference => !ownFormTargets.has(reference?.target)))
     for (const [index, [reference, target]] of ownCharacterReferences.entries()) {
         // Asset Maid takes the last reference of a target: an earlier one of the same target was never in use.
         if (ownCharacterReferences.slice(index + 1).some(([later]) => later.target === reference.target)) continue
@@ -372,8 +375,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         // installed body did not have, the user's reference goes to its default form, as a form reference of the user's would. A form
         // that already took another reference of the user's (from another installed character) keeps it; this one is held.
         const forms = entriesOf(data).find(entry => entry.target === target.target)
-        const slot = forms && !entriesOf(own.data).some(entry => entry.target === reference.target)
-            ? (forms.forms ?? []).find(form => form?.id === forms.defaultFormId) ?? forms.forms?.[0] : undefined
+        const slot = forms ? (forms.forms ?? []).find(form => form?.id === forms.defaultFormId) ?? forms.forms?.[0] : undefined
         if (slot && ownSlots.has(slot)) { hold('mine', reference.target, (reference as CharacterReference).asset, 'character-ambiguous'); continue }
         const moved = place(reference as CharacterReference, 'mine')
         if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }

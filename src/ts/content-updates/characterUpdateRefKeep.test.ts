@@ -1061,13 +1061,14 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
 
     test('character references: the new body\'s follow their pictures, the user\'s win on the same character', () => {
         const { mine, theirs, base } = scenario()
-        mine.globalLore[2] = withPicks(mine.globalLore[2], { characterReferences: [{ target: 'lore:1', asset: 'asset:2', enabled: true }] })
-        theirs.globalLore[2] = withPicks(theirs.globalLore[2], { characterReferences: [{ target: 'lore:0', asset: 'asset:9' }, { target: 'lore:1', analysisEnabled: false }] }, { 9: 'card2' })
+        // Targets without forms ("self", "description:self"): Asset Maid uses a character reference only there.
+        mine.globalLore[2] = withPicks(mine.globalLore[2], { characterReferences: [{ target: 'self', asset: 'asset:2', enabled: true }] })
+        theirs.globalLore[2] = withPicks(theirs.globalLore[2], { characterReferences: [{ target: 'self', asset: 'asset:9' }, { target: 'description:self', analysisEnabled: false }] }, { 9: 'card2' })
         const { result, merged, entry } = run(mine, theirs, base)
         expect(result).toMatchObject({ held: [], selected: 1 })
         const name = named(entry, merged.additionalAssets!)
         expect(portable(entry).features.assetSelection.characterReferences.map((ref: any) => ({ ...ref, asset: ref.asset && name(ref.asset) })))
-            .toEqual([{ target: 'lore:0', asset: 'u2', enabled: true }, { target: 'lore:1', analysisEnabled: false }])
+            .toEqual([{ target: 'self', asset: 'u2', enabled: true }, { target: 'description:self', analysisEnabled: false }])
         expect(dangling(entry)).toEqual([])
     })
 
@@ -1113,7 +1114,8 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
     test('a picture the user\'s character reference brings back keeps the user\'s picks of it', () => {
         const { mine, theirs, base } = scenario()
         mine.additionalAssets = [...mine.additionalAssets!, pic('u3')]
-        mine.globalLore[2] = withPicks(mine.globalLore[2], { selections: [{ target: 'lore:1', assets: ['asset:4'] }], characterReferences: [{ target: 'lore:1', asset: 'asset:4' }] }, { 4: 'u3' })
+        // ("self" has no forms: Asset Maid uses a character reference only there.)
+        mine.globalLore[2] = withPicks(mine.globalLore[2], { selections: [{ target: 'self', assets: ['asset:4'] }], characterReferences: [{ target: 'self', asset: 'asset:4' }] }, { 4: 'u3' })
         const { result, merged, entry } = run(mine, theirs, base, everything('theirs'))
         expect(merged.additionalAssets!.map(asset => asset[0])).toContain('u3')
         const name = named(entry, merged.additionalAssets!)
@@ -1286,6 +1288,19 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
             const { merged, data, name } = merge(mineEntry, theirsEntry, { mine: [A, C], theirs: [A, B] }, [A, C])
             expect(data.features.assetSelection.characterReferences.map((ref: any) => [ref.target, name(ref.asset)])).toEqual([['description:self', 'c']])
             expect(merged.held.map(held => [held.side, held.target, held.reference.asset, held.reason])).toEqual([['theirs', 'self', 'asset:1', 'asset-missing']])
+        })
+
+        test('a character reference the installed body never used (its character has forms) is not carried', () => {
+            const C: [string, string, string] = pic('c')
+            const mineEntry = body({ characterForms: { entries: [{ target: 'self', defaultFormId: 'f', forms: [{ id: 'f', label: 'f', reference: { asset: 'asset:0' } }] }] },
+                assetSelection: { characterReferences: [{ target: 'self', asset: 'asset:1' }] } }, { assets: { 'asset:0': record(A), 'asset:1': record(B) } })
+            const theirsEntry = body({ assetSelection: { characterReferences: [{ target: 'self', asset: 'asset:0' }] } }, { assets: { 'asset:0': record(C) } })
+            const result: unknown[] = [C]
+            const { merged, data, name } = merge(mineEntry, theirsEntry, { mine: [A, B], theirs: [C] }, result)
+            expect(result).toEqual([C])
+            expect(merged.selected).toBe(0)
+            expect(data.features.assetSelection.characterReferences.map((ref: any) => [ref.target, name(ref.asset)])).toEqual([['self', 'c']])
+            expect(merged.held.map(held => [held.side, held.formId, held.reason])).toEqual([['mine', 'f', 'character-missing']])
         })
 
         test('form references on "self" move like any other same target', () => {
