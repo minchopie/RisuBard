@@ -9,7 +9,7 @@
     import { transferStatus } from 'src/ts/transferState'
     import { nativeSend } from 'src/ts/transferNative'
 
-    let { active = false, watch = false, outcome = null }: { active?: boolean; watch?: boolean; outcome?: { ok: boolean; elapsedMs: number } | null } = $props()
+    let { active = false, watch = false, outcome = null }: { active?: boolean; watch?: boolean; outcome?: { ok: boolean; elapsedMs: number; at: number } | null } = $props()
     let progress = $state<TransferProgress | null>(null)
     let now = $state(Date.now()), startedAt = $state(0), ended = $state<{ ok: boolean; elapsedMs: number } | null>(null)
     let timer: ReturnType<typeof setInterval> | undefined, every = 0
@@ -33,7 +33,7 @@
     // Any native state other than a final one is still running (sending, preparing, ready = USB waits for the PC transferer).
     const nativeRunning = $derived(!!$nativeSend && !['delivered', 'applied', 'failed', 'cancelled', 'unknown'].includes($nativeSend.state))
     $effect(() => {
-        const wanted = active || nativeRunning ? 1000 : watch ? 3000 : 0
+        const wanted = active || nativeRunning || progress ? 1000 : watch ? 3000 : 0
         if (wanted === every) return
         if (timer) clearInterval(timer)
         timer = undefined; every = wanted
@@ -41,9 +41,9 @@
     })
     $effect(() => {
         // A run the user waited on (at least 1.5 s): its end is shown as done/failed; quick list/config actions are not.
-        // `outcome` is set in the same step that ends `active`, so the one read here belongs to this run.
+        // Only an outcome made after this run started belongs to it (a panel action); a background import has none, so no done/failed line.
         if (active) { if (!startedAt) { startedAt = Date.now(); ended = null } }
-        else if (startedAt) { ended = Date.now() - startedAt >= 1500 ? outcome : null; startedAt = 0 }
+        else if (startedAt) { ended = Date.now() - startedAt >= 1500 && outcome && outcome.at >= startedAt ? outcome : null; startedAt = 0 }
     })
     // Which kind of work the line is about: a native send keeps its own final state (전달 완료/가져오기 완료) until another run starts.
     let source = $state<'run' | 'native' | ''>('')
@@ -62,7 +62,7 @@
     <div class="play-transfer-progress" role="status" aria-live="polite" aria-busy={running} data-transfer-progress data-tone={final ? (final.ok ? 'done' : 'failed') : view.tone}>
         {#if !final}
             <span class="label">{view.tone === 'done' ? '✓ ' : view.tone === 'failed' ? '✕ ' : ''}{view.label}</span>
-            <div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={view.percent ?? undefined}>
+            <div class="track" role="progressbar" aria-label="전송 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow={view.percent ?? undefined}>
                 {#if view.percent !== null}<div class="fill" style="width: {view.percent}%"></div>{:else}<div class="fill moving"></div>{/if}
             </div>
             <span class="detail">{view.percent !== null ? `${view.percent}%` : ''}{view.percent !== null && detail ? ' · ' : ''}{detail}</span>

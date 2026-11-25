@@ -1171,9 +1171,9 @@
       "path": "server/node/play-set-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "f500941e5ddb1265dd8f331d4c6f2e5cba97017d52a1e3fc879f1a960ab287bb",
-      "contentSha256": "f500941e5ddb1265dd8f331d4c6f2e5cba97017d52a1e3fc879f1a960ab287bb",
-      "bytes": 34565
+      "sha256": "e99bcadfd2ccd4488dc0495d1310442abca4ff57d04245b9f9562e4b00ad6fb7",
+      "contentSha256": "e99bcadfd2ccd4488dc0495d1310442abca4ff57d04245b9f9562e4b00ad6fb7",
+      "bytes": 35217
     },
     {
       "path": "server/node/play-transfer-http.test.ts",
@@ -1339,17 +1339,17 @@
       "path": "server/node/transfer-sync/play-set-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "293b2c8b5ade88c247afb1746c271fa7d3aabe766fb45fb7ef261355a8095fae",
-      "contentSha256": "293b2c8b5ade88c247afb1746c271fa7d3aabe766fb45fb7ef261355a8095fae",
+      "sha256": "b2a4b61ce2a2155c88886df4f28eb28da5018c7d85cb3cb1c7d537827435a419",
+      "contentSha256": "b2a4b61ce2a2155c88886df4f28eb28da5018c7d85cb3cb1c7d537827435a419",
       "bytes": 50751
     },
     {
       "path": "server/node/transfer-sync/transfer-remote.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "37f624fdeb9dd5daaad98410ee6011a6b33397a7c068da09b17c87d30184bdd0",
-      "contentSha256": "37f624fdeb9dd5daaad98410ee6011a6b33397a7c068da09b17c87d30184bdd0",
-      "bytes": 26892
+      "sha256": "c72214a1da5650af5f1c9012a0aea8a138bf1caa7ed377e90942befa2a4b674d",
+      "contentSha256": "c72214a1da5650af5f1c9012a0aea8a138bf1caa7ed377e90942befa2a4b674d",
+      "bytes": 26994
     },
     {
       "path": "server/node/transfer-sync/transfer-secrets.cjs",
@@ -1507,9 +1507,9 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "beecff75b233a720f597b902cb751fc0a3c67d26bb293d8957e797a541509499",
-      "contentSha256": "beecff75b233a720f597b902cb751fc0a3c67d26bb293d8957e797a541509499",
-      "bytes": 51318
+      "sha256": "714d598b4e8a2551276125faab025ca39be72bb5067a60bd3b1d51098b807833",
+      "contentSha256": "714d598b4e8a2551276125faab025ca39be72bb5067a60bd3b1d51098b807833",
+      "bytes": 51346
     },
     {
       "path": "src/lib/Setting/Pages/NasSyncProgress.svelte",
@@ -1523,9 +1523,9 @@
       "path": "src/lib/Setting/Pages/PlayTransferProgress.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "cbcb2b7e8ca2aeef56fb8051f9af69be67acfcfa068e9fb38ea4d3ffd42cba8d",
-      "contentSha256": "cbcb2b7e8ca2aeef56fb8051f9af69be67acfcfa068e9fb38ea4d3ffd42cba8d",
-      "bytes": 6674
+      "sha256": "a2e010d8047893c8a1f8699e0339b2f1ac65888ddc2e8adb802db71781861199",
+      "contentSha256": "a2e010d8047893c8a1f8699e0339b2f1ac65888ddc2e8adb802db71781861199",
+      "bytes": 6800
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -1587,9 +1587,9 @@
       "path": "src/ts/playTransfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "11118b7b92bf6d7ca9e0665832c35f2b85ac1eb5f1b4f28b0f2ddf5be37a64a7",
-      "contentSha256": "11118b7b92bf6d7ca9e0665832c35f2b85ac1eb5f1b4f28b0f2ddf5be37a64a7",
-      "bytes": 16389
+      "sha256": "5fd265fe6d8a6c5a0ac0dd01a8357beffa61860b9d642b389b7eaa832f7034c3",
+      "contentSha256": "5fd265fe6d8a6c5a0ac0dd01a8357beffa61860b9d642b389b7eaa832f7034c3",
+      "bytes": 18389
     },
     {
       "path": "src/ts/playTransfer.ts",
@@ -1659,9 +1659,9 @@
       "path": "src/ts/transfer-sync/playTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "f0bdcbe98b4fa442ce110d2f79c5527e581781a2366ea6dd6b94260696cfcd4d",
-      "contentSha256": "f0bdcbe98b4fa442ce110d2f79c5527e581781a2366ea6dd6b94260696cfcd4d",
-      "bytes": 28599
+      "sha256": "70da81a06fe2d2c611323bd39e778c0d31764ce8cddeb6dc1c1ba1d8d5d6dbc9",
+      "contentSha256": "70da81a06fe2d2c611323bd39e778c0d31764ce8cddeb6dc1c1ba1d8d5d6dbc9",
+      "bytes": 29140
     },
     {
       "path": "src/ts/transfer-sync/transferAssets.ts",

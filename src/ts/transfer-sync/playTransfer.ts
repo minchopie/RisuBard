@@ -99,8 +99,9 @@ export function transferProgressView(progress: TransferProgress | null, native: 
     if (native) {
         const total = native.total ?? 0, sent = Math.min(native.sent ?? 0, total)
         const finished = ['delivered', 'applied'].includes(native.state), failed = ['failed', 'cancelled', 'unknown'].includes(native.state)
-        const label = native.state === 'applied' ? '받는 기기에서 가져오기 완료' : native.state === 'delivered' ? '전달 완료 · 받는 기기에서 가져오기 대기'
-            : failed ? '전송 실패' : native.state === 'ready' ? 'USB 전송 준비 완료 · PC 전송기에서 받아 주세요' : native.state === 'preparing' ? 'USB 전송 준비 중' : 'Wi-Fi·USB로 전송 중'
+        // Direction-neutral: the Windows USB 「기기에서 받기」 loop writes the same store. `unknown` = the state could not be read, not a failure.
+        const label = native.state === 'applied' ? '받는 쪽에서 가져오기 완료' : native.state === 'delivered' ? '전달 완료 · 받는 쪽에서 가져오기 대기'
+            : native.state === 'unknown' ? '상대 기기 상태를 확인하지 못했어요' : failed ? '전송 실패' : native.state === 'ready' ? 'USB 전송 준비 완료 · PC 전송기에서 받아 주세요' : native.state === 'preparing' ? 'USB 전송 준비 중' : 'Wi-Fi·USB로 전송 중'
         return { label, percent: finished ? 100 : total ? Math.min(100, Math.floor(sent / total * 100)) : null, detail: failed ? native.error ?? '' : total ? `${mb(sent)}/${mb(total)} MB` : '',
             tone: finished ? 'done' as const : failed ? 'failed' as const : 'running' as const }
     }
@@ -115,19 +116,20 @@ export function transferProgressText(progress: TransferProgress) {
 /** While a step behind the modal overlay runs, its status line carries the server step's progress (polled every second). Text another
  *  writer sets stays the base line; when no server step runs, the base line is shown again. Returns the stop function. */
 function overlayProgress() {
-    let base = get(transferStatus), mine = '', stopped = false, busy = false
+    let base = get(transferStatus), mine = '', stopped = false, controller: AbortController | undefined
     const timer = setInterval(() => {
-        if (busy) return
-        busy = true
-        void playTransferProgress().then((progress: TransferProgress | null) => {
+        if (controller) return
+        // A hung request is cut after 5 s (like the panel line), so the next tick can ask again; stop() cancels it.
+        const c = controller = new AbortController(), limit = setTimeout(() => c.abort(), 5000)
+        void playTransferProgress(c.signal).then((progress: TransferProgress | null) => {
             if (stopped) return
             const current = get(transferStatus)
             if (current !== mine) base = current
             mine = progress ? transferProgressText(progress) : base
             if (mine !== current) transferStatus.set(mine)
-        }).catch(() => {}).finally(() => { busy = false })
+        }).catch(() => {}).finally(() => { clearTimeout(limit); if (controller === c) controller = undefined })
     }, 1000)
-    return () => { stopped = true; clearInterval(timer); if (mine && get(transferStatus) === mine && mine !== base) transferStatus.set(base) }
+    return () => { stopped = true; clearInterval(timer); controller?.abort(); if (mine && get(transferStatus) === mine && mine !== base) transferStatus.set(base) }
 }
 export function transferUnavailable() {
     return get(transferBusy) || get(syncSaveHold) || get(doingChat) || get(isAnyGenerating) || get(importSession).phase !== 'idle'

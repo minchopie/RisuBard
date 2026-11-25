@@ -59,12 +59,12 @@
     $effect(() => { selected = character?.chats[character.chatPage]?.id ? [character.chats[character.chatPage].id] : []; result = null })
     onMount(() => { void refreshTransfers().catch(error => transferStatus.set(String(error))) })
     // 0.9.103-ver4: how the last action ended, for the progress line's done/failed state.
-    let outcome = $state<{ ok: boolean; elapsedMs: number } | null>(null)
+    let outcome = $state<{ ok: boolean; elapsedMs: number; at: number } | null>(null)
     async function run(work: () => Promise<unknown>) {
         working = true
         const started = Date.now()
         let ok = false
-        try { await work(); ok = true } catch (error) { transferStatus.set(String(error)) } finally { working = false; outcome = { ok, elapsedMs: Date.now() - started } }
+        try { await work(); ok = true } catch (error) { transferStatus.set(String(error)) } finally { working = false; outcome = { ok, elapsedMs: Date.now() - started, at: Date.now() } }
     }
     async function download() {
         if (androidTransferAvailable()) { await sendNative(result.id, 'file', undefined, result.name); return }

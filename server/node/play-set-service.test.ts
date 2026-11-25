@@ -369,6 +369,12 @@ test('progress: export and receive show their running step with bytes and total,
     // an unknown size stays null (indeterminate), a failed receive also ends its run
     await expect(service.ingest(Readable.from([Buffer.from('not a zip')]), { total: 0 })).rejects.toThrow()
     expect(service.progress()).toBeNull()
+    // a receive that cannot even create its folder leaves no run behind (Codex R1 #2)
+    const blocked = join(root, 'blocked'); await mkdir(blocked)
+    const blockedService = createPlaySetService({ dataRoot: blocked, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(blocked), storage: kv, readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+    await promiseFiles.writeFile(join(blocked, 'play-transfer'), 'not a folder')
+    await expect(blockedService.ingest(Readable.from([bytes]), { total: bytes.length })).rejects.toThrow()
+    expect(blockedService.progress()).toBeNull()
     const tracked = service.track('upload', { bytesTotal: 10 }); tracked.add(4); tracked.bytes(1)
     expect(service.progress()).toMatchObject({ stage: 'upload', bytes: 5, bytesTotal: 10, items: 0, itemsTotal: null })
     tracked.next('upload-finish'); expect(service.progress()).toMatchObject({ stage: 'upload-finish', bytes: 0, bytesTotal: null })

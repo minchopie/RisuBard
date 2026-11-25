@@ -150,7 +150,8 @@ test('progress line: bytes give percent, MB, speed and remaining time; items cou
 test('progress line: native send states, finished and failed, and the text bar for the modal overlay', () => {
     expect(transferProgressView(null, { state: 'sending', sent: 50_000_000, total: 200_000_000 })).toMatchObject({ label: 'Wi-Fi·USB로 전송 중', percent: 25, detail: '50/200 MB', tone: 'running' })
     expect(transferProgressView(null, { state: 'delivered', sent: 0, total: 200_000_000 })).toMatchObject({ percent: 100, tone: 'done' })
-    expect(transferProgressView(null, { state: 'applied' })).toMatchObject({ label: '받는 기기에서 가져오기 완료', tone: 'done' })
+    expect(transferProgressView(null, { state: 'applied' })).toMatchObject({ label: '받는 쪽에서 가져오기 완료', tone: 'done' })
+    expect(transferProgressView(null, { state: 'unknown', error: '상태 조회 시간 초과' })).toMatchObject({ label: '상대 기기 상태를 확인하지 못했어요', detail: '상태 조회 시간 초과' })
     expect(transferProgressView(null, { state: 'failed', error: 'x' })).toMatchObject({ label: '전송 실패', tone: 'failed', percent: null, detail: 'x' })
     expect(transferProgressView(null, null, '채팅을 저장하는 중…')).toMatchObject({ label: '채팅을 저장하는 중…', percent: null })
     expect(transferProgressText({ stage: 'pack', bytes: 42, bytesTotal: 100, items: 0, itemsTotal: null, elapsedMs: 3_000, stageElapsedMs: 1_000 })).toBe('전송 파일로 묶는 중 ████░░░░░░ 42% · 0.0/0.0 MB · 경과 3초')
@@ -178,6 +179,33 @@ test('the modal status line carries the running step and returns to the step tex
         expect(get(transferStatus)).toBe('가져오기 완료 · 기존 캐릭터 목록에서 확인해 주세요.')
         await vi.advanceTimersByTimeAsync(3000)
         expect(f.request.mock.calls.filter(c => c[0] === '/progress').length).toBe(2)
+    } finally { vi.useRealTimers() }
+})
+test('a progress request that hangs is cut after 5 s so the overlay line keeps updating; stop cancels the one in flight', async () => {
+    vi.useFakeTimers()
+    try {
+        const signals: AbortSignal[] = []
+        let release!: () => void
+        const held = new Promise<void>(resolve => { release = resolve })
+        f.request.mockImplementation(async (path: string, init: any = {}) => {
+            if (path === '/progress') {
+                signals.push(init.signal)
+                if (signals.length === 1) return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))))
+                return reply({ stage: 'copy', bytes: 0, bytesTotal: null, items: 2, itemsTotal: 4, elapsedMs: 8000, stageElapsedMs: 1000 })
+            }
+            if (path.endsWith('/inspect')) return reply({ characters: [] })
+            if (path.endsWith('/prepare')) { await held; return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {} }) }
+            return reply([])
+        })
+        const running = receiveTransfer('in')
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(signals).toHaveLength(1); expect(get(transferStatus)).toBe('자료 검증 · 가져오기 준비 중…')
+        await vi.advanceTimersByTimeAsync(4000)
+        expect(signals[0].aborted).toBe(true); expect(signals.length).toBeGreaterThan(1)
+        expect(get(transferStatus)).toBe('그림 꺼내는 중 █████░░░░░ 50% · 2/4개 · 경과 8초')
+        release(); await running
+        expect(signals.at(-1)!.aborted || signals.length >= 2).toBe(true)
+        expect(get(transferStatus)).toBe('가져오기 완료 · 기존 캐릭터 목록에서 확인해 주세요.')
     } finally { vi.useRealTimers() }
 })
 test('Asset Maid pictures of a received chat are added to the existing card by name only when the name is new', async () => {

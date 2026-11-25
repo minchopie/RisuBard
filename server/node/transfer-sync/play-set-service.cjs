@@ -146,7 +146,6 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         name: record.name, bytes: record.bytes, sha256: record.sha256, error: record.error, trusted: !!record.trusted, applyRequested: record.applyRequested, nativeId: record.nativeId, progress: record.progress, ...(record.kind ? { kind: record.kind } : {}) });
     async function ingest(source, { name = '대화 자료.risuplay', trusted = false, applyRequested, nativeId, total = null } = {}) {
         const key = randomUUID(), dir = directory(key);
-        const shown = track('receive', { bytesTotal: Number.isSafeInteger(total) && total > 0 ? total : null });
         await fs.mkdir(dir, { recursive: true, mode: 0o700 });
         const record = { id: key, direction: 'receive', state: 'receiving', createdAt: Date.now(), name: String(name).slice(0, 200), trusted, ...(typeof applyRequested === 'boolean' ? { applyRequested } : {}), ...(nativeId ? { nativeId } : {}) };
         write(record);
@@ -161,6 +160,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                 done(null, chunk);
             }, done).catch(done);
         } });
+        const shown = track('receive', { bytesTotal: Number.isSafeInteger(total) && total > 0 ? total : null });
         try {
             const partial = join(dir, 'incoming.part');
             await pipeline(source, meter, createWriteStream(partial, { flags: 'wx', mode: 0o600 }));

@@ -2,7 +2,7 @@
 const https = require('node:https');
 const fs = require('node:fs/promises');
 const { createReadStream } = require('node:fs');
-const { Readable, Transform } = require('node:stream');
+const { Readable, Transform, pipeline: streamPipeline } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { createHash, randomUUID } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
@@ -167,8 +167,8 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
         // 0.9.103-ver4: progress display only (GET /api/play-transfer/progress): upload bytes, then the remote + local re-read of the check.
         const shown = transfers.track?.('upload', { bytesTotal: stat.size });
         try {
-            const source = createReadStream(file), body = shown ? source.pipe(new Transform({ transform(chunk, _encoding, done) { shown.add(chunk.length); done(null, chunk); } })) : source;
-            if (body !== source) source.on('error', error => body.destroy(error));
+            // pipeline (callback form) returns the counter and ties both ways: a read error fails the PUT, a failed PUT closes the file.
+            const source = createReadStream(file), body = shown ? streamPipeline(source, new Transform({ transform(chunk, _encoding, done) { shown.add(chunk.length); done(null, chunk); } }), () => {}) : source;
             await drain(checked(await nasRequest(c, 'PUT', temporary, { 'If-None-Match': '*', 'Content-Length': String(stat.size), 'Content-Type': 'application/octet-stream' }, body), [200, 201, 204]));
             shown?.next('upload-check', { bytesTotal: stat.size * 2 });
             const verification = checked(await nasRequest(c, 'GET', temporary));
