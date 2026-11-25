@@ -4680,6 +4680,14 @@
       "bytes": 1654
     },
     {
+      "path": "patchnote/0.9.103-ver4.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "605844270a8de79dd58a6e853f3863a6ad1472b46258f5a16dd9f7ffc2358007",
+      "contentSha256": "605844270a8de79dd58a6e853f3863a6ad1472b46258f5a16dd9f7ffc2358007",
+      "bytes": 1418
+    },
+    {
       "path": "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
       "module": "history-docs",
       "kind": "files",
@@ -5710,6 +5718,7 @@
         "patchnote/0.9.103-ver1.md",
         "patchnote/0.9.103-ver2.md",
         "patchnote/0.9.103-ver3.md",
+        "patchnote/0.9.103-ver4.md",
         "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
         "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
@@ -5815,7 +5824,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "35b81fa55ef3eaf99661a8117a9e97c6e7f9d558243ab431cc8136e597532afe"
+      "sha256": "621dfd61ae61c4ff55b67646d6ca64ce7c8744395207e811a5a470ebc746164b"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5893,7 +5902,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.103/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "ee6784527b0790b3e94d138dd7531ff2af20a72a33e35b3313059507fb750782"
+          "sha256": "7dc0de90416ab9858615dae93a41bb7b0565518529bba852d992aac87eba7628"
         },
         {
           "module": "lore-lua",
