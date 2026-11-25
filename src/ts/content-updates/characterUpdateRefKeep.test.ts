@@ -1269,6 +1269,16 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
             expect(merged.held.map(held => [held.target, held.reason, held.selection])).toEqual([['lore:1', 'character-ambiguous', true]])
         })
 
+        test('of two character references of one target, the last (the one Asset Maid uses) is carried', () => {
+            const mineEntry = body({ assetSelection: { characterReferences: [{ target: 'self', asset: 'asset:0' }, { target: 'self', asset: 'asset:1' }] } }, { assets: { 'asset:0': record(A), 'asset:1': record(B) } })
+            const theirsEntry = body({ characterForms: { entries: [{ target: 'self', defaultFormId: 'f', forms: [{ id: 'f', label: 'f' }] }] } })
+            const { merged, data, name } = merge(mineEntry, theirsEntry, { mine: [A, B], theirs: [A, B] }, [A, B])
+            expect(merged).toMatchObject({ held: [], selected: 1 })
+            expect(name(data.features.characterForms.entries[0].forms[0].reference.asset)).toBe('b')
+            const { data: noForms, name: noFormsName } = merge(mineEntry, body({}), { mine: [A, B], theirs: [A, B] }, [A, B])
+            expect(noForms.features.assetSelection.characterReferences.map((ref: any) => [ref.target, noFormsName(ref.asset)])).toEqual([['self', 'b']])
+        })
+
         test('form references on "self" move like any other same target', () => {
             const forms = (asset: string) => ({ characterForms: { entries: [{ target: 'self', defaultFormId: 'form_default', forms: [{ id: 'form_default', label: 'd', reference: { asset } }] }] } })
             const { merged, data, name } = merge(body(forms('asset:0'), { assets: { 'asset:0': record(A) } }), body(forms('asset:4'), { assets: { 'asset:4': record(B) } }), { mine: [A], theirs: [B] }, [A, B])

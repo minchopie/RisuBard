@@ -363,7 +363,10 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         })
     }
     const ownReferences: CharacterReference[] = []
-    for (const [reference, target] of where(ownSelection?.characterReferences)) {
+    const ownCharacterReferences = where(ownSelection?.characterReferences)
+    for (const [index, [reference, target]] of ownCharacterReferences.entries()) {
+        // Asset Maid takes the last reference of a target: an earlier one of the same target was never in use.
+        if (ownCharacterReferences.slice(index + 1).some(([later]) => later.target === reference.target)) continue
         if (typeof target === 'string') { hold('mine', reference.target, (reference as CharacterReference).asset, target); continue }
         // Asset Maid uses a character reference only for a character without forms: where the new body gave the character forms the
         // installed body did not have, the user's reference goes to its default form, as a form reference of the user's would. A form

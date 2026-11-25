@@ -4979,9 +4979,9 @@
       "path": "docs/content-updates/README.md",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "be1a7347a68b0ae4d75cc6d3d5e4f5c16b46d30fca80b7c170c657adcdfeed5e",
-      "contentSha256": "be1a7347a68b0ae4d75cc6d3d5e4f5c16b46d30fca80b7c170c657adcdfeed5e",
-      "bytes": 29061
+      "sha256": "c4c784b00bd223e9746bf16840a79a702bec9e437be1432e41e0e050e228264a",
+      "contentSha256": "c4c784b00bd223e9746bf16840a79a702bec9e437be1432e41e0e050e228264a",
+      "bytes": 29159
     },
     {
       "path": "server/node/content-updates/app-code-watch.cjs",
@@ -5019,17 +5019,17 @@
       "path": "src/ts/content-updates/characterUpdateRefKeep.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "80d223dbdc0d5ae7dd5e9a4cd1397279d18eac77aa3d68435e463b2af5ecac92",
-      "contentSha256": "80d223dbdc0d5ae7dd5e9a4cd1397279d18eac77aa3d68435e463b2af5ecac92",
-      "bytes": 49127
+      "sha256": "462d66bef2ee0932e6bdcba3c668f3f8f2184e5c615b9e61e690d2a115131b84",
+      "contentSha256": "462d66bef2ee0932e6bdcba3c668f3f8f2184e5c615b9e61e690d2a115131b84",
+      "bytes": 49431
     },
     {
       "path": "src/ts/content-updates/characterUpdateRefKeep.test.ts",
       "module": "content-updates",
       "kind": "files",
-      "sha256": "1c79d09b4a748e7e508bb0e858e9fa9db67d6e321860d5653d0b35ffd781c5bd",
-      "contentSha256": "1c79d09b4a748e7e508bb0e858e9fa9db67d6e321860d5653d0b35ffd781c5bd",
-      "bytes": 97410
+      "sha256": "ad03a04098bba5f57e6c727d2cd70304536916517902b9ce32e6147e5ca6c229",
+      "contentSha256": "ad03a04098bba5f57e6c727d2cd70304536916517902b9ce32e6147e5ca6c229",
+      "bytes": 98462
     }
   ],
   "modules": [
