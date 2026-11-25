@@ -404,7 +404,7 @@ describe('Asset Maid free-created characters', () => {
     test.each([[0, 'character-missing'], [2, 'character-ambiguous']])('holds when there are %i exact targets', (count, reason) => {
         const forms = [{ id: 'f', reference: { asset: 'asset:0' } }]
         const mine = customBody([{ target, forms }])
-        const theirs = customBody([{ target: target + '-other', forms }, ...Array.from({ length: count }, () => ({ target, forms }))])
+        const theirs = customBody([{ target: target + '-other', forms }, ...Array.from({ length: count }, () => ({ target, forms }))], { 0: 'incoming' })
         const merged = mergeAssetMaid(mine, theirs, { additionalAssets: [pic('mine')] }, { additionalAssets: [pic('incoming')] }, [pic('incoming')], new Map())!
         expect(merged.held).toEqual([{ side: 'mine', target, character: '', formId: 'f', reference: forms[0].reference, reason }])
         expect(merged).toMatchObject({ kept: 0, replaced: 0, appended: 0, dropped: [] })
@@ -1136,6 +1136,70 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
         expect(name(body.features.outfits.entries[0].outfits[0].reference.asset)).toBe('card2')
         expect(dangling(entry)).toEqual([])
     })
+
+    describe('mergeAssetMaid on bodies built by hand', () => {
+        const A = pic('a'), B = pic('b')
+        const record = (picture: [string, string, string]) => ({ fingerprints: { descriptor: assetMaidCharacterLocators([picture])[0]!.descriptor } })
+        const moduleRecord = { module: 'module:map', fingerprints: { descriptor: 'am2:map-a' } }
+        const body = (features: Record<string, unknown>, entities: Record<string, unknown> = {}, lorebooks: Record<string, unknown> = { 'lore:0': fp('aria') }) =>
+            lore(ASSET_MAID_COMMENT, '@@dont_activate ' + JSON.stringify({ schema: 'asset-maid.portable', version: 1, scope: 'character', entities: { lorebooks, ...entities }, features }))
+        const merge = (mineEntry: loreBook, theirsEntry: loreBook, pictures: { mine: unknown[], theirs: unknown[] }, result: unknown[], map?: Map<number, number>) => {
+            const mine = bot({ globalLore: [lore('Character: Aria', 'aria'), mineEntry], additionalAssets: pictures.mine as [string, string, string][] })
+            const theirs = bot({ globalLore: [lore('Character: Aria', 'aria'), theirsEntry], additionalAssets: pictures.theirs as [string, string, string][] })
+            const merged = mergeAssetMaid(mineEntry, theirsEntry, mine, theirs, result, map)!
+            const entry = { content: merged.content } as loreBook
+            return { merged, entry, data: portable(entry), name: named(entry, result) }
+        }
+
+        test('a picture the user\'s character reference brings back keeps the new body\'s picks and outfit references of it', () => {
+            const mineEntry = body({ assetSelection: { characterReferences: [{ target: 'self', asset: 'asset:0' }] } }, { assets: { 'asset:0': record(A) } })
+            const theirsEntry = body({ assetSelection: { selections: [{ target: 'self', assets: ['asset:5'] }] }, outfits: { entries: [{ target: 'self', outfits: [{ id: 'o', label: 'o', description: '', parts: {}, reference: { asset: 'asset:5' } }] }] } }, { assets: { 'asset:5': record(A) } })
+            const result: unknown[] = []
+            const { merged, data, name } = merge(mineEntry, theirsEntry, { mine: [A], theirs: [A] }, result)
+            expect(result).toEqual([A])
+            expect(merged.held).toEqual([])
+            expect(data.features.assetSelection.selections.map((row: any) => row.assets.map(name))).toEqual([['a']])
+            expect(name(data.features.outfits.entries[0].outfits[0].reference.asset)).toBe('a')
+        })
+
+        test('custom characters and member descriptions the new body has keep the user\'s picks', () => {
+            const picks = { selections: [{ target: 'custom:demo', assets: ['asset:0'] }, { target: 'member:0/description:self', assets: ['asset:0'] }], characterReferences: [{ target: 'custom:demo', asset: 'asset:0' }] }
+            const mineEntry = body({ assetSelection: picks }, { assets: { 'asset:0': record(A) }, members: { 'member:0': {} } })
+            const theirsEntry = body({ characters: { entries: [{ id: 'demo' }] } }, { members: { 'member:0': {} } })
+            const { merged, data, name } = merge(mineEntry, theirsEntry, { mine: [A], theirs: [A] }, [A])
+            expect(merged).toMatchObject({ held: [], selected: 3 })
+            expect(data.features.assetSelection.selections.map((row: any) => [row.target, row.assets.map(name)])).toEqual([['custom:demo', ['a']], ['member:0/description:self', ['a']]])
+            expect(data.features.assetSelection.characterReferences.map((ref: any) => [ref.target, name(ref.asset)])).toEqual([['custom:demo', 'a']])
+            // A custom character the new body does not have is held.
+            const { merged: gone } = merge(mineEntry, body({}), { mine: [A], theirs: [A] }, [A])
+            expect(gone.held.map(held => [held.target, held.reason])).toEqual([['custom:demo', 'character-missing'], ['custom:demo', 'character-missing'], ['member:0/description:self', 'character-missing']])
+        })
+
+        test('one module picture named on both sides is one number', () => {
+            const mineEntry = body({ assetSelection: { selections: [{ target: 'self', assets: ['asset:3'] }] } }, { assets: { 'asset:3': moduleRecord } })
+            const theirsEntry = body({ assetSelection: { selections: [{ target: 'self', assets: ['asset:7', 'asset:1'] }] } }, { assets: { 'asset:7': moduleRecord, 'asset:1': record(B) } })
+            const { data } = merge(mineEntry, theirsEntry, { mine: [A], theirs: [A, B] }, [A, B])
+            const tokens = data.features.assetSelection.selections[0].assets
+            expect(tokens).toHaveLength(2)
+            expect(tokens.map((token: string) => data.entities.assets[token])).toEqual([moduleRecord, record(B)])
+        })
+
+        test('a reference number without a record is held and taken out, never left without its record', () => {
+            const theirsEntry = body({ characterForms: { entries: [{ target: 'lore:0', defaultFormId: 'f', forms: [{ id: 'f', label: 'f', reference: { asset: 'asset:0' } }] }] } })
+            const { merged, data } = merge(body({}), theirsEntry, { mine: [A], theirs: [A] }, [A])
+            expect(merged.held.map(held => [held.side, held.formId, held.reason])).toEqual([['theirs', 'f', 'asset-missing']])
+            expect(data.features.characterForms.entries[0].forms[0].reference).toBeUndefined()
+            expect(dangling(entry_(data))).toEqual([])
+        })
+
+        test('picks of a new-body lore entry left out of the lorebook go with it and are reported', () => {
+            const theirsEntry = body({ assetSelection: { selections: [{ target: 'lore:0', assets: ['asset:0'] }] } }, { assets: { 'asset:0': record(A) } })
+            const { merged, data } = merge(body({}), theirsEntry, { mine: [A], theirs: [A] }, [A], new Map())
+            expect(merged.dropped).toEqual(['Character: Aria'])
+            expect(data.features.assetSelection).toEqual({ selections: [] })
+        })
+    })
+    const entry_ = (data: unknown) => ({ content: '@@dont_activate ' + JSON.stringify(data) }) as loreBook
 
     test('without picks on either side the body has no assetSelection, as before', () => {
         const { mine, theirs, base } = scenario()
