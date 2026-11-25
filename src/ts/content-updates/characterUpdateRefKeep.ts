@@ -238,6 +238,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     if (!own || !other) return null
     // 0.9.103-ver4: Asset Maid trims every target ("wr"); both bodies are read that way, so " lore:0 " and "lore:0" are one target below.
     const trimmed = (key: string, value: unknown) => key === 'target' && typeof value === 'string' ? value.trim() : value
+    const sameId = (a: unknown, b: unknown) => a === b || (typeof a === 'string' && typeof b === 'string' && a.trim() === b.trim()) // form ids too
     own.data = JSON.parse(JSON.stringify(own.data), trimmed)
     let data: Portable = JSON.parse(JSON.stringify(other.data), trimmed)
     const mineAssets = (mine.additionalAssets ?? []) as Asset[], theirsAssets = (theirs.additionalAssets ?? []) as Asset[]
@@ -326,7 +327,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (typeof target === 'string') { note(target); continue }
         if (claims.get(target)!.size > 1) { note('character-ambiguous'); continue }
         if (!placed(target)) { note('character-missing'); continue }
-        const slot = (target.forms ?? []).find(candidate => candidate?.id === form.id)
+        const slot = (target.forms ?? []).find(candidate => sameId(candidate?.id, form.id))
         if (!slot) { note('form-missing'); continue }
         if (empty) {
             slot.reference ??= {}
@@ -385,7 +386,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         // installed body did not have, the user's reference goes to its default form, as a form reference of the user's would. A form
         // that already took another reference of the user's (from another installed character) keeps it; this one is held.
         const forms = entriesOf(data).find(entry => entry.target === target.target)
-        const slot = forms ? (forms.forms ?? []).find(form => form?.id === forms.defaultFormId) ?? forms.forms?.[0] : undefined
+        const slot = forms ? (forms.forms ?? []).find(form => sameId(form?.id, forms.defaultFormId)) ?? forms.forms?.[0] : undefined
         if (slot && ownSlots.has(slot)) { hold('mine', reference.target, (reference as CharacterReference).asset, 'character-ambiguous'); continue }
         const moved = place(reference as CharacterReference, 'mine')
         if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }

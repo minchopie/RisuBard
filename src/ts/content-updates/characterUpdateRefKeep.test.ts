@@ -1364,6 +1364,20 @@ describe('Asset Maid picture picks (assetSelection) across a card update', () =>
             expect(data.features.assetSelection).toBeUndefined()
         })
 
+        test('form ids are compared as Asset Maid reads them (trimmed): the default form and the user\'s own form', () => {
+            const C: [string, string, string] = pic('c')
+            const refEntry = body({ assetSelection: { characterReferences: [{ target: 'self', asset: 'asset:0' }] } }, { assets: { 'asset:0': record(A) } })
+            const formsEntry = body({ characterForms: { entries: [{ target: 'self', defaultFormId: ' f2 ', forms: [{ id: 'f1', label: 'f1', reference: { asset: 'asset:1' } }, { id: 'f2', label: 'f2', reference: { asset: 'asset:2' } }] }] } }, { assets: { 'asset:1': record(B), 'asset:2': record(C) } })
+            const first = merge(refEntry, formsEntry, { mine: [A], theirs: [B, C] }, [B, C, A])
+            expect(first.merged).toMatchObject({ held: [], selected: 1 })
+            expect(formPictures(first.entry, [B, C, A])).toEqual(['self/f1=b', 'self/f2=a'])
+            const mineForms = body({ characterForms: { entries: [{ target: 'self', defaultFormId: 'f', forms: [{ id: ' f ', label: 'f', reference: { asset: 'asset:0' } }] }] } }, { assets: { 'asset:0': record(A) } })
+            const theirsForms = body({ characterForms: { entries: [{ target: 'self', defaultFormId: 'f', forms: [{ id: 'f', label: 'f' }] }] } })
+            const second = merge(mineForms, theirsForms, { mine: [A], theirs: [A] }, [A])
+            expect(second.merged).toMatchObject({ kept: 1, held: [] })
+            expect(formPictures(second.entry, [A])).toEqual(['self/f=a'])
+        })
+
         test('form references on "self" move like any other same target', () => {
             const forms = (asset: string) => ({ characterForms: { entries: [{ target: 'self', defaultFormId: 'form_default', forms: [{ id: 'form_default', label: 'd', reference: { asset } }] }] } })
             const { merged, data, name } = merge(body(forms('asset:0'), { assets: { 'asset:0': record(A) } }), body(forms('asset:4'), { assets: { 'asset:4': record(B) } }), { mine: [A], theirs: [B] }, [A, B])
