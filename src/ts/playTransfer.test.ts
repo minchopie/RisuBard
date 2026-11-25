@@ -224,12 +224,13 @@ test('Asset Maid pictures of a received chat are added to the existing card by n
 })
 test('a chat received before (duplicate) still gets its missing Asset Maid names, compared case-insensitively, and the card alone is saved', async () => {
     f.db.characters[0].additionalAssets = [['Mine.__AM__.chat.a', 'assets/keep.png', 'png']]
+    f.db.characters[0].personas = [{ id: 'local-p', embeddedModule: { id: 'lm', assets: [['card-persona.taken', 'assets/cp.png', 'png']] } }]
     f.db.modules = [{ id: 'mod', assets: [['module.taken', 'assets/module.png', 'png']] }, { id: 'no-assets' }]
     f.db.personas = [{ id: 'p', embeddedModule: { id: 'em', assets: [['PERSONA.taken', 'assets/persona.png', 'png']] } }, { id: 'plain' }]
     f.request.mockImplementation(async (path: string) => {
         if (path.endsWith('/inspect')) return reply({ characters: [] })
         if (path.endsWith('/prepare')) return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {}, duplicate: true,
-            characterAssets: [{ characterId: 'existing', name: 'mine.__am__.chat.a', path: 'assets/other.png', ext: 'png' }, { characterId: 'existing', name: 'pc.__am__.chat.b', path: 'assets/b.png', ext: 'png' }, { characterId: 'existing', name: 'Module.Taken', path: 'assets/t.png', ext: 'png' }, { characterId: 'existing', name: 'persona.TAKEN', path: 'assets/p.png', ext: 'png' }] })
+            characterAssets: [{ characterId: 'existing', name: 'mine.__am__.chat.a', path: 'assets/other.png', ext: 'png' }, { characterId: 'existing', name: 'pc.__am__.chat.b', path: 'assets/b.png', ext: 'png' }, { characterId: 'existing', name: 'Module.Taken', path: 'assets/t.png', ext: 'png' }, { characterId: 'existing', name: 'persona.TAKEN', path: 'assets/p.png', ext: 'png' }, { characterId: 'existing', name: 'Card-Persona.Taken', path: 'assets/c.png', ext: 'png' }] })
         return reply([])
     })
     await receiveTransfer('in')

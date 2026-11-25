@@ -361,15 +361,15 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             // match). A card that already exists gets the name entries of that chat's Asset Maid pictures it does not have yet — names compared
             // like the renderer (case-insensitive), nothing existing replaced — also for a chat received before (duplicate), so a chat that came
             // without its pictures (0.9.103-ver3) is repaired by receiving the same file again. `needed`: the pictures those entries point to.
-            // Module pictures share the renderer's name list too: any module's (or persona's embedded module's) picture name counts as taken
-            // (the existing one keeps showing).
+            // Module pictures share the renderer's name list too: any module's, any persona's embedded module's and the card's own personas'
+            // embedded modules' picture names count as taken (the existing one keeps showing).
             const characterAssets = [], needed = new Map();
             const moduleNames = [...(db.modules ?? []), ...(db.personas ?? []).map(p => p?.embeddedModule)].flatMap(m => (m?.assets ?? []).map(row => String(row?.[0] ?? '').toLocaleLowerCase()));
             for (const entry of incomingCharacters(archive.manifest, archive.records)) {
                 const candidates = matchingCharacters(db, entry.name, entry.id, entry.originalId);
                 const card = targets[entry.id] ? candidates.find(c => c.chaId === targets[entry.id]) : candidates.length === 1 ? candidates[0] : undefined;
                 if (!card) continue;
-                const names = new Set([...(card.additionalAssets ?? []).map(row => String(row?.[0] ?? '').toLocaleLowerCase()), ...moduleNames]);
+                const names = new Set([...(card.additionalAssets ?? []), ...(card.personas ?? []).flatMap(p => p?.embeddedModule?.assets ?? [])].map(row => String(row?.[0] ?? '').toLocaleLowerCase()).concat(moduleNames));
                 const owner = archive.manifest.items.find(i => i.id === entry.id);
                 for (const ref of owner.references.filter(r => /^\/chats\/\d+$/.test(r.pointer))) for (const picture of maid.get(ref.target) ?? []) {
                     const lower = picture.name.toLocaleLowerCase();

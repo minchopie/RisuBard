@@ -255,13 +255,15 @@ export async function receiveTransfer(key: string, automatic = false) {
         for (const addition of plan.added) db.characters.find(c => c.chaId === addition.characterId)!.chats.push(addition.chat)
         // 0.9.103-ver4: Asset Maid pictures of a chat received into an existing card: add only the names the card does not have yet
         // (compared like the renderer, case-insensitive). The card is saved with the chats (or on its own when the chats were received before).
-        // Module pictures share the renderer's name list: a name any module (or persona's embedded module) uses also counts as taken.
+        // Module pictures share the renderer's name list: a name any module, any persona's embedded module or the card's own personas'
+        // embedded modules use also counts as taken.
         const pictured: string[] = []
         let pictureCount = 0
         const moduleNames = new Set([...(db.modules ?? []), ...(db.personas ?? []).map((p: any) => p?.embeddedModule)].flatMap((m: any) => (m?.assets ?? []).map((entry: any) => String(entry?.[0] ?? '').toLocaleLowerCase())))
         for (const row of (plan.characterAssets ?? []) as { characterId: string; name: string; path: string; ext: string }[]) {
             const target = db.characters.find(c => c.chaId === row.characterId)
-            if (!target || moduleNames.has(row.name.toLocaleLowerCase()) || (target.additionalAssets ?? []).some(entry => String(entry?.[0] ?? '').toLocaleLowerCase() === row.name.toLocaleLowerCase())) continue
+            const lower = row.name.toLocaleLowerCase()
+            if (!target || moduleNames.has(lower) || [...(target.additionalAssets ?? []), ...((target as any).personas ?? []).flatMap((p: any) => p?.embeddedModule?.assets ?? [])].some((entry: any) => String(entry?.[0] ?? '').toLocaleLowerCase() === lower)) continue
             ;(target.additionalAssets ??= []).push([row.name, row.path, row.ext]); pictureCount++
             if (!pictured.includes(row.characterId)) pictured.push(row.characterId)
         }

@@ -455,6 +455,10 @@ test('Asset Maid pictures of a chat received into an existing card: name entries
     const personaHeld = await make('persona-module', { characters: [{ chaId: 'p-card', name: '같은 카드', additionalAssets: [], chats: [] }], personas: [{ id: 'p', name: 'p', embeddedModule: { id: 'em', assets: [['PC.__am__.chat.1', 'assets/persona.png', 'png']] } }] }, [])
     const personaPlan = await personaHeld.service.prepare((await personaHeld.service.ingest(createReadStream(await from.service.file(sent.id)))).id)
     expect(personaPlan.characterAssets.map((r: any) => r.name)).toEqual(['pc.__am__.chat.2'])
+    // and so is a picture name of an embedded module of one of the card's own personas
+    const cardPersona = await make('card-persona', { characters: [{ chaId: 'cp-card', name: '같은 카드', additionalAssets: [], chats: [], personas: [{ id: 'local-p', embeddedModule: { id: 'lm', assets: [['pc.__AM__.chat.2', 'assets/mine.png', 'png']] } }] }] }, [])
+    const cardPersonaPlan = await cardPersona.service.prepare((await cardPersona.service.ingest(createReadStream(await from.service.file(sent.id)))).id)
+    expect(cardPersonaPlan.characterAssets.map((r: any) => r.name)).toEqual(['pc.__am__.chat.1'])
     // a card new to this device brings its own entries; nothing is added to it twice
     const other = await make('other', { characters: [] }, [])
     const otherEntry = await other.service.ingest(createReadStream(await from.service.file(sent.id)))
