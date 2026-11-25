@@ -45,6 +45,43 @@ const transferPersonaId = (fileSha, index) => {
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${(8 | (parseInt(h[16], 16) & 3)).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 };
 
+/**
+ * 0.9.103-ver4 (user 2026-11-26 「에셋메이드 이미지는 못보내는구나 … 턴마다 올바르게 띄워지면 좋겠다」): Asset Maid's chat pictures.
+ * Asset Maid keeps a chat's pictures in that chat's lore entry `__ASSET_MAID_CHAT_DATA__` (`{assetName, savedPath, extension}` per
+ * picture, savedPath = the app's content-addressed key `assets/<sha256>.<ext>`) and shows each turn's picture with `{{raw::<assetName>}}`,
+ * which the app resolves by NAME through the character's `additionalAssets`. The pictures already travel (the chat text names their
+ * paths, so the snapshot carries them as assets), but a chat received into an existing card left that card without the name entries.
+ * Returns, per chat item id, the pictures its own record names and the archive carries: [{ name, path, ext, item }].
+ */
+function assetMaidPictures(manifest, records) {
+    const decode = value => manifest.recordEncoding ? decodeRecordKeys(value) : value;
+    const byId = new Map(manifest.items.map(item => [item.id, item]));
+    const out = new Map();
+    for (const chatItem of manifest.items.filter(item => item.kind === 'chat')) {
+        const chat = decode(records.get(chatItem.entry));
+        const lore = (Array.isArray(chat?.localLore) ? chat.localLore : []).find(entry => entry?.comment === '__ASSET_MAID_CHAT_DATA__' && typeof entry.content === 'string');
+        if (!lore) continue;
+        let data;
+        try { data = JSON.parse(lore.content.slice(lore.content.indexOf('{'))); } catch { continue; }
+        const context = byId.get(chatItem.references.find(ref => ref.pointer === '/playContext')?.target);
+        const aliases = context ? decode(records.get(context.entry))?.assets ?? {} : {};
+        const pictures = new Map();
+        const walk = value => {
+            if (Array.isArray(value)) { value.forEach(walk); return; }
+            if (!value || typeof value !== 'object') return;
+            if (typeof value.assetName === 'string' && value.assetName && typeof value.savedPath === 'string' && !pictures.has(value.assetName)) {
+                const item = byId.get(aliases[value.savedPath]);
+                const ext = String(value.extension || value.savedPath.split('.').at(-1) || 'png').replace(/^\./, '').toLowerCase();
+                if (item?.kind === 'asset') pictures.set(value.assetName, { name: value.assetName, path: value.savedPath, ext, item });
+            }
+            Object.values(value).forEach(walk);
+        };
+        walk(data);
+        if (pictures.size) out.set(chatItem.id, [...pictures.values()]);
+    }
+    return out;
+}
+
 function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInlay, installInlay, removeInlay, nativeInbox, foreignArchive = null }) {
     const root = join(dataRoot, 'play-transfer');
     const directory = key => join(root, id(key));
@@ -61,6 +98,26 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             if (record.plan) { activeTransaction = record.plan.transaction; activeRecord = record.id; }
         }
     }
+    // 0.9.103-ver4 (user 2026-11-26 「진행이 되고 있는지 알 수가 없어 … 진행 그래프같은걸 띄워줬으면 해」): progress of the running
+    // play-set step for the UI (GET /api/play-transfer/progress, PlayTransferProgress.svelte). Display only: nothing reads it back.
+    // Same idea as the NAS sync progress (0.9.92-ver7): the newest running step is shown; a total that is not known stays null.
+    const runs = new Set();
+    const track = (stage, totals = {}) => {
+        const run = { stage, bytes: 0, bytesTotal: totals.bytesTotal ?? null, items: 0, itemsTotal: totals.itemsTotal ?? null, startedAt: Date.now(), stageAt: Date.now() };
+        runs.add(run);
+        return {
+            next(next, nextTotals = {}) { Object.assign(run, { stage: next, bytes: 0, bytesTotal: nextTotals.bytesTotal ?? null, items: 0, itemsTotal: nextTotals.itemsTotal ?? null, stageAt: Date.now() }); },
+            add(bytes = 0, items = 0) { run.bytes += bytes; run.items += items; },
+            /** `(bytes, total?)` callback for the archive reader/writer. */
+            bytes: (bytes, total) => { if (total !== undefined) run.bytesTotal = total; run.bytes += bytes; },
+            end() { runs.delete(run); },
+        };
+    };
+    const progress = () => {
+        const run = [...runs].at(-1); if (!run) return null;
+        const now = Date.now();
+        return { stage: run.stage, bytes: run.bytes, bytesTotal: run.bytesTotal, items: run.items, itemsTotal: run.itemsTotal, elapsedMs: now - run.startedAt, stageElapsedMs: now - run.stageAt };
+    };
     let operating = false;
     let lane = Promise.resolve();
     const exclusive = operation => { const next = lane.then(async () => { operating = true; try { return await operation(); } finally { operating = false; } }); lane = next.catch(() => {}); return next; };
@@ -87,15 +144,16 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
     }
     const publicState = record => ({ id: record.id, direction: record.direction, state: record.state, createdAt: record.createdAt,
         name: record.name, bytes: record.bytes, sha256: record.sha256, error: record.error, trusted: !!record.trusted, applyRequested: record.applyRequested, nativeId: record.nativeId, progress: record.progress, ...(record.kind ? { kind: record.kind } : {}) });
-    async function ingest(source, { name = '대화 자료.risuplay', trusted = false, applyRequested, nativeId } = {}) {
+    async function ingest(source, { name = '대화 자료.risuplay', trusted = false, applyRequested, nativeId, total = null } = {}) {
         const key = randomUUID(), dir = directory(key);
+        const shown = track('receive', { bytesTotal: Number.isSafeInteger(total) && total > 0 ? total : null });
         await fs.mkdir(dir, { recursive: true, mode: 0o700 });
         const record = { id: key, direction: 'receive', state: 'receiving', createdAt: Date.now(), name: String(name).slice(0, 200), trusted, ...(typeof applyRequested === 'boolean' ? { applyRequested } : {}), ...(nativeId ? { nativeId } : {}) };
         write(record);
         let bytes = 0, checked = 0;
         const digest = createHash('sha256');
         const meter = new Transform({ transform(chunk, _encoding, done) {
-            bytes += chunk.length; digest.update(chunk);
+            bytes += chunk.length; digest.update(chunk); shown.add(chunk.length);
             if (bytes - checked < 8 * 1024 * 1024) return done(null, chunk);
             checked = bytes;
             fs.statfs(dir, { bigint: true }).then(space => {
@@ -108,17 +166,19 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             await pipeline(source, meter, createWriteStream(partial, { flags: 'wx', mode: 0o600 }));
             const fd = await fs.open(partial, 'r+'); try { await fd.sync(); } finally { await fd.close(); }
             // A persona bundle travels the same transports but is not a play set: keep it as its own queue entry.
+            shown.next('verify');
             const persona = await detectPersonaBundle(partial);
             if (persona) {
                 await fs.rename(partial, join(dir, 'incoming.risuplay')); await syncDir(dir);
                 Object.assign(record, { state: 'waiting', bytes, sha256: digest.digest('hex'), kind: 'persona', name: bundleName(persona.names) }); write(record);
                 return publicState(record);
             }
-            const archive = await openPlaySetArchive(partial, dir); await archive.close();
+            const archive = await openPlaySetArchive(partial, dir, shown.bytes); await archive.close();
             await fs.rename(partial, join(dir, 'incoming.risuplay')); await syncDir(dir);
             Object.assign(record, { state: 'waiting', bytes, sha256: digest.digest('hex') }); write(record);
             return publicState(record);
         } catch (error) { record.state = 'failed'; record.error = String(error.message); write(record); throw error; }
+        finally { shown.end(); }
     }
     async function exportSet(selection) {
         if ((await list()).some(item => item.plan && item.state === 'applying')) throw new Error('Finish pending import first');
@@ -131,6 +191,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         await fs.mkdir(dir, { recursive: true, mode: 0o700 });
         const work = await mkdtempLong(join(dir, 'export-work-'));
         let capture, recorded = false;
+        const shown = track('collect');
         try {
             capture = await memory.capturePlaySetMemory({ characterId: character.chaId, chatIds: selection.chatIds, temporaryDirectory: work });
             const binary = async key => {
@@ -144,16 +205,18 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             catch (error) { if (error.code !== 'ENOENT') throw error; origin = randomUUID(); atomicWriteJson(root, 'origin.json', origin); }
             let snapshot = await snapshotPlaySet({ database, origin, cold: async () => { throw new Error('Hydrate cold storage before exporting'); },
                 asset: binary, lazyAssets: true, digestBlob: async blob => {
-                    const digest = createHash('sha256'); for await (const chunk of blob.stream()) digest.update(chunk); return digest.digest('hex');
+                    const digest = createHash('sha256'); for await (const chunk of blob.stream()) { digest.update(chunk); shown.add(chunk.length); } shown.add(0, 1); return digest.digest('hex');
                 }, inlay: readInlay, chatMaterials: (c, ch) => playSetMemoryMaterials(capture, c, ch) },
                 { ...selection, setId: selection.setId || randomUUID(), characterChatsOnly: true });
             if (!selection.compatibility) snapshot = await attachPlaySetMemory(snapshot, capture);
             else if (capture.workspaces.some(w => w.files.length || w.slots.length)) snapshot.excluded.push({ path: 'BardWiki/저장 슬롯', reason: '구 앱 호환 v1에는 Bard 기억과 슬롯이 포함되지 않습니다.' });
             if (snapshot.missing.length) return { missing: snapshot.missing, external: snapshot.external, excluded: snapshot.excluded };
             if (hash(canonical((await readDatabase()).characters.find(c => c.chaId === character.chaId), true)) !== selectedHash) throw new Error('Chat changed while exporting; retry after saving');
-            const archive = await writePlaySetArchive(snapshot, work);
+            shown.next('pack');
+            const archive = await writePlaySetArchive(snapshot, work, shown.bytes);
             await fs.rename(archive, join(dir, 'export.risuplay'));
-            const digest = createHash('sha256'); for await (const chunk of createReadStream(join(dir, 'export.risuplay'))) digest.update(chunk);
+            shown.next('hash', { bytesTotal: (await fs.stat(join(dir, 'export.risuplay'))).size });
+            const digest = createHash('sha256'); for await (const chunk of createReadStream(join(dir, 'export.risuplay'))) { digest.update(chunk); shown.add(chunk.length); }
             const record = { id: key, direction: 'send', state: 'ready', createdAt: Date.now(), name: `${character.name}.risuplay`,
                 backupKey: hash(snapshot.manifest.primaryChat),
                 bytes: (await fs.stat(join(dir, 'export.risuplay'))).size, sha256: digest.digest('hex') };
@@ -162,7 +225,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             generation.bardFingerprints = await bardFingerprints(snapshot.manifest, snapshot.records, block => fs.readFile(capture.blocks.get(block.entry)));
             write(record); recorded = true;
             return { ...publicState(record), missing: [], external: snapshot.external, excluded: snapshot.excluded, registry: exported.risuPlaySets };
-        } finally { await fs.rm(recorded ? work : dir, { recursive: true, force: true }); }
+        } finally { shown.end(); await fs.rm(recorded ? work : dir, { recursive: true, force: true }); }
     }
     /** Persona transfer: the chosen personas (by id, from the saved database) as one bundle send entry for every transport. */
     async function exportPersonas(selection) {
@@ -247,12 +310,14 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             const bundle = await readPersonaBundle(await fs.readFile(join(directory(key), 'incoming.risuplay')));
             return { ...publicState(record), characters: [], personas: bundle.personas.map((p, i) => ({ name: p.name, ...personaIds(record, i) })) };
         }
-        const archive = await openPlaySetArchive(join(directory(key), 'incoming.risuplay'), directory(key));
+        const shown = track('check');
+        let archive;
         try {
+            archive = await openPlaySetArchive(join(directory(key), 'incoming.risuplay'), directory(key), shown.bytes);
             const db = await readDatabase();
             return { ...publicState(record), characters: incomingCharacters(archive.manifest, archive.records).map(c => ({ ...c,
                 candidates: matchingCharacters(db, c.name, c.id, c.originalId).map(local => ({ id: local.chaId, name: local.name })) })) };
-        } finally { await archive.close(); }
+        } finally { shown.end(); await archive?.close(); }
     }
     async function prepare(key, targets = {}) {
         const all = await list();
@@ -264,9 +329,14 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         const dir = directory(key), staging = join(dir, transaction);
         await fs.mkdir(staging, { mode: 0o700 });
         let archive;
+        const shown = track('verify');
         try {
-            archive = await openPlaySetArchive(join(dir, 'incoming.risuplay'), dir);
-            const assets = new Map(archive.manifest.items.filter(i => i.kind === 'asset').map(i => [i.id, `assets/${randomUUID()}.${(i.media?.name?.split('.').at(-1) || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 12) || 'bin'}`]));
+            archive = await openPlaySetArchive(join(dir, 'incoming.risuplay'), dir, shown.bytes);
+            // 0.9.103-ver4: an Asset Maid picture whose savedPath is the app's own content-addressed key for these exact bytes keeps that
+            // key, so Asset Maid's savedPath stays valid here and a picture this device already has is not stored twice. Others: as before.
+            const maid = assetMaidPictures(archive.manifest, archive.records), sameKey = new Map();
+            for (const pictures of maid.values()) for (const picture of pictures) if (picture.path === `assets/${picture.item.hash}.${picture.path.split('.').at(-1)}`) sameKey.set(picture.item.id, picture.path);
+            const assets = new Map(archive.manifest.items.filter(i => i.kind === 'asset').map(i => [i.id, sameKey.get(i.id) ?? `assets/${randomUUID()}.${(i.media?.name?.split('.').at(-1) || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 12) || 'bin'}`]));
             const fingerprints = await bardFingerprints(archive.manifest, archive.records, async block => {
                 const path = join(staging, randomUUID());
                 try { await archive.copyEntry(block.entry, path); return await fs.readFile(path); }
@@ -277,7 +347,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             const added = result.database.characters.flatMap(c => c.chats.filter(ch => !before.has(ch.id)).map(chat => ({ characterId: c.chaId, chat })));
             const newCharacters = result.database.characters.filter(c => !db.characters.some(old => old.chaId === c.chaId)).map(c => ({ ...c, chats: [] }));
             const plan = { transaction, staging: transaction, phase: 'preparing', added, newCharacters, registry: result.database.risuPlaySets,
-                assetKeys: [], inlayIds: [], workspaces: [], pages: [], result: result.instanceId };
+                assetKeys: [], inlayIds: [], workspaces: [], pages: [], result: result.instanceId, characterAssets: [] };
             record.plan = plan; record.state = 'applying'; delete record.error; write(record);
             if (result.generation) {
                 const ids = result.generation.ids;
@@ -304,9 +374,23 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                     });
                     sourceIdentityMap({ ...c, chaId: c.risuTransferOriginalId }, chats, ids[item.id], identities);
                 }
-                for (const item of archive.manifest.items.filter(i => i.kind === 'asset')) {
+                const assetItems = archive.manifest.items.filter(i => i.kind === 'asset');
+                shown.next('copy', { itemsTotal: assetItems.length, bytesTotal: assetItems.reduce((total, item) => total + item.bytes, 0) });
+                for (const item of assetItems) {
+                    // 0.9.103-ver4: the same content-addressed key already here = the same bytes: keep it, copy and install nothing.
+                    if (sameKey.has(item.id) && storage.kvGetUpdatedAt(sameKey.get(item.id)) !== null) { shown.add(item.bytes, 1); continue; }
                     const name = randomUUID(), path = join(staging, name); await archive.copyEntry(item.entry, path);
                     plan.assetKeys.push({ key: assets.get(item.id), file: name });
+                    shown.add(item.bytes, 1);
+                }
+                // 0.9.103-ver4: a received chat added to a card this device already has: the card gets the name entries of that chat's
+                // Asset Maid pictures (only names it does not have yet; nothing existing is replaced), so `{{raw::<name>}}` finds them.
+                for (const [chatItem, pictures] of maid) {
+                    const row = added.find(r => r.chat.id === ids[chatItem]);
+                    const target = row && db.characters.find(c => c.chaId === row.characterId);
+                    if (!target) continue;
+                    const names = new Set([...(target.additionalAssets ?? []).map(entry => entry?.[0]), ...plan.characterAssets.filter(r => r.characterId === row.characterId).map(r => r.name)]);
+                    for (const picture of pictures) if (!names.has(picture.name)) { names.add(picture.name); plan.characterAssets.push({ characterId: row.characterId, name: picture.name, path: assets.get(picture.item.id), ext: picture.ext }); }
                 }
                 for (const item of archive.manifest.items.filter(i => i.kind === 'inlay')) {
                     const mapped = remapRecord(archive.records.get(item.entry), item.references, new Map(Object.entries(ids)));
@@ -314,8 +398,9 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                     const asset = plan.assetKeys.find(asset => asset.key === value.data);
                     plan.inlayIds.push({ id: ids[item.id], metadata: value, file: asset?.file, text: asset ? undefined : value.data });
                 }
+                shown.next('memory', { itemsTotal: (archive.manifest.bard ?? []).length });
                 for (const workspace of archive.manifest.bard ?? []) {
-                    const target = added.find(c => c.chat.id === ids[workspace.chat]); if (!target) continue;
+                    const target = added.find(c => c.chat.id === ids[workspace.chat]); if (!target) { shown.add(0, 1); continue; }
                     const rel = `memory-${randomUUID()}`, mapped = await relinkWorkspace({ archive, workspace, directory: join(staging, rel), identities, destinationChatId: target.chat.id, media: target.chat.risuTransferMedia });
                     target.chat = mapped.chat(target.chat);
                     plan.workspaces.push({ characterId: target.characterId, chatId: target.chat.id, source: `${rel}/current` });
@@ -323,16 +408,17 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                         plan.workspaces.push({ characterId: target.characterId, chatId: memorySaveWorkspaceId(slot.saveId), source: `${rel}/slots/${slot.saveId}` });
                         for (const page of slot.pages) plan.pages.push({ characterId: target.characterId, hash: page.hash, source: `${rel}/pages/${page.hash.slice(0, 2)}/${page.hash}` });
                     }
+                    shown.add(0, 1);
                 }
             }
             plan.phase = 'prepared'; write(record);
-            return { transaction, added: plan.added, newCharacters: plan.newCharacters, registry: plan.registry, duplicate: result.mode === 'duplicate' };
+            return { transaction, added: plan.added, newCharacters: plan.newCharacters, registry: plan.registry, duplicate: result.mode === 'duplicate', characterAssets: plan.characterAssets };
         } catch (error) {
             // No client has received a plan yet; leave the archive retryable after a preparation error.
             await finish(key);
             await fs.rm(staging, { recursive: true, force: true });
             throw error;
-        } finally { await archive?.close(); }
+        } finally { shown.end(); await archive?.close(); }
     }
     async function arm(key, transaction, added) {
         const record = await read(key), plan = record.plan;
@@ -340,13 +426,17 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         if (!Array.isArray(added) || added.length !== plan.added.length || added.some((r, i) => r.characterId !== plan.added[i].characterId || r.chat?.id !== plan.added[i].chat.id)) throw new Error('Import identity changed');
         plan.expected = added.map(row => ({ characterId: row.characterId, chatId: row.chat.id, fields: Object.keys(row.chat), hash: hash(canonical(row.chat, true)) }));
         plan.phase = 'armed'; write(record);
-        // Assets are immutable unique keys. The saved chat cannot refer to absent media after a crash.
-        for (const inlay of plan.inlayIds) await installInlay(inlay, join(directory(key), plan.staging));
-        for (const asset of plan.assetKeys) {
-            const sourcePath = join(directory(key), plan.staging, asset.file);
-            if (storage.kvGetUpdatedAt(asset.key) !== null) throw new Error('Transfer asset identity already exists');
-            await storage.kvReplacePrefixesFromFilesAsync([{ key: asset.key, sourcePath }], []);
-        }
+        const shown = track('install', { itemsTotal: plan.inlayIds.length + plan.assetKeys.length });
+        try {
+            // Assets are immutable unique keys. The saved chat cannot refer to absent media after a crash.
+            for (const inlay of plan.inlayIds) { await installInlay(inlay, join(directory(key), plan.staging)); shown.add(0, 1); }
+            for (const asset of plan.assetKeys) {
+                const sourcePath = join(directory(key), plan.staging, asset.file);
+                if (storage.kvGetUpdatedAt(asset.key) !== null) throw new Error('Transfer asset identity already exists');
+                await storage.kvReplacePrefixesFromFilesAsync([{ key: asset.key, sourcePath }], []);
+                shown.add(0, 1);
+            }
+        } finally { shown.end(); }
         plan.phase = 'saving'; write(record);
         return { ready: true };
     }
@@ -365,6 +455,8 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             })) throw new Error('Saved chat does not match the prepared import; recovery retained');
             plan.phase = 'committed'; write(record);
             const staging = join(directory(key), plan.staging);
+            const shown = track('finish', { itemsTotal: plan.pages.length + plan.workspaces.length });
+            try {
             for (const page of plan.pages) {
                 const store = saveStoreDirectory(resolveMemoryWorkspace(dataRoot, page.characterId, 'placeholder').directory);
                 const target = join(store, page.hash.slice(0, 2), page.hash);
@@ -373,6 +465,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                 catch (error) { if (error.code !== 'EEXIST' || hash(await fs.readFile(target)) !== page.hash) throw error; }
                 const fd = await fs.open(target, 'r+'); try { await fd.sync(); } finally { await fd.close(); }
                 await syncDir(dirname(target));
+                shown.add(0, 1);
             }
             for (const workspace of plan.workspaces) {
                 const target = resolveMemoryWorkspace(dataRoot, workspace.characterId, workspace.chatId).directory;
@@ -387,7 +480,9 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                     try { await fs.lstat(target); throw new Error('Memory workspace already exists'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
                     await fs.rename(source, target); await syncDir(dirname(target));
                 }
+                shown.add(0, 1);
             }
+            } finally { shown.end(); }
             record.state = 'applied';
         } else {
             if (confirmed || plan.added.some(row => db.characters.some(c => c.chaId === row.characterId && c.chats?.some(ch => ch.id === row.chat.id)))) throw new Error('Application save has not completed; recovery retained');
@@ -452,10 +547,13 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         try { stat = await fs.lstat(file); }
         catch (error) { if (error.code === 'ENOENT' && foreignArchive) { const consumed = await foreignArchive.consumed(key); if (consumed) return consumed; } throw error; }
         if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid native archive');
-        const digest = createHash('sha256'); for await (const chunk of createReadStream(file)) digest.update(chunk);
-        if (entry.hash && digest.digest('hex') !== entry.hash) throw new Error('Native archive hash mismatch');
+        const shown = track('native', { bytesTotal: stat.size });
+        try {
+            const digest = createHash('sha256'); for await (const chunk of createReadStream(file)) { digest.update(chunk); shown.add(chunk.length); }
+            if (entry.hash && digest.digest('hex') !== entry.hash) throw new Error('Native archive hash mismatch');
+        } finally { shown.end(); }
         const other = await foreign(file, entry); if (other) return other;
-        return ingest(createReadStream(file), { nativeId: key, trusted: typeof entry.trustedDevice === 'string' && entry.trustedDevice !== 'usb:adb' });
+        return ingest(createReadStream(file), { nativeId: key, trusted: typeof entry.trustedDevice === 'string' && entry.trustedDevice !== 'usb:adb', total: stat.size });
     }
     /** Every native inbox archive that is a foreign payload, with its provenance (startup sweep: crash-before-import cleanup). */
     async function foreignInbox() {
@@ -493,8 +591,10 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         });
         route('get', '', async (_req, res) => res.json([...(await list()).map(publicState), ...(foreignArchive?.consumedAll ? await foreignArchive.consumedAll() : [])])); // + terminal sync-share outcomes for the native status path
         route('get', '/recovery', async (_req, res) => res.json(await pending()));
+        // 0.9.103-ver4: the running step's progress (display only; null when none runs). Not in the exclusive lane: answers during it.
+        route('get', '/progress', async (_req, res) => res.json(progress()));
         route('post', '/native-import', async (req, res) => res.json(await exclusive(() => importNative(req.body.id))));
-        route('post', '/incoming', async (req, res) => res.json(await ingest(req, { name: decodeURIComponent(req.headers['x-transfer-name'] ?? '대화 자료.risuplay') })));
+        route('post', '/incoming', async (req, res) => res.json(await ingest(req, { name: decodeURIComponent(req.headers['x-transfer-name'] ?? '대화 자료.risuplay'), total: Number(req.headers['content-length']) || null })));
         route('post', '/export', async (req, res) => res.json(await exclusive(() => exportSet(req.body))));
         route('post', '/persona-export', async (req, res) => res.json(await exclusive(() => exportPersonas(req.body))));
         route('get', '/:id/personas', async (req, res) => res.json(await receivedPersonas(req.params.id)));
@@ -510,7 +610,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/:id/apply-request', async (req, res) => res.json(await exclusive(() => requestApply(req.params.id, req.body.requested))));
     }
     return { assertWrite, list, ingest, exportSet, exportPersonas, receivedPersonas, personaApplied: key => exclusive(() => personaApplied(key)), personaMap: (key, map) => exclusive(() => personaMap(key, map)), inspect, prepare: (...args) => exclusive(() => prepare(...args)), arm: (...args) => exclusive(() => arm(...args)),
-        finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), requestApply: (...args) => exclusive(() => requestApply(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes };
+        finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), requestApply: (...args) => exclusive(() => requestApply(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes, track, progress };
 }
 async function safeParents(root, path) {
     const rel = relative(root, path);
@@ -521,4 +621,4 @@ async function safeParents(root, path) {
         const stat = await fs.lstat(current); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe transfer directory');
     }
 }
-module.exports = { createPlaySetService };
+module.exports = { createPlaySetService, assetMaidPictures };

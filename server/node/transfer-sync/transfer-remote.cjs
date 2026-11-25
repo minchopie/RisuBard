@@ -99,10 +99,11 @@ async function gitHash(file, size) {
     for await (const chunk of createReadStream(file)) digest.update(chunk);
     return digest.digest('hex');
 }
-async function* base64JsonFile(file, fields) {
+async function* base64JsonFile(file, fields, onBytes) { // 0.9.103-ver4: `onBytes` = progress display only (file bytes read)
     yield Buffer.from(JSON.stringify(fields).slice(0, -1) + ',"content":"');
     let carry = Buffer.alloc(0);
     for await (const chunk of createReadStream(file)) {
+        onBytes?.(chunk.length);
         const bytes = Buffer.concat([carry, chunk]), end = bytes.length - bytes.length % 3;
         yield Buffer.from(bytes.subarray(0, end).toString('base64')); carry = bytes.subarray(end);
     }
@@ -163,19 +164,25 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
         const c = await nasConfig();
         const file = await transfers.file(id), stat = await fs.stat(file);
         const filename = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}.risuplay`, temporary = filename + '.part';
+        // 0.9.103-ver4: progress display only (GET /api/play-transfer/progress): upload bytes, then the remote + local re-read of the check.
+        const shown = transfers.track?.('upload', { bytesTotal: stat.size });
         try {
-            await drain(checked(await nasRequest(c, 'PUT', temporary, { 'If-None-Match': '*', 'Content-Length': String(stat.size), 'Content-Type': 'application/octet-stream' }, createReadStream(file)), [200, 201, 204]));
+            const source = createReadStream(file), body = shown ? source.pipe(new Transform({ transform(chunk, _encoding, done) { shown.add(chunk.length); done(null, chunk); } })) : source;
+            if (body !== source) source.on('error', error => body.destroy(error));
+            await drain(checked(await nasRequest(c, 'PUT', temporary, { 'If-None-Match': '*', 'Content-Length': String(stat.size), 'Content-Type': 'application/octet-stream' }, body), [200, 201, 204]));
+            shown?.next('upload-check', { bytesTotal: stat.size * 2 });
             const verification = checked(await nasRequest(c, 'GET', temporary));
             const remote = createHash('sha256'), local = createHash('sha256'); let count = 0;
-            for await (const bytes of verification) { count += bytes.length; if (count > stat.size) throw new Error('NAS uploaded size mismatch'); remote.update(bytes); }
-            for await (const bytes of createReadStream(file)) local.update(bytes);
+            for await (const bytes of verification) { count += bytes.length; if (count > stat.size) throw new Error('NAS uploaded size mismatch'); remote.update(bytes); shown?.add(bytes.length); }
+            for await (const bytes of createReadStream(file)) { local.update(bytes); shown?.add(bytes.length); }
             if (count !== stat.size || remote.digest('hex') !== local.digest('hex')) throw new Error('NAS uploaded hash mismatch');
+            shown?.next('upload-finish');
             await drain(checked(await nasRequest(c, 'MOVE', temporary, { Destination: c.url + encodeURIComponent(filename), Overwrite: 'F' }), [200, 201, 204]));
             return { name: filename, bytes: stat.size, state: 'delivered' };
         } catch (error) {
             try { await drain(await nasRequest(c, 'DELETE', temporary)); } catch {}
             throw error;
-        }
+        } finally { shown?.end(); }
     }
     async function nasDownload(input) {
         const c = await nasConfig();
@@ -184,7 +191,9 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
             if (!/^[\x20-\x7e]+$/.test(input.etag)) throw new Error('Invalid ETag');
             headers['If-Match'] = input.etag;
         }
-        return transfers.ingest(checked(await nasRequest(c, 'GET', filename, headers)), { name: filename, applyRequested: input.applyRequested === true });
+        const response = checked(await nasRequest(c, 'GET', filename, headers));
+        const total = Number(response.headers?.['content-length']); // 0.9.103-ver4: progress display only
+        return transfers.ingest(response, { name: filename, applyRequested: input.applyRequested === true, ...(total > 0 ? { total } : {}) });
     }
     const api = (c, path, options = {}) => fetch(`https://api.github.com/repos/${c.repository}/${path}`, { ...options, headers: {
         Authorization: `Bearer ${c.token}`, 'User-Agent': 'RisuBard', Accept: 'application/vnd.github.object+json', 'X-GitHub-Api-Version': '2026-03-10', ...options.headers,
@@ -221,12 +230,16 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
         if (previous && (previous.type !== 'file' || !/^[a-f0-9]{40}$/.test(previous.sha))) throw new Error('Backup target is not a regular file');
         const fields = { message: 'Update RisuBard conversation backup', branch, ...(previous ? { sha: previous.sha } : {}) };
         const bytes = Buffer.byteLength(JSON.stringify(fields).slice(0, -1) + ',"content":""}') + Math.ceil(stat.size / 3) * 4;
-        const response = checked(await api(c, path, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Content-Length': String(bytes) }, body: Readable.from(base64JsonFile(file, fields)) }), [200, 201]);
-        const uploaded = JSON.parse((await bounded(response)).toString('utf8'));
-        if (!/^[a-f0-9]{40}$/.test(uploaded.commit?.sha)) throw new Error('업로드 응답을 확인하지 못했어요. 목록을 새로 고쳐 주세요.');
-        const verified = await json(await api(c, `${path}?ref=${uploaded.commit.sha}`));
-        if (verified.size !== stat.size || verified.sha !== await gitHash(file, stat.size)) throw new Error('업로드 파일 검증 실패. 이전 Git 이력은 유지됩니다.');
-        return { name: `${record.backupKey}.risuplay`, bytes: stat.size, state: 'delivered' };
+        const shown = transfers.track?.('upload', { bytesTotal: stat.size }); // 0.9.103-ver4: progress display only
+        try {
+            const response = checked(await api(c, path, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Content-Length': String(bytes) }, body: Readable.from(base64JsonFile(file, fields, shown?.add)) }), [200, 201]);
+            shown?.next('upload-check');
+            const uploaded = JSON.parse((await bounded(response)).toString('utf8'));
+            if (!/^[a-f0-9]{40}$/.test(uploaded.commit?.sha)) throw new Error('업로드 응답을 확인하지 못했어요. 목록을 새로 고쳐 주세요.');
+            const verified = await json(await api(c, `${path}?ref=${uploaded.commit.sha}`));
+            if (verified.size !== stat.size || verified.sha !== await gitHash(file, stat.size)) throw new Error('업로드 파일 검증 실패. 이전 Git 이력은 유지됩니다.');
+            return { name: `${record.backupKey}.risuplay`, bytes: stat.size, state: 'delivered' };
+        } finally { shown?.end(); }
     }
     async function githubDownload(input) {
         if (!/^[a-f0-9]{64}\.risuplay$/.test(input.name ?? '') || !/^[a-f0-9]{40}$/.test(input.commit ?? '') || !/^[a-f0-9]{40}$/.test(input.sha ?? '')) throw new Error('Invalid GitHub file revision');
@@ -240,7 +253,7 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
             done(bytes > info.size ? new Error('GitHub download exceeds declared size') : null, chunk);
         }, flush(done) { done(bytes !== info.size || hash.digest('hex') !== input.sha ? new Error('GitHub download hash mismatch') : null); } });
         stream.on('error', error => verify.destroy(error)); verify.on('close', () => stream.destroy()); stream.pipe(verify);
-        return transfers.ingest(verify, { name: input.name, applyRequested: input.applyRequested === true });
+        return transfers.ingest(verify, { name: input.name, applyRequested: input.applyRequested === true, total: info.size });
     }
     async function legacyList() {
         const c = await secrets.get('github'); await repoInfo(c);

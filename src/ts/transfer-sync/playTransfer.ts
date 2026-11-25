@@ -62,6 +62,73 @@ export async function requestRemoteTransfer(kind: 'nas' | 'github', operation: s
     }
 }
 export async function refreshTransfers() { transferQueue.set(await (await transferRequest()).json()) }
+/** 0.9.103-ver4: the running play-set step (display only): { stage, bytes, bytesTotal, items, itemsTotal, elapsedMs, stageElapsedMs } or null. */
+export const playTransferProgress = async (signal?: AbortSignal) => (await transferRequest('/progress', { signal })).json()
+export type TransferProgress = { stage: string; bytes: number; bytesTotal: number | null; items: number; itemsTotal: number | null; elapsedMs: number; stageElapsedMs: number }
+/** Step names shown for the server's play-set stages (user wording: what is happening now). */
+export const TRANSFER_STAGES: Record<string, string> = {
+    collect: '대화·Wiki·저장 슬롯·그림을 모으는 중', pack: '전송 파일로 묶는 중', hash: '전송 파일 확인값 계산 중',
+    upload: '올리는 중', 'upload-check': '올린 파일을 다시 받아 확인하는 중', 'upload-finish': '올린 파일 이름 정리 중',
+    receive: '파일을 받는 중', native: '기기에서 받은 파일 확인 중', verify: '받은 파일 검증 중', check: '받은 파일 내용 확인 중',
+    copy: '그림 꺼내는 중', memory: 'Wiki·저장 슬롯 준비 중', install: '그림 저장 중', finish: 'Wiki·저장 슬롯 옮기는 중',
+}
+const mb = (n: number) => (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)
+const clock = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return s >= 3600 ? `${Math.floor(s / 3600)}시간 ${Math.floor(s % 3600 / 60)}분` : s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초` }
+/** One progress line from a server step ({@link TransferProgress}) or a native send ({ state, sent, total }), display only. percent is
+ *  null when no total is known (indeterminate bar). Speed and remaining time are the stage average, shown after 2 s and 1 MB. */
+export function transferProgressView(progress: TransferProgress | null, native: { state: string; sent?: number; total?: number; error?: string } | null = null, fallback = '') {
+    if (progress) {
+        const byBytes = !!progress.bytesTotal, byItems = !byBytes && !!progress.itemsTotal
+        const done = byBytes ? Math.min(progress.bytes, progress.bytesTotal!) : byItems ? Math.min(progress.items, progress.itemsTotal!) : 0
+        const total = byBytes ? progress.bytesTotal! : byItems ? progress.itemsTotal! : 0
+        const percent = total ? Math.min(100, Math.floor(done / total * 100)) : null
+        const parts: string[] = []
+        if (progress.bytesTotal) parts.push(`${mb(Math.min(progress.bytes, progress.bytesTotal))}/${mb(progress.bytesTotal)} MB`)
+        else if (progress.bytes > 0) parts.push(`${mb(progress.bytes)} MB`)
+        if (progress.itemsTotal) parts.push(`${Math.min(progress.items, progress.itemsTotal)}/${progress.itemsTotal}개`)
+        else if (progress.items > 0) parts.push(`${progress.items}개`)
+        const seconds = progress.stageElapsedMs / 1000
+        if (progress.bytes >= 1_000_000 && seconds >= 2) {
+            const speed = progress.bytes / seconds
+            parts.push(`${mb(speed)} MB/s`)
+            if (progress.bytesTotal && progress.bytes < progress.bytesTotal) parts.push(`남은 시간 약 ${clock((progress.bytesTotal - progress.bytes) / speed * 1000)}`)
+        }
+        parts.push(`경과 ${clock(progress.elapsedMs)}`)
+        return { label: TRANSFER_STAGES[progress.stage] ?? (fallback || '처리 중'), percent, detail: parts.join(' · '), tone: 'running' as const }
+    }
+    if (native) {
+        const total = native.total ?? 0, sent = Math.min(native.sent ?? 0, total)
+        const finished = ['delivered', 'applied'].includes(native.state), failed = ['failed', 'cancelled', 'unknown'].includes(native.state)
+        const label = native.state === 'applied' ? '받는 기기에서 가져오기 완료' : native.state === 'delivered' ? '전달 완료 · 받는 기기에서 가져오기 대기'
+            : failed ? '전송 실패' : native.state === 'ready' ? 'USB 전송 준비 완료 · PC 전송기에서 받아 주세요' : native.state === 'preparing' ? 'USB 전송 준비 중' : 'Wi-Fi·USB로 전송 중'
+        return { label, percent: finished ? 100 : total ? Math.min(100, Math.floor(sent / total * 100)) : null, detail: failed ? native.error ?? '' : total ? `${mb(sent)}/${mb(total)} MB` : '',
+            tone: finished ? 'done' as const : failed ? 'failed' as const : 'running' as const }
+    }
+    return { label: fallback || '처리 중', percent: null, detail: '', tone: 'running' as const }
+}
+/** The same line as text with a 10-cell bar, for the modal overlay (App.svelte shows only the status text): no host change needed. */
+export function transferProgressText(progress: TransferProgress) {
+    const view = transferProgressView(progress)
+    const bar = view.percent === null ? '' : ` ${'█'.repeat(Math.round(view.percent / 10))}${'░'.repeat(10 - Math.round(view.percent / 10))} ${view.percent}%`
+    return `${view.label}${bar} · ${view.detail}`
+}
+/** While a step behind the modal overlay runs, its status line carries the server step's progress (polled every second). Text another
+ *  writer sets stays the base line; when no server step runs, the base line is shown again. Returns the stop function. */
+function overlayProgress() {
+    let base = get(transferStatus), mine = '', stopped = false, busy = false
+    const timer = setInterval(() => {
+        if (busy) return
+        busy = true
+        void playTransferProgress().then((progress: TransferProgress | null) => {
+            if (stopped) return
+            const current = get(transferStatus)
+            if (current !== mine) base = current
+            mine = progress ? transferProgressText(progress) : base
+            if (mine !== current) transferStatus.set(mine)
+        }).catch(() => {}).finally(() => { busy = false })
+    }, 1000)
+    return () => { stopped = true; clearInterval(timer); if (mine && get(transferStatus) === mine && mine !== base) transferStatus.set(base) }
+}
 export function transferUnavailable() {
     return get(transferBusy) || get(syncSaveHold) || get(doingChat) || get(isAnyGenerating) || get(importSession).phase !== 'idle'
         || getDatabase().characters.some(c => c.chats.some(ch => ch.isStreaming || ch.risuBardWikiReboot))
@@ -77,6 +144,7 @@ export async function queueTransferFile(file: File) {
 export async function exportTransfer(chatIds: string[], compatibility = false) {
     if (transferUnavailable()) throw new Error('진행 중인 생성이나 가져오기가 끝난 뒤 다시 보내 주세요.')
     transferBusy.set(true); transferStatus.set('보낼 자료를 확인하고 묶는 중…')
+    const stopProgress = overlayProgress()
     try {
         const char = getCurrentCharacter()
         if (!char) throw new Error('보낼 캐릭터를 먼저 열어 주세요.')
@@ -87,9 +155,10 @@ export async function exportTransfer(chatIds: string[], compatibility = false) {
             Object.assign(getDatabase(), { risuPlaySets: result.registry })
             await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
         }
+        stopProgress()
         transferStatus.set(result.missing.length ? '필요한 자료가 빠져 있어요. 아래 목록을 확인해 주세요.' : '파일 준비 완료 · 보낼 방법을 선택해 주세요.')
         return result
-    } finally { transferBusy.set(false); await refreshTransfers() }
+    } finally { stopProgress(); transferBusy.set(false); await refreshTransfers() }
 }
 /** Persona transfer: bundles the chosen personas (saved values) as one file for any transfer method. */
 export async function exportPersonaTransfer(personaIds: string[]) {
@@ -163,6 +232,7 @@ export async function receiveTransfer(key: string, automatic = false) {
     if (transferUnavailable()) return
     transferBusy.set(true); transferStatus.set('자료 검증 · 가져오기 준비 중…')
     let prepared = false
+    const stopProgress = overlayProgress()
     try {
         await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
         const plan = await post(`/${key}/prepare`, { targets }); prepared = true
@@ -181,12 +251,19 @@ export async function receiveTransfer(key: string, automatic = false) {
         transferStatus.set('채팅을 저장하는 중…')
         db.characters.push(...plan.newCharacters)
         for (const addition of plan.added) db.characters.find(c => c.chaId === addition.characterId)!.chats.push(addition.chat)
+        // 0.9.103-ver4: Asset Maid pictures of a chat received into an existing card: add only the names the card does not have yet.
+        for (const row of (plan.characterAssets ?? []) as { characterId: string; name: string; path: string; ext: string }[]) {
+            const target = db.characters.find(c => c.chaId === row.characterId)
+            if (target && !(target.additionalAssets ?? []).some(entry => entry?.[0] === row.name)) (target.additionalAssets ??= []).push([row.name, row.path, row.ext])
+        }
         Object.assign(db, { risuPlaySets: plan.registry })
         checkCharOrder()
         await requestImmediateSave({ chats: plan.added.map((row: { characterId: string; chat: Chat }) => [row.characterId, row.chat.id!]), flushServer: 'canonical', rejectOnFailure: true })
         await post(`/${key}/finish`, { confirmed: true })
+        stopProgress()
         transferStatus.set(plan.duplicate ? '이미 받은 동일한 자료예요. 중복으로 추가하지 않았어요.' : '가져오기 완료 · 기존 캐릭터 목록에서 확인해 주세요.')
     } catch (error) {
+        stopProgress()
         transferStatus.set(String(error))
         if (prepared) {
             // Reload reads the durable app revision before any recovery decision; never roll back a live DB copy.
@@ -194,7 +271,7 @@ export async function receiveTransfer(key: string, automatic = false) {
             return
         }
         throw error
-    } finally { forageStorage.realStorage.transferTransaction = undefined; transferBusy.set(false); await refreshTransfers() }
+    } finally { stopProgress(); forageStorage.realStorage.transferTransaction = undefined; transferBusy.set(false); await refreshTransfers() }
 }
 export async function recoverTransfers() {
     const pending = await (await transferRequest('/recovery')).json()

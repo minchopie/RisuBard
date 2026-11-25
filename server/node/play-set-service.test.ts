@@ -342,3 +342,92 @@ test('fingerprint failure under a long path still raises its original failure an
     expect(await sender.list()).toEqual([])
     expect((await readdir(join(dataRoot, 'play-transfer'))).filter((name: string) => /^[a-f0-9-]{36}$/.test(name))).toHaveLength(0)
 })
+
+// 0.9.103-ver4 (user 2026-11-26): progress display and Asset Maid chat pictures.
+const { Readable } = require('node:stream')
+test('progress: export and receive show their running step with bytes and total, and nothing once they end', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'bard-transfer-progress-'))
+    t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const picture = Buffer.alloc(300_000, 7)
+    const db = { characters: [{ chaId: 'card', name: '진행', image: 'assets/pic.png', chats: [{ id: 'chat', name: 'c', note: '', localLore: [], message: [{ role: 'char', data: 'x' }] }] }] }
+    const dataRoot = join(root, 'sender'); await mkdir(dataRoot)
+    const kv = createFileKv({ dataRoot }); kv.kvSet('assets/pic.png', picture)
+    const seen: any[] = []
+    let service: any
+    const storage = new Proxy(kv, { get: (target: any, key) => key === 'kvExportFile' ? async (...args: any[]) => { seen.push(service.progress()); return target.kvExportFile(...args) } : target[key] })
+    service = createPlaySetService({ dataRoot, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(dataRoot), storage, readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+    expect(service.progress()).toBeNull()
+    const sent = await service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat' })
+    expect(seen[0]).toMatchObject({ stage: 'collect', bytesTotal: null, itemsTotal: null })
+    expect(service.progress()).toBeNull()
+    const bytes = await readFile(await service.file(sent.id)), during: any[] = []
+    async function* slow() { for (let i = 0; i < bytes.length; i += 4096) { yield bytes.subarray(i, i + 4096); during.push(service.progress()) } }
+    const received = await service.ingest(Readable.from(slow()), { total: bytes.length })
+    expect(received.state).toBe('waiting')
+    expect(during.some(p => p?.stage === 'receive' && p.bytesTotal === bytes.length && p.bytes > 0 && p.bytes <= bytes.length)).toBe(true)
+    expect(service.progress()).toBeNull()
+    // an unknown size stays null (indeterminate), a failed receive also ends its run
+    await expect(service.ingest(Readable.from([Buffer.from('not a zip')]), { total: 0 })).rejects.toThrow()
+    expect(service.progress()).toBeNull()
+    const tracked = service.track('upload', { bytesTotal: 10 }); tracked.add(4); tracked.bytes(1)
+    expect(service.progress()).toMatchObject({ stage: 'upload', bytes: 5, bytesTotal: 10, items: 0, itemsTotal: null })
+    tracked.next('upload-finish'); expect(service.progress()).toMatchObject({ stage: 'upload-finish', bytes: 0, bytesTotal: null })
+    tracked.end(); expect(service.progress()).toBeNull()
+})
+
+const assetMaidLore = (pictures: { name: string; path: string }[]) => ({ key: '', secondkey: '', comment: '__ASSET_MAID_CHAT_DATA__', mode: 'normal', insertorder: 100, alwaysActive: false, selective: false,
+    content: '@@dont_activate ' + JSON.stringify({ messages: Object.fromEntries(pictures.map((p, i) => [`m${i}`, { kind: 'illustration', requestedCount: 1, generations: [{ id: `revision:${i}`, slots: { [String(i)]: [{ assetName: p.name, savedPath: p.path, extension: 'png', width: 2, height: 3 }] } }] }])) }) })
+test('Asset Maid pictures of a chat received into an existing card: name entries for new names only, same content-addressed key, no second copy, rollback keeps what was already there', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'bard-transfer-assetmaid-'))
+    t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const first = Buffer.from('asset-maid-picture-one'), second = Buffer.from('asset-maid-picture-two'), card = Buffer.from('card-art')
+    const one = `assets/${sha256(first)}.png`, two = `assets/${sha256(second)}.png`
+    const pictures = [{ name: 'pc.__am__.chat.1', path: one }, { name: 'pc.__am__.chat.2', path: two }]
+    const chat = { id: 'chat', name: '그림 대화', note: '', localLore: [assetMaidLore(pictures)],
+        message: pictures.map((p, i) => ({ role: 'char', chatId: `m${i}`, data: `<img class="am-image__media" data-am-asset="${p.name}" src="{{raw::${p.name}}}">` })) }
+    const sender = { characters: [{ chaId: 'card', name: '같은 카드', image: 'assets/card.png', additionalAssets: [['카드 그림', 'assets/card.png', 'png'], ...pictures.map(p => [p.name, p.path, 'png'])], chats: [chat] }] }
+    const make = async (name: string, db: any, seed: [string, Buffer][]) => {
+        const dataRoot = join(root, name); await mkdir(dataRoot, { recursive: true })
+        const storage = createFileKv({ dataRoot }); for (const [key, value] of seed) storage.kvSet(key, value)
+        const service = createPlaySetService({ dataRoot, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(dataRoot), storage, readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+        return { service, storage }
+    }
+    const from = await make('sender', sender, [['assets/card.png', card], [one, first], [two, second]])
+    const sent = await from.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat' })
+    expect(sent.missing).toEqual([])
+    // receiver: the same card without the PC pictures; it already has picture one's bytes and its own entry named like picture two
+    const receiver = { characters: [{ chaId: 'local-card', name: '같은 카드', image: 'assets/card.png', additionalAssets: [['카드 그림', 'assets/card.png', 'png'], ['pc.__am__.chat.2', 'assets/edited-on-tablet.png', 'png']], chats: [{ id: 'keep', message: [] }] }] }
+    const to = await make('receiver', receiver, [['assets/card.png', card], [one, first]])
+    const entry = await to.service.ingest(createReadStream(await from.service.file(sent.id)))
+    const plan = await to.service.prepare(entry.id)
+    expect(plan.characterAssets).toEqual([{ characterId: 'local-card', name: 'pc.__am__.chat.1', path: one, ext: 'png' }])
+    const staged = JSON.parse(await readFile(join(root, 'receiver/play-transfer', entry.id, 'state.json'), 'utf8')).plan
+    expect(staged.assetKeys.map((a: any) => a.key)).toContain(two)
+    expect(staged.assetKeys.map((a: any) => a.key)).not.toContain(one)
+    // the chat text and Asset Maid's own data are kept as sent: its savedPath is the key used here
+    expect(plan.added[0].chat.localLore[0].content).toBe(chat.localLore[0].content)
+    expect(plan.added[0].chat.risuTransferMedia.assets[one]).toBe(one)
+    // restart before the save: only this plan's new picture goes; the bytes that were already here stay
+    await to.service.arm(entry.id, plan.transaction, plan.added)
+    expect(Buffer.from(to.storage.kvGet(two)).equals(second)).toBe(true)
+    const fresh = await make('receiver', receiver, [])
+    expect((await fresh.service.finish(entry.id)).state).toBe('waiting')
+    expect(fresh.storage.kvGetUpdatedAt(one)).not.toBeNull(); expect(fresh.storage.kvGetUpdatedAt(two)).toBeNull()
+    // the import itself, then the card gets the new name and every message name resolves to the picture's own bytes
+    const again = await fresh.service.prepare(entry.id)
+    await fresh.service.arm(entry.id, again.transaction, again.added)
+    const target = receiver.characters[0] as any
+    target.chats.push(again.added[0].chat)
+    for (const row of again.characterAssets) if (!target.additionalAssets.some((a: any) => a[0] === row.name)) target.additionalAssets.push([row.name, row.path, row.ext])
+    ;(receiver as any).risuPlaySets = again.registry
+    expect((await fresh.service.finish(entry.id, true)).state).toBe('applied')
+    expect(target.additionalAssets.filter((a: any) => a[0] === 'pc.__am__.chat.2')).toEqual([['pc.__am__.chat.2', 'assets/edited-on-tablet.png', 'png']])
+    const byName = new Map(target.additionalAssets.map((a: any) => [a[0], a[1]]))
+    expect(sha256(Buffer.from(fresh.storage.kvGet(byName.get('pc.__am__.chat.1'))))).toBe(sha256(first))
+    // a card new to this device brings its own entries; nothing is added to it twice
+    const other = await make('other', { characters: [] }, [])
+    const otherEntry = await other.service.ingest(createReadStream(await from.service.file(sent.id)))
+    const otherPlan = await other.service.prepare(otherEntry.id)
+    expect(otherPlan.characterAssets).toEqual([])
+    expect(otherPlan.newCharacters[0].additionalAssets.filter((a: any) => a[0].includes('__am__'))).toEqual(pictures.map(p => [p.name, p.path, 'png']))
+})

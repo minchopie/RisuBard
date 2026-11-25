@@ -24,8 +24,9 @@ function expectedEntries(manifest) {
     return new Map([...manifest.items, ...bardFiles(manifest)].map(item => [item.entry, item]));
 }
 
-/** One private, disposable export directory. Never overwrites an existing backup. */
-async function writePlaySetArchive(snapshot, temporaryDirectory) {
+/** One private, disposable export directory. Never overwrites an existing backup.
+ *  `onBytes(bytes, total?)` (0.9.103-ver4): progress display only — called once with the entries' total, then per chunk written. */
+async function writePlaySetArchive(snapshot, temporaryDirectory, onBytes) {
     if (snapshot.missing.length) throw new Error('Missing play-set material: ' + snapshot.missing.map(item => item.path).join(', '));
     validateRecords(snapshot.manifest, snapshot.records);
     const entries = expectedEntries(snapshot.manifest);
@@ -36,6 +37,7 @@ async function writePlaySetArchive(snapshot, temporaryDirectory) {
     const expanded = manifest.length + [...entries.values()].reduce((total, item) => total + item.bytes, 0);
     if (!Number.isSafeInteger(expanded * 2) || await availableBytes(temporaryDirectory) < expanded * 2) throw new Error('Not enough storage space');
     const directory = await mkdtempLong(join(temporaryDirectory, 'play-export-'));
+    onBytes?.(0, expanded - manifest.length);
     const destination = join(directory, 'transfer.risuplay');
     const zip = new ZipFile(), active = new Set();
     const output = createWriteStream(destination, { flags: 'wx', mode: 0o600 });
@@ -60,7 +62,7 @@ async function writePlaySetArchive(snapshot, temporaryDirectory) {
                             const chunk = new Uint8Array(await source.slice(offset, Math.min(offset + CHUNK, source.size)).arrayBuffer());
                             bytes += chunk.length;
                             if (chunk.length > CHUNK || bytes > item.bytes) throw new Error('Play-set source size changed');
-                            hash.update(chunk); yield chunk;
+                            hash.update(chunk); onBytes?.(chunk.length); yield chunk;
                         }
                         if (bytes !== item.bytes || hash.digest('hex') !== item.hash) throw new Error('Play-set source hash changed');
                     })());
@@ -84,8 +86,9 @@ async function writePlaySetArchive(snapshot, temporaryDirectory) {
     }
 }
 
-/** Central-directory parsing and bounded streaming; ZIP64 is handled by yauzl. */
-async function openPlaySetArchive(path, temporaryDirectory) {
+/** Central-directory parsing and bounded streaming; ZIP64 is handled by yauzl.
+ *  `onBytes(bytes, total?)` (0.9.103-ver4): progress display only — the members' expanded total once, then the bytes hashed while verifying. */
+async function openPlaySetArchive(path, temporaryDirectory, onBytes) {
     const zip = await yauzl.openPromise(path, { autoClose: false, lazyEntries: true, strictFileNames: true, validateEntrySizes: true });
     let closing;
     const close = () => closing ??= new Promise(resolve => { zip.once('close', resolve); zip.close(); });
@@ -102,6 +105,7 @@ async function openPlaySetArchive(path, temporaryDirectory) {
             if (!Number.isSafeInteger(entry.uncompressedSize) || entry.uncompressedSize < 0) throw new Error('Invalid expanded size');
             entries.set(name, entry);
         }
+        onBytes?.(0, [...entries.values()].reduce((total, entry) => entry.fileName === 'manifest.json' ? total : total + entry.uncompressedSize, 0));
         const stream = async name => {
             if (!entries.has(name)) throw new Error('Missing play-set archive member');
             return zip.openReadStreamPromise(entries.get(name));
@@ -125,7 +129,7 @@ async function openPlaySetArchive(path, temporaryDirectory) {
                 for await (const chunk of await stream(name)) {
                     bytes += chunk.length;
                     if (bytes > expectedBytes) throw new Error('Expanded entry exceeds declared size');
-                    hash.update(chunk);
+                    hash.update(chunk); onBytes?.(chunk.length);
                 }
                 if (bytes !== expectedBytes) throw new Error('Truncated play-set entry');
                 return hash.digest('hex');
