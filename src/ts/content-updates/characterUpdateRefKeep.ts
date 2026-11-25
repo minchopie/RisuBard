@@ -236,7 +236,10 @@ function moveLore(value: unknown, map: Map<number, number>): unknown {
 export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine: Partial<character>, theirs: Partial<character>, result: unknown[], map?: Map<number, number> | null): AssetMaidMerge | null {
     const own = parse(mineEntry?.content), other = parse(theirsEntry?.content)
     if (!own || !other) return null
-    let data: Portable = JSON.parse(JSON.stringify(other.data))
+    // 0.9.103-ver4: Asset Maid trims every target ("wr"); both bodies are read that way, so " lore:0 " and "lore:0" are one target below.
+    const trimmed = (key: string, value: unknown) => key === 'target' && typeof value === 'string' ? value.trim() : value
+    own.data = JSON.parse(JSON.stringify(own.data), trimmed)
+    let data: Portable = JSON.parse(JSON.stringify(other.data), trimmed)
     const mineAssets = (mine.additionalAssets ?? []) as Asset[], theirsAssets = (theirs.additionalAssets ?? []) as Asset[]
     const assets: Record<string, Fingerprinted> = {}
     const held: HeldReference[] = []
