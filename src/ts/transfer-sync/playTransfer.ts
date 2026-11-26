@@ -137,16 +137,25 @@ export function transferProgressText(progress: TransferProgress) {
  *  text. Without changing the host, the panel's own progress component (bar, %, MB, speed, remaining time) is mounted inside that
  *  overlay's box while it is up. When the box is not found (the host markup changed), the text bar stays as before. */
 export const OVERLAY_BOX = 'div.fixed.inset-0[role="alert"][aria-busy="true"] > div'
+/** Mounts the progress component into a host element; returns its remover (replaceable in tests). */
+export const overlayBarMount = {
+    async place(host: HTMLElement): Promise<() => void> {
+        const [{ mount, unmount }, component] = await Promise.all([import('svelte'), import('../../lib/Setting/Pages/PlayTransferProgress.svelte')])
+        const app = mount(component.default, { target: host, props: { active: true, quiet: true } })
+        return () => { void unmount(app) }
+    },
+}
 export async function mountOverlayBar(): Promise<(() => void) | null> {
     const box = typeof document === 'undefined' ? null : document.querySelector(OVERLAY_BOX)
     if (!box) return null
-    const [{ mount, unmount }, component] = await Promise.all([import('svelte'), import('../../lib/Setting/Pages/PlayTransferProgress.svelte')])
-    if (!box.isConnected) return null
     const host = document.createElement('div')
     host.setAttribute('data-transfer-overlay-bar', ''); host.style.width = 'min(28rem, 80vw)'
     box.appendChild(host)
-    const app = mount(component.default, { target: host, props: { active: true, quiet: true } })
-    return () => { void unmount(app); host.remove() }
+    try {
+        const remove = await overlayBarMount.place(host)
+        if (!host.isConnected) { remove(); return null }
+        return () => { remove(); host.remove() }
+    } catch (error) { host.remove(); throw error }
 }
 function overlayProgress() {
     let base = get(transferStatus), mine = '', stopped = false, controller: AbortController | undefined
@@ -217,7 +226,7 @@ export async function exportTransferChecked(chatIds: string[], compatibility = f
     if (duplicate) {
         const when = new Date(duplicate.createdAt).toLocaleString()
         const choice = await alertSelect([`준비된 묶음 그대로 쓰기 (${sizeText(duplicate.bytes ?? 0)})`, '새로 다시 만들기', '취소'],
-            `같은 대화로 ${when}에 만든 묶음이 이미 있어요. ${duplicate.same ? '그 뒤로 대화·카드가 바뀌지 않았어요.' : '그 뒤로 대화나 카드가 바뀌었어요. 바뀐 내용까지 보내려면 새로 만들어 주세요.'}`)
+            `같은 대화로 ${when}에 만든 묶음이 이미 있어요. ${duplicate.same ? '그 뒤로 대화·카드·전역 변수가 바뀌지 않았어요(Wiki 기억은 비교하지 않아요).' : '그 뒤로 대화나 카드가 바뀌었어요. 바뀐 내용까지 보내려면 새로 만들어 주세요.'}`)
         if (choice === '0') { transferStatus.set('준비된 묶음을 그대로 써요. 보낼 방법을 선택해 주세요.'); return { ...duplicate, missing: [], external: [], excluded: [], reused: true } }
         if (choice !== '1') { transferStatus.set('보낼 자료 확인을 취소했어요.'); return null }
     }
@@ -225,7 +234,8 @@ export async function exportTransferChecked(chatIds: string[], compatibility = f
 }
 export const sentPackages = async (): Promise<SentPackage[]> => (await transferRequest('/sent')).json()
 export const removeSentPackage = (id: string) => post(`/${id}/remove-sent`, { confirmed: true })
-export const clearSentPackages = () => post('/sent/clear', { confirmed: true })
+/** Deletes exactly the listed send packages (the ones the confirmation showed). */
+export const clearSentPackages = (ids: string[]) => post('/sent/clear', { confirmed: true, ids })
 /** Where a package went (display only; a failed note never fails the send). */
 export const noteSent = (id: string, note: { method: string; target?: string; state: string; transfer?: string }) => post(`/${id}/sent`, note).catch(() => null)
 const METHOD_LABEL: Record<string, string> = { file: '파일', nas: 'NAS', github: 'GitHub', wifi: 'Wi-Fi', usb: 'USB', share: '공유' }

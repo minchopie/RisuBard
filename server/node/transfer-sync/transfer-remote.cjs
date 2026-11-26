@@ -164,6 +164,7 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
         const c = await nasConfig();
         const file = await transfers.file(id), stat = await fs.stat(file);
         const filename = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}.risuplay`, temporary = filename + '.part';
+        const release = transfers.hold?.(id); // 0.9.103-ver4: the package cannot be deleted from the list while it is read here
         // 0.9.103-ver4: progress display only (GET /api/play-transfer/progress): upload bytes, then the remote + local re-read of the check.
         const shown = transfers.track?.('upload', { bytesTotal: stat.size });
         try {
@@ -184,7 +185,7 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
         } catch (error) {
             try { await drain(await nasRequest(c, 'DELETE', temporary)); } catch {}
             throw error;
-        } finally { shown?.end(); }
+        } finally { shown?.end(); release?.(); }
     }
     async function nasDownload(input) {
         const c = await nasConfig();
@@ -235,6 +236,7 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
         const fields = { message: 'Update RisuBard conversation backup', branch, ...(previous ? { sha: previous.sha } : {}) };
         const bytes = Buffer.byteLength(JSON.stringify(fields).slice(0, -1) + ',"content":""}') + Math.ceil(stat.size / 3) * 4;
         const shown = transfers.track?.('upload', { bytesTotal: stat.size }); // 0.9.103-ver4: progress display only
+        const release = transfers.hold?.(id);
         try {
             const response = checked(await api(c, path, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Content-Length': String(bytes) }, body: Readable.from(base64JsonFile(file, fields, shown?.add)) }), [200, 201]);
             shown?.next('upload-check');
@@ -244,7 +246,7 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
             if (verified.size !== stat.size || verified.sha !== await gitHash(file, stat.size)) throw new Error('업로드 파일 검증 실패. 이전 Git 이력은 유지됩니다.');
             await transfers.noteSent?.(id, { method: 'github', target: `${record.backupKey}.risuplay`, state: 'delivered' }).catch(() => {});
             return { name: `${record.backupKey}.risuplay`, bytes: stat.size, state: 'delivered' };
-        } finally { shown?.end(); }
+        } finally { shown?.end(); release?.(); }
     }
     async function githubDownload(input) {
         if (!/^[a-f0-9]{64}\.risuplay$/.test(input.name ?? '') || !/^[a-f0-9]{40}$/.test(input.commit ?? '') || !/^[a-f0-9]{40}$/.test(input.sha ?? '')) throw new Error('Invalid GitHub file revision');

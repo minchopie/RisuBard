@@ -48,6 +48,9 @@ export const playNative = async <T>(op: string, args: Record<string, unknown> = 
 };
 
 export const nativeSend = writable<{ state: string; sent?: number; total?: number; error?: string } | null>(null);
+/** 0.9.103-ver4 (Codex R2 #2): until when this device's own transferer may hold a local copy (`bard.export` writes a `.part` in the
+ *  same folder as an arriving file). The arrival line stays hidden until then: while the copy runs and 3 s after it ends. */
+export const nativeLocalCopyUntil = writable(0);
 let sendGeneration = 0;
 /** 0.9.103-ver4 (보낸 묶음 목록): where a package went, recorded on its send entry (display only, never fails the send). */
 async function note(id: string, method: string, state: string, target?: string, transfer?: string) {
@@ -55,7 +58,10 @@ async function note(id: string, method: string, state: string, target?: string, 
 }
 export async function sendNative(id: string, method: 'wifi' | 'usb' | 'share' | 'file', device?: string | Record<string, string>, name?: string, label?: string) {
   transferStatus.set('보낼 파일을 기기 전송기로 넘기는 중…'); // 0.9.103-ver4: the large copy below had no status
-  const handle = await playNative<string>('bard.export', { id });
+  nativeLocalCopyUntil.set(Number.POSITIVE_INFINITY);
+  let handle: string;
+  try { handle = await playNative<string>('bard.export', { id }); }
+  finally { nativeLocalCopyUntil.set(Date.now() + 3000); }
   const target = label ?? (typeof device === 'string' ? device : device?.model ?? device?.serial);
   if (method === 'share' || method === 'file') {
     await playNative(method === 'share' ? 'file.share' : 'file.save', { handle, name });

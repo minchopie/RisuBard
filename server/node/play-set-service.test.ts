@@ -573,6 +573,11 @@ test('send packages: listed with size and notes, the same selection is offered a
     const check = await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'] })
     expect(check.duplicate).toMatchObject({ id: first.id, same: true, characterId: 'card', chatCount: 1 })
     expect((await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'], light: true })).duplicate).toBeNull() // another option = another package
+    // a global chat variable the export copies into the chat counts too (Codex R1 #1)
+    ;(s.db as any).globalChatVariables = { flag: '1' }
+    expect((await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'] })).duplicate).toMatchObject({ id: first.id, same: false })
+    delete (s.db as any).globalChatVariables
+    expect((await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'] })).duplicate).toMatchObject({ same: true })
     s.db.characters[0].chats[0].message.push({ role: 'user', chatId: 'm1', data: '새 줄' } as any)
     expect((await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'] })).duplicate).toMatchObject({ id: first.id, same: false })
     await s.service.noteSent(first.id, { method: 'wifi', target: 'Galaxy Tab', state: 'sending', transfer: 't1' })
@@ -589,6 +594,11 @@ test('send packages: listed with size and notes, the same selection is offered a
     expect(listed.find((i: any) => i.id === first.id).diskBytes).toBeGreaterThanOrEqual(first.bytes)
     expect(listed.find((i: any) => i.leftover)).toMatchObject({ diskBytes: 10 })
     await expect(s.service.removeSent(received.id)).rejects.toThrow(/보낸 묶음만/)
+    // a package an upload or download is reading is neither deleted nor cleared meanwhile (Codex R1 #3)
+    const release = s.service.hold(first.id)
+    await expect(s.service.removeSent(first.id)).rejects.toThrow(/올리거나 내려받는 중/)
+    expect(await s.service.clearSent([first.id])).toMatchObject({ removed: 0, skipped: 1 })
+    release(); release()
     await expect(s.service.removeSent('11111111-1111-4111-8111-111111111111')).rejects.toThrow(/아직 만들고/)
     // over HTTP both deletions need the confirmation flag
     const routes = new Map<string, Function>()
@@ -599,6 +609,10 @@ test('send packages: listed with size and notes, the same selection is offered a
     expect((await call('post /api/play-transfer/sent/clear', {}, {})).status).toBe(400)
     expect(existsSyncFiles(await s.service.file(first.id))).toBe(true)
     expect((await call('post /api/play-transfer/:id/remove-sent', { id: first.id }, { confirmed: true })).payload).toEqual({ removed: true })
+    // only the packages the confirmation listed are deleted (a package made after the question stays)
+    const later = await s.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat', light: true })
+    expect((await call('post /api/play-transfer/sent/clear', {}, { confirmed: true, ids: ['22222222-2222-4222-8222-222222222222'] })).payload).toMatchObject({ removed: 1 })
+    expect((await s.service.sentPackages()).map((i: any) => i.id)).toEqual([later.id])
     expect((await call('post /api/play-transfer/sent/clear', {}, { confirmed: true })).payload).toMatchObject({ removed: 1 })
     expect((await s.service.sentPackages())).toEqual([])
     expect((await s.service.list()).find((r: any) => r.id === received.id)).toMatchObject({ direction: 'receive', state: 'waiting' })
@@ -625,4 +639,21 @@ test('arrivals: a native part file being received is reported with its size (and
     // no native transferer on this platform: nothing
     const none = createPlaySetService({ dataRoot, readDatabase: async () => ({ characters: [] }), memory: createRuntimeMemoryService(dataRoot), storage: createFileKv({ dataRoot }), readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
     expect(await none.arrivals()).toEqual([])
+})
+test('light package keeps a picture an embedded persona module of the card uses, even when the card also shows it (Codex R1 #2)', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'bard-transfer-light-module-'))
+    t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const art = Buffer.from('card-only-art'), modulePic = Buffer.from('module-only-picture'), both = Buffer.from('shared-by-card-and-module')
+    const k = (b: Buffer, ext = 'png') => `assets/${sha256(b)}.${ext}`
+    const db = { characters: [{ chaId: 'card', name: '모듈 카드', image: k(art), additionalAssets: [['둘 다', k(both), 'png']],
+        personas: [{ id: 'p', name: 'p', embeddedModule: { id: 'em', name: 'em', assets: [['모듈 그림', k(modulePic), 'png'], ['둘 다', k(both), 'png']] } }],
+        chats: [{ id: 'chat', name: 'c', note: '', localLore: [], message: [{ role: 'char', data: 'x' }] }] }] }
+    const dataRoot = join(root, 'sender'); await mkdir(dataRoot)
+    const storage = createFileKv({ dataRoot }); for (const b of [art, modulePic, both]) storage.kvSet(k(b), b)
+    const service = createPlaySetService({ dataRoot, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(dataRoot), storage, readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+    const light = await service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat', light: true })
+    const names = await zipNames(await service.file(light.id))
+    expect(names).not.toContain(`blobs/${sha256(art)}`)
+    expect(names).toContain(`blobs/${sha256(modulePic)}`); expect(names).toContain(`blobs/${sha256(both)}`)
+    expect(light.light).toEqual({ count: 1, bytes: art.length })
 })

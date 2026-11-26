@@ -7,11 +7,13 @@
     import { onDestroy } from 'svelte'
     import { transferArrivals, arrivalView, type TransferArrival } from 'src/ts/playTransfer'
     import { transferBusy } from 'src/ts/transferState'
-    import { nativeSend, playSetAvailable } from 'src/ts/transferNative'
+    import { nativeSend, nativeLocalCopyUntil, playSetAvailable } from 'src/ts/transferNative'
 
     let arrivals = $state<TransferArrival[]>([])
+    let now = $state(Date.now())
     let polling = false, controller: AbortController | undefined
     async function tick() {
+        now = Date.now()
         if (polling || document.hidden || !playSetAvailable()) { if (!playSetAvailable()) arrivals = []; return }
         polling = true
         const c = controller = new AbortController(), limit = setTimeout(() => c.abort(), 5000)
@@ -22,7 +24,8 @@
     void tick()
     onDestroy(() => { clearInterval(timer); controller?.abort() })
     const sending = $derived(!!$nativeSend && !['delivered', 'applied', 'failed', 'cancelled', 'unknown'].includes($nativeSend.state))
-    const view = $derived($transferBusy || sending ? null : arrivalView(arrivals))
+    // This device's own hand-over copy (sending, saving, sharing) also writes a part file: not an arrival (Codex R2 #2).
+    const view = $derived($transferBusy || sending || now < $nativeLocalCopyUntil ? null : arrivalView(arrivals))
 </script>
 
 {#if view}
@@ -38,7 +41,7 @@
 <style>
     .play-transfer-arrival { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + .75rem); transform: translateX(-50%); z-index: 99990;
         width: min(32rem, calc(100vw - 1.5rem)); display: grid; gap: .3rem; padding: .55rem .8rem; font-size: .85rem; color: var(--color-textcolor);
-        border: 1px solid var(--color-darkborderc); border-radius: var(--risu-radius-lg, .5rem); background: var(--color-bgcolor); box-shadow: 0 4px 16px rgb(0 0 0 / .25); }
+        border: 1px solid var(--color-darkborderc); border-radius: var(--risu-radius-lg, .5rem); background: var(--color-bgcolor); }
     .label { font-weight: 600; overflow-wrap: anywhere; }
     .detail { opacity: .85; overflow-wrap: anywhere; }
     .track { height: .5rem; border-radius: 999px; background: var(--color-darkbg); overflow: hidden; }

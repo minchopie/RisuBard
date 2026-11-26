@@ -11,7 +11,7 @@ vi.mock('./stores.svelte', () => ({ loadedStore: writable(true), alertStore: wri
 vi.mock('./alert', () => ({ alertSelect: (...args: any[]) => f.select(...args), alertConfirm: (...args: any[]) => f.select(...args) }))
 vi.mock('./risubard/memorySaveSlots', () => ({ applyMemorySavePromptSettings: (chat: any, current: any) => { chat.modelBinding = current.modelBinding; delete chat.bindedPersona } }))
 import { receiveTransfer, recoverTransfers, exportTransfer, uploadLegacyChat, transferBusy, requestRemoteTransfer, transferProgressView, transferProgressText, transferStatus } from './playTransfer'
-import { arrivalView, sentSummary, suggestLight, exportTransferChecked, OVERLAY_BOX } from './playTransfer'
+import { arrivalView, sentSummary, suggestLight, exportTransferChecked, OVERLAY_BOX, overlayBarMount } from './playTransfer'
 import { forageStorage } from './globalApi.svelte'
 import { isAnyGenerating } from './process/generationState'
 import { importSession } from './importSession'
@@ -286,12 +286,38 @@ test('the full-screen overlay gets the graphical bar inside its box while a step
         if (path.endsWith('/prepare')) { await held; return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {} }) }
         return reply([])
     })
+    // The real component in the overlay is checked in the headless screenshot; here the placement and lifetime (the component is
+    // compiled per test environment, so a stand-in is placed).
+    const placed: HTMLElement[] = [], removed: HTMLElement[] = [], original = overlayBarMount.place
+    overlayBarMount.place = async (host: HTMLElement) => { placed.push(host); host.textContent = 'bar'; return () => { removed.push(host) } }
     try {
         const running = receiveTransfer('in')
-        await vi.waitFor(() => expect(box.querySelector('[data-transfer-overlay-bar] [data-transfer-progress]')?.textContent).toContain('50%'), { timeout: 10000, interval: 100 })
-        expect(box.querySelector('[data-transfer-overlay-bar] [role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('50')
+        await vi.waitFor(() => expect(placed).toHaveLength(1), { timeout: 5000, interval: 50 })
+        expect(box.lastElementChild).toBe(placed[0]); expect(placed[0].hasAttribute('data-transfer-overlay-bar')).toBe(true)
+        await new Promise(r => setTimeout(r, 1200))
+        // with the bar placed, the overlay text stays the plain step line (no text bar)
         expect(get(transferStatus)).toBe('자료 검증 · 가져오기 준비 중…')
         release(); await running
-        expect(box.querySelector('[data-transfer-overlay-bar]')).toBeNull()
-    } finally { overlay.remove() }
+        expect(box.querySelector('[data-transfer-overlay-bar]')).toBeNull(); expect(removed).toEqual(placed)
+    } finally { overlay.remove(); overlayBarMount.place = original }
+}, 20000)
+test('arrival line on the receiving device; hidden while this device makes its own hand-over copy (Codex R2 #2)', async () => {
+    if (typeof document === 'undefined') return
+    const { nativeLocalCopyUntil } = await import('./transferNative')
+    ;(globalThis as any).RisuPlay = {}
+    f.request.mockImplementation(async (path: string) => reply(path === '/arrivals' ? [{ id: 'x', bytes: 1_000_000, bytesTotal: 2_000_000, elapsedMs: 3000, speed: null }] : []))
+    const { mount, unmount } = await import('svelte')
+    const Arrival = (await import('../lib/Setting/Pages/PlayTransferArrival.svelte')).default
+    nativeLocalCopyUntil.set(Number.POSITIVE_INFINITY)
+    const t = document.createElement('div'); document.body.append(t)
+    const m = mount(Arrival, { target: t })
+    try {
+        await new Promise(r => setTimeout(r, 400))
+        expect(f.request.mock.calls.some(c => c[0] === '/arrivals')).toBe(true)
+        expect(t.querySelector('[data-transfer-arrival]')).toBeNull()
+        nativeLocalCopyUntil.set(Date.now() - 1)
+        await vi.waitFor(() => expect(t.querySelector('[data-transfer-arrival]')?.textContent).toContain('50%'), { timeout: 5000, interval: 100 })
+        transferBusy.set(true)
+        await vi.waitFor(() => expect(t.querySelector('[data-transfer-arrival]')).toBeNull(), { timeout: 3000, interval: 50 })
+    } finally { transferBusy.set(false); await unmount(m); t.remove(); delete (globalThis as any).RisuPlay; nativeLocalCopyUntil.set(0) }
 }, 20000)

@@ -443,9 +443,9 @@
       "path": "desktop-transfer/src/RisuAI.ChatTransfer.Core/PlaySetArchive.cs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "9a2cdb74c7418dc0f96a0b10b2dd1dc38379b91b1616091dc62386fcdcb48200",
-      "contentSha256": "9a2cdb74c7418dc0f96a0b10b2dd1dc38379b91b1616091dc62386fcdcb48200",
-      "bytes": 9645
+      "sha256": "78e62d6321bfd4c64bb8cc2c0deef9c9ac28029cd26ab5b2831303d3c25ad08e",
+      "contentSha256": "78e62d6321bfd4c64bb8cc2c0deef9c9ac28029cd26ab5b2831303d3c25ad08e",
+      "bytes": 9959
     },
     {
       "path": "desktop-transfer/src/RisuAI.ChatTransfer.Core/PlaySetDiscovery.cs",
@@ -571,9 +571,9 @@
       "path": "desktop-transfer/src/RisuAI.ChatTransfer.WinForms/PlaySetService.cs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "6501138ea8dfa2d267fa21ff7d7e3105e2742b08d53a0e60eb44a8699e61557e",
-      "contentSha256": "6501138ea8dfa2d267fa21ff7d7e3105e2742b08d53a0e60eb44a8699e61557e",
-      "bytes": 30816
+      "sha256": "b6298a1dc82b77fb977ef5bcb6218caaa04eb04214b6a8ff0909c899c9371c6c",
+      "contentSha256": "b6298a1dc82b77fb977ef5bcb6218caaa04eb04214b6a8ff0909c899c9371c6c",
+      "bytes": 31003
     },
     {
       "path": "desktop-transfer/src/RisuAI.ChatTransfer.WinForms/PlaySetShareForm.cs",
@@ -611,9 +611,9 @@
       "path": "desktop-transfer/tests/RisuAI.ChatTransfer.Tests/Program.cs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "5dfc04c9836a2ed94cbec61355d1f544e84b748ff4dd9c765d1059f2b316bb6c",
-      "contentSha256": "5dfc04c9836a2ed94cbec61355d1f544e84b748ff4dd9c765d1059f2b316bb6c",
-      "bytes": 36888
+      "sha256": "ac0bf474da33928cf41b65f99039919d40aad035ddb328608447010faede8e1e",
+      "contentSha256": "ac0bf474da33928cf41b65f99039919d40aad035ddb328608447010faede8e1e",
+      "bytes": 37298
     },
     {
       "path": "desktop-transfer/tests/RisuAI.ChatTransfer.Tests/RisuAI.ChatTransfer.Tests.csproj",
@@ -1171,9 +1171,9 @@
       "path": "server/node/play-set-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "1354170a14ca8fac1e8895ebe1982c0d83de10ccda0eb1d84f28903e8f2d495b",
-      "contentSha256": "1354170a14ca8fac1e8895ebe1982c0d83de10ccda0eb1d84f28903e8f2d495b",
-      "bytes": 55028
+      "sha256": "26fbff876db018a05971f14223246556f75b0933de0a743d7c6a54fa8d996eda",
+      "contentSha256": "26fbff876db018a05971f14223246556f75b0933de0a743d7c6a54fa8d996eda",
+      "bytes": 58089
     },
     {
       "path": "server/node/play-transfer-http.test.ts",
@@ -1195,9 +1195,9 @@
       "path": "server/node/transfer-remote.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "57601c636b14a153edc032aea44e39e622f25dbbe7e58eb7a9614c465193702d",
-      "contentSha256": "57601c636b14a153edc032aea44e39e622f25dbbe7e58eb7a9614c465193702d",
-      "bytes": 26757
+      "sha256": "e366689b5921d69e98c657fac7df249cc0577fbf8aa60f8d84a79a471c1698cc",
+      "contentSha256": "e366689b5921d69e98c657fac7df249cc0577fbf8aa60f8d84a79a471c1698cc",
+      "bytes": 27017
     },
     {
       "path": "server/node/transfer-secrets.cjs",
@@ -1339,17 +1339,17 @@
       "path": "server/node/transfer-sync/play-set-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "1b841a2781b730ec818191b36e971606e83c6734c10bd4a2fd7bada767a4c7ed",
-      "contentSha256": "1b841a2781b730ec818191b36e971606e83c6734c10bd4a2fd7bada767a4c7ed",
-      "bytes": 68776
+      "sha256": "c4c85467e4806bbdadc526684ac2a4e770225d578105b618fedaa642718f7829",
+      "contentSha256": "c4c85467e4806bbdadc526684ac2a4e770225d578105b618fedaa642718f7829",
+      "bytes": 70786
     },
     {
       "path": "server/node/transfer-sync/transfer-remote.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "8186d13963166b785075377c9c412ad26a994c019a02f2d6521f1e93b9158fd3",
-      "contentSha256": "8186d13963166b785075377c9c412ad26a994c019a02f2d6521f1e93b9158fd3",
-      "bytes": 27697
+      "sha256": "233d8b18285c7038ea693314528f80f4b050c1748a792e6f60f5c6f2c2424f7c",
+      "contentSha256": "233d8b18285c7038ea693314528f80f4b050c1748a792e6f60f5c6f2c2424f7c",
+      "bytes": 27898
     },
     {
       "path": "server/node/transfer-sync/transfer-secrets.cjs",
@@ -1507,9 +1507,9 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "de6bce4b9ec06b398e3c99780ff26ff93c5102b727fff2734a57e60a0b21188b",
-      "contentSha256": "de6bce4b9ec06b398e3c99780ff26ff93c5102b727fff2734a57e60a0b21188b",
-      "bytes": 56179
+      "sha256": "fcbd9c4f2896c95cedd806364b196f81a938917388bbbba4181798f47b2db234",
+      "contentSha256": "fcbd9c4f2896c95cedd806364b196f81a938917388bbbba4181798f47b2db234",
+      "bytes": 56553
     },
     {
       "path": "src/lib/Setting/Pages/NasSyncProgress.svelte",
@@ -1531,9 +1531,9 @@
       "path": "src/lib/Setting/Pages/PlayTransferArrival.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "d0cc33d25a4f297205b6b194d9c066c0c4bd962204f5c7247d5a7e808edac6de",
-      "contentSha256": "d0cc33d25a4f297205b6b194d9c066c0c4bd962204f5c7247d5a7e808edac6de",
-      "bytes": 3595
+      "sha256": "c08aa888afab1b6b25bf979bb06c451a2bd65c2886b4d59796eb5440412ac2f7",
+      "contentSha256": "c08aa888afab1b6b25bf979bb06c451a2bd65c2886b4d59796eb5440412ac2f7",
+      "bytes": 3787
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -1595,9 +1595,9 @@
       "path": "src/ts/playTransfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "63ca4442345cc4e1d956aa728546d83c3e93e5750e581e8fe99c321c327af592",
-      "contentSha256": "63ca4442345cc4e1d956aa728546d83c3e93e5750e581e8fe99c321c327af592",
-      "bytes": 25876
+      "sha256": "6e38ee9cc39f41af7b48ed8a5c8e7fa3d962226895e7821369a5d59eff33139a",
+      "contentSha256": "6e38ee9cc39f41af7b48ed8a5c8e7fa3d962226895e7821369a5d59eff33139a",
+      "bytes": 27943
     },
     {
       "path": "src/ts/playTransfer.ts",
@@ -1667,9 +1667,9 @@
       "path": "src/ts/transfer-sync/playTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "d0e010b163f85433ac3e0207bac441308c6dfc257f8275e0278487997c9a4ce7",
-      "contentSha256": "d0e010b163f85433ac3e0207bac441308c6dfc257f8275e0278487997c9a4ce7",
-      "bytes": 39026
+      "sha256": "d08cf73c25888bd0828dacec9541a2b072c5205079733fa3725b0af4f72af486",
+      "contentSha256": "d08cf73c25888bd0828dacec9541a2b072c5205079733fa3725b0af4f72af486",
+      "bytes": 39567
     },
     {
       "path": "src/ts/transfer-sync/transferAssets.ts",
@@ -1691,9 +1691,9 @@
       "path": "src/ts/transfer-sync/transferNative.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "d94c95c556a537ace4dbb84e28f5bc2fec3fbb1282a58db7cba289b9fc958a9f",
-      "contentSha256": "d94c95c556a537ace4dbb84e28f5bc2fec3fbb1282a58db7cba289b9fc958a9f",
-      "bytes": 6789
+      "sha256": "ddee3c89ce6698eba98b4f7314d98761d5f7f55ae3b3c36112167379e4f3db0f",
+      "contentSha256": "ddee3c89ce6698eba98b4f7314d98761d5f7f55ae3b3c36112167379e4f3db0f",
+      "bytes": 7234
     },
     {
       "path": "src/ts/transfer-sync/transferState.ts",
@@ -1755,9 +1755,9 @@
       "path": "src/ts/transferSyncPanel.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "70f7eee97f7d7d9a11b0914b5e22ff0e2d0fef612dd6a3183119eb98308633e2",
-      "contentSha256": "70f7eee97f7d7d9a11b0914b5e22ff0e2d0fef612dd6a3183119eb98308633e2",
-      "bytes": 12882
+      "sha256": "b4e8d5bc2705e4af08419c1fbdfd7d0d7b236edc06aa3328855af0a0e56912aa",
+      "contentSha256": "b4e8d5bc2705e4af08419c1fbdfd7d0d7b236edc06aa3328855af0a0e56912aa",
+      "bytes": 13002
     },
     {
       "path": "src/ts/transferSyncShims.test.ts",
@@ -4699,9 +4699,9 @@
       "path": "patchnote/0.9.103-ver4.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "cba5785b1a2bc97efce0560e0d924e806d6acc408d6c3b461c8f4dd4099aff58",
-      "contentSha256": "cba5785b1a2bc97efce0560e0d924e806d6acc408d6c3b461c8f4dd4099aff58",
-      "bytes": 3792
+      "sha256": "64d2a6645b662f17a816be488061330d31d5c2fb3e60e9631b1e743e254f8008",
+      "contentSha256": "64d2a6645b662f17a816be488061330d31d5c2fb3e60e9631b1e743e254f8008",
+      "bytes": 6684
     },
     {
       "path": "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",

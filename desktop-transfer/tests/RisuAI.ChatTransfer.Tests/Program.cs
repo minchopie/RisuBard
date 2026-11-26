@@ -51,6 +51,10 @@ internal static partial class Program
             seen = null;
             await archive.ReceiveAsync(new SlowStream(bytes, () => { if (Directory.GetFiles(root, "*.part.json").Length > 0) seen = "note"; })).ConfigureAwait(false);
             True(seen is null, "no note without a size");
+            // a local copy (send hand-over) is noted as local
+            seen = null;
+            await archive.ReceiveAsync(new SlowStream(bytes, () => { var n = Directory.GetFiles(root, "*.part.json").SingleOrDefault(); if (n is not null) seen = File.ReadAllText(n); }), default, 0, localCopy: true).ConfigureAwait(false);
+            Equal("{\"direction\":\"local\"}", seen ?? "", "local copy note");
             // an abandoned note is removed with abandoned parts on start
             var stale = Guid.NewGuid().ToString();
             File.WriteAllText(Path.Combine(root, stale + ".part"), "x"); File.WriteAllText(Path.Combine(root, stale + ".part.json"), "{}");

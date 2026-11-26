@@ -385,9 +385,13 @@
         {/each}
         {#if sent.length}
             <ShButton variant="outline" disabled={working || $transferBusy} onclick={() => run(async () => {
-                if (!await alertConfirm(`보낸 묶음 ${sent.length}개(${megabytes(sentTotal)})를 모두 지울까요?\n이 기기의 전송 파일만 지워요. 대화·카드·받은 자료와 이미 보낸 기기의 자료는 그대로예요.`)) return
-                const cleared = await clearSentPackages(); if (result?.id && sent.some(item => item.id === result.id)) result = null
-                await loadSent(); await refreshTransfers(); transferStatus.set(`보낸 묶음 ${cleared.removed}개를 지웠어요.`)
+                // Codex R2 #1: the list is read again right before asking, and only the packages shown in the question are deleted.
+                await loadSent()
+                const shown = sent.map(item => item.id), bytes = sentTotal
+                if (!shown.length) return
+                if (!await alertConfirm(`보낸 묶음 ${shown.length}개(${megabytes(bytes)})를 모두 지울까요?\n이 기기의 전송 파일만 지워요. 대화·카드·받은 자료와 이미 보낸 기기의 자료는 그대로예요.`)) return
+                const cleared = await clearSentPackages(shown); if (result?.id && shown.includes(result.id)) result = null
+                await loadSent(); await refreshTransfers(); transferStatus.set(`보낸 묶음 ${cleared.removed}개를 지웠어요.${cleared.skipped ? ` 올리거나 내려받는 중인 ${cleared.skipped}개는 남겼어요.` : ''}`)
             })}>모두 지우기</ShButton>
         {:else}<p>보낸 묶음이 없어요.</p>{/if}
     </details>

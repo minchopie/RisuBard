@@ -129,6 +129,6 @@ test('send packages: listed when opened; one or all are deleted only after the c
         expect(removeSentPackage).toHaveBeenCalledWith('p1')
         ;(alertConfirm as any).mockResolvedValueOnce(true)
         button('모두 지우기').click(); await settle()
-        expect(clearSentPackages).toHaveBeenCalledTimes(1)
+        expect(clearSentPackages).toHaveBeenCalledTimes(1); expect(clearSentPackages).toHaveBeenCalledWith(['p1']) // exactly the ones the question listed (list read again first)
     } finally { await unmount(instance); target.remove() }
 })

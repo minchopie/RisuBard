@@ -93,12 +93,15 @@ function contentKey(item) {
 /** 0.9.103-ver4: the pictures a 「카드 그림 빼고 보내기」 (light) package leaves out — content-addressed pictures the card record itself
  *  points to (image, additional, emotion pictures …). Never left out: Asset Maid chat pictures, inlay data, a picture a chat record points
  *  to or names (its hash appears in the chat), a picture that is not content-addressed. An entry shared with a kept item stays. */
+const CARD_PICTURE = /^\/(?:image|(?:additionalAssets|emotionImages)\/\d+\/1)$/;
 function lightOmissions(manifest, records) {
     const keep = new Set();
     for (const pictures of assetMaidPictures(manifest, records).values()) for (const picture of pictures) keep.add(picture.item.id);
-    for (const item of manifest.items) if (item.kind === 'chat' || item.kind === 'inlay') for (const ref of item.references) keep.add(ref.target);
+    // Kept: pictures of chats, inlays, modules and personas, and any other card field than the card's own pictures (an embedded
+    // module's picture, Codex R1 #2). Context alias tables point at every card picture and are not a reason to keep one.
+    for (const item of manifest.items) if (item.kind !== 'context') for (const ref of item.references) if (item.kind !== 'character' || !CARD_PICTURE.test(ref.pointer)) keep.add(ref.target);
     const chatText = manifest.items.filter(item => item.kind === 'chat').map(item => JSON.stringify(records.get(item.entry) ?? null)).join('\n');
-    const cardPictures = new Set(manifest.items.filter(item => item.kind === 'character').flatMap(item => item.references.map(ref => ref.target)));
+    const cardPictures = new Set(manifest.items.filter(item => item.kind === 'character').flatMap(item => item.references.filter(ref => CARD_PICTURE.test(ref.pointer)).map(ref => ref.target)));
     const assets = manifest.items.filter(item => item.kind === 'asset');
     const out = assets.filter(item => cardPictures.has(item.id) && !keep.has(item.id) && contentKey(item) && !chatText.includes(item.hash));
     const left = new Set(out.map(item => item.id));
@@ -219,6 +222,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         if (character.chats.some(c => selection.chatIds.includes(c.id) && (c.isStreaming || c.risuBardWikiReboot))) throw new Error('Wait for generation and Wiki work to finish');
         const selectedHash = hash(canonical(character, true));
         const light = !!selection.light && !selection.compatibility;
+        const contentHash = packageInputs(database, character);
         await fs.mkdir(dir, { recursive: true, mode: 0o700 });
         const work = await mkdtempLong(join(dir, 'export-work-'));
         let capture, recorded = false;
@@ -256,7 +260,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                 backupKey: hash(snapshot.manifest.primaryChat),
                 bytes: (await fs.stat(join(dir, 'export.risuplay'))).size, sha256: digest.digest('hex'),
                 // 0.9.103-ver4: the selection and the card state it was made from (same selection again → offer this package).
-                characterId: character.chaId, chatIds: [...selection.chatIds], compatibility: !!selection.compatibility, selectionKey: selectionKeyOf(selection), sourceHash: selectedHash,
+                characterId: character.chaId, chatIds: [...selection.chatIds], compatibility: !!selection.compatibility, selectionKey: selectionKeyOf(selection), sourceHash: contentHash,
                 ...(omittedEntries.length ? { light: { count: omittedEntries.length, bytes: omitted.filter((item, i, all) => all.findIndex(other => other.entry === item.entry) === i).reduce((total, item) => total + item.bytes, 0) } } : {}) };
             const exported = await recordExport(database, snapshot);
             const generation = exported.risuPlaySets.generations.find(g => g.setId === snapshot.manifest.setId && g.revision === snapshot.manifest.revision);
@@ -273,8 +277,18 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         if (!character) return { duplicate: null };
         const key = selectionKeyOf(selection);
         const ready = (await list()).find(record => record.direction === 'send' && !record.transient && record.selectionKey === key && record.state === 'ready' && existsSync(join(directory(record.id), 'export.risuplay')));
-        return { duplicate: ready ? { ...publicState(ready), same: ready.sourceHash === hash(canonical(character, true)) } : null };
+        return { duplicate: ready ? { ...publicState(ready), same: ready.sourceHash === packageInputs(database, character) } : null };
     }
+    // Codex R1 #1: what an export reads from the saved data besides the card and its chats (global chat variables). Bard Wiki memory
+    // is not compared; the panel says so.
+    const packageInputs = (database, character) => hash(canonical({ character, globalChatVariables: database?.globalChatVariables ?? null }, true));
+    // Codex R1 #3: a send package a NAS/GitHub upload or a download is reading right now (another lane) cannot be deleted meanwhile.
+    const busy = new Map();
+    const hold = key => {
+        id(key); busy.set(key, (busy.get(key) ?? 0) + 1);
+        let released = false;
+        return () => { if (released) return; released = true; const left = busy.get(key) - 1; if (left > 0) busy.set(key, left); else busy.delete(key); };
+    };
     const LEFTOVER_AGE = 10 * 60 * 1000;
     async function diskBytes(path) {
         let total = 0;
@@ -311,6 +325,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         let record = null;
         try { record = await read(key); } catch (error) { if (error.code !== 'ENOENT') throw error; }
         if (record && (record.direction !== 'send' || record.transient)) throw new Error('보낸 묶음만 여기서 지울 수 있어요.');
+        if (busy.has(key)) throw new Error('이 묶음을 지금 올리거나 내려받는 중이에요. 끝난 뒤 지워 주세요.');
         if (!record) {
             const stat = await fs.stat(directory(key)).catch(() => null);
             if (!stat?.isDirectory()) return { removed: false };
@@ -319,10 +334,16 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         await fs.rm(directory(key), { recursive: true, force: true });
         return { removed: true };
     }
-    async function clearSent() {
-        let removed = 0, bytes = 0;
-        for (const item of await sentPackages()) { bytes += item.diskBytes; if ((await removeSent(item.id)).removed) removed++; }
-        return { removed, bytes };
+    /** `ids` (Codex R2 #1): only the packages the user's confirmation listed; a package made after that question stays. */
+    async function clearSent(ids) {
+        const chosen = Array.isArray(ids) ? new Set(ids.filter(value => typeof value === 'string')) : null;
+        let removed = 0, bytes = 0, skipped = 0;
+        for (const item of await sentPackages()) {
+            if (chosen && !chosen.has(item.id)) continue;
+            if (busy.has(item.id)) { skipped++; continue; }
+            bytes += item.diskBytes; if ((await removeSent(item.id)).removed) removed++;
+        }
+        return { removed, bytes, skipped };
     }
     /** 0.9.103-ver4: where a send package went (method, target, state), recorded by the panel or the remote upload. Display only. */
     async function noteSent(key, input = {}) {
@@ -791,14 +812,17 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         // 0.9.103-ver4: same-selection check, send package list / delete, send notes, native arrivals (display only).
         route('post', '/export-check', async (req, res) => res.json(await exportCheck(req.body)));
         route('get', '/sent', async (_req, res) => res.json(await sentPackages()));
-        route('post', '/sent/clear', async (req, res) => { if (req.body.confirmed !== true) throw new Error('Clearing requires confirmation'); res.json(await exclusive(() => clearSent())); });
+        route('post', '/sent/clear', async (req, res) => { if (req.body.confirmed !== true) throw new Error('Clearing requires confirmation'); res.json(await exclusive(() => clearSent(req.body.ids))); });
         route('get', '/arrivals', async (_req, res) => res.json(await arrivals()));
         route('post', '/persona-export', async (req, res) => res.json(await exclusive(() => exportPersonas(req.body))));
         route('get', '/:id/personas', async (req, res) => res.json(await receivedPersonas(req.params.id)));
         route('post', '/:id/persona-applied', async (req, res) => res.json(await exclusive(() => personaApplied(req.params.id))));
         route('post', '/:id/persona-map', async (req, res) => res.json(await exclusive(() => personaMap(req.params.id, req.body.map))));
         route('get', '/:id/inspect', async (req, res) => res.json(await inspect(req.params.id)));
-        route('get', '/:id/file', async (req, res) => res.download(await file(req.params.id), (await read(req.params.id)).name));
+        route('get', '/:id/file', async (req, res) => {
+            const path = await file(req.params.id), name = (await read(req.params.id)).name, release = hold(req.params.id);
+            res.on('close', release); res.download(path, name, error => { release(); if (error && !res.headersSent) res.status(404).end(); });
+        });
         route('post', '/:id/prepare', async (req, res) => res.json(await exclusive(() => prepare(req.params.id, req.body.targets))));
         route('post', '/:id/arm', async (req, res) => res.json(await exclusive(() => arm(req.params.id, req.body.transaction, req.body.added))));
         route('post', '/:id/finish', async (req, res) => res.json(await exclusive(() => finish(req.params.id, req.body.confirmed === true))));
@@ -810,7 +834,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
     }
     return { assertWrite, list, ingest, exportSet, exportPersonas, receivedPersonas, personaApplied: key => exclusive(() => personaApplied(key)), personaMap: (key, map) => exclusive(() => personaMap(key, map)), inspect, prepare: (...args) => exclusive(() => prepare(...args)), arm: (...args) => exclusive(() => arm(...args)),
         finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), requestApply: (...args) => exclusive(() => requestApply(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes, track, progress,
-        exportCheck, sentPackages, removeSent: key => exclusive(() => removeSent(key)), clearSent: () => exclusive(() => clearSent()), noteSent: (key, input) => exclusive(() => noteSent(key, input)), arrivals };
+        exportCheck, sentPackages, removeSent: key => exclusive(() => removeSent(key)), clearSent: ids => exclusive(() => clearSent(ids)), hold, noteSent: (key, input) => exclusive(() => noteSent(key, input)), arrivals };
 }
 async function safeParents(root, path) {
     const rel = relative(root, path);

@@ -202,7 +202,8 @@ internal sealed class PlaySetService : IPlaySetTransportHost, IDisposable
                 case "bard.export": {
                     if (BardDataRoot is null || !Guid.TryParseExact(S("id"), "D", out _)) throw new InvalidDataException("Invalid Bard export");
                     var path = Path.Combine(BardDataRoot, "play-transfer", S("id"), "export.risuplay");
-                    using var source = File.OpenRead(path); return JsonValue.Create(await archive.ReceiveAsync(source).ConfigureAwait(false));
+                    // 0.9.103-ver4 (Codex R1 #4): this device's own hand-over copy is marked local, never shown as an arrival.
+                    using var source = File.OpenRead(path); return JsonValue.Create(await archive.ReceiveAsync(source, default, 0, localCopy: true).ConfigureAwait(false));
                 }
                 case "identity": return new JsonObject { ["id"] = DeviceId, ["name"] = Name };
                 case "application.register": if (S("profile") != Profile) throw new InvalidDataException("Wrong application profile"); Register(S("path")); return null;
@@ -254,7 +255,7 @@ internal sealed class PlaySetService : IPlaySetTransportHost, IDisposable
                 case "file.receive": {
                     var path = Path.GetFullPath(S("path"));
                     if (!Path.GetExtension(path).Equals(".risuplay", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Select a .risuplay file");
-                    using var source = File.OpenRead(path); var handle = await archive.ReceiveAsync(source).ConfigureAwait(false);
+                    using var source = File.OpenRead(path); var handle = await archive.ReceiveAsync(source, default, 0, localCopy: true).ConfigureAwait(false);
                     if (op == "file.stage") return JsonValue.Create(handle);
                     lock (metadata) { var inbox = Read("inbox") as JsonArray ?? new(); inbox.Add(new JsonObject { ["id"] = Guid.NewGuid().ToString(), ["fileHandle"] = handle, ["state"] = "received", ["receivedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ["trustedDevice"] = null, ["accepted"] = false }); Write("inbox", inbox); }
                     return JsonValue.Create(handle);
