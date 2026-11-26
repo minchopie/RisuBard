@@ -50,6 +50,7 @@ export const playNative = async <T>(op: string, args: Record<string, unknown> = 
 export const nativeSend = writable<{ state: string; sent?: number; total?: number; error?: string } | null>(null);
 let sendGeneration = 0;
 export async function sendNative(id: string, method: 'wifi' | 'usb' | 'share' | 'file', device?: string | Record<string, string>, name?: string) {
+  transferStatus.set('보낼 파일을 기기 전송기로 넘기는 중…'); // 0.9.103-ver4: the large copy below had no status
   const handle = await playNative<string>('bard.export', { id });
   if (method === 'share' || method === 'file') {
     await playNative(method === 'share' ? 'file.share' : 'file.save', { handle, name });

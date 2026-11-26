@@ -10,7 +10,7 @@ vi.mock('./importSession', () => ({ importSession: writable({ phase: 'idle' }) }
 vi.mock('./stores.svelte', () => ({ loadedStore: writable(true), alertStore: writable({ type: 'none' }) }))
 vi.mock('./alert', () => ({ alertSelect: (...args: any[]) => f.select(...args), alertConfirm: (...args: any[]) => f.select(...args) }))
 vi.mock('./risubard/memorySaveSlots', () => ({ applyMemorySavePromptSettings: (chat: any, current: any) => { chat.modelBinding = current.modelBinding; delete chat.bindedPersona } }))
-import { receiveTransfer, recoverTransfers, exportTransfer, uploadLegacyChat, transferBusy, requestRemoteTransfer } from './playTransfer'
+import { receiveTransfer, recoverTransfers, exportTransfer, uploadLegacyChat, transferBusy, requestRemoteTransfer, transferProgressView, transferProgressText, transferStatus } from './playTransfer'
 import { forageStorage } from './globalApi.svelte'
 import { isAnyGenerating } from './process/generationState'
 import { importSession } from './importSession'
@@ -132,4 +132,109 @@ test('startup recovery independently verifies committed client chat before serve
     await recoverTransfers()
     expect(f.request).toHaveBeenCalledWith('/in/hold-recovery', expect.objectContaining({ body: JSON.stringify({ confirmed: true }) }))
     expect(chat.name).toBe('changed')
+})
+
+// 0.9.103-ver4: transfer progress line (display only)
+test('progress line: bytes give percent, MB, speed and remaining time; items count when no byte total; unknown totals stay indeterminate', () => {
+    const bytes = transferProgressView({ stage: 'upload', bytes: 100_000_000, bytesTotal: 400_000_000, items: 0, itemsTotal: null, elapsedMs: 65_000, stageElapsedMs: 10_000 })
+    expect(bytes).toMatchObject({ label: '올리는 중', percent: 25, tone: 'running' })
+    expect(bytes.detail).toBe('100/400 MB · 10 MB/s · 남은 시간 약 30초 · 경과 1분 5초')
+    const items = transferProgressView({ stage: 'install', bytes: 0, bytesTotal: null, items: 3, itemsTotal: 12, elapsedMs: 1_000, stageElapsedMs: 1_000 })
+    expect(items).toMatchObject({ label: '그림 저장 중', percent: 25, detail: '3/12개 · 경과 1초' })
+    const open = transferProgressView({ stage: 'collect', bytes: 5_500_000, bytesTotal: null, items: 7, itemsTotal: null, elapsedMs: 1_500, stageElapsedMs: 1_500 })
+    expect(open).toMatchObject({ percent: null, detail: '5.5 MB · 7개 · 경과 2초' })
+    // more bytes than the total (a re-read) never shows over 100 %
+    expect(transferProgressView({ stage: 'hash', bytes: 9, bytesTotal: 5, items: 0, itemsTotal: null, elapsedMs: 0, stageElapsedMs: 0 }).percent).toBe(100)
+    expect(transferProgressView({ stage: 'new-stage', bytes: 0, bytesTotal: null, items: 0, itemsTotal: null, elapsedMs: 0, stageElapsedMs: 0 }, null, '대기 문구').label).toBe('대기 문구')
+})
+test('progress line: native send states, finished and failed, and the text bar for the modal overlay', () => {
+    expect(transferProgressView(null, { state: 'sending', sent: 50_000_000, total: 200_000_000 })).toMatchObject({ label: 'Wi-Fi·USB로 전송 중', percent: 25, detail: '50/200 MB', tone: 'running' })
+    expect(transferProgressView(null, { state: 'delivered', sent: 0, total: 200_000_000 })).toMatchObject({ percent: 100, tone: 'done' })
+    expect(transferProgressView(null, { state: 'applied' })).toMatchObject({ label: '받는 쪽에서 가져오기 완료', tone: 'done' })
+    expect(transferProgressView(null, { state: 'unknown', error: '상태 조회 시간 초과' })).toMatchObject({ label: '상대 기기 상태를 확인하지 못했어요', detail: '상태 조회 시간 초과', tone: 'unknown', percent: null })
+    expect(transferProgressView(null, { state: 'failed', error: 'x' })).toMatchObject({ label: '전송 실패', tone: 'failed', percent: null, detail: 'x' })
+    expect(transferProgressView(null, null, '채팅을 저장하는 중…')).toMatchObject({ label: '채팅을 저장하는 중…', percent: null })
+    expect(transferProgressText({ stage: 'pack', bytes: 42, bytesTotal: 100, items: 0, itemsTotal: null, elapsedMs: 3_000, stageElapsedMs: 1_000 })).toBe('전송 파일로 묶는 중 ████░░░░░░ 42% · 0.0/0.0 MB · 경과 3초')
+    expect(transferProgressText({ stage: 'collect', bytes: 0, bytesTotal: null, items: 0, itemsTotal: null, elapsedMs: 3_000, stageElapsedMs: 3_000 })).toBe('대화·Wiki·저장 슬롯·그림을 모으는 중 · 경과 3초')
+})
+test('the modal status line carries the running step and returns to the step text when the server step ends', async () => {
+    vi.useFakeTimers()
+    try {
+        let progress: any = { stage: 'verify', bytes: 50, bytesTotal: 100, items: 0, itemsTotal: null, elapsedMs: 1000, stageElapsedMs: 1000 }
+        let release!: () => void
+        const held = new Promise<void>(resolve => { release = resolve })
+        f.request.mockImplementation(async (path: string) => {
+            if (path === '/progress') return reply(progress)
+            if (path.endsWith('/inspect')) return reply({ characters: [] })
+            if (path.endsWith('/prepare')) { await held; return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {} }) }
+            return reply([])
+        })
+        const running = receiveTransfer('in')
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(get(transferStatus)).toBe('받은 파일 검증 중 █████░░░░░ 50% · 0.0/0.0 MB · 경과 1초')
+        progress = null
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(get(transferStatus)).toBe('자료 검증 · 가져오기 준비 중…')
+        release(); await running
+        expect(get(transferStatus)).toBe('가져오기 완료 · 기존 캐릭터 목록에서 확인해 주세요.')
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(f.request.mock.calls.filter(c => c[0] === '/progress').length).toBe(2)
+    } finally { vi.useRealTimers() }
+})
+test('a progress request that hangs is cut after 5 s so the overlay line keeps updating; stop cancels the one in flight', async () => {
+    vi.useFakeTimers()
+    try {
+        const signals: AbortSignal[] = []
+        let release!: () => void
+        const held = new Promise<void>(resolve => { release = resolve })
+        f.request.mockImplementation(async (path: string, init: any = {}) => {
+            if (path === '/progress') {
+                signals.push(init.signal)
+                if (signals.length !== 2) return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))))
+                return reply({ stage: 'copy', bytes: 0, bytesTotal: null, items: 2, itemsTotal: 4, elapsedMs: 8000, stageElapsedMs: 1000 })
+            }
+            if (path.endsWith('/inspect')) return reply({ characters: [] })
+            if (path.endsWith('/prepare')) { await held; return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {} }) }
+            return reply([])
+        })
+        const running = receiveTransfer('in')
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(signals).toHaveLength(1); expect(get(transferStatus)).toBe('자료 검증 · 가져오기 준비 중…')
+        await vi.advanceTimersByTimeAsync(4000)
+        expect(signals[0].aborted).toBe(true); expect(signals.length).toBeGreaterThan(1)
+        expect(get(transferStatus)).toBe('그림 꺼내는 중 █████░░░░░ 50% · 2/4개 · 경과 8초')
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(signals).toHaveLength(3); expect(signals[2].aborted).toBe(false)
+        release(); await running
+        expect(signals[2].aborted).toBe(true)
+        expect(get(transferStatus)).toBe('가져오기 완료 · 기존 캐릭터 목록에서 확인해 주세요.')
+    } finally { vi.useRealTimers() }
+})
+test('Asset Maid pictures of a received chat are added to the existing card by name only when the name is new', async () => {
+    f.db.characters[0].additionalAssets = [['mine.__am__.chat.a', 'assets/keep.png', 'png']]
+    f.request.mockImplementation(async (path: string) => {
+        if (path.endsWith('/inspect')) return reply({ characters: [] })
+        if (path.endsWith('/prepare')) return reply({ transaction: 'tx', newCharacters: [], added: [{ characterId: 'existing', chat: { id: 'incoming', message: [] } }], registry: {},
+            characterAssets: [{ characterId: 'existing', name: 'mine.__am__.chat.a', path: 'assets/other.png', ext: 'png' }, { characterId: 'existing', name: 'pc.__am__.chat.b', path: 'assets/b.png', ext: 'png' }, { characterId: 'missing', name: 'x', path: 'assets/x.png', ext: 'png' }] })
+        return reply([])
+    })
+    await receiveTransfer('in')
+    expect(f.db.characters[0].additionalAssets).toEqual([['mine.__am__.chat.a', 'assets/keep.png', 'png'], ['pc.__am__.chat.b', 'assets/b.png', 'png']])
+    expect(f.save).toHaveBeenLastCalledWith({ chats: [['existing', 'incoming']], characters: ['existing'], flushServer: 'canonical', rejectOnFailure: true })
+})
+test('a chat received before (duplicate) still gets its missing Asset Maid names, compared case-insensitively, and the card alone is saved', async () => {
+    f.db.characters[0].additionalAssets = [['Mine.__AM__.chat.a', 'assets/keep.png', 'png']]
+    f.db.characters[0].personas = [{ id: 'local-p', embeddedModule: { id: 'lm', assets: [['card-persona.taken', 'assets/cp.png', 'png']] } }]
+    f.db.modules = [{ id: 'mod', assets: [['module.taken', 'assets/module.png', 'png']] }, { id: 'no-assets' }]
+    f.db.personas = [{ id: 'p', embeddedModule: { id: 'em', assets: [['PERSONA.taken', 'assets/persona.png', 'png']] } }, { id: 'plain' }]
+    f.request.mockImplementation(async (path: string) => {
+        if (path.endsWith('/inspect')) return reply({ characters: [] })
+        if (path.endsWith('/prepare')) return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {}, duplicate: true,
+            characterAssets: [{ characterId: 'existing', name: 'mine.__am__.chat.a', path: 'assets/other.png', ext: 'png' }, { characterId: 'existing', name: 'pc.__am__.chat.b', path: 'assets/b.png', ext: 'png' }, { characterId: 'existing', name: 'Module.Taken', path: 'assets/t.png', ext: 'png' }, { characterId: 'existing', name: 'persona.TAKEN', path: 'assets/p.png', ext: 'png' }, { characterId: 'existing', name: 'Card-Persona.Taken', path: 'assets/c.png', ext: 'png' }] })
+        return reply([])
+    })
+    await receiveTransfer('in')
+    expect(f.db.characters[0].additionalAssets).toEqual([['Mine.__AM__.chat.a', 'assets/keep.png', 'png'], ['pc.__am__.chat.b', 'assets/b.png', 'png']])
+    expect(f.save).toHaveBeenLastCalledWith({ chats: [], characters: ['existing'], flushServer: 'canonical', rejectOnFailure: true })
+    expect(get(transferStatus)).toBe('이미 받은 동일한 자료예요. 중복으로 추가하지 않았어요. 에셋메이드 그림 1개를 캐릭터에 더했어요.')
 })

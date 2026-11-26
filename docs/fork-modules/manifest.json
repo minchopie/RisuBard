@@ -1171,9 +1171,9 @@
       "path": "server/node/play-set-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "718eac9dec0ccce7b99f8b9dbd95b301ddebb77969b8531bdee7fbb7ebd8ba78",
-      "contentSha256": "718eac9dec0ccce7b99f8b9dbd95b301ddebb77969b8531bdee7fbb7ebd8ba78",
-      "bytes": 26050
+      "sha256": "3b8f75da9100d135f4d33380b8f0ba2f3b524758694d3f583fd53419a47ab158",
+      "contentSha256": "3b8f75da9100d135f4d33380b8f0ba2f3b524758694d3f583fd53419a47ab158",
+      "bytes": 39839
     },
     {
       "path": "server/node/play-transfer-http.test.ts",
@@ -1195,9 +1195,9 @@
       "path": "server/node/transfer-remote.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "a1b6322bd3bff2d79e7956b8730d432e9d8ffd484be50231c6af1aa500569a70",
-      "contentSha256": "a1b6322bd3bff2d79e7956b8730d432e9d8ffd484be50231c6af1aa500569a70",
-      "bytes": 22143
+      "sha256": "a57e37a81ff2a75171e08e7053b842b43cc38450c32920a987c956ecf18c1491",
+      "contentSha256": "a57e37a81ff2a75171e08e7053b842b43cc38450c32920a987c956ecf18c1491",
+      "bytes": 25297
     },
     {
       "path": "server/node/transfer-secrets.cjs",
@@ -1307,9 +1307,9 @@
       "path": "server/node/transfer-sync/play-set-archive.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "1019d0a2cfdf0b981d7f842cb233cf51fa91dccfc235be524ccf2eb0e209dc6b",
-      "contentSha256": "1019d0a2cfdf0b981d7f842cb233cf51fa91dccfc235be524ccf2eb0e209dc6b",
-      "bytes": 9493
+      "sha256": "643aee4f4a14f50d3a2739f1c835b83e5153222677232c835a84c5937112f91d",
+      "contentSha256": "643aee4f4a14f50d3a2739f1c835b83e5153222677232c835a84c5937112f91d",
+      "bytes": 10033
     },
     {
       "path": "server/node/transfer-sync/play-set-fingerprint.cjs",
@@ -1339,17 +1339,17 @@
       "path": "server/node/transfer-sync/play-set-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "f7d617b5d2c5f0a6f135db60332122fa6412044c693963744bcea67b99e05b0c",
-      "contentSha256": "f7d617b5d2c5f0a6f135db60332122fa6412044c693963744bcea67b99e05b0c",
-      "bytes": 42651
+      "sha256": "ca27346c50e85d8d63ee03d518539ff4e5d6d953c5576e3e71f0f3a181b51366",
+      "contentSha256": "ca27346c50e85d8d63ee03d518539ff4e5d6d953c5576e3e71f0f3a181b51366",
+      "bytes": 54552
     },
     {
       "path": "server/node/transfer-sync/transfer-remote.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "0971f1bb31da7289bde4c34b294a819aa4738856331190224152ce501e7d55c4",
-      "contentSha256": "0971f1bb31da7289bde4c34b294a819aa4738856331190224152ce501e7d55c4",
-      "bytes": 25673
+      "sha256": "c72214a1da5650af5f1c9012a0aea8a138bf1caa7ed377e90942befa2a4b674d",
+      "contentSha256": "c72214a1da5650af5f1c9012a0aea8a138bf1caa7ed377e90942befa2a4b674d",
+      "bytes": 26994
     },
     {
       "path": "server/node/transfer-sync/transfer-secrets.cjs",
@@ -1507,9 +1507,9 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "05dbb3d396cce41834b581c943cb36ad7032cb754b5ac051adbbc00b78cfe305",
-      "contentSha256": "05dbb3d396cce41834b581c943cb36ad7032cb754b5ac051adbbc00b78cfe305",
-      "bytes": 50580
+      "sha256": "714d598b4e8a2551276125faab025ca39be72bb5067a60bd3b1d51098b807833",
+      "contentSha256": "714d598b4e8a2551276125faab025ca39be72bb5067a60bd3b1d51098b807833",
+      "bytes": 51346
     },
     {
       "path": "src/lib/Setting/Pages/NasSyncProgress.svelte",
@@ -1518,6 +1518,14 @@
       "sha256": "699c85f6d15836f760871c2a3a2c0d8e3eca42b286c4eb6efb258f1a7ab579e4",
       "contentSha256": "699c85f6d15836f760871c2a3a2c0d8e3eca42b286c4eb6efb258f1a7ab579e4",
       "bytes": 4135
+    },
+    {
+      "path": "src/lib/Setting/Pages/PlayTransferProgress.svelte",
+      "module": "transfer-sync",
+      "kind": "files",
+      "sha256": "4b247303e4934166b16b791bfdb6f1696aa7b6101087d600b0fea3e2a95159b1",
+      "contentSha256": "4b247303e4934166b16b791bfdb6f1696aa7b6101087d600b0fea3e2a95159b1",
+      "bytes": 6811
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -1579,9 +1587,9 @@
       "path": "src/ts/playTransfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "89e7ddbd2d7e3d1699da4d6cf72fb7cf2f739de7063fc48c25d452f29236fbe7",
-      "contentSha256": "89e7ddbd2d7e3d1699da4d6cf72fb7cf2f739de7063fc48c25d452f29236fbe7",
-      "bytes": 10755
+      "sha256": "8c4d222acece7ca50a5e9fab92a772eac96d9bef36388c990ed7d0211d34a35b",
+      "contentSha256": "8c4d222acece7ca50a5e9fab92a772eac96d9bef36388c990ed7d0211d34a35b",
+      "bytes": 20462
     },
     {
       "path": "src/ts/playTransfer.ts",
@@ -1651,9 +1659,9 @@
       "path": "src/ts/transfer-sync/playTransfer.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "4fc7ec75b165770727f36b76a860a39cf05d97fa433dce55325cfac5fa695277",
-      "contentSha256": "4fc7ec75b165770727f36b76a860a39cf05d97fa433dce55325cfac5fa695277",
-      "bytes": 21950
+      "sha256": "65e87f17399540b48cb94d6829a138bb163584ec0c944e27afa75dfe4eb9e3ae",
+      "contentSha256": "65e87f17399540b48cb94d6829a138bb163584ec0c944e27afa75dfe4eb9e3ae",
+      "bytes": 30358
     },
     {
       "path": "src/ts/transfer-sync/transferAssets.ts",
@@ -1675,9 +1683,9 @@
       "path": "src/ts/transfer-sync/transferNative.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "6099b6830459889069681ae777649fc9d1d8f4969a1f90f2c9d7960e5d946a7a",
-      "contentSha256": "6099b6830459889069681ae777649fc9d1d8f4969a1f90f2c9d7960e5d946a7a",
-      "bytes": 5758
+      "sha256": "460113131ac72cc2d36f4ea19efcf85846eba141c57c749b65510f8818d82c3b",
+      "contentSha256": "460113131ac72cc2d36f4ea19efcf85846eba141c57c749b65510f8818d82c3b",
+      "bytes": 5889
     },
     {
       "path": "src/ts/transfer-sync/transferState.ts",
@@ -1739,9 +1747,9 @@
       "path": "src/ts/transferSyncPanel.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "4316dcfc89b188c84a6cddce04ec1e8eb15e0a3a28e7888ad0108512741e3bf2",
-      "contentSha256": "4316dcfc89b188c84a6cddce04ec1e8eb15e0a3a28e7888ad0108512741e3bf2",
-      "bytes": 10509
+      "sha256": "0276372a65cdb76a1c55bb367666b5379f385cf5a6757c66a10a22c563d246a7",
+      "contentSha256": "0276372a65cdb76a1c55bb367666b5379f385cf5a6757c66a10a22c563d246a7",
+      "bytes": 10711
     },
     {
       "path": "src/ts/transferSyncShims.test.ts",
@@ -4680,6 +4688,14 @@
       "bytes": 1654
     },
     {
+      "path": "patchnote/0.9.103-ver4.md",
+      "module": "history-docs",
+      "kind": "files",
+      "sha256": "e2bf0aa0d3fe6b7dde486a12999f59e25e72ff5e7872cf87d52f3425c6776cee",
+      "contentSha256": "e2bf0aa0d3fe6b7dde486a12999f59e25e72ff5e7872cf87d52f3425c6776cee",
+      "bytes": 2284
+    },
+    {
       "path": "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
       "module": "history-docs",
       "kind": "files",
@@ -5220,6 +5236,7 @@
         "src/lib/Setting/Pages/TransferMethodSelect.svelte.test.ts",
         "src/lib/Setting/Pages/TransferPanel.svelte",
         "src/lib/Setting/Pages/NasSyncProgress.svelte",
+        "src/lib/Setting/Pages/PlayTransferProgress.svelte",
         "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
         "src/ts/nasSync.test.ts",
         "src/ts/nasSync.ts",
@@ -5710,6 +5727,7 @@
         "patchnote/0.9.103-ver1.md",
         "patchnote/0.9.103-ver2.md",
         "patchnote/0.9.103-ver3.md",
+        "patchnote/0.9.103-ver4.md",
         "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
         "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
@@ -5815,7 +5833,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "35b81fa55ef3eaf99661a8117a9e97c6e7f9d558243ab431cc8136e597532afe"
+      "sha256": "92c81c932c3a8dc630efbcbee0617c4bacd18c0c11bceee084565821f4f13171"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5893,7 +5911,7 @@
           "module": "distribution",
           "path": "docs/fork-modules/compat/v0.9.103/distribution.patch",
           "sourceSha256": "341f2501294c4fcba78c81b06d69a3abe2e3745ff308159367bae4a6b96cccb0",
-          "sha256": "ee6784527b0790b3e94d138dd7531ff2af20a72a33e35b3313059507fb750782"
+          "sha256": "7dc0de90416ab9858615dae93a41bb7b0565518529bba852d992aac87eba7628"
         },
         {
           "module": "lore-lua",

@@ -113,7 +113,7 @@ test('GitHub fixed revision download verifies bytes before durable ingestion; pu
     } })
     const input = { name: 'a'.repeat(64) + '.risuplay', commit, sha }
     expect((await remote.dispatch('github', 'download', { ...input, applyRequested: true })).state).toBe('waiting')
-    expect(f.importOptions[0]).toEqual({ name: input.name, applyRequested: true })
+    expect(f.importOptions[0]).toEqual({ name: input.name, applyRequested: true, total: 24 })
     corrupt = true; await expect(remote.dispatch('github', 'download', input)).rejects.toThrow('hash mismatch')
     expect(f.imports).toHaveLength(1)
     publicRepo = true; await expect(remote.dispatch('github', 'download', input)).rejects.toThrow('비공개')
@@ -240,4 +240,43 @@ test('direct-IP NAS: optional certificate names are saved/masked per side and va
     expect(calls[0].options).toEqual({ method: 'GET', servername: 'nas.example', headers: { Host: 'nas.example:64470', Depth: '0' } })
     expect(calls[1].options).toEqual({ method: 'GET', headers: { Depth: '0' } }); expect(calls[1].options).not.toHaveProperty('servername')
     for (const c of calls) expect(JSON.stringify(c.options)).not.toMatch(/rejectUnauthorized|checkServerIdentity|insecure/)
+})
+
+// 0.9.103-ver4: progress display only — upload bytes, the re-read check (remote + local) and the step names; the bytes sent are unchanged.
+test('NAS and GitHub uploads report progress to the play-set tracker without changing the bytes sent', async t => {
+    const f = await fixture(t, 3 * 1024 * 1024 + 5)
+    const runs: any[] = []
+    const track = (stage: string, totals: any = {}) => {
+        const run: any = { stages: [{ stage, ...totals, bytes: 0 }], ended: false }
+        runs.push(run)
+        return { next(next: string, nextTotals: any = {}) { run.stages.push({ stage: next, ...nextTotals, bytes: 0 }) }, add(n = 0) { run.stages.at(-1).bytes += n }, end() { run.ended = true } }
+    }
+    const transfers = { ...f.transfers, track }
+    const nas = createRemoteTransfers({ ...f, transfers, fetch: async (_url: string, o: any) => {
+        if (o.method === 'PUT') { expect(await bytes(o.body)).toEqual(f.content); return response(201, '') }
+        if (o.method === 'GET') return response(200, f.content)
+        return response(201, '')
+    } })
+    expect((await nas.dispatch('nas', 'upload', { id: 'out' })).state).toBe('delivered')
+    expect(runs[0].ended).toBe(true)
+    expect(runs[0].stages).toEqual([{ stage: 'upload', bytesTotal: f.content.length, bytes: f.content.length }, { stage: 'upload-check', bytesTotal: f.content.length * 2, bytes: f.content.length * 2 }, { stage: 'upload-finish', bytes: 0 }])
+    const sha = await gitHash(f.file, f.content.length)
+    const github = createRemoteTransfers({ ...f, transfers, fetch: async (url: string, o: any) => {
+        if (o.method === 'PUT') { const body = JSON.parse((await bytes(o.body)).toString()); expect(Buffer.from(body.content, 'base64').equals(f.content)).toBe(true); return response(201, { commit: { sha: 'c'.repeat(40) } }) }
+        if (url.includes('/contents/')) return url.includes('?ref=' + 'c'.repeat(40)) ? response(200, { type: 'file', size: f.content.length, sha }) : response(404, '')
+        return response(200, { private: true, default_branch: 'main' })
+    } })
+    expect((await github.dispatch('github', 'upload', { id: 'out' })).state).toBe('delivered')
+    expect(runs[1].ended).toBe(true)
+    expect(runs[1].stages).toEqual([{ stage: 'upload', bytesTotal: f.content.length, bytes: f.content.length }, { stage: 'upload-check', bytes: 0 }])
+    // a failed upload still ends its progress run
+    const failing = createRemoteTransfers({ ...f, transfers, fetch: async (_url: string, o: any) => { if (o.body) await bytes(o.body); return response(o.method === 'PUT' ? 507 : 204, '') } })
+    await expect(failing.dispatch('nas', 'upload', { id: 'out' })).rejects.toThrow('507')
+    expect(runs[2].ended).toBe(true)
+})
+test('downloads pass the known size to the receive progress', async t => {
+    const f = await fixture(t, 64)
+    const nas = createRemoteTransfers({ ...f, fetch: async () => Object.assign(response(200, f.content), { headers: { 'content-length': '64' } }) })
+    await nas.dispatch('nas', 'download', { name: 'fixture.risuplay' })
+    expect(f.importOptions.at(-1)).toMatchObject({ name: 'fixture.risuplay', total: 64 })
 })

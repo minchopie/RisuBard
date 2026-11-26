@@ -8,7 +8,8 @@ vi.mock('./alert', () => ({ alertConfirm: vi.fn() }))
 vi.mock('./platform', () => ({ isNodeServer: true }))
 vi.mock('./transferNas', () => ({ parseNasListing: vi.fn() }))
 vi.mock('./transferNative', () => ({ nativeSend: writable(null), playSetAvailable: () => false, androidTransferAvailable: () => false, playNative: vi.fn(), sendNative: vi.fn() }))
-vi.mock('./playTransfer', () => ({ transferBusy: writable(false), transferStatus: writable(''), transferQueue: writable([]), refreshTransfers: vi.fn(async () => {}), queueTransferFile: vi.fn(), exportTransfer: vi.fn(), receiveTransfer: vi.fn(), cancelTransfer: vi.fn(), requestRemoteTransfer: vi.fn(), uploadLegacyChat: vi.fn() }))
+vi.mock('./playTransfer', () => ({ transferBusy: writable(false), transferStatus: writable(''), transferQueue: writable([]), refreshTransfers: vi.fn(async () => {}), queueTransferFile: vi.fn(), exportTransfer: vi.fn(), receiveTransfer: vi.fn(), cancelTransfer: vi.fn(), requestRemoteTransfer: vi.fn(), uploadLegacyChat: vi.fn(),
+    playTransferProgress: vi.fn(async () => null), transferProgressView: (_p: unknown, _n: unknown, fallback = '') => ({ label: fallback || '처리 중', percent: null, detail: '', tone: 'running' }) }))
 vi.mock('./nasSyncCoordinator', () => ({ coordinatorState: f.coordinator = writable({ lastOutcome: 'empty' }), syncCoordinator: () => ({ uploadNow: f.upload, downloadNow: f.download, state: { pendingReview: 2, keptDeletions: 1 } }) }))
 vi.mock('./nasSync', () => ({ syncStatus: f.status, syncNetwork: vi.fn(async () => null), reportSyncNetwork: vi.fn(async () => {}), reportSyncProfile: f.profile,
     syncConflicts: vi.fn(async () => [{ root: 'opaque-root', type: 'chat', title: '표본 · 기존 대화', sameMessages: true, differs: ['wiki'], state: 'diverged', variants: [{ heads: ['h1'], messages: 2, wikiFiles: 3, source: { self: true } }, { heads: ['h2'], messages: 2, wikiFiles: 4, source: {} }] }]),

@@ -12,8 +12,10 @@
     import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, setSyncScope, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, resolveAllSync, startAdoptionSync, endAdoptionSync, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
     import NasSyncProgress from './NasSyncProgress.svelte'
+    import PlayTransferProgress from './PlayTransferProgress.svelte'
     import { syncStateRows, syncItemTitle, syncDifference, syncRevisionTime, groupSyncItemsByTime, syncGroupTitles, syncGroupStates, SYNC_ITEM_STATE, keyRequestNeeded, bootstrapAuthority, incomingPeers, conflictVariantLabel, shareMethodAllowed, hydrateSyncForm, routeLabel, withSavedHomeSsids, syncOutcomeText, syncDeviceName, syncHeadline, groupSyncTrash, detectDeviceKind } from 'src/ts/nasSyncUi'
     import { ownsServer } from 'src/ts/transfer-sync/chatDeviceLabel'
+    import { syncBusyOwned } from 'src/ts/transferState'
     import { isMissingMediaPath, type MissingSyncMedia } from '../../../../shared/play-set/nas-diagnostic'
     let selected = $state<string[]>([])
     let selectedPersonas = $state<string[]>([])
@@ -56,9 +58,13 @@
     const character = $derived(DBState.db.characters[$selectedCharID])
     $effect(() => { selected = character?.chats[character.chatPage]?.id ? [character.chats[character.chatPage].id] : []; result = null })
     onMount(() => { void refreshTransfers().catch(error => transferStatus.set(String(error))) })
+    // 0.9.103-ver4: how the last action ended, for the progress line's done/failed state.
+    let outcome = $state<{ ok: boolean; elapsedMs: number; at: number } | null>(null)
     async function run(work: () => Promise<unknown>) {
         working = true
-        try { await work() } catch (error) { transferStatus.set(String(error)) } finally { working = false }
+        const started = Date.now()
+        let ok = false
+        try { await work(); ok = true } catch (error) { transferStatus.set(String(error)) } finally { working = false; outcome = { ok, elapsedMs: Date.now() - started, at: Date.now() } }
     }
     async function download() {
         if (androidTransferAvailable()) { await sendNative(result.id, 'file', undefined, result.name); return }
@@ -450,7 +456,6 @@
         <ShButton variant="outline" onclick={() => run(refreshTransfers)}>수신 목록 새로고침</ShButton>
     </fieldset>
 
-    {#if $nativeSend?.total}<progress max={$nativeSend.total} value={$nativeSend.sent ?? 0} aria-label="전송 진행률"></progress>{/if}
     {#each $transferQueue.filter(row => row.direction === 'receive' && !(row as any).share) as entry (entry.id)}
         <div class="entry">
             <strong>{entry.name}</strong><span>{entry.state === 'waiting' && entry.applyRequested ? '앱에 반영 대기 · 기존 작업이 끝나면 자동 반영' : entry.state === 'recovery-held' ? '복구 보관' : stateLabel[entry.state] ?? entry.state}</span>
@@ -462,6 +467,8 @@
         </div>
     {/each}
     </details>
+    <!-- 0.9.103-ver4: transfer progress, kept in view at the bottom of the panel while the page scrolls (replaces the bare native <progress>). -->
+    <div class="transfer-progress-dock"><PlayTransferProgress active={(working || ($transferBusy && !$syncBusyOwned)) && !$coordinatorState?.running} watch outcome={outcome} /></div>
 </section>
 <style>
     .transfer-panel { display: grid; gap: 1rem; margin-block: 1rem; }
@@ -484,4 +491,6 @@
     .transfer-actions { width: 100%; display: flex; flex-wrap: wrap; gap: .5rem; }
     .hint { opacity: .8; font-size: .9em; }
     .sync-timeline .remote-file .remote-file { padding-left: 1rem; }
+    .transfer-progress-dock { position: sticky; bottom: 0; z-index: 1; }
+    .transfer-progress-dock:empty { display: none; }
 </style>
