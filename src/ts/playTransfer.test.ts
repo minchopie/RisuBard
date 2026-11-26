@@ -321,3 +321,32 @@ test('arrival line on the receiving device; hidden while this device makes its o
         await vi.waitFor(() => expect(t.querySelector('[data-transfer-arrival]')).toBeNull(), { timeout: 3000, interval: 50 })
     } finally { transferBusy.set(false); await unmount(m); t.remove(); delete (globalThis as any).RisuPlay; nativeLocalCopyUntil.set(0) }
 }, 20000)
+test('a reading that started during the own hand-over copy is dropped even when it answers late; overlapping copies end the window after the last one (Codex R2b)', async () => {
+    if (typeof document === 'undefined') return
+    const { nativeLocalCopyUntil, beginLocalCopy, endLocalCopy } = await import('./transferNative')
+    beginLocalCopy(); beginLocalCopy(); endLocalCopy()
+    expect(get(nativeLocalCopyUntil)).toBe(Number.POSITIVE_INFINITY) // one copy still runs
+    endLocalCopy()
+    expect(get(nativeLocalCopyUntil)).toBeLessThan(Date.now() + 3100); expect(get(nativeLocalCopyUntil)).toBeGreaterThan(Date.now())
+    ;(globalThis as any).RisuPlay = {}
+    let answer!: (value: Response) => void, asked = 0
+    f.request.mockImplementation(async (path: string) => {
+        if (path !== '/arrivals') return reply([])
+        asked++
+        if (asked === 1) return new Promise<Response>(r => { answer = r })
+        return reply([{ id: 'real', bytes: 3_000_000, bytesTotal: 6_000_000, elapsedMs: 2000, speed: null }])
+    })
+    beginLocalCopy()
+    const { mount, unmount } = await import('svelte')
+    const Arrival = (await import('../lib/Setting/Pages/PlayTransferArrival.svelte')).default
+    const t = document.createElement('div'); document.body.append(t)
+    const m = mount(Arrival, { target: t })
+    try {
+        await vi.waitFor(() => expect(asked).toBe(1), { timeout: 3000, interval: 20 })
+        endLocalCopy(); nativeLocalCopyUntil.set(Date.now() - 1) // the window is over before the slow answer lands
+        answer(reply([{ id: 'own-copy', bytes: 1_000_000, bytesTotal: null, elapsedMs: 1000, speed: null }]))
+        await new Promise(r => setTimeout(r, 100))
+        expect(t.querySelector('[data-transfer-arrival]')).toBeNull()
+        await vi.waitFor(() => expect(t.querySelector('[data-transfer-arrival]')?.textContent).toContain('50%'), { timeout: 5000, interval: 100 })
+    } finally { await unmount(m); t.remove(); delete (globalThis as any).RisuPlay; nativeLocalCopyUntil.set(0) }
+}, 20000)

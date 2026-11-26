@@ -599,6 +599,19 @@ test('send packages: listed with size and notes, the same selection is offered a
     await expect(s.service.removeSent(first.id)).rejects.toThrow(/올리거나 내려받는 중/)
     expect(await s.service.clearSent([first.id])).toMatchObject({ removed: 0, skipped: 1 })
     release(); release()
+    // and the other order: once a deletion started, an upload or download cannot take the package (Codex R1b #1)
+    const spare = await s.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat', compatibility: true })
+    const realRm = promiseFiles.rm
+    let letGo!: () => void
+    const gate = new Promise<void>(r => { letGo = r })
+    const spy = vi.spyOn(promiseFiles, 'rm').mockImplementation(async (...args: any[]) => { if (String(args[0]).includes(spare.id)) await gate; return (realRm as any)(...args) })
+    try {
+        const removing = s.service.removeSent(spare.id)
+        await new Promise(r => setTimeout(r, 20))
+        expect(() => s.service.hold(spare.id)).toThrow(/지우는 중/)
+        letGo(); expect(await removing).toEqual({ removed: true })
+    } finally { spy.mockRestore() }
+    expect(() => s.service.hold(spare.id)()).not.toThrow()
     await expect(s.service.removeSent('11111111-1111-4111-8111-111111111111')).rejects.toThrow(/아직 만들고/)
     // over HTTP both deletions need the confirmation flag
     const routes = new Map<string, Function>()
@@ -656,4 +669,19 @@ test('light package keeps a picture an embedded persona module of the card uses,
     expect(names).not.toContain(`blobs/${sha256(art)}`)
     expect(names).toContain(`blobs/${sha256(modulePic)}`); expect(names).toContain(`blobs/${sha256(both)}`)
     expect(light.light).toEqual({ count: 1, bytes: art.length })
+})
+test('light package keeps a card picture that an embedded module names in its text (Codex R1b #2)', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'bard-transfer-light-text-'))
+    t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const shared = Buffer.from('card-and-module-text'), only = Buffer.from('card-only-picture')
+    const k = (b: Buffer) => `assets/${sha256(b)}.png`
+    const db = { characters: [{ chaId: 'card', name: '글 카드', image: k(shared), additionalAssets: [['카드만', k(only), 'png']],
+        personas: [{ id: 'p', name: 'p', embeddedModule: { id: 'em', name: 'em', lorebook: [{ key: 'a', content: `<img src="${k(shared)}">` }] } }],
+        chats: [{ id: 'chat', name: 'c', note: '', localLore: [], message: [{ role: 'char', data: 'x' }] }] }] }
+    const dataRoot = join(root, 'sender'); await mkdir(dataRoot)
+    const storage = createFileKv({ dataRoot }); for (const b of [shared, only]) storage.kvSet(k(b), b)
+    const service = createPlaySetService({ dataRoot, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(dataRoot), storage, readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+    const light = await service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat', light: true })
+    const names = await zipNames(await service.file(light.id))
+    expect(names).toContain(`blobs/${sha256(shared)}`); expect(names).not.toContain(`blobs/${sha256(only)}`)
 })

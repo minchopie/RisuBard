@@ -1171,9 +1171,9 @@
       "path": "server/node/play-set-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "26fbff876db018a05971f14223246556f75b0933de0a743d7c6a54fa8d996eda",
-      "contentSha256": "26fbff876db018a05971f14223246556f75b0933de0a743d7c6a54fa8d996eda",
-      "bytes": 58089
+      "sha256": "0ea60302676fabce6ec0a862f082cd383a28e2b1b523fd01c0ba4a773e256286",
+      "contentSha256": "0ea60302676fabce6ec0a862f082cd383a28e2b1b523fd01c0ba4a773e256286",
+      "bytes": 60500
     },
     {
       "path": "server/node/play-transfer-http.test.ts",
@@ -1339,17 +1339,17 @@
       "path": "server/node/transfer-sync/play-set-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "c4c85467e4806bbdadc526684ac2a4e770225d578105b618fedaa642718f7829",
-      "contentSha256": "c4c85467e4806bbdadc526684ac2a4e770225d578105b618fedaa642718f7829",
-      "bytes": 70786
+      "sha256": "d9510108ae642927272f670f257138ba5e0d19d85ccae3f4a0c6eb6b2e306ed6",
+      "contentSha256": "d9510108ae642927272f670f257138ba5e0d19d85ccae3f4a0c6eb6b2e306ed6",
+      "bytes": 71645
     },
     {
       "path": "server/node/transfer-sync/transfer-remote.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "233d8b18285c7038ea693314528f80f4b050c1748a792e6f60f5c6f2c2424f7c",
-      "contentSha256": "233d8b18285c7038ea693314528f80f4b050c1748a792e6f60f5c6f2c2424f7c",
-      "bytes": 27898
+      "sha256": "7ae5cd644de4242b18c645df731bda43aa5c6ece9a423df14dcefa2af3eb8feb",
+      "contentSha256": "7ae5cd644de4242b18c645df731bda43aa5c6ece9a423df14dcefa2af3eb8feb",
+      "bytes": 28191
     },
     {
       "path": "server/node/transfer-sync/transfer-secrets.cjs",
@@ -1531,9 +1531,9 @@
       "path": "src/lib/Setting/Pages/PlayTransferArrival.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "c08aa888afab1b6b25bf979bb06c451a2bd65c2886b4d59796eb5440412ac2f7",
-      "contentSha256": "c08aa888afab1b6b25bf979bb06c451a2bd65c2886b4d59796eb5440412ac2f7",
-      "bytes": 3787
+      "sha256": "77b84e7fb95d69633c2b1f3a05b6e7c7bea342f6855189a795da38472fc79a4b",
+      "contentSha256": "77b84e7fb95d69633c2b1f3a05b6e7c7bea342f6855189a795da38472fc79a4b",
+      "bytes": 4158
     },
     {
       "path": "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
@@ -1595,9 +1595,9 @@
       "path": "src/ts/playTransfer.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "6e38ee9cc39f41af7b48ed8a5c8e7fa3d962226895e7821369a5d59eff33139a",
-      "contentSha256": "6e38ee9cc39f41af7b48ed8a5c8e7fa3d962226895e7821369a5d59eff33139a",
-      "bytes": 27943
+      "sha256": "2ebf6324de9b03d25c7ba038f706b1571010b2d73a80ee58a0bc139f82c72a66",
+      "contentSha256": "2ebf6324de9b03d25c7ba038f706b1571010b2d73a80ee58a0bc139f82c72a66",
+      "bytes": 29975
     },
     {
       "path": "src/ts/playTransfer.ts",
@@ -1691,9 +1691,9 @@
       "path": "src/ts/transfer-sync/transferNative.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "ddee3c89ce6698eba98b4f7314d98761d5f7f55ae3b3c36112167379e4f3db0f",
-      "contentSha256": "ddee3c89ce6698eba98b4f7314d98761d5f7f55ae3b3c36112167379e4f3db0f",
-      "bytes": 7234
+      "sha256": "4552db68d7282c7ac90f905f55c8ba1c91575626e9643e9f7dbe1bffa9119846",
+      "contentSha256": "4552db68d7282c7ac90f905f55c8ba1c91575626e9643e9f7dbe1bffa9119846",
+      "bytes": 7572
     },
     {
       "path": "src/ts/transfer-sync/transferState.ts",
@@ -4699,9 +4699,9 @@
       "path": "patchnote/0.9.103-ver4.md",
       "module": "history-docs",
       "kind": "files",
-      "sha256": "64d2a6645b662f17a816be488061330d31d5c2fb3e60e9631b1e743e254f8008",
-      "contentSha256": "64d2a6645b662f17a816be488061330d31d5c2fb3e60e9631b1e743e254f8008",
-      "bytes": 6684
+      "sha256": "da775cfe16671cee83bebdf0a18e64426890c43765d2b4196787e0253b976d01",
+      "contentSha256": "da775cfe16671cee83bebdf0a18e64426890c43765d2b4196787e0253b976d01",
+      "bytes": 6868
     },
     {
       "path": "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",

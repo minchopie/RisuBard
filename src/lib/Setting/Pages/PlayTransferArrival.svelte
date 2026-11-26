@@ -5,6 +5,7 @@
     // a moving bar with the MB that arrived. Mounted once by startTransferInbox (no host change). Hidden while this device is sending or a
     // transfer of its own runs (the panel and the overlay show those). Display only.
     import { onDestroy } from 'svelte'
+    import { get } from 'svelte/store'
     import { transferArrivals, arrivalView, type TransferArrival } from 'src/ts/playTransfer'
     import { transferBusy } from 'src/ts/transferState'
     import { nativeSend, nativeLocalCopyUntil, playSetAvailable } from 'src/ts/transferNative'
@@ -16,8 +17,13 @@
         now = Date.now()
         if (polling || document.hidden || !playSetAvailable()) { if (!playSetAvailable()) arrivals = []; return }
         polling = true
-        const c = controller = new AbortController(), limit = setTimeout(() => c.abort(), 5000)
-        try { arrivals = await transferArrivals(c.signal) } catch { arrivals = [] }
+        const c = controller = new AbortController(), limit = setTimeout(() => c.abort(), 5000), started = Date.now()
+        try {
+            const value = await transferArrivals(c.signal)
+            // A reading that started during (or before the end of) this device's own hand-over copy may list that copy: dropped, only a
+            // reading started after the hidden window counts (Codex R2b #1).
+            arrivals = started < get(nativeLocalCopyUntil) ? [] : value
+        } catch { arrivals = [] }
         finally { clearTimeout(limit); controller = undefined; polling = false }
     }
     const timer = setInterval(tick, 1500)

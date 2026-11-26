@@ -100,7 +100,10 @@ function lightOmissions(manifest, records) {
     // Kept: pictures of chats, inlays, modules and personas, and any other card field than the card's own pictures (an embedded
     // module's picture, Codex R1 #2). Context alias tables point at every card picture and are not a reason to keep one.
     for (const item of manifest.items) if (item.kind !== 'context') for (const ref of item.references) if (item.kind !== 'character' || !CARD_PICTURE.test(ref.pointer)) keep.add(ref.target);
-    const chatText = manifest.items.filter(item => item.kind === 'chat').map(item => JSON.stringify(records.get(item.entry) ?? null)).join('\n');
+    // A picture named in any record's text (a chat, the card's own text, an embedded module's lore or script …) also travels (Codex
+    // R1b #2): structural fields hold item ids, so the content hash appears only where a text names the picture. Context alias tables
+    // name every picture and are left out.
+    const chatText = manifest.items.filter(item => item.kind !== 'context').map(item => JSON.stringify(records.get(item.entry) ?? null)).join('\n');
     const cardPictures = new Set(manifest.items.filter(item => item.kind === 'character').flatMap(item => item.references.filter(ref => CARD_PICTURE.test(ref.pointer)).map(ref => ref.target)));
     const assets = manifest.items.filter(item => item.kind === 'asset');
     const out = assets.filter(item => cardPictures.has(item.id) && !keep.has(item.id) && contentKey(item) && !chatText.includes(item.hash));
@@ -283,9 +286,12 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
     // is not compared; the panel says so.
     const packageInputs = (database, character) => hash(canonical({ character, globalChatVariables: database?.globalChatVariables ?? null }, true));
     // Codex R1 #3: a send package a NAS/GitHub upload or a download is reading right now (another lane) cannot be deleted meanwhile.
-    const busy = new Map();
+    const busy = new Map(), removing = new Set();
     const hold = key => {
-        id(key); busy.set(key, (busy.get(key) ?? 0) + 1);
+        id(key);
+        // Codex R1b #1: a package whose deletion has started is not handed to an upload or download.
+        if (removing.has(key)) throw new Error('이 묶음은 지우는 중이에요. 다시 준비해 주세요.');
+        busy.set(key, (busy.get(key) ?? 0) + 1);
         let released = false;
         return () => { if (released) return; released = true; const left = busy.get(key) - 1; if (left > 0) busy.set(key, left); else busy.delete(key); };
     };
@@ -325,13 +331,15 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         let record = null;
         try { record = await read(key); } catch (error) { if (error.code !== 'ENOENT') throw error; }
         if (record && (record.direction !== 'send' || record.transient)) throw new Error('보낸 묶음만 여기서 지울 수 있어요.');
-        if (busy.has(key)) throw new Error('이 묶음을 지금 올리거나 내려받는 중이에요. 끝난 뒤 지워 주세요.');
         if (!record) {
             const stat = await fs.stat(directory(key)).catch(() => null);
             if (!stat?.isDirectory()) return { removed: false };
             if (Date.now() - stat.mtimeMs < LEFTOVER_AGE) throw new Error('아직 만들고 있을 수 있는 묶음이에요. 잠시 뒤 다시 지워 주세요.');
         }
-        await fs.rm(directory(key), { recursive: true, force: true });
+        // the busy check and the reservation happen together (no await between): an upload cannot start on it from here on
+        if (busy.has(key)) throw new Error('이 묶음을 지금 올리거나 내려받는 중이에요. 끝난 뒤 지워 주세요.');
+        removing.add(key);
+        try { await fs.rm(directory(key), { recursive: true, force: true }); } finally { removing.delete(key); }
         return { removed: true };
     }
     /** `ids` (Codex R2 #1): only the packages the user's confirmation listed; a package made after that question stays. */
@@ -820,8 +828,11 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/:id/persona-map', async (req, res) => res.json(await exclusive(() => personaMap(req.params.id, req.body.map))));
         route('get', '/:id/inspect', async (req, res) => res.json(await inspect(req.params.id)));
         route('get', '/:id/file', async (req, res) => {
-            const path = await file(req.params.id), name = (await read(req.params.id)).name, release = hold(req.params.id);
-            res.on('close', release); res.download(path, name, error => { release(); if (error && !res.headersSent) res.status(404).end(); });
+            const release = hold(req.params.id);
+            try {
+                const path = await file(req.params.id), name = (await read(req.params.id)).name;
+                res.on('close', release); res.download(path, name, error => { release(); if (error && !res.headersSent) res.status(404).end(); });
+            } catch (error) { release(); throw error; }
         });
         route('post', '/:id/prepare', async (req, res) => res.json(await exclusive(() => prepare(req.params.id, req.body.targets))));
         route('post', '/:id/arm', async (req, res) => res.json(await exclusive(() => arm(req.params.id, req.body.transaction, req.body.added))));
