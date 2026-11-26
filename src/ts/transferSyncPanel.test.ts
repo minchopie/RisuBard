@@ -154,6 +154,13 @@ test('2026-11-27: 「채팅만 NAS에 업로드」 runs only the chats-only uplo
         expect(select.value).toBe('all')
         expect(target.textContent).toContain('동기화 범위를 바꾸지 못했어요')
         expect(target.textContent).toContain('진행 중인 동기화 적용이 끝난 뒤 설정해 주세요.')
+        // The switch itself succeeded but the refresh after it failed: the list and the message say it changed.
+        const status = await f.status()
+        f.scope.mockResolvedValueOnce({ ...status, syncScope: 'chats' }); f.status.mockRejectedValueOnce(new Error('상태 읽기 실패'))
+        select.value = 'chats'; select.dispatchEvent(new Event('change', { bubbles: true }))
+        await settle()
+        expect(select.value).toBe('chats')
+        expect(target.textContent).toContain('동기화 범위: 채팅만으로 바꿨어요.')
     } finally { await unmount(instance); target.remove(); f.profile.mockClear() }
     const status = await f.status()
     f.status.mockResolvedValue({ ...status, syncScope: 'chats' } as typeof status)

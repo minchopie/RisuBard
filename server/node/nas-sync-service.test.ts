@@ -2870,16 +2870,53 @@ test('chats-only upload once (16): an all-scope device whose module picture is m
     expect(lastCommitRoots(tablet)).toEqual(expect.arrayContaining(['library/character/card', 'library/module/life', 'settings/group/provider-main', 'settings/group/pluginCustomStorage', 'library/module/mod (deleted)']))
     expect(lastCommitRoots(tablet)).not.toContain('play/chat/chat')
 })
-test('chats-only upload once (17): on a device already in chats scope it is the ordinary chats-only snapshot (joins the same flight); on an all-scope device it never deletes a card removed here', async t => {
+test('chats-only upload once (17): on a device already in chats scope it records like the ordinary chats-only snapshot (its own flight, serialized in the lane); on an all-scope device it never deletes a card removed here', async t => {
     const dav = fixtureDav(), tablet = await seedTablet(t, dav)
     const gone = tablet.db(); gone.characters = []; tablet.save(gone)
     expect((await tablet.service.snapshot({ chatsOnly: true })).committed).toBeNull() // the card and its chat vanished here: nothing deleted
     expect(tombstoneCount(tablet)).toBe(0)
     await tablet.service.setSyncScope({ scope: 'chats' })
     const back = baseDb(); tablet.save(back)
+    const edited = tablet.db(); edited.characters[0].chats[0].message.push({ role: 'user', data: '채팅만 범위의 새 턴' }); tablet.save(edited)
     const a = tablet.service.snapshot({ chatsOnly: true }), b = tablet.service.snapshot()
-    expect(await a).toEqual(await b) // same flight in chats scope
-    expect((await a).chatsOnly).toBeUndefined()
+    expect(await a).toMatchObject({ chatsOnly: true, committed: { revisions: 1, tombstones: 0 } })
+    expect((await b).committed).toBeNull() // the lane ran them one after the other; nothing was left for the second
+    expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat'])
+})
+test('chats-only upload once (19, Codex R1 #1): a restored backup is completed only by a full upload — the one-time chats-only upload refuses and leaves the restore mark and lineage as they were', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const lineage = structuredClone(tablet.service.state().lineage)
+    tablet.service.markRestore({ source: 'backup-import', restoreId: 'once-restore', lineage })
+    const db = tablet.db(); db.characters[0].chats[0].message.push({ role: 'user', data: '복원 뒤 턴' }); tablet.save(db)
+    await expect(tablet.service.snapshot({ chatsOnly: true })).rejects.toMatchObject({ code: 'NAS_SYNC_RESTORE_FIRST' })
+    expect(tablet.service.status().pendingRestore).toBeTruthy()
+    expect(tablet.service.state().lineage).toEqual(lineage)
+    expect((await tablet.service.snapshot()).provenance).toBe('restored-backup') // the full upload still completes the restore
+    expect(tablet.service.status().pendingRestore).toBeNull()
+})
+test('chats-only upload once (20, Codex R1 #2): a scope change queued before it in the lane does not turn the request into a full snapshot', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    const db = tablet.db(); db.characters[0].description = 'card edited'; db.aiModel = 'other-model'; db.characters[0].chats[0].message.push({ role: 'user', data: '새 턴' }); tablet.save(db)
+    const change = tablet.service.setSyncScope({ scope: 'all' }), once = tablet.service.snapshot({ chatsOnly: true })
+    await change; const result = await once
+    expect(tablet.service.status().syncScope).toBe('all')
+    expect(result).toMatchObject({ chatsOnly: true, committed: { revisions: 1, tombstones: 0 } })
+    expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat'])
+})
+test('chats-only upload once (21, Codex R1 #3): when a chat picture is missing too, the picture report of the full check keeps its module picture and gains the chat one', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const moduleIcon = 'assets/' + 'e'.repeat(64) + '.png', inlay = '12345678-abcd-4321-8abc-9876543210ad'
+    const db = tablet.db(); db.modules.push({ id: 'life', name: '라이프 모듈', lorebook: [], assets: [['icon', moduleIcon, 'png']] }); tablet.save(db)
+    await expect(tablet.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING' })
+    expect(tablet.service.status().missingMedia).toMatchObject({ count: 1, files: [{ path: moduleIcon }] })
+    const chat = tablet.db(); chat.characters[0].chats[0].message.push({ role: 'char', data: '{{inlay::' + inlay + '}}' }); tablet.save(chat)
+    await expect(tablet.service.snapshot({ chatsOnly: true })).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
+    expect(tablet.service.status().missingMedia).toMatchObject({ count: 2, files: [{ path: moduleIcon }, { path: 'inlay/' + inlay }] })
+    // A full check rewrites the report as it finds it.
+    tablet.inlays.set(inlay, { data: Buffer.from('chat inlay'), metadata: {} })
+    await expect(tablet.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING' })
+    expect(tablet.service.status().missingMedia).toMatchObject({ count: 1, files: [{ path: moduleIcon }] })
 })
 test('chats-only upload once (18, the 11-26 PC case): a device that stopped uploading its settings (stale plugin storage on the NAS) and now uploads chats only never replaces a newer plugin storage elsewhere by any automatic cycle — the two values wait as a difference to choose', async t => {
     const dav = fixtureDav(), tablet = await seedTablet(t, dav)

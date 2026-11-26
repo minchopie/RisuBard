@@ -161,7 +161,9 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         checkedMissingMedia = null;
         return { cleared: true };
     }
-    function missingMediaError(missing, missingMedia) {
+    /** keepUnchecked (2026-11-27, one-time chats-only snapshot): that check did not look at card/module pictures, so the paths of the
+     *  current report are kept and this check's paths are added to it. */
+    function missingMediaError(missing, missingMedia, { keepUnchecked = false } = {}) {
         checkedMissingMedia = null;
         const count = new Set(missing).size;
         // shortcut: record up to 200 valid paths, expand if the panel needs larger reports.
@@ -176,7 +178,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             } catch { /* Diagnostic I/O must not change the snapshot error. */ }
         }
         try {
-            writeMissingMedia({ id: randomUUID(), count, files: visible.map(path => ({ path })) });
+            const previous = keepUnchecked ? readMissingMedia() : null;
+            if (previous) {
+                const listed = new Set(previous.files.map(f => f.path)), added = [...new Set(missing)].filter(path => !listed.has(path));
+                writeMissingMedia({ id: randomUUID(), count: previous.count + added.length, files: [...previous.files.map(f => f.path), ...visible.filter(path => !listed.has(path))].slice(0, 200).map(path => ({ path })) });
+            } else writeMissingMedia({ id: randomUUID(), count, files: visible.map(path => ({ path })) });
         } catch { /* Diagnostic I/O must not change the snapshot error. */ }
         return Object.assign(new Error('빠진 그림 파일이 있어요. NAS 동기화 화면에서 확인해 주세요.'), { code: 'SNAPSHOT_MISSING', detail: { missingFiles: count, logged } });
     }
@@ -933,9 +939,13 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             // reapplying: back in 'all' while skipped card/module/settings heads still wait to be applied here. Chats received meanwhile carry the
             // pins of those newer heads; a chat that differs only in pins is not published again against the older local items (it would hold
             // the chat on 'all' devices until this device caught up). A chat with any other change is published with this device's pins.
-            const scoped = chatsOnly() || chatsOnlyOnce === true, reapplying = (service().scopeReapply ?? []).length > 0;
+            const scoped = chatsOnly() || chatsOnlyOnce === true, reapplying = (service().scopeReapply ?? []).length > 0, partial = chatsOnlyOnce === true && !chatsOnly();
+            // 2026-11-27: a restored backup (pending restore mark, or a store rotated for a missing protected sidecar) is completed only by a full
+            // snapshot; a one-time chats-only one would consume it and leave the other items to an ordinary snapshot (wrong deletions/overwrites).
+            if (partial && (!!service().pendingRestore || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''))))
+                throw Object.assign(new Error('복원한 백업은 「NAS에 업로드」(전체)로 먼저 올려야 해요. 그 전에는 「채팅만 NAS에 업로드」를 쓸 수 없어요.'), { code: 'NAS_SYNC_RESTORE_FIRST' });
             const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: readSnapshotInlay, inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value, chatsOnly: scoped });
-            if (projection.missing.length) throw missingMediaError(projection.missing, projection.missingMedia);
+            if (projection.missing.length) throw missingMediaError(projection.missing, projection.missingMedia, { keepUnchecked: partial });
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
             const restored = !!restoreMark || (service().incarnation !== null && service().incarnation !== s.identity().incarnationId && /sidecar/.test(s.state().rotations.at(-1)?.reason ?? ''));
             // A restored state continues the bases recorded with it (or starts genesis roots), never this install's newest heads: a copied
@@ -1591,9 +1601,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     // 2026-11-07 adoption: this device's values are being replaced; checked inside the lane so a queued snapshot sees a just-started adoption.
     // 2026-11-27: a one-time chats-only snapshot (「채팅만 NAS에 업로드」) runs in its own flight (never joins or is joined by a full one) and
     // reports no checked missing-media id: it did not look at the card/module pictures, so a picture report of a full snapshot stays.
+    // The request's intent is kept as asked (a scope change queued before it in the lane does not turn it into a full snapshot).
     const takeSnapshot = async ({ chatsOnly: once = false } = {}) => {
         requireEnabled();
-        const options = { chatsOnly: once === true && !chatsOnly() };
+        const options = { chatsOnly: once === true };
         return singleFlight(options.chatsOnly ? 'snapshotChats' : 'snapshot', () => exclusive(async () => {
             if (service().role === 'joining' && service().adopting) return { committed: null, adopting: true };
             const result = await (ownsDataRoot ? storage.kvWithNasAssetVerification(() => snapshot(options)) : snapshot(options));

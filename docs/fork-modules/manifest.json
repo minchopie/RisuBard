@@ -1051,9 +1051,9 @@
       "path": "server/node/nas-sync-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "6e8adbcfb760f57ff27e2c82a68795351cc888c73838fd24213090b3fd4875ae",
-      "contentSha256": "6e8adbcfb760f57ff27e2c82a68795351cc888c73838fd24213090b3fd4875ae",
-      "bytes": 271157
+      "sha256": "2b0988b8e310464581cbb3aad76bb763c989303821cd1309d5a4dc6d2766e774",
+      "contentSha256": "2b0988b8e310464581cbb3aad76bb763c989303821cd1309d5a4dc6d2766e774",
+      "bytes": 274875
     },
     {
       "path": "server/node/nas-sync-share.cjs",
@@ -1275,9 +1275,9 @@
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "c217b6c4aee0c23011daca7d62ddfe5be511110e3285b31f94226faeed1cb25a",
-      "contentSha256": "c217b6c4aee0c23011daca7d62ddfe5be511110e3285b31f94226faeed1cb25a",
-      "bytes": 170523
+      "sha256": "8a11b157c33eba06adc9147c9e560e4a410ea42ae6c41d358ec7e29810feb575",
+      "contentSha256": "8a11b157c33eba06adc9147c9e560e4a410ea42ae6c41d358ec7e29810feb575",
+      "bytes": 172177
     },
     {
       "path": "server/node/transfer-sync/nas-sync-share.cjs",
@@ -1507,9 +1507,9 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "f80a092e64e226bd64cd6aad0b5a033a3ef2d516cea17795cf4c16d17d8b9910",
-      "contentSha256": "f80a092e64e226bd64cd6aad0b5a033a3ef2d516cea17795cf4c16d17d8b9910",
-      "bytes": 57571
+      "sha256": "1be0f42736766fbe739a525b657a843b790c787db75155d2ea9037203f8f6e96",
+      "contentSha256": "1be0f42736766fbe739a525b657a843b790c787db75155d2ea9037203f8f6e96",
+      "bytes": 57570
     },
     {
       "path": "src/lib/Setting/Pages/NasSyncProgress.svelte",
@@ -1755,9 +1755,9 @@
       "path": "src/ts/transferSyncPanel.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "3752d81f26827bbb1bd615e2ef1f396c55bd59dcc7305ba029ad4959999ff66f",
-      "contentSha256": "3752d81f26827bbb1bd615e2ef1f396c55bd59dcc7305ba029ad4959999ff66f",
-      "bytes": 15727
+      "sha256": "444e8399e069246a7f00c91f73e14b72000f64fa5f81123189c00b0345374f24",
+      "contentSha256": "444e8399e069246a7f00c91f73e14b72000f64fa5f81123189c00b0345374f24",
+      "bytes": 16282
     },
     {
       "path": "src/ts/transferSyncShims.test.ts",
