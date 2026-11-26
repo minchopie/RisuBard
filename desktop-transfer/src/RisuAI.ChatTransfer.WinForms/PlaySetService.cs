@@ -104,7 +104,7 @@ internal sealed class PlaySetService : IPlaySetTransportHost, IDisposable
     public async Task<string> ReceiveAsync(string device, string transfer, Stream data, long length, string hash, CancellationToken token)
     {
         using var digest = new DigestStream(data);
-        var handle = await archive.ReceiveAsync(digest, token).ConfigureAwait(false);
+        var handle = await archive.ReceiveAsync(digest, token, length).ConfigureAwait(false); // 0.9.103-ver4: arrival progress note
         try {
             if (digest.Bytes != length || digest.Finish() != hash) throw new InvalidDataException("Received file hash mismatch");
             lock (metadata) {

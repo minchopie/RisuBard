@@ -24,7 +24,52 @@ internal static partial class Program
         ("wrong PIN then encrypted round trip", TestRoundTripAsync),
         ("production receiver and collision-safe save", TestProductionReceiverAsync),
         ("cancel and expiry", TestCancelAndExpiryAsync),
+        ("play-set arrival note while receiving", TestArrivalNoteAsync),
     ];
+
+    // 0.9.103-ver4: while a play set arrives, `<handle>.part.json` carries the announced size next to the part; it goes away with the part.
+    private static async Task TestArrivalNoteAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "risu-arrival-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var archive = new PlaySetArchive(root);
+            var zip = new MemoryStream();
+            using (var z = new System.IO.Compression.ZipArchive(zip, System.IO.Compression.ZipArchiveMode.Create, true))
+            using (var w = new StreamWriter(z.CreateEntry("manifest.json").Open())) w.Write("{}");
+            var bytes = zip.ToArray();
+            string? seen = null;
+            var gate = new SlowStream(bytes, () => {
+                var note = Directory.GetFiles(root, "*.part.json").SingleOrDefault();
+                if (note is not null && Directory.GetFiles(root, "*.part").Length == 1) seen = File.ReadAllText(note);
+            });
+            var handle = await archive.ReceiveAsync(gate, default, bytes.Length).ConfigureAwait(false);
+            Equal("{\"direction\":\"receive\",\"total\":" + bytes.Length + "}", seen ?? "", "arrival note during receive");
+            Equal(0, Directory.GetFiles(root, "*.part.json").Length, "note removed after receive");
+            True(File.Exists(archive.FilePath(handle)), "archive kept");
+            // without an announced size (file open, export hand-over) no note is written
+            seen = null;
+            await archive.ReceiveAsync(new SlowStream(bytes, () => { if (Directory.GetFiles(root, "*.part.json").Length > 0) seen = "note"; })).ConfigureAwait(false);
+            True(seen is null, "no note without a size");
+            // an abandoned note is removed with abandoned parts on start
+            var stale = Guid.NewGuid().ToString();
+            File.WriteAllText(Path.Combine(root, stale + ".part"), "x"); File.WriteAllText(Path.Combine(root, stale + ".part.json"), "{}");
+            _ = new PlaySetArchive(root);
+            Equal(0, Directory.GetFiles(root, "*.part*").Length, "stale part and note removed");
+        }
+        finally { try { Directory.Delete(root, true); } catch (IOException) { } }
+    }
+    private sealed class SlowStream(byte[] data, Action onRead) : Stream
+    {
+        private int position;
+        public override bool CanRead => true; public override bool CanSeek => false; public override bool CanWrite => false;
+        public override long Length => data.Length; public override long Position { get => position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) { onRead(); var n = Math.Min(Math.Min(count, 16), data.Length - position); Array.Copy(data, position, buffer, offset, n); position += n; return n; }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     private static async Task<int> Main(string[] args)
     {

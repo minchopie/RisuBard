@@ -42,6 +42,11 @@ public sealed class PlaySetArchive : IDisposable
             var name = Path.GetFileNameWithoutExtension(part);
             if (Guid.TryParseExact(name, "D", out _) && name == name.ToLowerInvariant()) File.Delete(part);
         }
+        // 0.9.103-ver4: the arrival note of an abandoned receive goes with its part.
+        foreach (var note in Directory.EnumerateFiles(root, "*.part.json")) {
+            var name = Path.GetFileName(note)[..^".part.json".Length];
+            if (Guid.TryParseExact(name, "D", out _) && name == name.ToLowerInvariant()) File.Delete(note);
+        }
     }
     public long AvailableBytes => new DriveInfo(Path.GetPathRoot(root)!).AvailableFreeSpace;
     private static void Handle(string id) { if (!Guid.TryParseExact(id, "D", out _) || id != id.ToLowerInvariant()) throw new ArgumentException("Invalid handle"); }
@@ -71,10 +76,14 @@ public sealed class PlaySetArchive : IDisposable
         w.Zip.Dispose(); w.File.Flush(true); w.File.Dispose(); writers.Remove(id);
         File.Move(Partial(id), FilePath(id)); return id;
     }
-    public async Task<string> ReceiveAsync(Stream source, CancellationToken cancellationToken = default) {
+    /// <param name="arrivalTotal">0.9.103-ver4: when above 0, the size the sender announced. While receiving, `&lt;handle&gt;.part.json`
+    /// ({"direction":"receive","total":N}) next to the part lets the app show the arrival progress with a percentage. Display only.</param>
+    public async Task<string> ReceiveAsync(Stream source, CancellationToken cancellationToken = default, long arrivalTotal = 0) {
         var id = Guid.NewGuid().ToString();
         var budget = AvailableBytes / 2; long received = 0;
+        var note = Partial(id) + ".json";
         try {
+        if (arrivalTotal > 0) File.WriteAllText(note, "{\"direction\":\"receive\",\"total\":" + arrivalTotal.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}");
         await using (var output = new FileStream(Partial(id), FileMode.CreateNew, FileAccess.Write, FileShare.None, ChunkSize, true)) {
             var buffer = new byte[ChunkSize]; int n;
             while ((n = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0) {
@@ -86,6 +95,7 @@ public sealed class PlaySetArchive : IDisposable
         }
         Inspect(Partial(id)); File.Move(Partial(id), FilePath(id)); return id;
         } catch { File.Delete(Partial(id)); throw; }
+        finally { try { File.Delete(note); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
     }
     public IReadOnlyList<(string Name, long Bytes)> Entries(string id) {
         return Inspect(FilePath(id));

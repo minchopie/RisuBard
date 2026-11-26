@@ -475,3 +475,154 @@ test('Asset Maid pictures are found through the single shared context of a legac
     records.set('records/chat', { localLore: [{ comment: 'other', content: lore.content }] })
     expect(assetMaidPictures(manifest, records).size).toBe(0)
 })
+
+// 0.9.103-ver4 extras (user 2026-11-26): send package list/delete, same-selection check, light packages and content-addressed reuse,
+// native arrivals.
+const lightCard = async (root: string) => {
+    const card = Buffer.from('card-art-bytes'), maid = Buffer.from('asset-maid-chat-picture'), emotion = Buffer.from('emotion-picture')
+    const cardKey = `assets/${sha256(card)}.png`, maidKey = `assets/${sha256(maid)}.png`, emotionKey = `assets/${sha256(emotion)}.webp`
+    const chat = { id: 'chat', name: '가벼운 대화', note: '', localLore: [assetMaidLore([{ name: 'pc.__am__.chat.9', path: maidKey }])], message: [{ role: 'char', chatId: 'm0', data: '<img src="{{raw::pc.__am__.chat.9}}">' }] }
+    const db = { characters: [{ chaId: 'card', name: '같은 카드', image: cardKey, emotionImages: [['웃음', emotionKey]], additionalAssets: [['pc.__am__.chat.9', maidKey, 'png'], ['old', 'assets/legacy-name.png', 'png']], chats: [chat] }] }
+    const dataRoot = join(root, 'sender'); await mkdir(dataRoot, { recursive: true })
+    const storage = createFileKv({ dataRoot })
+    for (const [key, value] of [[cardKey, card], [maidKey, maid], [emotionKey, emotion], ['assets/legacy-name.png', Buffer.from('legacy')]] as [string, Buffer][]) storage.kvSet(key, value)
+    const service = createPlaySetService({ dataRoot, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(dataRoot), storage, readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+    return { service, db, card, maid, emotion, cardKey, maidKey, emotionKey }
+}
+const receiverOf = async (root: string, name: string, db: any, seed: [string, Buffer][]) => {
+    const dataRoot = join(root, name); await mkdir(dataRoot, { recursive: true })
+    const storage = createFileKv({ dataRoot }); for (const [key, value] of seed) storage.kvSet(key, value)
+    return { storage, dataRoot, service: createPlaySetService({ dataRoot, readDatabase: async () => structuredClone(db), memory: createRuntimeMemoryService(dataRoot), storage, readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} }) }
+}
+const zipNames = async (file: string) => {
+    const yauzl = require('yauzl'), zip = await yauzl.openPromise(file, { lazyEntries: true }), names: string[] = []
+    for await (const entry of zip.eachEntry()) names.push(entry.fileName)
+    zip.close(); return names
+}
+test('light package: leaves out only the card\'s own content-addressed pictures; a receiver holding their bytes imports without copying them, one without them stops before any change', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'bard-transfer-light-'))
+    t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const s = await lightCard(root)
+    const full = await s.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat' })
+    const light = await s.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat', light: true })
+    expect(full.light).toBeUndefined()
+    expect(light.light).toEqual({ count: 2, bytes: s.card.length + s.emotion.length })
+    const names = await zipNames(await s.service.file(light.id))
+    expect(names).not.toContain(`blobs/${sha256(s.card)}`); expect(names).not.toContain(`blobs/${sha256(s.emotion)}`)
+    expect(names).toContain(`blobs/${sha256(s.maid)}`) // the Asset Maid chat picture always travels
+    expect(names).toContain(`blobs/${sha256(Buffer.from('legacy'))}`) // not content-addressed: travels
+    expect((await zipNames(await s.service.file(full.id)))).toContain(`blobs/${sha256(s.card)}`)
+    // the manifest names what was left out (an older receiver finds the archive incomplete and stops)
+    const opened = await openPlaySetArchive(await s.service.file(light.id), root)
+    try { expect(opened.manifest.omittedAssets).toEqual([`blobs/${sha256(s.card)}`, `blobs/${sha256(s.emotion)}`].sort()); expect([...opened.omitted].sort()).toEqual(opened.manifest.omittedAssets) }
+    finally { await opened.close() }
+    // compatibility files are never light
+    expect((await s.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat', light: true, compatibility: true })).light).toBeUndefined()
+    // receiver with the same card pictures (content keys): imports; nothing is copied or stored for them
+    const tabletDb = { characters: [{ chaId: 'tablet-card', name: '같은 카드', image: s.cardKey, additionalAssets: [], chats: [{ id: 'keep', message: [] }] }] }
+    const tablet = await receiverOf(root, 'tablet', tabletDb, [[s.cardKey, s.card], [s.emotionKey, s.emotion]])
+    const entry = await tablet.service.ingest(createReadStream(await s.service.file(light.id)))
+    const plan = await tablet.service.prepare(entry.id)
+    expect(plan.added).toHaveLength(1)
+    const staged = JSON.parse(await readFile(join(tablet.dataRoot, 'play-transfer', entry.id, 'state.json'), 'utf8')).plan
+    expect(staged.assetKeys.map((a: any) => a.key)).not.toContain(s.cardKey); expect(staged.assetKeys.map((a: any) => a.key)).not.toContain(s.emotionKey)
+    expect(staged.assetKeys.find((a: any) => a.key === s.maidKey)).toMatchObject({ shared: sha256(s.maid) })
+    await tablet.service.arm(entry.id, plan.transaction, plan.added)
+    tabletDb.characters[0].chats.push(plan.added[0].chat); (tabletDb as any).risuPlaySets = plan.registry
+    expect((await tablet.service.finish(entry.id, true)).state).toBe('applied')
+    expect(Buffer.from(tablet.storage.kvGet(s.cardKey)).equals(s.card)).toBe(true)
+    // receiver without one of them: stops before preparing anything, says why, and keeps the file for a later try
+    const phoneDb = { characters: [{ chaId: 'phone-card', name: '같은 카드', additionalAssets: [], chats: [{ id: 'keep', message: [] }] }] }
+    const phone = await receiverOf(root, 'phone', phoneDb, [[s.cardKey, s.card], [s.emotionKey, Buffer.from('other bytes')]])
+    const phoneEntry = await phone.service.ingest(createReadStream(await s.service.file(light.id)))
+    const before = structuredClone(phoneDb)
+    await expect(phone.service.prepare(phoneEntry.id)).rejects.toThrow(/가벼운 묶음.*1개/)
+    const failed = (await phone.service.list()).find((r: any) => r.id === phoneEntry.id)
+    expect(failed).toMatchObject({ state: 'failed' }); expect(failed.plan).toBeUndefined(); expect(await phone.service.pending()).toEqual([])
+    expect(phoneDb).toEqual(before); expect(Buffer.from(phone.storage.kvGet(s.emotionKey)).toString()).toBe('other bytes')
+    expect(phone.storage.kvGetUpdatedAt(s.maidKey)).toBeNull()
+    // once the picture is there, the same file imports
+    const fixedPhone = await receiverOf(root, 'phone2', phoneDb, [[s.cardKey, s.card], [s.emotionKey, s.emotion]])
+    const again = await fixedPhone.service.ingest(createReadStream(await s.service.file(light.id)))
+    expect((await fixedPhone.service.prepare(again.id)).added).toHaveLength(1)
+})
+test('full package into a device that already holds a card picture with the same bytes: not copied or stored again; other keys never replaced', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'bard-transfer-dedupe-'))
+    t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const s = await lightCard(root)
+    const full = await s.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat' })
+    const db = { characters: [{ chaId: 'r-card', name: '같은 카드', additionalAssets: [], chats: [{ id: 'keep', message: [] }] }] }
+    const r = await receiverOf(root, 'r', db, [[s.cardKey, s.card], [s.emotionKey, Buffer.from('edited on this device')]])
+    const entry = await r.service.ingest(createReadStream(await s.service.file(full.id)))
+    const plan = await r.service.prepare(entry.id)
+    const keys = JSON.parse(await readFile(join(r.dataRoot, 'play-transfer', entry.id, 'state.json'), 'utf8')).plan.assetKeys
+    expect(keys.map((a: any) => a.key)).not.toContain(s.cardKey) // same bytes already here
+    expect(keys.map((a: any) => a.key)).not.toContain(s.emotionKey) // other bytes under that key: a new key instead
+    expect(keys.filter((a: any) => /^assets\/[0-9a-f-]{36}\.webp$/.test(a.key))).toHaveLength(1)
+    expect(keys.find((a: any) => a.key === 'assets/legacy-name.png')).toBeUndefined()
+    await r.service.arm(entry.id, plan.transaction, plan.added)
+    expect(Buffer.from(r.storage.kvGet(s.emotionKey)).toString()).toBe('edited on this device')
+    expect(plan.added[0].chat.risuTransferMedia.assets[s.cardKey]).toBe(s.cardKey)
+})
+test('send packages: listed with size and notes, the same selection is offered again, deleting touches only send packages and asks for confirmation over HTTP', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'bard-transfer-sent-'))
+    t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const s = await lightCard(root)
+    expect(await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'] })).toEqual({ duplicate: null })
+    const first = await s.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat' })
+    const check = await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'] })
+    expect(check.duplicate).toMatchObject({ id: first.id, same: true, characterId: 'card', chatCount: 1 })
+    expect((await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'], light: true })).duplicate).toBeNull() // another option = another package
+    s.db.characters[0].chats[0].message.push({ role: 'user', chatId: 'm1', data: '새 줄' } as any)
+    expect((await s.service.exportCheck({ characterId: 'card', chatIds: ['chat'] })).duplicate).toMatchObject({ id: first.id, same: false })
+    await s.service.noteSent(first.id, { method: 'wifi', target: 'Galaxy Tab', state: 'sending', transfer: 't1' })
+    await s.service.noteSent(first.id, { method: 'wifi', target: 'Galaxy Tab', state: 'applied', transfer: 't1' })
+    await expect(s.service.noteSent(first.id, { method: 'mail', state: 'applied' })).rejects.toThrow()
+    // a received file and a leftover folder younger than 10 minutes are never listed or deleted here
+    const received = await s.service.ingest(createReadStream(await s.service.file(first.id)))
+    const young = join(root, 'sender/play-transfer', '11111111-1111-4111-8111-111111111111'); await mkdir(young)
+    const old = join(root, 'sender/play-transfer', '22222222-2222-4222-8222-222222222222'); await mkdir(old); await promiseFiles.writeFile(join(old, 'export-work.bin'), Buffer.alloc(10))
+    const ago = new Date(Date.now() - 11 * 60 * 1000); await promiseFiles.utimes(old, ago, ago)
+    const listed = await s.service.sentPackages()
+    expect(listed.map((i: any) => i.id).sort()).toEqual([first.id, '22222222-2222-4222-8222-222222222222'].sort())
+    expect(listed.find((i: any) => i.id === first.id)).toMatchObject({ hasFile: true, sentVia: [{ method: 'wifi', target: 'Galaxy Tab', state: 'applied', transfer: 't1' }] })
+    expect(listed.find((i: any) => i.id === first.id).diskBytes).toBeGreaterThanOrEqual(first.bytes)
+    expect(listed.find((i: any) => i.leftover)).toMatchObject({ diskBytes: 10 })
+    await expect(s.service.removeSent(received.id)).rejects.toThrow(/보낸 묶음만/)
+    await expect(s.service.removeSent('11111111-1111-4111-8111-111111111111')).rejects.toThrow(/아직 만들고/)
+    // over HTTP both deletions need the confirmation flag
+    const routes = new Map<string, Function>()
+    const app = { get: (path: string, h: Function) => routes.set('get ' + path, h), post: (path: string, h: Function) => routes.set('post ' + path, h) }
+    s.service.registerRoutes(app, { auth: async () => true, activeSession: () => true })
+    const call = async (key: string, params: any, body: any) => { let status = 200, payload: any; await routes.get(key)!({ params, body, headers: {} }, { headersSent: false, status(code: number) { status = code; return this }, json(value: any) { payload = value } }); return { status, payload } }
+    expect((await call('post /api/play-transfer/:id/remove-sent', { id: first.id }, {})).status).toBe(400)
+    expect((await call('post /api/play-transfer/sent/clear', {}, {})).status).toBe(400)
+    expect(existsSyncFiles(await s.service.file(first.id))).toBe(true)
+    expect((await call('post /api/play-transfer/:id/remove-sent', { id: first.id }, { confirmed: true })).payload).toEqual({ removed: true })
+    expect((await call('post /api/play-transfer/sent/clear', {}, { confirmed: true })).payload).toMatchObject({ removed: 1 })
+    expect((await s.service.sentPackages())).toEqual([])
+    expect((await s.service.list()).find((r: any) => r.id === received.id)).toMatchObject({ direction: 'receive', state: 'waiting' })
+    expect(syncFiles.existsSync(young)).toBe(true)
+})
+const existsSyncFiles = (path: string) => syncFiles.existsSync(path)
+test('arrivals: a native part file being received is reported with its size (and total when the transferer notes it); other parts are not', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'bard-transfer-arrivals-'))
+    t.onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const archives = join(root, 'native/archives'); await mkdir(archives, { recursive: true })
+    const dataRoot = join(root, 'data'); await mkdir(dataRoot)
+    const service = createPlaySetService({ dataRoot, readDatabase: async () => ({ characters: [] }), memory: createRuntimeMemoryService(dataRoot), storage: createFileKv({ dataRoot }), readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {}, nativeInbox: { state: join(root, 'native/inbox.json'), archives } })
+    expect(await service.arrivals()).toEqual([])
+    const a = '33333333-3333-4333-8333-333333333333', b = '44444444-4444-4444-8444-444444444444', c = '55555555-5555-4555-8555-555555555555'
+    await promiseFiles.writeFile(join(archives, a + '.part'), Buffer.alloc(1000))
+    await promiseFiles.writeFile(join(archives, b + '.part'), Buffer.alloc(500)); await promiseFiles.writeFile(join(archives, b + '.part.json'), JSON.stringify({ direction: 'receive', total: 2000 }))
+    await promiseFiles.writeFile(join(archives, c + '.part'), Buffer.alloc(10)); await promiseFiles.writeFile(join(archives, c + '.part.json'), JSON.stringify({ direction: 'send', total: 10 }))
+    await promiseFiles.writeFile(join(archives, 'done.risuplay'), 'x')
+    const first = await service.arrivals()
+    expect(first.map((x: any) => [x.id, x.bytes, x.bytesTotal]).sort()).toEqual([[a, 1000, null], [b, 500, 2000]])
+    // a part that stopped growing for 30 s is not shown anymore
+    const now = Date.now(), clock = vi.spyOn(Date, 'now').mockReturnValue(now + 31_000)
+    try { expect(await service.arrivals()).toEqual([]) } finally { clock.mockRestore() }
+    // no native transferer on this platform: nothing
+    const none = createPlaySetService({ dataRoot, readDatabase: async () => ({ characters: [] }), memory: createRuntimeMemoryService(dataRoot), storage: createFileKv({ dataRoot }), readInlay: async () => null, installInlay: async () => {}, removeInlay: async () => {} })
+    expect(await none.arrivals()).toEqual([])
+})

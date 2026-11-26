@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte'
+    import { onMount, untrack } from 'svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import ContentUpdatesPanel from './ContentUpdatesPanel.svelte'
     import { DBState, selectedCharID } from 'src/ts/stores.svelte'
@@ -7,7 +7,8 @@
     import { downloadFile } from 'src/ts/globalApi.svelte'
     import { alertConfirm } from 'src/ts/alert'
     import { playSetAvailable, androidTransferAvailable, playNative, sendNative, nativeSend } from 'src/ts/transferNative'
-    import { transferBusy, transferStatus, transferQueue, refreshTransfers, queueTransferFile, exportTransfer, exportPersonaTransfer, receiveTransfer, cancelTransfer, requestRemoteTransfer, uploadLegacyChat } from 'src/ts/playTransfer'
+    import { transferBusy, transferStatus, transferQueue, refreshTransfers, queueTransferFile, exportPersonaTransfer, receiveTransfer, cancelTransfer, requestRemoteTransfer, uploadLegacyChat } from 'src/ts/playTransfer'
+    import { exportTransferChecked, sentPackages, removeSentPackage, clearSentPackages, noteSent, sentSummary, suggestLight, type SentPackage } from 'src/ts/playTransfer'
     import { isNodeServer } from 'src/ts/platform'
     import { syncStatus, syncOverview, enableSync, disableSync, setCardOnlyUpload, setSyncScope, shareRequestSync, acceptSharedKey, discardShareSync, syncConflicts, resolveSyncConflict, resolveAllSync, startAdoptionSync, endAdoptionSync, syncTrash, restoreSyncTrash, restoreOpenDeletion, acceptOpenDeletion, bootstrapSync , syncNetwork, reportSyncNetwork, registerHomeNetwork, forgetHomeNetwork, reportSyncProfile } from 'src/ts/nasSync'
     import { syncCoordinator, coordinatorState } from 'src/ts/nasSyncCoordinator'
@@ -20,6 +21,14 @@
     let selected = $state<string[]>([])
     let selectedPersonas = $state<string[]>([])
     let compatibility = $state(false)
+    // 0.9.103-ver4 (「카드 그림 중복 전송 줄이기」): leave the card's own pictures out; starts on for a character another device confirmed importing.
+    let light = $state(false)
+    // 0.9.103-ver4 (「보낸 묶음 목록·지우기」): this device's send packages, read when the list is opened.
+    let sent = $state<SentPackage[]>([])
+    let sentOpen = $state(false)
+    const sentTotal = $derived(sent.reduce((total, item) => total + item.diskBytes, 0))
+    const megabytes = (bytes: number) => `${(bytes / 1_000_000).toFixed(bytes >= 10_000_000 ? 0 : 1)} MB`
+    async function loadSent() { sent = await sentPackages() }
     let result = $state<any>(null)
     let working = $state(false)
     let syncActionResult = $state('')
@@ -57,6 +66,11 @@
     }
     const character = $derived(DBState.db.characters[$selectedCharID])
     $effect(() => { selected = character?.chats[character.chatPage]?.id ? [character.chats[character.chatPage].id] : []; result = null })
+    let lightTouched = false, lightFor: string | undefined
+    $effect(() => {
+        const id = character?.chaId, queue = $transferQueue
+        untrack(() => { if (lightFor !== id) { lightFor = id; lightTouched = false } if (!lightTouched) light = suggestLight(queue, id) })
+    })
     onMount(() => { void refreshTransfers().catch(error => transferStatus.set(String(error))) })
     // 0.9.103-ver4: how the last action ended, for the progress line's done/failed state.
     let outcome = $state<{ ok: boolean; elapsedMs: number; at: number } | null>(null)
@@ -69,6 +83,7 @@
     async function download() {
         if (androidTransferAvailable()) { await sendNative(result.id, 'file', undefined, result.name); return }
         const link = document.createElement('a'); link.href = `/api/play-transfer/${result.id}/file`; link.download = result.name; link.click()
+        void noteSent(result.id, { method: 'file', state: 'requested' })
         transferStatus.set('파일 저장을 요청했어요. 다운로드 완료 여부는 기기의 파일 목록에서 확인해 주세요.')
     }
     const stateLabel: Record<string, string> = { waiting: '가져오기 대기', applying: '가져오는 중', applied: '가져오기 완료', failed: '실패', cancelled: '취소', receiving: '받는 중', ready: '파일 준비 완료' }
@@ -332,7 +347,9 @@
                 <label><input type="checkbox" value={chat.id} bind:group={selected} />{chat.name || `대화 ${i + 1}`}{i === character.chatPage ? ' (현재 대화)' : ''}</label>
             {/each}
             <label><input type="checkbox" bind:checked={compatibility} />구 RisuAI USB 앱용 호환 파일 (BardWiki·저장 슬롯 제외)</label>
-            <ShButton disabled={!selected.length} onclick={() => run(async () => { result = await exportTransfer(selected, compatibility) })}>보낼 자료 확인</ShButton>
+            <label><input type="checkbox" bind:checked={light} disabled={compatibility} onchange={() => { lightTouched = true }} />카드 그림 빼고 보내기 (받는 기기에 같은 카드가 있을 때 · 받는 앱 0.9.103-ver4 이상)</label>
+            {#if light && !compatibility}<p class="hint">카드 자체 그림(대표·추가·감정 그림)을 빼고 대화와 에셋메이드 그림만 묶어요. 받는 기기에 같은 그림이 없으면 아무것도 바꾸지 않고 멈춘 뒤, 이 칸을 끄고 다시 보내 달라고 알려요. GitHub 백업으로는 올리지 않아요.</p>{/if}
+            <ShButton disabled={!selected.length} onclick={() => run(async () => { const prepared = await exportTransferChecked(selected, compatibility, light); if (prepared) result = prepared })}>보낼 자료 확인</ShButton>
         {:else}<p>보낼 캐릭터를 먼저 열어 주세요. 파일 받기는 바로 사용할 수 있어요.</p>{/if}
     </fieldset>
     <fieldset disabled={working || $transferBusy}>
@@ -350,9 +367,30 @@
         {#each result.excluded ?? [] as item}<p>제외: {item.path} · {item.reason}</p>{/each}
         {#each result.external ?? [] as item}<p>외부 자료: {item.path} · 인터넷 연결이 필요할 수 있어요.</p>{/each}
         {#if result.id}
-            <p>{result.name} · {Math.ceil(result.bytes / 1024).toLocaleString()} KiB</p>
+            <p>{result.name} · {Math.ceil(result.bytes / 1024).toLocaleString()} KiB{result.light ? ` · 카드 그림 ${result.light.count}개(${megabytes(result.light.bytes)})를 뺀 가벼운 묶음` : ''}{result.reused ? ' · 준비돼 있던 묶음' : ''}</p>
         {/if}
     {/if}
+    <details class="sent-packages" bind:open={sentOpen} ontoggle={() => { if (sentOpen) void run(loadSent) }}>
+        <summary>보낸 묶음 정리{sent.length ? ` · ${sent.length}개 · ${megabytes(sentTotal)}` : ''}</summary>
+        <p class="hint">「보낼 자료 확인」으로 만든 전송 파일이에요. 보낸 뒤에도 자동으로 지워지지 않아요. 지워도 대화·카드·받은 자료는 그대로예요.</p>
+        {#each sent as item (item.id)}
+            <div class="remote-file"><strong>{item.leftover ? '정리 안 된 작업 폴더' : item.name}</strong><span>{sentSummary(item)}</span>
+                {#if !item.leftover && item.hasFile && item.state === 'ready'}<ShButton size="sm" variant="outline" disabled={working || $transferBusy} onclick={() => { result = { ...item, missing: [], external: [], excluded: [], reused: true }; transferStatus.set('이 묶음을 다시 보낼 수 있어요. 아래에서 보낼 방법을 선택해 주세요.') }}>이 묶음 다시 보내기</ShButton>{/if}
+                <ShButton size="sm" variant="outline" disabled={working || $transferBusy} onclick={() => run(async () => {
+                    if (!await alertConfirm(`이 묶음을 지울까요? (${megabytes(item.diskBytes)})\n${item.leftover ? '끝나지 않은 묶음 작업이 남긴 폴더예요.' : item.name}\n이 기기의 전송 파일만 지워요. 대화·카드·받은 자료와 이미 보낸 기기의 자료는 그대로예요.`)) return
+                    await removeSentPackage(item.id); if (result?.id === item.id) result = null
+                    await loadSent(); await refreshTransfers(); transferStatus.set('보낸 묶음을 지웠어요.')
+                })}>지우기</ShButton>
+            </div>
+        {/each}
+        {#if sent.length}
+            <ShButton variant="outline" disabled={working || $transferBusy} onclick={() => run(async () => {
+                if (!await alertConfirm(`보낸 묶음 ${sent.length}개(${megabytes(sentTotal)})를 모두 지울까요?\n이 기기의 전송 파일만 지워요. 대화·카드·받은 자료와 이미 보낸 기기의 자료는 그대로예요.`)) return
+                const cleared = await clearSentPackages(); if (result?.id && sent.some(item => item.id === result.id)) result = null
+                await loadSent(); await refreshTransfers(); transferStatus.set(`보낸 묶음 ${cleared.removed}개를 지웠어요.`)
+            })}>모두 지우기</ShButton>
+        {:else}<p>보낸 묶음이 없어요.</p>{/if}
+    </details>
     <fieldset disabled={working || $transferBusy}>
         <legend>2. 전송 방법 · 보내기와 받기</legend>
         <label>방법<select bind:value={method} onchange={chooseMethod}>
@@ -370,7 +408,7 @@
                 <div class="remote-file"><strong>{device.name}</strong>
                     {#if device.registered}
                         <span>등록된 내 기기</span>
-                        {#if result?.id}<ShButton onclick={() => run(() => sendNative(result.id, 'wifi', device.id))}>보내기</ShButton>{/if}
+                        {#if result?.id}<ShButton onclick={() => run(() => sendNative(result.id, 'wifi', device.id, undefined, device.name))}>보내기</ShButton>{/if}
                         <ShButton variant="outline" onclick={() => run(async () => { await playNative('network.forget', { device: device.id }); devices = await playNative('network.devices') })}>등록 해제</ShButton>
                     {:else}<ShButton disabled={!/^\d{6}$/.test(pairCode)} onclick={() => run(async () => { await playNative('network.pair', { device: device.id, code: pairCode }); pairCode = ''; devices = await playNative('network.devices'); transferStatus.set('기기를 등록했어요. 다음부터는 코드를 입력하지 않아도 돼요.') })}>기기 등록</ShButton>{/if}
                 </div>
@@ -430,6 +468,7 @@
                 })}>전송 연결 정보 모두 재설정</ShButton>
             </details>
             {#if result?.id && !shareResult}<ShButton onclick={() => run(async () => { transferStatus.set('업로드·검증 중…'); await remote('upload', { id: result.id }); transferStatus.set('전달 완료 · 받는 기기에서 목록을 열어 내려받아 주세요.'); })}>준비한 대화 업로드</ShButton>{/if}
+            {#if result?.light && method === 'github'}<p class="hint">가벼운 묶음은 GitHub 백업으로 올리지 않아요. 「카드 그림 빼고 보내기」를 끄고 다시 준비해 주세요.</p>{/if}
             <ShButton variant="outline" onclick={() => run(listRemote)}>저장된 파일 목록</ShButton>
             {#if method === 'github'}
                 <details>

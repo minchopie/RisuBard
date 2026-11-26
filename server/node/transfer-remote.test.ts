@@ -280,3 +280,18 @@ test('downloads pass the known size to the receive progress', async t => {
     await nas.dispatch('nas', 'download', { name: 'fixture.risuplay' })
     expect(f.importOptions.at(-1)).toMatchObject({ name: 'fixture.risuplay', total: 64 })
 })
+// 0.9.103-ver4 extras: an upload notes where the package went; a light package is not a GitHub backup.
+test('uploads note where the package went; a light package is refused as a GitHub backup before anything is sent', async t => {
+    const f = await fixture(t, 64)
+    const notes: any[] = []
+    const transfers = { ...f.transfers, noteSent: async (id: string, note: any) => { notes.push([id, note]); throw new Error('a failed note never fails the upload') } }
+    const nas = createRemoteTransfers({ ...f, transfers, fetch: async (_url: string, o: any) => { if (o.body) await bytes(o.body); return o.method === 'GET' ? response(200, f.content) : response(201, '') } })
+    const delivered = await nas.dispatch('nas', 'upload', { id: 'out' })
+    expect(delivered.state).toBe('delivered')
+    expect(notes).toEqual([['out', { method: 'nas', target: delivered.name, state: 'delivered' }]])
+    let sent = false
+    const lightTransfers = { ...transfers, list: async () => [{ id: 'out', backupKey: 'a'.repeat(64), light: { count: 3, bytes: 100 } }] }
+    const github = createRemoteTransfers({ ...f, transfers: lightTransfers, fetch: async (url: string, o: any) => { if (o.method === 'PUT') sent = true; return url.includes('/contents/') ? response(404, '') : response(200, { private: true, default_branch: 'main' }) } })
+    await expect(github.dispatch('github', 'upload', { id: 'out' })).rejects.toThrow(/가벼운 묶음/)
+    expect(sent).toBe(false)
+})

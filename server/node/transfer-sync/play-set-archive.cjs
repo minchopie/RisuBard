@@ -11,7 +11,7 @@ const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const yauzl = require('yauzl');
 const { ZipFile } = require('yazl');
-const { bardFiles, canonical, entryPath, validateManifest, validateRecords, verifyArchive,
+const { bardFiles, canonical, entryPath, validateManifest, validateRecords, verifyArchive, omittedAssetEntries,
     MANIFEST_BYTE_LIMIT, DEFAULT_RECORD_BYTE_BUDGET } = require('../../../shared/play-set/protocol.ts');
 
 const CHUNK = 256 * 1024;
@@ -21,7 +21,9 @@ async function availableBytes(directory) {
     return Number(bytes > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : bytes);
 }
 function expectedEntries(manifest) {
-    return new Map([...manifest.items, ...bardFiles(manifest)].map(item => [item.entry, item]));
+    // 0.9.103-ver4: a light package's `omittedAssets` (card pictures the receiver finds by their bytes) are not archive members.
+    const omitted = omittedAssetEntries(manifest);
+    return new Map([...manifest.items, ...bardFiles(manifest)].filter(item => !omitted.has(item.entry)).map(item => [item.entry, item]));
 }
 
 /** One private, disposable export directory. Never overwrites an existing backup.
@@ -136,7 +138,8 @@ async function openPlaySetArchive(path, temporaryDirectory, onBytes) {
             },
         };
         const manifest = validateManifest(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await reader.readRecord('manifest.json'))));
-        const records = await verifyArchive(manifest, reader);
+        const omitted = omittedAssetEntries(manifest);
+        const records = await verifyArchive(manifest, reader, omitted);
         const expected = expectedEntries(manifest);
         const copyEntry = async (name, destination) => {
             const item = expected.get(name);
@@ -156,7 +159,7 @@ async function openPlaySetArchive(path, temporaryDirectory, onBytes) {
             }
             await handle.close();
         };
-        return { manifest, records, copyEntry, close };
+        return { manifest, records, copyEntry, close, omitted };
     } catch (error) { await close(); throw error; }
 }
 

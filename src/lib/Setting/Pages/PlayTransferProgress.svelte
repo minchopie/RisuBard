@@ -9,7 +9,9 @@
     import { transferStatus } from 'src/ts/transferState'
     import { nativeSend } from 'src/ts/transferNative'
 
-    let { active = false, watch = false, outcome = null }: { active?: boolean; watch?: boolean; outcome?: { ok: boolean; elapsedMs: number; at: number } | null } = $props()
+    // `quiet` (0.9.103-ver4, inside the host's full-screen overlay): only a running server step or native send is drawn — the overlay
+    // already shows the status text, so no fallback label and no done/failed line.
+    let { active = false, watch = false, outcome = null, quiet = false }: { active?: boolean; watch?: boolean; outcome?: { ok: boolean; elapsedMs: number; at: number } | null; quiet?: boolean } = $props()
     let progress = $state<TransferProgress | null>(null)
     let now = $state(Date.now()), startedAt = $state(0), ended = $state<{ ok: boolean; elapsedMs: number } | null>(null)
     let timer: ReturnType<typeof setInterval> | undefined, every = 0
@@ -58,7 +60,7 @@
     const final = $derived(!running && source === 'run' ? ended : null)
 </script>
 
-{#if running || native || final}
+{#if quiet ? (!!progress || nativeRunning) : (running || native || final)}
     <div class="play-transfer-progress" role="status" aria-live="polite" aria-busy={running} data-transfer-progress data-tone={final ? (final.ok ? 'done' : 'failed') : view.tone}>
         {#if !final}
             <span class="label">{view.tone === 'done' ? '✓ ' : view.tone === 'failed' ? '✕ ' : ''}{view.label}</span>

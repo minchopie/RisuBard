@@ -9,6 +9,7 @@ vi.mock('./platform', () => ({ isNodeServer: true }))
 vi.mock('./transferNas', () => ({ parseNasListing: vi.fn() }))
 vi.mock('./transferNative', () => ({ nativeSend: writable(null), playSetAvailable: () => false, androidTransferAvailable: () => false, playNative: vi.fn(), sendNative: vi.fn() }))
 vi.mock('./playTransfer', () => ({ transferBusy: writable(false), transferStatus: writable(''), transferQueue: writable([]), refreshTransfers: vi.fn(async () => {}), queueTransferFile: vi.fn(), exportTransfer: vi.fn(), receiveTransfer: vi.fn(), cancelTransfer: vi.fn(), requestRemoteTransfer: vi.fn(), uploadLegacyChat: vi.fn(),
+    exportTransferChecked: vi.fn(), sentPackages: vi.fn(async () => []), removeSentPackage: vi.fn(), clearSentPackages: vi.fn(), noteSent: vi.fn(), sentSummary: () => '', suggestLight: () => false,
     playTransferProgress: vi.fn(async () => null), transferProgressView: (_p: unknown, _n: unknown, fallback = '') => ({ label: fallback || '처리 중', percent: null, detail: '', tone: 'running' }) }))
 vi.mock('./nasSyncCoordinator', () => ({ coordinatorState: f.coordinator = writable({ lastOutcome: 'empty' }), syncCoordinator: () => ({ uploadNow: f.upload, downloadNow: f.download, state: { pendingReview: 2, keptDeletions: 1 } }) }))
 vi.mock('./nasSync', () => ({ syncStatus: f.status, syncNetwork: vi.fn(async () => null), reportSyncNetwork: vi.fn(async () => {}), reportSyncProfile: f.profile,
@@ -101,5 +102,33 @@ test('NAS app receive requests durable application without a browser download or
         expect(requestRemoteTransfer).toHaveBeenCalledWith('nas', 'download', { name: 'fixture.risuplay', bytes: 123, applyRequested: true })
         expect(target.textContent).toContain('다운로드 폴더에는 저장하지 않아요')
         expect(downloadFile).not.toHaveBeenCalled(); expect(receiveTransfer).not.toHaveBeenCalled()
+    } finally { await unmount(instance); target.remove() }
+})
+
+// 0.9.103-ver4: the send package list opens on demand, and deleting one or all asks first.
+test('send packages: listed when opened; one or all are deleted only after the confirmation', async () => {
+    const { sentPackages, removeSentPackage, clearSentPackages } = await import('./playTransfer')
+    const { alertConfirm } = await import('./alert')
+    ;(sentPackages as any).mockResolvedValue([{ id: 'p1', name: '표본.risuplay', state: 'ready', hasFile: true, diskBytes: 424_000_000, createdAt: 1 }])
+    ;(clearSentPackages as any).mockResolvedValue({ removed: 1, bytes: 424_000_000 })
+    const target = document.createElement('div'); document.body.append(target)
+    const instance = mount(Panel, { target })
+    const settle = async () => { for (let i = 0; i < 20; i++) { await Promise.resolve(); await tick() } }
+    try {
+        await settle()
+        const list = target.querySelector('details.sent-packages') as HTMLDetailsElement
+        expect(list).not.toBeNull(); expect(sentPackages).not.toHaveBeenCalled()
+        list.open = true; list.dispatchEvent(new Event('toggle')); await settle()
+        expect(list.textContent).toContain('표본.risuplay'); expect(list.querySelector('summary')?.textContent).toContain('1개 · 424 MB')
+        const button = (text: string) => [...list.querySelectorAll('button')].find(e => e.textContent === text)!
+        ;(alertConfirm as any).mockResolvedValueOnce(false)
+        button('지우기').click(); await settle()
+        expect(removeSentPackage).not.toHaveBeenCalled()
+        ;(alertConfirm as any).mockResolvedValueOnce(true)
+        button('지우기').click(); await settle()
+        expect(removeSentPackage).toHaveBeenCalledWith('p1')
+        ;(alertConfirm as any).mockResolvedValueOnce(true)
+        button('모두 지우기').click(); await settle()
+        expect(clearSentPackages).toHaveBeenCalledTimes(1)
     } finally { await unmount(instance); target.remove() }
 })

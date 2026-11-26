@@ -18,6 +18,8 @@ export interface Manifest {
   origin: string; primaryCharacter: string; primaryChat: string; items: Item[];
   ancestors: string[];
   bard?: BardWorkspace[];
+  /** 0.9.103-ver4 light package: asset entries the archive leaves out (outside the revision). Receivers before 0.9.103-ver4 reject such an archive as incomplete. */
+  omittedAssets?: string[];
 }
 export interface Draft { manifest: Manifest; records: Map<string, Json> }
 const kinds = new Set<Kind>(['character', 'chat', 'persona', 'module', 'preset', 'asset', 'inlay', 'context']);
@@ -265,11 +267,24 @@ export interface ArchiveReader {
   availableBytes(): Promise<number>;
   recordBudgetBytes?: number;
 }
-export async function verifyArchive(m: Manifest, archive: ArchiveReader): Promise<Map<string, Json>> {
+/** 0.9.103-ver4: the validated `omittedAssets` of a light package — unique entries of binary asset items only (never records, Bard files
+ *  or inlay data). Empty for every other archive. */
+export function omittedAssetEntries(m: Manifest): Set<string> {
+  const list = (m as { omittedAssets?: unknown }).omittedAssets;
+  if (list === undefined) return new Set();
+  if (!Array.isArray(list) || list.some(entry => typeof entry !== 'string') || new Set(list).size !== list.length) throw new Error('Invalid omitted assets');
+  const assets = new Set(m.items.filter(i => i.kind === 'asset').map(i => i.entry));
+  const kept = new Set([...bardFiles(m).map(file => file.entry), ...m.items.filter(i => i.kind !== 'asset').map(i => i.entry),
+    ...m.items.filter(i => i.kind === 'inlay').flatMap(i => i.references.filter(r => r.pointer === '/data').map(r => m.items.find(x => x.id === r.target)?.entry ?? ''))]);
+  if (list.some(entry => !assets.has(entry) || kept.has(entry))) throw new Error('Invalid omitted assets');
+  return new Set(list as string[]);
+}
+export async function verifyArchive(m: Manifest, archive: ArchiveReader, omitted: ReadonlySet<string> = new Set()): Promise<Map<string, Json>> {
   validateManifest(m);
   if (await revisionOf(m) !== m.revision) throw new Error('Set revision mismatch');
   const expected = new Map(m.items.map(i => [i.entry, i]));
   for (const file of bardFiles(m)) if (!expected.has(file.entry)) expected.set(file.entry, { ...file, id: file.entry, kind: 'asset', parent: null, references: [] });
+  for (const entry of omitted) expected.delete(entry);
   const actual = await archive.entries();
   const seen = new Set<string>();
   let expanded = 0, recordBytes = 0;

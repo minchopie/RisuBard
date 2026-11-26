@@ -83,6 +83,31 @@ function assetMaidPictures(manifest, records) {
     return out;
 }
 
+/** 0.9.103-ver4 (user 2026-11-26 「카드 그림 중복 전송 줄이기」): an asset item's content-addressed key. The app saves a picture as
+ *  `assets/<sha256 of its bytes>.<ext>`; the sender's own key name travels as `media.name`. Null when that name is not this address
+ *  (such a picture can only be matched by its key, never by its bytes, so it is neither reused nor left out). */
+function contentKey(item) {
+    const name = item?.media?.name;
+    return typeof name === 'string' && /^[a-f0-9]{64}$/.test(item.hash) && name.startsWith(item.hash + '.') && /^[A-Za-z0-9]{1,12}$/.test(name.slice(65)) ? `assets/${name}` : null;
+}
+/** 0.9.103-ver4: the pictures a 「카드 그림 빼고 보내기」 (light) package leaves out — content-addressed pictures the card record itself
+ *  points to (image, additional, emotion pictures …). Never left out: Asset Maid chat pictures, inlay data, a picture a chat record points
+ *  to or names (its hash appears in the chat), a picture that is not content-addressed. An entry shared with a kept item stays. */
+function lightOmissions(manifest, records) {
+    const keep = new Set();
+    for (const pictures of assetMaidPictures(manifest, records).values()) for (const picture of pictures) keep.add(picture.item.id);
+    for (const item of manifest.items) if (item.kind === 'chat' || item.kind === 'inlay') for (const ref of item.references) keep.add(ref.target);
+    const chatText = manifest.items.filter(item => item.kind === 'chat').map(item => JSON.stringify(records.get(item.entry) ?? null)).join('\n');
+    const cardPictures = new Set(manifest.items.filter(item => item.kind === 'character').flatMap(item => item.references.map(ref => ref.target)));
+    const assets = manifest.items.filter(item => item.kind === 'asset');
+    const out = assets.filter(item => cardPictures.has(item.id) && !keep.has(item.id) && contentKey(item) && !chatText.includes(item.hash));
+    const left = new Set(out.map(item => item.id));
+    return out.filter(item => assets.every(other => other.entry !== item.entry || left.has(other.id)));
+}
+const selectionKeyOf = selection => hash(JSON.stringify(['risuplay-selection', String(selection?.characterId ?? ''), [...(Array.isArray(selection?.chatIds) ? selection.chatIds : [])].map(String).sort(), !!selection?.compatibility, !!selection?.light && !selection?.compatibility]));
+const SENT_METHODS = new Set(['file', 'nas', 'github', 'wifi', 'usb', 'share']);
+const SENT_STATES = new Set(['requested', 'sending', 'delivered', 'applied', 'failed']);
+
 function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInlay, installInlay, removeInlay, nativeInbox, foreignArchive = null }) {
     const root = join(dataRoot, 'play-transfer');
     const directory = key => join(root, id(key));
@@ -146,7 +171,9 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         return result.sort((a, b) => b.createdAt - a.createdAt);
     }
     const publicState = record => ({ id: record.id, direction: record.direction, state: record.state, createdAt: record.createdAt,
-        name: record.name, bytes: record.bytes, sha256: record.sha256, error: record.error, trusted: !!record.trusted, applyRequested: record.applyRequested, nativeId: record.nativeId, progress: record.progress, ...(record.kind ? { kind: record.kind } : {}) });
+        name: record.name, bytes: record.bytes, sha256: record.sha256, error: record.error, trusted: !!record.trusted, applyRequested: record.applyRequested, nativeId: record.nativeId, progress: record.progress, ...(record.kind ? { kind: record.kind } : {}),
+        // 0.9.103-ver4 (보낸 묶음 목록): what a send package holds and where it went (display only).
+        ...(record.direction === 'send' ? { characterId: record.characterId, chatCount: record.chatIds?.length, compatibility: record.compatibility, light: record.light, sentVia: record.sentVia, transient: record.transient } : {}) });
     async function ingest(source, { name = '대화 자료.risuplay', trusted = false, applyRequested, nativeId, total = null } = {}) {
         const key = randomUUID(), dir = directory(key);
         await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -191,6 +218,7 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         if (!character || !selection.chatIds?.length || selection.chatIds.some(ch => !character.chats?.some(c => c.id === ch))) throw new Error('Select existing chats');
         if (character.chats.some(c => selection.chatIds.includes(c.id) && (c.isStreaming || c.risuBardWikiReboot))) throw new Error('Wait for generation and Wiki work to finish');
         const selectedHash = hash(canonical(character, true));
+        const light = !!selection.light && !selection.compatibility;
         await fs.mkdir(dir, { recursive: true, mode: 0o700 });
         const work = await mkdtempLong(join(dir, 'export-work-'));
         let capture, recorded = false;
@@ -216,19 +244,127 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
             if (snapshot.missing.length) return { missing: snapshot.missing, external: snapshot.external, excluded: snapshot.excluded };
             if (hash(canonical((await readDatabase()).characters.find(c => c.chaId === character.chaId), true)) !== selectedHash) throw new Error('Chat changed while exporting; retry after saving');
             shown.next('pack');
-            const archive = await writePlaySetArchive(snapshot, work, shown.bytes);
+            // 0.9.103-ver4: a light package leaves the card's own content-addressed pictures out (listed in the manifest as
+            // `omittedAssets`, outside the revision); the receiver finds them by their bytes or stops before changing anything.
+            const omitted = light ? lightOmissions(snapshot.manifest, snapshot.records) : [];
+            const omittedEntries = [...new Set(omitted.map(item => item.entry))].sort();
+            const archive = await writePlaySetArchive(omittedEntries.length ? { ...snapshot, manifest: { ...snapshot.manifest, omittedAssets: omittedEntries } } : snapshot, work, shown.bytes);
             await fs.rename(archive, join(dir, 'export.risuplay'));
             shown.next('hash', { bytesTotal: (await fs.stat(join(dir, 'export.risuplay'))).size });
             const digest = createHash('sha256'); for await (const chunk of createReadStream(join(dir, 'export.risuplay'))) { digest.update(chunk); shown.add(chunk.length); }
             const record = { id: key, direction: 'send', state: 'ready', createdAt: Date.now(), name: `${character.name}.risuplay`,
                 backupKey: hash(snapshot.manifest.primaryChat),
-                bytes: (await fs.stat(join(dir, 'export.risuplay'))).size, sha256: digest.digest('hex') };
+                bytes: (await fs.stat(join(dir, 'export.risuplay'))).size, sha256: digest.digest('hex'),
+                // 0.9.103-ver4: the selection and the card state it was made from (same selection again → offer this package).
+                characterId: character.chaId, chatIds: [...selection.chatIds], compatibility: !!selection.compatibility, selectionKey: selectionKeyOf(selection), sourceHash: selectedHash,
+                ...(omittedEntries.length ? { light: { count: omittedEntries.length, bytes: omitted.filter((item, i, all) => all.findIndex(other => other.entry === item.entry) === i).reduce((total, item) => total + item.bytes, 0) } } : {}) };
             const exported = await recordExport(database, snapshot);
             const generation = exported.risuPlaySets.generations.find(g => g.setId === snapshot.manifest.setId && g.revision === snapshot.manifest.revision);
             generation.bardFingerprints = await bardFingerprints(snapshot.manifest, snapshot.records, block => fs.readFile(capture.blocks.get(block.entry)));
             write(record); recorded = true;
             return { ...publicState(record), missing: [], external: snapshot.external, excluded: snapshot.excluded, registry: exported.risuPlaySets };
         } finally { shown.end(); await fs.rm(recorded ? work : dir, { recursive: true, force: true }); }
+    }
+    /** 0.9.103-ver4 (user 2026-11-26 「보낸 묶음 목록·지우기」): a ready package of the same selection (character, chats, options), so the
+     *  panel can offer it instead of packing the same chats again; `same` = the card and its chats are unchanged since it was made. */
+    async function exportCheck(selection) {
+        const database = await readDatabase();
+        const character = database?.characters?.find(c => c.chaId === selection?.characterId);
+        if (!character) return { duplicate: null };
+        const key = selectionKeyOf(selection);
+        const ready = (await list()).find(record => record.direction === 'send' && !record.transient && record.selectionKey === key && record.state === 'ready' && existsSync(join(directory(record.id), 'export.risuplay')));
+        return { duplicate: ready ? { ...publicState(ready), same: ready.sourceHash === hash(canonical(character, true)) } : null };
+    }
+    const LEFTOVER_AGE = 10 * 60 * 1000;
+    async function diskBytes(path) {
+        let total = 0;
+        for (const entry of await fs.readdir(path, { withFileTypes: true }).catch(() => [])) {
+            const child = join(path, entry.name);
+            if (entry.isDirectory()) total += await diskBytes(child);
+            else if (entry.isFile()) total += (await fs.stat(child).catch(() => ({ size: 0 }))).size;
+        }
+        return total;
+    }
+    /** 0.9.103-ver4: this device's send packages (finished or left over) with their size on disk. A folder without a record is an export
+     *  that never finished (an app exit mid-export); one younger than 10 minutes may still be running and is not listed. */
+    async function sentPackages() {
+        await fs.mkdir(root, { recursive: true, mode: 0o700 });
+        const out = [];
+        for (const name of await fs.readdir(root)) if (/^[a-f0-9-]{36}$/i.test(name)) {
+            let record = null;
+            try { record = await read(name); } catch (error) { if (error.code !== 'ENOENT') continue; }
+            if (record && (record.direction !== 'send' || record.transient)) continue;
+            if (!record) {
+                const stat = await fs.stat(directory(name)).catch(() => null);
+                if (!stat?.isDirectory() || Date.now() - stat.mtimeMs < LEFTOVER_AGE) continue;
+                out.push({ id: name, leftover: true, createdAt: stat.mtimeMs, diskBytes: await diskBytes(directory(name)) });
+                continue;
+            }
+            out.push({ ...publicState(record), hasFile: existsSync(join(directory(name), 'export.risuplay')), diskBytes: await diskBytes(directory(name)) });
+        }
+        return out.sort((a, b) => b.createdAt - a.createdAt);
+    }
+    /** 0.9.103-ver4: deletes one send package folder (user action, after a confirmation in the panel). Received files, imports and the
+     *  NAS sync key share are never touched here. */
+    async function removeSent(key) {
+        id(key);
+        let record = null;
+        try { record = await read(key); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (record && (record.direction !== 'send' || record.transient)) throw new Error('보낸 묶음만 여기서 지울 수 있어요.');
+        if (!record) {
+            const stat = await fs.stat(directory(key)).catch(() => null);
+            if (!stat?.isDirectory()) return { removed: false };
+            if (Date.now() - stat.mtimeMs < LEFTOVER_AGE) throw new Error('아직 만들고 있을 수 있는 묶음이에요. 잠시 뒤 다시 지워 주세요.');
+        }
+        await fs.rm(directory(key), { recursive: true, force: true });
+        return { removed: true };
+    }
+    async function clearSent() {
+        let removed = 0, bytes = 0;
+        for (const item of await sentPackages()) { bytes += item.diskBytes; if ((await removeSent(item.id)).removed) removed++; }
+        return { removed, bytes };
+    }
+    /** 0.9.103-ver4: where a send package went (method, target, state), recorded by the panel or the remote upload. Display only. */
+    async function noteSent(key, input = {}) {
+        const record = await read(key);
+        if (record.direction !== 'send') throw new Error('Not a send package');
+        const method = String(input.method ?? ''), state = String(input.state ?? '');
+        if (!SENT_METHODS.has(method) || !SENT_STATES.has(state)) throw new Error('Invalid send note');
+        const target = typeof input.target === 'string' ? input.target.slice(0, 200) : '', transfer = typeof input.transfer === 'string' ? input.transfer.slice(0, 64) : '';
+        const via = Array.isArray(record.sentVia) ? record.sentVia : [];
+        const prior = transfer ? via.find(row => row.transfer === transfer) : undefined;
+        if (prior) Object.assign(prior, { state, at: Date.now(), ...(target ? { target } : {}) });
+        else via.push({ method, target, state, at: Date.now(), ...(transfer ? { transfer } : {}) });
+        record.sentVia = via.slice(-20); write(record);
+        return publicState(record);
+    }
+    // 0.9.103-ver4 (user 2026-11-26 「Wi-Fi·USB 받는 쪽 도착 중 진행」): a file the device's own Wi-Fi/USB transferer is still receiving
+    // is a `<handle>.part` in its archive folder (Android and the Windows transferer alike). Its size is the bytes that arrived; a newer
+    // transferer also writes `<handle>.part.json` ({ direction, total }) next to it. Display only; a part that stopped growing for 30 s
+    // is not shown (the transferers delete abandoned parts themselves).
+    const arrivalSeen = new Map();
+    async function arrivals() {
+        const folder = nativeInbox?.archives;
+        if (!folder) return [];
+        let names; try { names = await fs.readdir(folder); } catch { return []; }
+        const now = Date.now(), out = [], live = new Set();
+        for (const name of names) {
+            const match = /^([a-f0-9-]{36})\.part$/.exec(name); if (!match) continue;
+            let stat; try { stat = await fs.stat(join(folder, name)); } catch { continue; }
+            if (!stat.isFile()) continue;
+            let meta = null; try { meta = JSON.parse(await fs.readFile(join(folder, name + '.json'), 'utf8')); } catch {}
+            if (meta && typeof meta.direction === 'string' && meta.direction !== 'receive') continue;
+            live.add(match[1]);
+            let seen = arrivalSeen.get(match[1]);
+            if (!seen) arrivalSeen.set(match[1], seen = { firstAt: now, firstBytes: stat.size, bytes: stat.size, changedAt: now });
+            if (stat.size !== seen.bytes) Object.assign(seen, { bytes: stat.size, changedAt: now });
+            if (now - seen.changedAt > 30_000) continue;
+            const seconds = (now - seen.firstAt) / 1000;
+            out.push({ id: match[1], bytes: stat.size, bytesTotal: Number.isSafeInteger(meta?.total) && meta.total > 0 ? meta.total : null,
+                elapsedMs: now - seen.firstAt, speed: seconds >= 2 && stat.size > seen.firstBytes ? (stat.size - seen.firstBytes) / seconds : null });
+        }
+        for (const key of [...arrivalSeen.keys()]) if (!live.has(key)) arrivalSeen.delete(key);
+        return out;
     }
     /** Persona transfer: the chosen personas (by id, from the saved database) as one bundle send entry for every transport. */
     async function exportPersonas(selection) {
@@ -346,6 +482,25 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
                 if (sameKey.has(item.id) || inlayData.has(item.id) || picture.path !== `assets/${item.hash}.${picture.path.split('.').at(-1)}`) continue;
                 if (storage.kvGetUpdatedAt(picture.path) === null) sameKey.set(item.id, picture.path);
                 else if (holds(picture.path, item.hash)) { sameKey.set(item.id, picture.path); reused.add(item.id); }
+            }
+            // 0.9.103-ver4 (「카드 그림 중복 전송 줄이기」): every other content-addressed picture works the same way — this device already
+            // holding that key with those bytes → reused (nothing copied or stored again, never replaced or deleted); key absent → stored
+            // under it. A picture a light package left out must be found here by its bytes, or the import stops before anything changes.
+            const omitted = archive.omitted ?? new Set(), absent = [], planned = new Set(sameKey.values());
+            for (const item of archive.manifest.items.filter(i => i.kind === 'asset')) {
+                if (sameKey.has(item.id) || inlayData.has(item.id)) { if (omitted.has(item.entry) && !reused.has(item.id)) absent.push(item); continue; }
+                const key = contentKey(item);
+                const here = key && storage.kvGetUpdatedAt(key) !== null;
+                if (key && here && holds(key, item.hash)) { sameKey.set(item.id, key); reused.add(item.id); planned.add(key); }
+                else if (omitted.has(item.entry)) absent.push(item);
+                else if (key && !here) { sameKey.set(item.id, key); if (planned.has(key)) reused.add(item.id); planned.add(key); }
+            }
+            if (absent.length) {
+                const megabytes = (absent.reduce((total, item) => total + item.bytes, 0) / 1_000_000).toFixed(1);
+                record.state = 'failed';
+                record.error = `카드 그림을 뺀 가벼운 묶음이에요. 빠진 그림 ${omitted.size}개 중 ${absent.length}개(${megabytes} MB)가 이 기기에 없어서 가져오지 않았어요. 이 기기의 자료는 바뀌지 않았어요. 보내는 기기에서 「카드 그림 빼고 보내기」를 끄고 다시 보내 주세요.`;
+                write(record);
+                throw new Error(record.error);
             }
             const assets = new Map(archive.manifest.items.filter(i => i.kind === 'asset').map(i => [i.id, sameKey.get(i.id) ?? `assets/${randomUUID()}.${(i.media?.name?.split('.').at(-1) || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 12) || 'bin'}`]));
             const fingerprints = await bardFingerprints(archive.manifest, archive.records, async block => {
@@ -633,6 +788,11 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/native-import', async (req, res) => res.json(await exclusive(() => importNative(req.body.id))));
         route('post', '/incoming', async (req, res) => res.json(await ingest(req, { name: decodeURIComponent(req.headers['x-transfer-name'] ?? '대화 자료.risuplay'), total: Number(req.headers['content-length']) || null })));
         route('post', '/export', async (req, res) => res.json(await exclusive(() => exportSet(req.body))));
+        // 0.9.103-ver4: same-selection check, send package list / delete, send notes, native arrivals (display only).
+        route('post', '/export-check', async (req, res) => res.json(await exportCheck(req.body)));
+        route('get', '/sent', async (_req, res) => res.json(await sentPackages()));
+        route('post', '/sent/clear', async (req, res) => { if (req.body.confirmed !== true) throw new Error('Clearing requires confirmation'); res.json(await exclusive(() => clearSent())); });
+        route('get', '/arrivals', async (_req, res) => res.json(await arrivals()));
         route('post', '/persona-export', async (req, res) => res.json(await exclusive(() => exportPersonas(req.body))));
         route('get', '/:id/personas', async (req, res) => res.json(await receivedPersonas(req.params.id)));
         route('post', '/:id/persona-applied', async (req, res) => res.json(await exclusive(() => personaApplied(req.params.id))));
@@ -645,9 +805,12 @@ function createPlaySetService({ dataRoot, readDatabase, memory, storage, readInl
         route('post', '/:id/hold-recovery', async (req, res) => { if (req.body.confirmed !== true) throw new Error('Recovery exit requires confirmation'); res.json(await exclusive(() => holdRecovery(req.params.id))); });
         route('post', '/:id/cancel', async (req, res) => res.json(await exclusive(() => cancel(req.params.id))));
         route('post', '/:id/apply-request', async (req, res) => res.json(await exclusive(() => requestApply(req.params.id, req.body.requested))));
+        route('post', '/:id/remove-sent', async (req, res) => { if (req.body.confirmed !== true) throw new Error('Removing requires confirmation'); res.json(await exclusive(() => removeSent(req.params.id))); });
+        route('post', '/:id/sent', async (req, res) => res.json(await exclusive(() => noteSent(req.params.id, req.body))));
     }
     return { assertWrite, list, ingest, exportSet, exportPersonas, receivedPersonas, personaApplied: key => exclusive(() => personaApplied(key)), personaMap: (key, map) => exclusive(() => personaMap(key, map)), inspect, prepare: (...args) => exclusive(() => prepare(...args)), arm: (...args) => exclusive(() => arm(...args)),
-        finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), requestApply: (...args) => exclusive(() => requestApply(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes, track, progress };
+        finish: (...args) => exclusive(() => finish(...args)), holdRecovery: (...args) => exclusive(() => holdRecovery(...args)), requestApply: (...args) => exclusive(() => requestApply(...args)), pending, cancel, file, legacyChat, stageSend, dropStaged, stagedSends, foreignInbox, importNative: key => exclusive(() => importNative(key)), registerRoutes, track, progress,
+        exportCheck, sentPackages, removeSent: key => exclusive(() => removeSent(key)), clearSent: () => exclusive(() => clearSent()), noteSent: (key, input) => exclusive(() => noteSent(key, input)), arrivals };
 }
 async function safeParents(root, path) {
     const rel = relative(root, path);
@@ -658,4 +821,4 @@ async function safeParents(root, path) {
         const stat = await fs.lstat(current); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe transfer directory');
     }
 }
-module.exports = { createPlaySetService, assetMaidPictures };
+module.exports = { createPlaySetService, assetMaidPictures, contentKey, lightOmissions };

@@ -178,6 +178,8 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
             if (count !== stat.size || remote.digest('hex') !== local.digest('hex')) throw new Error('NAS uploaded hash mismatch');
             shown?.next('upload-finish');
             await drain(checked(await nasRequest(c, 'MOVE', temporary, { Destination: c.url + encodeURIComponent(filename), Overwrite: 'F' }), [200, 201, 204]));
+            // 0.9.103-ver4 (보낸 묶음 목록): where this package went; display only, a failed note never fails the upload.
+            await transfers.noteSent?.(id, { method: 'nas', target: filename, state: 'delivered' }).catch(() => {});
             return { name: filename, bytes: stat.size, state: 'delivered' };
         } catch (error) {
             try { await drain(await nasRequest(c, 'DELETE', temporary)); } catch {}
@@ -223,6 +225,8 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
         if (stat.size >= GITHUB_LIMIT) throw new Error('GitHub 묶음은 100,000,000바이트 미만이어야 해요. NAS나 파일 전송을 사용해 주세요.');
         const record = (await transfers.list()).find(record => record.id === id);
         if (!record?.backupKey) throw new Error('보낼 자료를 다시 준비해 주세요.');
+        // 0.9.103-ver4: a backup must restore on its own; a light package (card pictures left out) is not one.
+        if (record.light) throw new Error('카드 그림을 뺀 가벼운 묶음은 GitHub 백업으로 올리지 않아요. 「카드 그림 빼고 보내기」를 끄고 다시 준비해 주세요.');
         const path = `contents/risubard-backups/${record.backupKey}.risuplay`;
         const previousResponse = await api(c, `${path}?ref=${encodeURIComponent(branch)}`);
         let previous;
@@ -238,6 +242,7 @@ function createRemoteTransfers({ secrets, transfers, fetch = request, route = nu
             if (!/^[a-f0-9]{40}$/.test(uploaded.commit?.sha)) throw new Error('업로드 응답을 확인하지 못했어요. 목록을 새로 고쳐 주세요.');
             const verified = await json(await api(c, `${path}?ref=${uploaded.commit.sha}`));
             if (verified.size !== stat.size || verified.sha !== await gitHash(file, stat.size)) throw new Error('업로드 파일 검증 실패. 이전 Git 이력은 유지됩니다.');
+            await transfers.noteSent?.(id, { method: 'github', target: `${record.backupKey}.risuplay`, state: 'delivered' }).catch(() => {});
             return { name: `${record.backupKey}.risuplay`, bytes: stat.size, state: 'delivered' };
         } finally { shown?.end(); }
     }

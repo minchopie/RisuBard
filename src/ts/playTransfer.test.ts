@@ -11,6 +11,7 @@ vi.mock('./stores.svelte', () => ({ loadedStore: writable(true), alertStore: wri
 vi.mock('./alert', () => ({ alertSelect: (...args: any[]) => f.select(...args), alertConfirm: (...args: any[]) => f.select(...args) }))
 vi.mock('./risubard/memorySaveSlots', () => ({ applyMemorySavePromptSettings: (chat: any, current: any) => { chat.modelBinding = current.modelBinding; delete chat.bindedPersona } }))
 import { receiveTransfer, recoverTransfers, exportTransfer, uploadLegacyChat, transferBusy, requestRemoteTransfer, transferProgressView, transferProgressText, transferStatus } from './playTransfer'
+import { arrivalView, sentSummary, suggestLight, exportTransferChecked, OVERLAY_BOX } from './playTransfer'
 import { forageStorage } from './globalApi.svelte'
 import { isAnyGenerating } from './process/generationState'
 import { importSession } from './importSession'
@@ -238,3 +239,59 @@ test('a chat received before (duplicate) still gets its missing Asset Maid names
     expect(f.save).toHaveBeenLastCalledWith({ chats: [], characters: ['existing'], flushServer: 'canonical', rejectOnFailure: true })
     expect(get(transferStatus)).toBe('이미 받은 동일한 자료예요. 중복으로 추가하지 않았어요. 에셋메이드 그림 1개를 캐릭터에 더했어요.')
 })
+
+// 0.9.103-ver4 extras (user 2026-11-26).
+test('arrival line: percent with a known size, MB that arrived without one, several files added up', () => {
+    expect(arrivalView([])).toBeNull()
+    expect(arrivalView([{ id: 'a', bytes: 150_000_000, bytesTotal: 300_000_000, elapsedMs: 30_000, speed: 5_000_000 }])).toEqual({ label: '다른 기기에서 전송 파일을 받는 중', percent: 50, detail: '150/300 MB · 5.0 MB/s · 남은 시간 약 30초 · 경과 30초' })
+    expect(arrivalView([{ id: 'a', bytes: 2_500_000, bytesTotal: null, elapsedMs: 1000, speed: null }])).toEqual({ label: '다른 기기에서 전송 파일을 받는 중', percent: null, detail: '2.5 MB 받음 · 경과 1초' })
+    expect(arrivalView([{ id: 'a', bytes: 1_000_000, bytesTotal: 2_000_000, elapsedMs: 4000, speed: 250_000 }, { id: 'b', bytes: 1_000_000, bytesTotal: null, elapsedMs: 2000, speed: 250_000 }])).toMatchObject({ label: '다른 기기에서 전송 파일 2개를 받는 중', percent: null })
+})
+test('send package line and the light default', () => {
+    const at = Date.parse('2026-11-26T03:53:30Z')
+    expect(sentSummary({ id: 'x', createdAt: at, diskBytes: 424_015_239, hasFile: true, chatCount: 1, sentVia: [{ method: 'wifi', target: 'Galaxy Tab', state: 'sending', at }, { method: 'wifi', target: 'Galaxy Tab', state: 'applied', at }] })).toContain('424 MB · 대화 1개 · Wi-Fi Galaxy Tab · 받는 쪽 가져오기 완료 외 1번')
+    expect(sentSummary({ id: 'y', createdAt: at, diskBytes: 4096, hasFile: true, light: { count: 477, bytes: 260_000_000 } })).toContain('가벼운 묶음(카드 그림 477개 260 MB 뺌) · 보낸 기록 없음')
+    expect(sentSummary({ id: 'z', createdAt: at, diskBytes: 10, leftover: true })).toContain('끝나지 않은 묶음 작업이 남긴 폴더')
+    const queue: any[] = [{ id: 's', name: 'a', direction: 'send', state: 'ready', characterId: 'card', sentVia: [{ method: 'usb', state: 'applied', at }] }, { id: 't', name: 'b', direction: 'send', state: 'ready', characterId: 'other', sentVia: [{ method: 'nas', state: 'delivered', at }] }]
+    expect(suggestLight(queue, 'card')).toBe(true); expect(suggestLight(queue, 'other')).toBe(false); expect(suggestLight(queue, undefined)).toBe(false)
+})
+test('the same selection again: the ready package is offered (use it, make a new one, or stop) before anything is packed', async () => {
+    const calls: string[] = []
+    f.request.mockImplementation(async (path: string, init: any = {}) => {
+        calls.push(path)
+        if (path === '/export-check') { expect(JSON.parse(init.body)).toEqual({ characterId: 'existing', chatIds: ['old'], compatibility: false, light: true }); return reply({ duplicate: { id: 'ready', name: 'Keep.risuplay', bytes: 2_000_000, createdAt: Date.now(), same: true } }) }
+        if (path === '/export') return reply({ id: 'new', name: 'Keep.risuplay', bytes: 1, missing: [], external: [], excluded: [] })
+        return reply([])
+    })
+    f.select.mockResolvedValueOnce('0')
+    expect(await exportTransferChecked(['old'], false, true)).toMatchObject({ id: 'ready', reused: true })
+    expect(calls).not.toContain('/export'); expect(f.select.mock.calls[0][1]).toContain('바뀌지 않았어요')
+    f.select.mockResolvedValueOnce('2')
+    expect(await exportTransferChecked(['old'], false, true)).toBeNull()
+    expect(calls).not.toContain('/export')
+    f.select.mockResolvedValueOnce('1')
+    expect(await exportTransferChecked(['old'], false, true)).toMatchObject({ id: 'new' })
+    expect(calls.filter(c => c === '/export')).toHaveLength(1)
+})
+test('the full-screen overlay gets the graphical bar inside its box while a step runs, and the overlay text stays the plain line', async () => {
+    if (typeof document === 'undefined') return
+    const overlay = document.createElement('div'); overlay.className = 'fixed inset-0'; overlay.setAttribute('role', 'alert'); overlay.setAttribute('aria-busy', 'true')
+    const box = document.createElement('div'); box.append(document.createElement('p')); overlay.append(box); document.body.append(overlay)
+    expect(document.querySelector(OVERLAY_BOX)).toBe(box)
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    f.request.mockImplementation(async (path: string) => {
+        if (path === '/progress') return reply({ stage: 'verify', bytes: 50, bytesTotal: 100, items: 0, itemsTotal: null, elapsedMs: 1000, stageElapsedMs: 1000 })
+        if (path.endsWith('/inspect')) return reply({ characters: [] })
+        if (path.endsWith('/prepare')) { await held; return reply({ transaction: 'tx', newCharacters: [], added: [], registry: {} }) }
+        return reply([])
+    })
+    try {
+        const running = receiveTransfer('in')
+        await vi.waitFor(() => expect(box.querySelector('[data-transfer-overlay-bar] [data-transfer-progress]')?.textContent).toContain('50%'), { timeout: 10000, interval: 100 })
+        expect(box.querySelector('[data-transfer-overlay-bar] [role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('50')
+        expect(get(transferStatus)).toBe('자료 검증 · 가져오기 준비 중…')
+        release(); await running
+        expect(box.querySelector('[data-transfer-overlay-bar]')).toBeNull()
+    } finally { overlay.remove() }
+}, 20000)

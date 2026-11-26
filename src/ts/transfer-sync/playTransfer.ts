@@ -32,7 +32,11 @@ export async function handleNativeInboxEntry(entry: { id: string }, io: { post: 
     return result?.share ? String(result.state) : 'queued'
 }
 
-export interface TransferEntry { id: string; name: string; direction: 'send' | 'receive'; state: string; bytes?: number; error?: string; trusted?: boolean; applyRequested?: boolean; nativeId?: string; kind?: string }
+export interface SentVia { method: string; target?: string; state: string; at: number; transfer?: string }
+export interface TransferEntry { id: string; name: string; direction: 'send' | 'receive'; state: string; bytes?: number; error?: string; trusted?: boolean; applyRequested?: boolean; nativeId?: string; kind?: string
+    createdAt?: number; characterId?: string; chatCount?: number; compatibility?: boolean; light?: { count: number; bytes: number }; sentVia?: SentVia[]; transient?: boolean }
+/** 0.9.103-ver4 (보낸 묶음 목록): a send package on this device; `leftover` = a folder of an export that never finished. */
+export interface SentPackage extends Partial<TransferEntry> { id: string; leftover?: boolean; hasFile?: boolean; diskBytes: number; createdAt: number }
 export const transferQueue = writable<TransferEntry[]>([])
 export async function transferRequest(path = '', init: RequestInit = {}) {
     await forageStorage.Init()
@@ -107,7 +111,21 @@ export function transferProgressView(progress: TransferProgress | null, native: 
     }
     return { label: fallback || '처리 중', percent: null, detail: '', tone: 'running' as const }
 }
-/** The same line as text with a 10-cell bar, for the modal overlay (App.svelte shows only the status text): no host change needed. */
+/** 0.9.103-ver4 (「Wi-Fi·USB 받는 쪽 도착 중 진행」): a file this device's Wi-Fi/USB transferer is still receiving (server GET /arrivals). */
+export type TransferArrival = { id: string; bytes: number; bytesTotal: number | null; elapsedMs: number; speed: number | null }
+export const transferArrivals = async (signal?: AbortSignal): Promise<TransferArrival[]> => (await transferRequest('/arrivals', { signal })).json()
+/** One line for the arriving files (several are added up). Without a known size (an older transferer) the bar moves and shows MB. */
+export function arrivalView(arrivals: TransferArrival[]) {
+    if (!arrivals.length) return null
+    const bytes = arrivals.reduce((t, a) => t + a.bytes, 0), known = arrivals.every(a => a.bytesTotal), total = known ? arrivals.reduce((t, a) => t + a.bytesTotal!, 0) : 0
+    const speed = arrivals.reduce((t, a) => t + (a.speed ?? 0), 0), elapsed = Math.max(...arrivals.map(a => a.elapsedMs))
+    const percent = known && total ? Math.min(100, Math.floor(Math.min(bytes, total) / total * 100)) : null
+    const parts = [known && total ? `${mb(Math.min(bytes, total))}/${mb(total)} MB` : `${mb(bytes)} MB 받음`]
+    if (speed > 0) { parts.push(`${mb(speed)} MB/s`); if (known && total > bytes) parts.push(`남은 시간 약 ${clock((total - bytes) / speed * 1000)}`) }
+    parts.push(`경과 ${clock(elapsed)}`)
+    return { label: arrivals.length > 1 ? `다른 기기에서 전송 파일 ${arrivals.length}개를 받는 중` : '다른 기기에서 전송 파일을 받는 중', percent, detail: parts.join(' · ') }
+}
+/** The same line as text with a 10-cell bar, for the modal overlay when its graphical bar cannot be placed (fallback). */
 export function transferProgressText(progress: TransferProgress) {
     const view = transferProgressView(progress)
     const bar = view.percent === null ? '' : ` ${'█'.repeat(Math.round(view.percent / 10))}${'░'.repeat(10 - Math.round(view.percent / 10))} ${view.percent}%`
@@ -115,9 +133,34 @@ export function transferProgressText(progress: TransferProgress) {
 }
 /** While a step behind the modal overlay runs, its status line carries the server step's progress (polled every second). Text another
  *  writer sets stays the base line; when no server step runs, the base line is shown again. Returns the stop function. */
+/** 0.9.103-ver4 (「가림 창에 그래픽 막대」): the full-screen transfer overlay belongs to the host (App.svelte) and shows only the status
+ *  text. Without changing the host, the panel's own progress component (bar, %, MB, speed, remaining time) is mounted inside that
+ *  overlay's box while it is up. When the box is not found (the host markup changed), the text bar stays as before. */
+export const OVERLAY_BOX = 'div.fixed.inset-0[role="alert"][aria-busy="true"] > div'
+export async function mountOverlayBar(): Promise<(() => void) | null> {
+    const box = typeof document === 'undefined' ? null : document.querySelector(OVERLAY_BOX)
+    if (!box) return null
+    const [{ mount, unmount }, component] = await Promise.all([import('svelte'), import('../../lib/Setting/Pages/PlayTransferProgress.svelte')])
+    if (!box.isConnected) return null
+    const host = document.createElement('div')
+    host.setAttribute('data-transfer-overlay-bar', ''); host.style.width = 'min(28rem, 80vw)'
+    box.appendChild(host)
+    const app = mount(component.default, { target: host, props: { active: true, quiet: true } })
+    return () => { void unmount(app); host.remove() }
+}
 function overlayProgress() {
     let base = get(transferStatus), mine = '', stopped = false, controller: AbortController | undefined
+    let bar: (() => void) | null = null, placing = false
+    const place = () => {
+        if (bar || placing || stopped) return
+        placing = true
+        void mountOverlayBar().then(remove => { if (stopped) remove?.(); else bar = remove }).catch(() => {}).finally(() => { placing = false })
+    }
+    queueMicrotask(place)
     const timer = setInterval(() => {
+        place()
+        // The graphical bar shows the step itself: the overlay text stays the plain status line.
+        if (bar) { if (mine && get(transferStatus) === mine && mine !== base) transferStatus.set(base); mine = ''; return }
         if (controller) return
         // A hung request is cut after 5 s (like the panel line), so the next tick can ask again; stop() cancels it.
         const c = controller = new AbortController(), limit = setTimeout(() => c.abort(), 5000)
@@ -129,7 +172,7 @@ function overlayProgress() {
             if (mine !== current) transferStatus.set(mine)
         }).catch(() => {}).finally(() => { clearTimeout(limit); if (controller === c) controller = undefined })
     }, 1000)
-    return () => { stopped = true; clearInterval(timer); controller?.abort(); if (mine && get(transferStatus) === mine && mine !== base) transferStatus.set(base) }
+    return () => { stopped = true; clearInterval(timer); controller?.abort(); bar?.(); bar = null; if (mine && get(transferStatus) === mine && mine !== base) transferStatus.set(base) }
 }
 export function transferUnavailable() {
     return get(transferBusy) || get(syncSaveHold) || get(doingChat) || get(isAnyGenerating) || get(importSession).phase !== 'idle'
@@ -143,7 +186,7 @@ export async function queueTransferFile(file: File) {
     } catch (error) { transferStatus.set(String(error)); throw error }
     finally { await refreshTransfers() }
 }
-export async function exportTransfer(chatIds: string[], compatibility = false) {
+export async function exportTransfer(chatIds: string[], compatibility = false, light = false) {
     if (transferUnavailable()) throw new Error('진행 중인 생성이나 가져오기가 끝난 뒤 다시 보내 주세요.')
     transferBusy.set(true); transferStatus.set('보낼 자료를 확인하고 묶는 중…')
     const stopProgress = overlayProgress()
@@ -152,7 +195,7 @@ export async function exportTransfer(chatIds: string[], compatibility = false) {
         if (!char) throw new Error('보낼 캐릭터를 먼저 열어 주세요.')
         for (const id of chatIds) if (!await ensureChatHydrated(char.chats, char.chats.findIndex(ch => ch.id === id), char.chaId)) throw new Error('대화 내용을 읽지 못했어요.')
         await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
-        const result = await post('/export', { characterId: char.chaId, chatIds, primaryChatId: chatIds.includes(char.chats[char.chatPage]?.id) ? char.chats[char.chatPage].id : chatIds[0], compatibility })
+        const result = await post('/export', { characterId: char.chaId, chatIds, primaryChatId: chatIds.includes(char.chats[char.chatPage]?.id) ? char.chats[char.chatPage].id : chatIds[0], compatibility, ...(light && !compatibility ? { light: true } : {}) })
         if (result.registry) {
             Object.assign(getDatabase(), { risuPlaySets: result.registry })
             await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
@@ -162,6 +205,45 @@ export async function exportTransfer(chatIds: string[], compatibility = false) {
         return result
     } finally { stopProgress(); transferBusy.set(false); await refreshTransfers() }
 }
+const sizeText = (bytes: number) => bytes >= 1_000_000 ? `${mb(bytes)} MB` : `${Math.max(1, Math.ceil(bytes / 1024)).toLocaleString()} KiB`
+/** 0.9.103-ver4 (「보낸 묶음 목록·지우기」): before packing, a ready package of the same selection is offered instead of a second copy.
+ *  Returns the package to send, or null when the user cancelled. */
+export async function exportTransferChecked(chatIds: string[], compatibility = false, light = false) {
+    if (transferUnavailable()) throw new Error('진행 중인 생성이나 가져오기가 끝난 뒤 다시 보내 주세요.')
+    const char = getCurrentCharacter()
+    if (!char) throw new Error('보낼 캐릭터를 먼저 열어 주세요.')
+    await requestImmediateSave({ flushServer: 'canonical', rejectOnFailure: true })
+    const { duplicate } = await post('/export-check', { characterId: char.chaId, chatIds, compatibility, ...(light && !compatibility ? { light: true } : {}) })
+    if (duplicate) {
+        const when = new Date(duplicate.createdAt).toLocaleString()
+        const choice = await alertSelect([`준비된 묶음 그대로 쓰기 (${sizeText(duplicate.bytes ?? 0)})`, '새로 다시 만들기', '취소'],
+            `같은 대화로 ${when}에 만든 묶음이 이미 있어요. ${duplicate.same ? '그 뒤로 대화·카드가 바뀌지 않았어요.' : '그 뒤로 대화나 카드가 바뀌었어요. 바뀐 내용까지 보내려면 새로 만들어 주세요.'}`)
+        if (choice === '0') { transferStatus.set('준비된 묶음을 그대로 써요. 보낼 방법을 선택해 주세요.'); return { ...duplicate, missing: [], external: [], excluded: [], reused: true } }
+        if (choice !== '1') { transferStatus.set('보낼 자료 확인을 취소했어요.'); return null }
+    }
+    return exportTransfer(chatIds, compatibility, light)
+}
+export const sentPackages = async (): Promise<SentPackage[]> => (await transferRequest('/sent')).json()
+export const removeSentPackage = (id: string) => post(`/${id}/remove-sent`, { confirmed: true })
+export const clearSentPackages = () => post('/sent/clear', { confirmed: true })
+/** Where a package went (display only; a failed note never fails the send). */
+export const noteSent = (id: string, note: { method: string; target?: string; state: string; transfer?: string }) => post(`/${id}/sent`, note).catch(() => null)
+const METHOD_LABEL: Record<string, string> = { file: '파일', nas: 'NAS', github: 'GitHub', wifi: 'Wi-Fi', usb: 'USB', share: '공유' }
+const SENT_STATE_LABEL: Record<string, string> = { requested: '저장·공유창 열림', sending: '보내는 중', delivered: '전달 완료', applied: '받는 쪽 가져오기 완료', failed: '실패' }
+/** One line per package for the list: when, size, light, where it went. */
+export function sentSummary(item: SentPackage) {
+    const parts = [new Date(item.createdAt).toLocaleString(), sizeText(item.diskBytes)]
+    if (item.leftover) return [...parts, '끝나지 않은 묶음 작업이 남긴 폴더'].join(' · ')
+    if (!item.hasFile) parts.push('파일 없음')
+    if (item.kind === 'persona') parts.push('페르소나')
+    else if (item.chatCount) parts.push(`대화 ${item.chatCount}개`)
+    if (item.light) parts.push(`가벼운 묶음(카드 그림 ${item.light.count}개 ${sizeText(item.light.bytes)} 뺌)`)
+    const last = item.sentVia?.at(-1)
+    parts.push(last ? `${METHOD_LABEL[last.method] ?? last.method}${last.target ? ` ${last.target}` : ''} · ${SENT_STATE_LABEL[last.state] ?? last.state}${item.sentVia!.length > 1 ? ` 외 ${item.sentVia!.length - 1}번` : ''}` : '보낸 기록 없음')
+    return parts.join(' · ')
+}
+/** The light option starts on for a character whose earlier package another device confirmed it imported (Wi-Fi/USB). */
+export const suggestLight = (queue: TransferEntry[], characterId?: string) => !!characterId && queue.some(row => row.direction === 'send' && row.characterId === characterId && row.sentVia?.some(via => via.state === 'applied'))
 /** Persona transfer: bundles the chosen personas (saved values) as one file for any transfer method. */
 export async function exportPersonaTransfer(personaIds: string[]) {
     if (transferUnavailable()) throw new Error('진행 중인 생성이나 가져오기가 끝난 뒤 다시 보내 주세요.')
@@ -333,9 +415,22 @@ let polling = false
 /** A structured write-gate answer (server 423 with one of these codes) that a background poll must not report as an error. */
 const GATE_CODES = ['NAS_SYNC_BUSY', 'TRANSFER_BUSY']
 const gateRace = (error: any) => error?.status === 423 && GATE_CODES.includes(error?.code)
+/** 0.9.103-ver4: the arriving-file line, mounted once on the page (fixed at the bottom; shows only while a file arrives). */
+let arrivalMounted = false
+async function mountArrivalLine() {
+    if (arrivalMounted || typeof document === 'undefined') return
+    arrivalMounted = true
+    try {
+        const [{ mount }, component] = await Promise.all([import('svelte'), import('../../lib/Setting/Pages/PlayTransferArrival.svelte')])
+        const host = document.createElement('div'); host.setAttribute('data-transfer-arrival-host', '')
+        document.body.appendChild(host)
+        mount(component.default, { target: host })
+    } catch { arrivalMounted = false }
+}
 export function startTransferInbox() {
     if (polling) return
     polling = true
+    void mountArrivalLine()
     // While a NAS sync apply or a manual transfer holds the write gate, native polling would only collect 423s (and overwrite the
     // status text with them): skip the tick, and re-check after every awaited step because the gate can close mid-tick.
     const gateHeld = () => get(transferBusy) || get(syncSaveHold)

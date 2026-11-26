@@ -200,6 +200,7 @@
         "src/lib/Setting/Pages/TransferPanel.svelte",
         "src/lib/Setting/Pages/NasSyncProgress.svelte",
         "src/lib/Setting/Pages/PlayTransferProgress.svelte",
+        "src/lib/Setting/Pages/PlayTransferArrival.svelte",
         "src/lib/Setting/Pages/__fixtures__/SelectBindOrder.svelte",
         "src/ts/nasSync.test.ts",
         "src/ts/nasSync.ts",
