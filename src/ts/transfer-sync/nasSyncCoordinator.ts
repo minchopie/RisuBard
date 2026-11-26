@@ -175,7 +175,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
      * One cycle. `safe` is the window opened by the triggering lifecycle event (null for timer/save/send/reconnect cycles, which never
      * apply). Its epoch is compared with the live interaction count at every decision point; a count that moved means the user is playing.
      */
-    async function cycle(reason: string, external?: AbortSignal, safe: SafeWindow | null = null, direction: 'both' | 'upload' | 'download' = 'both'): Promise<string> {
+    // 2026-11-27 snapshotScope 'chats': the one-time 「채팅만 NAS에 업로드」 (upload direction only) — this cycle's snapshot records chats only.
+    async function cycle(reason: string, external?: AbortSignal, safe: SafeWindow | null = null, direction: 'both' | 'upload' | 'download' = 'both', snapshotScope?: 'chats'): Promise<string> {
         // A failed startup probe leaves enabled unknown; an explicit retry must recheck it instead of silently returning idle forever.
         if (reason === 'manual' && started && !state.probed && !state.paused) await probe()
         if (!active()) return 'idle'
@@ -232,7 +233,7 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
                     // next settled save schedules it; edits made meanwhile are simply part of that later snapshot.
                     if (!receiveOnly && !o.generating()) {
                         enter('snapshot')
-                        try { missingMediaChecked = (await o.snapshot(signal))?.missingMediaChecked }
+                        try { missingMediaChecked = (await o.snapshot(signal, direction === 'upload' ? snapshotScope : undefined))?.missingMediaChecked }
                         // 2026-11-25 (user decision A1): a missing picture/inlay stops only the upload. The cycle still receives (pull, kept in the
                         // store); nothing is published or applied and the diagnostic stays. The upload button and every other error fail as before.
                         catch (error: any) { if (error?.code !== 'SNAPSHOT_MISSING' || direction === 'upload') throw error; snapshotMissing = error }
@@ -406,6 +407,8 @@ export function createSyncCoordinator(options: CoordinatorOptions = {}) {
         /** The user asked: a manual window (its epoch is now; typing right after still voids it). */
         retryNow: () => { state.failures = 0; return cycle('manual', undefined, openWindow('manual')) },
         uploadNow: () => { state.failures = 0; return cycle('manual', undefined, openWindow('manual'), 'upload') },
+        /** 2026-11-27: one upload of the chats only (Wiki and save slots with them); the device's sync scope stays as it is. */
+        uploadChatsNow: () => { state.failures = 0; return cycle('manual', undefined, openWindow('manual'), 'upload', 'chats') },
         downloadNow: () => { state.failures = 0; return cycle('manual', undefined, openWindow('manual'), 'download') },
         stop() { started = false; startupWindow = null; pendingWindow = null; invalidate('sync stopped'); stopTimers(); unsubscribe?.(); unsubscribe = null; unsubscribeSelection?.(); unsubscribeSelection = null; for (const l of listeners) l.target.removeEventListener(l.type, l.handler, { capture: l.capture }); listeners.length = 0 },
     }

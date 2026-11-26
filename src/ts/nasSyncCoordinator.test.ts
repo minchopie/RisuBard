@@ -983,3 +983,21 @@ test('0.9.96-ver10: the app coordinator (singleton) uses the 5-chat / 1-hour cad
     expect(syncCoordinator().cadence).toBe(DEFAULT_CADENCE)
     expect(createSyncCoordinator({ supported: () => false }).cadence).toBeNull()
 })
+
+test('2026-11-27 「채팅만 NAS에 업로드」: one upload whose snapshot asks for chats only; the upload and download buttons never ask for it; it clears no picture report', async () => {
+    const h = harness(); await h.c.start(); h.calls.length = 0
+    h.io.snapshot.mockClear()
+    expect(await h.c.uploadChatsNow()).toBe('uploaded')
+    expect(h.calls).toEqual(['status', 'snapshot', 'publish', 'status']) // like the upload button: nothing is pulled or applied
+    expect(h.io.snapshot.mock.calls[0][1]).toBe('chats')
+    expect(f.clearMissingMedia).not.toHaveBeenCalled()
+    h.io.snapshot.mockClear()
+    expect(await h.c.uploadNow()).toBe('uploaded'); expect(h.io.snapshot.mock.calls[0][1]).toBeUndefined()
+    h.io.snapshot.mockClear()
+    expect(await h.c.downloadNow()).toBe('empty'); expect(h.io.snapshot.mock.calls[0][1]).toBeUndefined()
+    // a picture a chat itself shows is missing: this upload fails like the upload button (nothing published)
+    h.io.snapshot.mockRejectedValueOnce(Object.assign(new Error('빠진 그림'), { code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1, logged: true } }))
+    h.io.publish.mockClear()
+    expect(await h.c.uploadChatsNow()).toBe('error'); expect(h.io.publish).not.toHaveBeenCalled()
+    h.c.stop()
+})

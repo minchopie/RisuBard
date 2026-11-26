@@ -2824,3 +2824,78 @@ test('chats-only scope (15, 0.9.103-ver1 R21): a picture missing from a chats-on
     expect((await tablet.service.snapshot()).committed).toMatchObject({ revisions: 1, tombstones: 0 })
     expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat'])
 })
+// ---------------------------------------------------------------- 2026-11-27 「채팅만 NAS에 업로드」 (one upload, the scope stays) ----------------------------------------------------------------
+test('chats-only upload once (16): an all-scope device whose module picture is missing uploads its chats only — no card/module/settings revision or tombstone, no card or module picture read, pins only the owner, the picture report stays, the scope stays all; over HTTP too', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const missingIcon = 'assets/' + 'd'.repeat(64) + '.png'
+    const db = tablet.db()
+    db.modules.push({ id: 'life', name: '라이프 모듈', lorebook: [], assets: [['icon', missingIcon, 'png']] })
+    db.characters[0].description = 'card edited on the tablet'; db.aiModel = 'tablet-model'; db.pluginCustomStorage = { assetMaid: 'tablet forms' }
+    db.characters[0].chats[0].message.push({ role: 'user', data: '태블릿에서 이어 쓴 턴' })
+    tablet.save(db)
+    // The ordinary upload still stops at the missing module picture (nothing recorded).
+    await expect(tablet.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING' })
+    expect(tablet.service.status().missingMedia).toMatchObject({ count: 1 })
+    const reads = countExports(tablet)
+    const once = await tablet.service.snapshot({ chatsOnly: true })
+    expect(once.committed).toMatchObject({ revisions: 1, tombstones: 0 })
+    expect(once.chatsOnly).toBe(true); expect(once.missingMediaChecked).toBeUndefined() // the full picture report is not cleared by it
+    expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat'])
+    expect(reads.filter(k => k.startsWith('assets/'))).toEqual([])
+    expect(pinsOf(headOf(tablet, 'play\nchat\nchat'))).toEqual({ 'pin:character:card': CHATS_ONLY_PIN })
+    expect(tablet.service.status()).toMatchObject({ syncScope: 'all', missingMedia: { count: 1 } })
+    // Nothing more to record for chats; a card removed here is not a deletion for this upload either.
+    const gone = tablet.db(); gone.characters[0].chats[0].message.push({ role: 'char', data: '한 턴 더' }); gone.modules = gone.modules.filter((m: any) => m.id !== 'mod'); tablet.save(gone)
+    const routes = new Map<string, any>()
+    tablet.service.registerRoutes({ get: (path: string, handler: any) => routes.set(path, handler), post: (path: string, handler: any) => routes.set(path, handler) }, { auth: async () => true, activeSession: () => true })
+    let body: any; await routes.get('/api/nas-sync/snapshot')({ body: { scope: 'chats' } }, { json: (value: any) => { body = value } })
+    expect(body.committed).toMatchObject({ revisions: 1, tombstones: 0 }); expect(body.chatsOnly).toBe(true)
+    expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat'])
+    expect(tablet.service.store().graph.classify('library\nmodule\nmod').state).toBe('live')
+    expect((await tablet.service.publish()).failed).toEqual([])
+    // An all-scope PC of this version with the same card id but different card content takes the chat (no pin compared), keeps its card and settings.
+    const pc = await device(t, dav, 'once16-pc', phoneWithCard()); pc.storage.kvSet('assets/phone-icon.png', Buffer.from('phone-icon-bytes')); pc.service.enable({ workspaceId: 'ws-fixture' })
+    await pc.service.snapshot() // its own card and settings are recorded first (as every cycle does): they meet the tablet's as conflicts, never overwritten
+    await pc.service.pull(); await settle(pc)
+    const mine = pc.db()
+    expect(mine.characters[0].chats.find((c: any) => c.id === 'chat').message.at(-1).data).toBe('한 턴 더')
+    expect(mine.characters[0].description).toBe('phone card')
+    expect(mine.pluginCustomStorage).not.toEqual({ assetMaid: 'tablet forms' }) // plugin storage never travels with a chats-only upload
+    expect(mine.aiModel).toBe('phone-model')
+    // Back on the tablet: once the picture is there, the ordinary upload records the card/module/settings edits as before and does not
+    // publish the chat again for its pins.
+    tablet.storage.kvSet(missingIcon, Buffer.from('life-icon'))
+    const full = await tablet.service.snapshot()
+    expect(full.committed.tombstones).toBe(1) // the module removed here is an ordinary deletion of the full upload
+    expect(lastCommitRoots(tablet)).toEqual(expect.arrayContaining(['library/character/card', 'library/module/life', 'settings/group/provider-main', 'settings/group/pluginCustomStorage', 'library/module/mod (deleted)']))
+    expect(lastCommitRoots(tablet)).not.toContain('play/chat/chat')
+})
+test('chats-only upload once (17): on a device already in chats scope it is the ordinary chats-only snapshot (joins the same flight); on an all-scope device it never deletes a card removed here', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const gone = tablet.db(); gone.characters = []; tablet.save(gone)
+    expect((await tablet.service.snapshot({ chatsOnly: true })).committed).toBeNull() // the card and its chat vanished here: nothing deleted
+    expect(tombstoneCount(tablet)).toBe(0)
+    await tablet.service.setSyncScope({ scope: 'chats' })
+    const back = baseDb(); tablet.save(back)
+    const a = tablet.service.snapshot({ chatsOnly: true }), b = tablet.service.snapshot()
+    expect(await a).toEqual(await b) // same flight in chats scope
+    expect((await a).chatsOnly).toBeUndefined()
+})
+test('chats-only upload once (18, the 11-26 PC case): a device that stopped uploading its settings (stale plugin storage on the NAS) and now uploads chats only never replaces a newer plugin storage elsewhere by any automatic cycle — the two values wait as a difference to choose', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav)
+    const tdb = tablet.db(); tdb.pluginCustomStorage = { lp_usage_stats: 1 }; tablet.save(tdb)
+    await tablet.service.snapshot(); await tablet.service.publish()
+    const pc = await device(t, dav, 'once18-pc', EMPTY_DB()); pc.storage.kvSet('assets/icon.png', Buffer.from('icon-bytes')); pc.service.enable({ workspaceId: 'ws-fixture' })
+    await applyAll(pc)
+    const p = pc.db(); p.pluginCustomStorage = { lp_usage_stats: 1, assetMaid: 'pc forms' }; pc.save(p)
+    await pc.service.snapshot(); await pc.service.publish()
+    // The tablet's own later plugin bookkeeping was recorded under all (old value on the NAS); then only its chats go up.
+    const t2 = tablet.db(); t2.pluginCustomStorage = { lp_usage_stats: 2 }; tablet.save(t2)
+    await tablet.service.snapshot(); await tablet.service.publish()
+    const t3 = tablet.db(); t3.pluginCustomStorage = { lp_usage_stats: 3 }; t3.characters[0].chats[0].message.push({ role: 'user', data: '태블릿 새 턴' }); tablet.save(t3)
+    expect((await tablet.service.snapshot({ chatsOnly: true })).committed).toMatchObject({ revisions: 1 }); await tablet.service.publish()
+    for (let i = 0; i < 2; i++) { await pc.service.snapshot(); await pc.service.pull(); await settle(pc) }
+    expect(pc.db().pluginCustomStorage).toEqual({ lp_usage_stats: 1, assetMaid: 'pc forms' })
+    expect(pc.db().characters[0].chats[0].message.at(-1).data).toBe('태블릿 새 턴')
+    expect((await pc.service.conflicts()).map((c: any) => c.root)).toContain('settings\ngroup\npluginCustomStorage')
+})

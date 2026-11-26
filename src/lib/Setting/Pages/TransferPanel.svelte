@@ -105,12 +105,12 @@
     let profileReported = false
     const syncSupported = isNodeServer
     const coordinator = () => syncCoordinator()
-    async function runSync(direction: 'upload' | 'download') {
+    async function runSync(direction: 'upload' | 'download' | 'upload-chats') {
         await run(async () => {
-            const label = direction === 'upload' ? '업로드' : '다운로드'
+            const label = direction === 'upload' ? '업로드' : direction === 'upload-chats' ? '채팅만 업로드' : '다운로드'
             syncActionResult = ''
             transferStatus.set(`${label} 중…`)
-            const outcome = await (direction === 'upload' ? coordinator().uploadNow() : coordinator().downloadNow())
+            const outcome = await (direction === 'upload' ? coordinator().uploadNow() : direction === 'upload-chats' ? coordinator().uploadChatsNow() : coordinator().downloadNow())
             syncActionResult = `${label}: ${syncOutcomeText(outcome, coordinator().state)}`
             transferStatus.set(syncActionResult)
             await refreshSync()
@@ -208,11 +208,13 @@
             <div class="transfer-actions">
                 <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload')}>{$coordinatorState?.running && $coordinatorState.direction === 'upload' ? '업로드 중…' : 'NAS에 업로드'}</ShButton>
                 <ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('download')}>{$coordinatorState?.running && $coordinatorState.direction === 'download' ? '다운로드 중…' : '이 기기에 다운로드'}</ShButton>
+                {#if sync.syncScope !== 'chats'}<ShButton variant="outline" disabled={$coordinatorState?.running || $coordinatorState?.paused} onclick={() => runSync('upload-chats')}>채팅만 NAS에 업로드</ShButton>{/if}
                 <ShButton variant="outline" onclick={() => coordinator().pause(!($coordinatorState?.paused ?? false))}>{$coordinatorState?.paused ? '자동 동기화 재개' : '잠시 중지'}</ShButton>
             </div>
             <NasSyncProgress />
             <p class="hint">업로드: 이 기기 → NAS · 다운로드: NAS → 이 기기에 바로 적용. 자동 동기화는 그대로 계속돼요.</p>
-            <label>동기화 범위<select value={sync.syncScope === 'chats' ? 'chats' : 'all'} disabled={$coordinatorState?.running} onchange={(event) => { const scope = event.currentTarget.value === 'chats' ? 'chats' : 'all'; void run(async () => { sync = await setSyncScope(scope); syncScopePick = scope; await refreshSync(); transferStatus.set(scope === 'chats' ? '이제 이 기기는 대화(Wiki·저장 슬롯 포함)만 동기화해요.' : '이제 이 기기는 전체를 동기화해요.') }) }}><option value="all">전체 · 카드·모듈·설정·대화 모두</option><option value="chats">채팅만 · 대화와 그 Wiki·저장 슬롯만</option></select></label>
+            {#if sync.syncScope !== 'chats'}<p class="hint">채팅만 NAS에 업로드: 동기화 범위는 그대로 두고, 이번 한 번 대화(Wiki·저장 슬롯 포함)만 올려요. 카드·모듈·플러그인·설정은 올리지도 지우지도 않고, 그 그림도 읽지 않아요.</p>{/if}
+            <label>동기화 범위<select value={sync.syncScope === 'chats' ? 'chats' : 'all'} disabled={$coordinatorState?.running} onchange={(event) => { const select = event.currentTarget, scope = select.value === 'chats' ? 'chats' : 'all'; void run(async () => { try { sync = await setSyncScope(scope); syncScopePick = scope; syncActionResult = scope === 'chats' ? '동기화 범위: 채팅만으로 바꿨어요.' : '동기화 범위: 전체로 바꿨어요.'; await refreshSync(); transferStatus.set(scope === 'chats' ? '이제 이 기기는 대화(Wiki·저장 슬롯 포함)만 동기화해요.' : '이제 이 기기는 전체를 동기화해요.') } catch (error) { syncActionResult = `동기화 범위를 바꾸지 못했어요 · ${String(error)}`; throw error } finally { select.value = sync?.syncScope === 'chats' ? 'chats' : 'all' } }) }}><option value="all">전체 · 카드·모듈·설정·대화 모두</option><option value="chats">채팅만 · 대화와 그 Wiki·저장 슬롯만</option></select></label>
             <p class="hint">채팅만: 대화와 그 Wiki·저장 슬롯만 올리고 받아요. 카드·모듈·설정은 NAS 배포 받기로 받고, 지우거나 덮어쓰지 않아요.</p>
             {#if sync.syncScope !== 'chats' && sync.scopeReapply}<p role="status">전체로 돌아가는 중: 채팅만일 때 건너뛴 카드·설정 {sync.scopeReapply}건을 받아 적용해요. 이 기기 값과 다른 항목은 기기 간 차이로 보여요.</p>{/if}
             {#if working || syncActionResult}<p role="status" aria-live="polite">{working ? $transferStatus : syncActionResult}</p>{/if}

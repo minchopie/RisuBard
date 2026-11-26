@@ -1,7 +1,7 @@
 import { test, expect, vi } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
 import { writable } from 'svelte/store'
-const f = vi.hoisted(() => ({ profile: vi.fn(async () => ({ kind: 'pc' })), upload: vi.fn(async () => 'uploaded'), download: vi.fn(async () => 'applied'), coordinator: null as any, status: vi.fn(async () => ({ enabled: true, role: 'authority', lastAppliedAt: Date.parse('2026-10-24T01:23:00Z'), sync: { outbox: { pending: [], published: 1 }, incoming: {} }, vault: { origin: 'generated' } })) }))
+const f = vi.hoisted(() => ({ profile: vi.fn(async () => ({ kind: 'pc' })), upload: vi.fn(async () => 'uploaded'), uploadChats: vi.fn(async () => 'uploaded'), scope: vi.fn(async (_scope: string): Promise<any> => ({})), download: vi.fn(async () => 'applied'), coordinator: null as any, status: vi.fn(async () => ({ enabled: true, role: 'authority', lastAppliedAt: Date.parse('2026-10-24T01:23:00Z'), sync: { outbox: { pending: [], published: 1 }, incoming: {} }, vault: { origin: 'generated' } })) }))
 vi.mock('./stores.svelte', () => ({ selectedCharID: writable(0), DBState: { db: { characters: [{ name: '표본', chatPage: 0, chats: [{ id: 'chat-id', name: '기존 대화' }] }] } } }))
 vi.mock('./globalApi.svelte', () => ({ downloadFile: vi.fn() }))
 vi.mock('./alert', () => ({ alertConfirm: vi.fn() }))
@@ -11,8 +11,8 @@ vi.mock('./transferNative', () => ({ nativeSend: writable(null), playSetAvailabl
 vi.mock('./playTransfer', () => ({ transferBusy: writable(false), transferStatus: writable(''), transferQueue: writable([]), refreshTransfers: vi.fn(async () => {}), queueTransferFile: vi.fn(), exportTransfer: vi.fn(), receiveTransfer: vi.fn(), cancelTransfer: vi.fn(), requestRemoteTransfer: vi.fn(), uploadLegacyChat: vi.fn(),
     exportTransferChecked: vi.fn(), sentPackages: vi.fn(async () => []), removeSentPackage: vi.fn(), clearSentPackages: vi.fn(), noteSent: vi.fn(), sentSummary: () => '', suggestLight: () => false,
     playTransferProgress: vi.fn(async () => null), transferProgressView: (_p: unknown, _n: unknown, fallback = '') => ({ label: fallback || '처리 중', percent: null, detail: '', tone: 'running' }) }))
-vi.mock('./nasSyncCoordinator', () => ({ coordinatorState: f.coordinator = writable({ lastOutcome: 'empty' }), syncCoordinator: () => ({ uploadNow: f.upload, downloadNow: f.download, state: { pendingReview: 2, keptDeletions: 1 } }) }))
-vi.mock('./nasSync', () => ({ syncStatus: f.status, syncNetwork: vi.fn(async () => null), reportSyncNetwork: vi.fn(async () => {}), reportSyncProfile: f.profile,
+vi.mock('./nasSyncCoordinator', () => ({ coordinatorState: f.coordinator = writable({ lastOutcome: 'empty' }), syncCoordinator: () => ({ uploadNow: f.upload, uploadChatsNow: f.uploadChats, downloadNow: f.download, state: { pendingReview: 2, keptDeletions: 1 } }) }))
+vi.mock('./nasSync', () => ({ syncStatus: f.status, setSyncScope: (scope: string) => f.scope(scope), syncNetwork: vi.fn(async () => null), reportSyncNetwork: vi.fn(async () => {}), reportSyncProfile: f.profile,
     syncConflicts: vi.fn(async () => [{ root: 'opaque-root', type: 'chat', title: '표본 · 기존 대화', sameMessages: true, differs: ['wiki'], state: 'diverged', variants: [{ heads: ['h1'], messages: 2, wikiFiles: 3, source: { self: true } }, { heads: ['h2'], messages: 2, wikiFiles: 4, source: {} }] }]),
     syncTrash: vi.fn(async () => []), syncOverview: vi.fn(async () => ({ localIssues: [{ name: '선택한 용사', reason: 'local-persona-edit' }], personas: [{ name: '새 페르소나' }], items: [{ type: 'chat', title: '표본 · 기존 대화', state: 'uploaded', nasAt: Date.parse('2026-10-22T16:05:00Z'), wikiFiles: 3, slots: 1, pages: 2 }, { type: 'module', title: '원격 모듈', state: 'recorded', nasAt: null }], chats: [{ character: '표본', name: '기존 대화', state: 'uploaded', wikiFiles: 3, slots: 1, pages: 2 }] })) }))
 import Panel from '../lib/Setting/Pages/TransferPanel.svelte'
@@ -131,4 +131,37 @@ test('send packages: listed when opened; one or all are deleted only after the c
         button('모두 지우기').click(); await settle()
         expect(clearSentPackages).toHaveBeenCalledTimes(1); expect(clearSentPackages).toHaveBeenCalledWith(['p1']) // exactly the ones the question listed (list read again first)
     } finally { await unmount(instance); target.remove() }
+})
+
+test('2026-11-27: 「채팅만 NAS에 업로드」 runs only the chats-only upload; a refused scope change says why and the list shows the scope that is really set; a chats-scope device has no extra button', async () => {
+    f.coordinator.set({ lastOutcome: 'empty' }) // not paused (an earlier test paused it)
+    const target = document.createElement('div'); document.body.append(target)
+    const instance = mount(Panel, { target })
+    const settle = async () => { for (let i = 0; i < 20; i++) { await Promise.resolve(); await tick() } }
+    try {
+        await settle()
+        f.upload.mockClear(); f.uploadChats.mockClear()
+        ;[...target.querySelectorAll('button')].find(e => e.textContent === '채팅만 NAS에 업로드')!.click()
+        await settle()
+        expect(f.uploadChats).toHaveBeenCalledTimes(1); expect(f.upload).not.toHaveBeenCalled()
+        expect(target.textContent).toContain('채팅만 업로드: NAS 업로드 완료')
+        // The server refuses the switch (an apply is still pending): the reason is shown and the list goes back to 전체.
+        f.scope.mockRejectedValueOnce(new Error('진행 중인 동기화 적용이 끝난 뒤 설정해 주세요.'))
+        const select = [...target.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'chats'))!
+        select.value = 'chats'; select.dispatchEvent(new Event('change', { bubbles: true }))
+        await settle()
+        expect(f.scope).toHaveBeenCalledWith('chats')
+        expect(select.value).toBe('all')
+        expect(target.textContent).toContain('동기화 범위를 바꾸지 못했어요')
+        expect(target.textContent).toContain('진행 중인 동기화 적용이 끝난 뒤 설정해 주세요.')
+    } finally { await unmount(instance); target.remove(); f.profile.mockClear() }
+    const status = await f.status()
+    f.status.mockResolvedValue({ ...status, syncScope: 'chats' } as typeof status)
+    const other = document.createElement('div'); document.body.append(other)
+    const second = mount(Panel, { target: other })
+    try {
+        for (let i = 0; i < 20; i++) { await Promise.resolve(); await tick() }
+        expect([...other.querySelectorAll('button')].some(e => e.textContent === 'NAS에 업로드')).toBe(true)
+        expect([...other.querySelectorAll('button')].some(e => e.textContent === '채팅만 NAS에 업로드')).toBe(false)
+    } finally { await unmount(second); other.remove(); f.status.mockResolvedValue(status); f.profile.mockClear() }
 })

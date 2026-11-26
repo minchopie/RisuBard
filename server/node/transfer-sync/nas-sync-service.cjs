@@ -899,8 +899,11 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         }
         return { database: { ...db, characters }, memberships, preserved };
     }
-    /** Snapshot: hydrated canonical DB → changed revisions committed with their blobs. Rejects while a plan is active. */
-    async function snapshot() {
+    /** Snapshot: hydrated canonical DB → changed revisions committed with their blobs. Rejects while a plan is active.
+     *  2026-11-27 `chatsOnly` (one upload, the device's scope unchanged): this one snapshot records chats only, exactly like the chats-only
+     *  scope (no card/module/plugin/settings revision or tombstone, no card asset read, chat pins = owner only); the next ordinary snapshot
+     *  records everything else as before. */
+    async function snapshot({ chatsOnly: chatsOnlyOnce = false } = {}) {
         const s = requireEnabled(), v = await openVault();
         if (service().plan) throw Object.assign(new Error('Finish the pending sync apply before taking a snapshot'), { code: 'NAS_SYNC_PLAN_PENDING' });
         const original = await readDatabase();
@@ -930,7 +933,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
             // reapplying: back in 'all' while skipped card/module/settings heads still wait to be applied here. Chats received meanwhile carry the
             // pins of those newer heads; a chat that differs only in pins is not published again against the older local items (it would hold
             // the chat on 'all' devices until this device caught up). A chat with any other change is published with this device's pins.
-            const scoped = chatsOnly(), reapplying = (service().scopeReapply ?? []).length > 0;
+            const scoped = chatsOnly() || chatsOnlyOnce === true, reapplying = (service().scopeReapply ?? []).length > 0;
             const projection = await projectDatabase({ database: db, cardOnlyMemberships: memberships, vault: v, captures, materials: playSetMemoryMaterials, branches: service().branches, readAsset: readSnapshotAsset, readInlay: readSnapshotInlay, inlayMeta, readColdChat, remapBranchChat: (value, workspace) => workspace?.identities ? remapBardChat(value, workspace.identities) : value, chatsOnly: scoped });
             if (projection.missing.length) throw missingMediaError(projection.missing, projection.missingMedia);
             const lineage = service().lineage, restoreMark = service().pendingRestore ?? null;
@@ -1583,14 +1586,18 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
     const recovery = async () => { await sweepShares(); return service().plan ? [{ transaction: service().plan.transaction, phase: service().plan.phase }] : []; };
     // A dropped HTTP wait does not stop server work: retries join the running snapshot/network operation instead of queueing duplicates.
     // A rejected run is not sticky; the next snapshot still captures fresh edits and checks enabled state inside its exclusive lane.
-    const inFlight = { snapshot: null, publish: null, pull: null };
+    const inFlight = { snapshot: null, snapshotChats: null, publish: null, pull: null };
     const singleFlight = (name, run) => inFlight[name] ??= run().finally(() => { inFlight[name] = null; });
     // 2026-11-07 adoption: this device's values are being replaced; checked inside the lane so a queued snapshot sees a just-started adoption.
-    const takeSnapshot = async () => {
+    // 2026-11-27: a one-time chats-only snapshot (「채팅만 NAS에 업로드」) runs in its own flight (never joins or is joined by a full one) and
+    // reports no checked missing-media id: it did not look at the card/module pictures, so a picture report of a full snapshot stays.
+    const takeSnapshot = async ({ chatsOnly: once = false } = {}) => {
         requireEnabled();
-        return singleFlight('snapshot', () => exclusive(async () => {
+        const options = { chatsOnly: once === true && !chatsOnly() };
+        return singleFlight(options.chatsOnly ? 'snapshotChats' : 'snapshot', () => exclusive(async () => {
             if (service().role === 'joining' && service().adopting) return { committed: null, adopting: true };
-            const result = await (ownsDataRoot ? storage.kvWithNasAssetVerification(snapshot) : snapshot());
+            const result = await (ownsDataRoot ? storage.kvWithNasAssetVerification(() => snapshot(options)) : snapshot(options));
+            if (options.chatsOnly) return { ...result, chatsOnly: true };
             checkedMissingMedia = readMissingMedia()?.id ?? null;
             return checkedMissingMedia ? { ...result, missingMediaChecked: checkedMissingMedia } : result;
         }));
@@ -1634,7 +1641,7 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         route('post', '/disable', () => disable());
         route('post', '/card-only-upload', req => exclusive(() => setCardOnlyUpload(req.body)));
         route('post', '/scope', req => exclusive(() => setSyncScope(req.body ?? {})));
-        route('post', '/snapshot', () => takeSnapshot());
+        route('post', '/snapshot', req => takeSnapshot({ chatsOnly: req.body?.scope === 'chats' }));
         route('post', '/missing-media/clear', req => clearMissingMedia(req.body?.id));
         route('post', '/bootstrap', req => exclusive(() => bootstrap(req.body)));
         route('post', '/publish', () => publish());

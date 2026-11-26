@@ -51,7 +51,8 @@ export const disableSync = () => post('/disable')
 export const setCardOnlyUpload = (characterId: string, enabled: boolean) => post('/card-only-upload', { characterId, enabled })
 /** 2026-11-21 (user decision: share chats only): this device's sync scope, 'all' (default) or 'chats'. Allowed while sync is off. */
 export const setSyncScope = (scope: 'all' | 'chats') => post('/scope', { scope })
-export const snapshotSync = (signal?: AbortSignal) => post('/snapshot', {}, signal)
+/** 2026-11-27 scope 'chats': a one-time chats-only snapshot (「채팅만 NAS에 업로드」); the device's sync scope is not changed. */
+export const snapshotSync = (signal?: AbortSignal, scope?: 'chats') => post('/snapshot', scope === 'chats' ? { scope } : {}, signal)
 export const clearMissingSyncMedia = (id: string, signal?: AbortSignal) => post('/missing-media/clear', { id }, signal)
 export const publishSync = (signal?: AbortSignal) => post('/publish', {}, signal)
 export const pullSync = (signal?: AbortSignal) => post('/pull', {}, signal)

@@ -1051,9 +1051,9 @@
       "path": "server/node/nas-sync-service.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "a17a3f9da780c899f31cef6be6cd8bc76ef3a000b2d2a1fb769006b7d4bec0dd",
-      "contentSha256": "a17a3f9da780c899f31cef6be6cd8bc76ef3a000b2d2a1fb769006b7d4bec0dd",
-      "bytes": 263745
+      "sha256": "6e8adbcfb760f57ff27e2c82a68795351cc888c73838fd24213090b3fd4875ae",
+      "contentSha256": "6e8adbcfb760f57ff27e2c82a68795351cc888c73838fd24213090b3fd4875ae",
+      "bytes": 271157
     },
     {
       "path": "server/node/nas-sync-share.cjs",
@@ -1275,9 +1275,9 @@
       "path": "server/node/transfer-sync/nas-sync-service.cjs",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "0d4d88e53d91424a370578f42b6694d7c88a002ea687079633fddbdaa547ff96",
-      "contentSha256": "0d4d88e53d91424a370578f42b6694d7c88a002ea687079633fddbdaa547ff96",
-      "bytes": 169536
+      "sha256": "c217b6c4aee0c23011daca7d62ddfe5be511110e3285b31f94226faeed1cb25a",
+      "contentSha256": "c217b6c4aee0c23011daca7d62ddfe5be511110e3285b31f94226faeed1cb25a",
+      "bytes": 170523
     },
     {
       "path": "server/node/transfer-sync/nas-sync-share.cjs",
@@ -1507,9 +1507,9 @@
       "path": "src/lib/Setting/Pages/TransferPanel.svelte",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "fcbd9c4f2896c95cedd806364b196f81a938917388bbbba4181798f47b2db234",
-      "contentSha256": "fcbd9c4f2896c95cedd806364b196f81a938917388bbbba4181798f47b2db234",
-      "bytes": 56553
+      "sha256": "f80a092e64e226bd64cd6aad0b5a033a3ef2d516cea17795cf4c16d17d8b9910",
+      "contentSha256": "f80a092e64e226bd64cd6aad0b5a033a3ef2d516cea17795cf4c16d17d8b9910",
+      "bytes": 57571
     },
     {
       "path": "src/lib/Setting/Pages/NasSyncProgress.svelte",
@@ -1563,9 +1563,9 @@
       "path": "src/ts/nasSyncCoordinator.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "8b6ffb451ccbd3c5f411cfed2364ef5c56046658dc6688f71559e7f8fc7912ba",
-      "contentSha256": "8b6ffb451ccbd3c5f411cfed2364ef5c56046658dc6688f71559e7f8fc7912ba",
-      "bytes": 76142
+      "sha256": "439f061dedcbac66c8b242fd0482d3c3fd43cd101214577d9dd044dd1c083dcb",
+      "contentSha256": "439f061dedcbac66c8b242fd0482d3c3fd43cd101214577d9dd044dd1c083dcb",
+      "bytes": 77427
     },
     {
       "path": "src/ts/nasSyncCoordinator.ts",
@@ -1643,17 +1643,17 @@
       "path": "src/ts/transfer-sync/nasSync.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "7fcd330128f53a9b20ba7b6f998c529816b02a55b2fbc9dd192d94681ebcb9a9",
-      "contentSha256": "7fcd330128f53a9b20ba7b6f998c529816b02a55b2fbc9dd192d94681ebcb9a9",
-      "bytes": 52007
+      "sha256": "25c5b1cb29f1bcc82fa33dd6d2203de0385cffde0111ba99b3b265cb6927e2c7",
+      "contentSha256": "25c5b1cb29f1bcc82fa33dd6d2203de0385cffde0111ba99b3b265cb6927e2c7",
+      "bytes": 52197
     },
     {
       "path": "src/ts/transfer-sync/nasSyncCoordinator.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "0b4d4818e39ff0074e6217f1d7fe5fb019002e2ce906fa1819844f361db1d18d",
-      "contentSha256": "0b4d4818e39ff0074e6217f1d7fe5fb019002e2ce906fa1819844f361db1d18d",
-      "bytes": 43022
+      "sha256": "804dec550d804b48adf13b78e3c841d1697e7cf014832b6927ff91f87ec6429a",
+      "contentSha256": "804dec550d804b48adf13b78e3c841d1697e7cf014832b6927ff91f87ec6429a",
+      "bytes": 43515
     },
     {
       "path": "src/ts/transfer-sync/nasSyncUi.ts",
@@ -1755,9 +1755,9 @@
       "path": "src/ts/transferSyncPanel.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "b4e8d5bc2705e4af08419c1fbdfd7d0d7b236edc06aa3328855af0a0e56912aa",
-      "contentSha256": "b4e8d5bc2705e4af08419c1fbdfd7d0d7b236edc06aa3328855af0a0e56912aa",
-      "bytes": 13002
+      "sha256": "3752d81f26827bbb1bd615e2ef1f396c55bd59dcc7305ba029ad4959999ff66f",
+      "contentSha256": "3752d81f26827bbb1bd615e2ef1f396c55bd59dcc7305ba029ad4959999ff66f",
+      "bytes": 15727
     },
     {
       "path": "src/ts/transferSyncShims.test.ts",
