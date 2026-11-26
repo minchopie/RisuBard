@@ -1563,9 +1563,9 @@
       "path": "src/ts/nasSyncCoordinator.test.ts",
       "module": "transfer-sync",
       "kind": "files",
-      "sha256": "439f061dedcbac66c8b242fd0482d3c3fd43cd101214577d9dd044dd1c083dcb",
-      "contentSha256": "439f061dedcbac66c8b242fd0482d3c3fd43cd101214577d9dd044dd1c083dcb",
-      "bytes": 77427
+      "sha256": "9863e6601c90051f63263d588ff27ea3e261e98f35b18154b5a6a6c61bb05fb4",
+      "contentSha256": "9863e6601c90051f63263d588ff27ea3e261e98f35b18154b5a6a6c61bb05fb4",
+      "bytes": 77472
     },
     {
       "path": "src/ts/nasSyncCoordinator.ts",
