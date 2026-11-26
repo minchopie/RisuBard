@@ -19,6 +19,8 @@
 // and the new body's own) is renumbered to the final picture order, and entities.assets / entities.lorebooks are rekeyed to match.
 // A separate async hook after finalization reads closed chats on demand and keeps their named pictures alongside those from open chats.
 // Skip module names during trash recovery, report ambiguous paths and unread chats, and skip names with no trash candidate.
+// 0.9.103-ver4: a picture is found by its record (descriptor and occurrence, as Asset Maid finds it), not by its "asset:N" number, and
+// Asset Maid's picture picks (features.assetSelection) go the same way as the references: rows joined by character, the new body's first.
 import { toast } from 'svelte-sonner'
 import { addLog } from '../log'
 import { applyUpdate, CHARACTER_UPDATE, type UpdateChoice, type UpdatePlan } from '../characterUpdate'
@@ -34,15 +36,17 @@ type Reference = { asset?: string, [key: string]: unknown }
 type Form = { id?: string, reference?: Reference | null, [key: string]: unknown }
 type Entry = { target?: string, forms?: Form[], [key: string]: unknown }
 type Fingerprinted = { fingerprints?: Record<string, string>, module?: unknown, occurrence?: number }
+type CharacterReference = Reference & { target?: string }
+type Selection = { selections?: { target?: string, assets?: unknown[] }[], characterReferences?: CharacterReference[] }
 interface Portable {
     schema?: string
     entities?: { lorebooks?: Record<string, Fingerprinted>, assets?: Record<string, Fingerprinted>, [key: string]: unknown }
-    features?: { characterForms?: { entries?: Entry[] }, [key: string]: unknown }
+    features?: { characterForms?: { entries?: Entry[] }, assetSelection?: Selection, [key: string]: unknown }
     [key: string]: unknown
 }
 
 export type HeldReason = 'character-missing' | 'character-ambiguous' | 'form-missing' | 'asset-missing'
-export interface HeldReference { side: 'mine' | 'theirs', target: string, character: string, formId: string, reference: Reference, reason: HeldReason }
+export interface HeldReference { side: 'mine' | 'theirs', target: string, character: string, formId: string, reference: Reference, reason: HeldReason, selection?: true }
 export interface AssetMaidMerge {
     content: string
     /** The user's references now on the new body. */
@@ -54,6 +58,8 @@ export interface AssetMaidMerge {
     appended: number
     /** Characters of the new body whose lore entry is not in the merged lorebook (taken out of the body). */
     dropped: string[]
+    /** The user's own picture picks (assetSelection rows and character references) now on the new body. */
+    selected: number
 }
 
 /** Directive prefix ("@@dont_activate ") and the Portable JSON, or null for anything else. */
@@ -72,7 +78,8 @@ function parse(content: unknown): { prefix: string, data: Portable } | null {
 }
 
 function indexOf(ref: unknown, kind: 'lore' | 'asset'): number {
-    const match = typeof ref === 'string' ? (kind === 'lore' ? /^lore:(\d+)$/ : /^asset:(\d+)$/).exec(ref) : null
+    // 0.9.103-ver4: Asset Maid trims a target, so " lore:3 " is lore:3 (a moved target is written without the spaces).
+    const match = typeof ref === 'string' ? (kind === 'lore' ? /^lore:(\d+)$/.exec(ref.trim()) : /^asset:(\d+)$/.exec(ref)) : null
     return match ? Number(match[1]) : -1
 }
 const entriesOf = (data: Portable): Entry[] => Array.isArray(data.features?.characterForms?.entries) ? data.features!.characterForms!.entries! : []
@@ -84,7 +91,8 @@ const isCustomTarget = (target: unknown) => typeof target === 'string' && target
  * narrows the candidates; a test nobody passes is skipped. More than one left is ambiguous: the lore index alone proves nothing.
  */
 function locate(entry: Entry, mine: { data: Portable, lore?: loreBook[] }, theirs: { data: Portable, lore?: loreBook[] }): Entry | HeldReason {
-    if (isCustomTarget(entry.target)) {
+    // 0.9.103-ver4: every target that is not "lore:N" ("custom:…", "self", "description:self", member targets) is the same target.
+    if (typeof entry.target === 'string' && indexOf(entry.target, 'lore') < 0) {
         const matches = entriesOf(theirs.data).filter(other => other.target === entry.target)
         return matches.length === 1 ? matches[0] : matches.length ? 'character-ambiguous' : 'character-missing'
     }
@@ -191,9 +199,13 @@ function loreMap(plan: UpdatePlan, choices: Record<string, UpdateChoice>, mine: 
 }
 
 const DROP = Symbol('drop')
+const TARGET_LISTS = new Set(['selectedTargets', 'workspaceDisabledTargets'])
 /**
  * Every "lore:N" value and key of the body moved by the map. Something that points at an entry not in the merged lorebook is taken
  * out (an object whose target it is, a list item, a key), so no number is left to point at another character.
+ * 0.9.103-ver4: as in Asset Maid, a lore number is a "target", an item of a target list (sourceSelection's selectedTargets and
+ * workspaceDisabledTargets) or a key; other text ("label", "description", matching keys and aliases, …) stays as written even when it
+ * reads "lore:N".
  */
 function moveLore(value: unknown, map: Map<number, number>): unknown {
     const move = (text: string): string | typeof DROP => {
@@ -207,7 +219,9 @@ function moveLore(value: unknown, map: Map<number, number>): unknown {
     const out: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
         const name = move(key)
-        const moved = moveLore(item, map)
+        const moved = typeof item === 'string' && key !== 'target' ? item
+            : Array.isArray(item) && !TARGET_LISTS.has(key) ? item.map(entry => typeof entry === 'string' ? entry : moveLore(entry, map)).filter(entry => entry !== DROP)
+            : moveLore(item, map)
         if (name !== DROP && moved !== DROP) out[name] = moved
     }
     return out
@@ -222,35 +236,73 @@ function moveLore(value: unknown, map: Map<number, number>): unknown {
 export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine: Partial<character>, theirs: Partial<character>, result: unknown[], map?: Map<number, number> | null): AssetMaidMerge | null {
     const own = parse(mineEntry?.content), other = parse(theirsEntry?.content)
     if (!own || !other) return null
-    let data: Portable = JSON.parse(JSON.stringify(other.data))
+    // 0.9.103-ver4: Asset Maid trims every target ("wr"); both bodies are read that way, so " lore:0 " and "lore:0" are one target below.
+    const text = (value: unknown) => value == null ? '' : String(value).trim() // Asset Maid's wr()
+    const trimmed = (key: string, value: unknown) => key === 'target' && value != null ? text(value) : value
+    const sameId = (a: unknown, b: unknown) => a === b || text(a) === text(b) // form ids too
+    own.data = JSON.parse(JSON.stringify(own.data), trimmed)
+    let data: Portable = JSON.parse(JSON.stringify(other.data), trimmed)
     const mineAssets = (mine.additionalAssets ?? []) as Asset[], theirsAssets = (theirs.additionalAssets ?? []) as Asset[]
     const assets: Record<string, Fingerprinted> = {}
     const held: HeldReference[] = []
-    let kept = 0, replaced = 0, appended = 0
-    const place = (reference: Reference, side: 'mine' | 'theirs'): Reference | null => {
+    let kept = 0, replaced = 0, appended = 0, selected = 0
+    // Asset Maid finds a picture by its record (descriptor and occurrence among the character's pictures, legacy fingerprint too);
+    // "asset:N" is only the number the body was written with and need not be the picture's position. The position is used as before
+    // when the record names no character picture of that side.
+    // A module picture is none of the card's pictures: it keeps its record under a number past every card picture the result can get
+    // (one number per module picture, whichever side names it and however its record is written). A number without a record of its
+    // side is not placed: it could only
+    // point at some other picture.
+    const sideLocators: Partial<Record<'mine' | 'theirs', ReturnType<typeof characterLocators>>> = {}
+    const moduleTokens = new Map<string, string>(), moduleBase = result.length + mineAssets.length
+    const place = (reference: Reference, side: 'mine' | 'theirs', append = side === 'mine'): Reference | null => {
         if (reference.asset === undefined) return { ...reference }
-        const picture = (side === 'mine' ? mineAssets : theirsAssets)[indexOf(reference.asset, 'asset')]
+        const list = side === 'mine' ? mineAssets : theirsAssets, number = indexOf(reference.asset, 'asset')
+        const record = (side === 'mine' ? own.data : other.data).entities?.assets?.[reference.asset]
+        if (!record) return null
+        if ('module' in record) {
+            const key = JSON.stringify([record.module, record.fingerprints?.descriptor, record.occurrence ?? 0])
+            let token = moduleTokens.get(key)
+            if (!token) {
+                token = `asset:${moduleBase + moduleTokens.size}`
+                moduleTokens.set(key, token)
+                assets[token] = JSON.parse(JSON.stringify(record))
+            }
+            return { ...reference, asset: token }
+        }
+        const descriptor = record.fingerprints?.descriptor
+        let picture: unknown = list[number]
+        if (descriptor) {
+            const found = sideLocators[side] ??= characterLocators(list)
+            const named = (locator: (typeof found)[number]) => !!locator && (locator.descriptor === descriptor || locator.fingerprint === descriptor) && locator.occurrence === (record.occurrence ?? 0)
+            const match = named(found[number]) ? number : found.findIndex(named)
+            if (match >= 0) picture = list[match]
+        }
         if (!Array.isArray(picture)) return null
-        let at = findAsset(result, picture)
-        if (at < 0 && side === 'mine') {
-            result.push([...picture])
+        let at = findAsset(result, picture as Asset)
+        if (at < 0 && append) {
+            result.push([...picture] as Asset)
             at = result.length - 1
             appended++
         }
         if (at < 0) return null
-        const record = (side === 'mine' ? own.data : other.data).entities?.assets?.[reference.asset]
-        if (record) assets[`asset:${at}`] = JSON.parse(JSON.stringify(record))
+        assets[`asset:${at}`] = JSON.parse(JSON.stringify(record))
         return { ...reference, asset: `asset:${at}` }
     }
-    const placed = (entry: Entry) => !map || isCustomTarget(entry.target) || map.has(indexOf(entry.target, 'lore'))
+    // Only lore targets follow the lore map; "custom:…", "self", "description:self" and member targets stay.
+    const placed = (entry: Entry) => !map || indexOf(entry.target, 'lore') < 0 || map.has(indexOf(entry.target, 'lore'))
     const dropped = entriesOf(data).filter(entry => !placed(entry)).map(entry => commentOf(theirs.globalLore, entry.target) || String(entry.target ?? ''))
-    // The new body's own references follow their pictures to their place in the result.
+    const droppedTargets = new Set(entriesOf(data).filter(entry => !placed(entry)).map(entry => String(entry.target ?? '')))
+    // The new body's own references follow their pictures to their place in the result. One whose picture is not there yet is looked
+    // for again after the user's references brought their pictures back (below).
+    const missing: [Entry, Form, Reference][] = []
     for (const entry of entriesOf(data)) for (const form of entry.forms ?? []) {
         if (!form?.reference) continue
         const moved = placed(entry) ? place(form.reference, 'theirs') : null
         if (moved) form.reference = moved
         else {
-            held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(form.id ?? ''), reference: form.reference, reason: placed(entry) ? 'asset-missing' : 'character-missing' })
+            if (placed(entry)) missing.push([entry, form, form.reference])
+            else held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(form.id ?? ''), reference: form.reference, reason: 'character-missing' })
             delete form.reference
         }
     }
@@ -263,6 +315,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         located.set(entry, target)
         if (typeof target !== 'string') claims.set(target, (claims.get(target) ?? new Set()).add(entry))
     }
+    const ownSlots = new Set<Form>() // forms of the new body that took a reference of the user's
     for (const entry of entriesOf(own.data)) for (const form of entry.forms ?? []) {
         const reference = form?.reference
         if (!reference) continue
@@ -275,7 +328,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (typeof target === 'string') { note(target); continue }
         if (claims.get(target)!.size > 1) { note('character-ambiguous'); continue }
         if (!placed(target)) { note('character-missing'); continue }
-        const slot = (target.forms ?? []).find(candidate => candidate?.id === form.id)
+        const slot = (target.forms ?? []).find(candidate => sameId(candidate?.id, form.id))
         if (!slot) { note('form-missing'); continue }
         if (empty) {
             slot.reference ??= {}
@@ -285,7 +338,144 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
         if (!moved) { note('asset-missing'); continue }
         if (slot.reference && (!custom || Object.keys(slot.reference).length > 0)) replaced++
         slot.reference = moved
+        ownSlots.add(slot)
         kept++
+    }
+    // Asset Maid's picture picks (the rows of its asset analysis tab and the character references) take the same way, so every number
+    // of the body keeps its record. Rows are joined by character: the new body's pictures first, then the user's picks not there yet.
+    // A pick whose picture is not in the result is left out (no picture is added for a pick) and a row left empty is dropped; the user's
+    // character reference wins on the same character, as a form reference does. Pictures the user's character references bring back
+    // are settled before any pick or outfit reference is looked for.
+    const selection = data.features?.assetSelection, ownSelection = own.data.features?.assetSelection
+    const hold = (side: 'mine' | 'theirs', target: unknown, asset: unknown, reason: HeldReason) => held.push({ side, target: String(target ?? ''),
+        character: commentOf(side === 'mine' ? mine.globalLore : theirs.globalLore, target), formId: '', reference: { asset: String(asset ?? '') }, reason, selection: true })
+    // Where each of the user's rows (and references) goes: a lore target to the same character of the new body (any of its lore
+    // targets, with or without forms); "self", "description:self", custom characters and members stay when the new body has them
+    // (Asset Maid's own target check), a member's lore target when the new body's record of it is the same entry. Rows of two different
+    // characters that land on one new character cannot both be right: both held.
+    const candidates = { data: { ...data, features: { characterForms: { entries: [...new Set([...entriesOf(data).map(entry => entry.target),
+        ...Object.keys(data.entities?.lorebooks ?? {})])].map(target => ({ target })) } } }, lore: theirs.globalLore }
+    const customIds = new Set(((data.features?.characters as { entries?: { id?: unknown }[] } | undefined)?.entries ?? []).map(entry => text(entry?.id)))
+    const members = (data.entities?.members ?? {}) as Record<string, unknown>
+    const sameLore = (target: string) => {
+        const before = own.data.entities?.lorebooks?.[target]?.fingerprints, after = data.entities?.lorebooks?.[target]?.fingerprints
+        return !!before && !!after && FINGERPRINTS.some(kind => !!before[kind] && before[kind] === after[kind])
+    }
+    const targetKept = (target: string) => isCustomTarget(target) ? customIds.has(target.slice('custom:'.length))
+        : target === 'self' || target === 'description:self' || !!members[target] || !!members[/^(member:\d+)\/description:self$/u.exec(target)?.[1] ?? '']
+            || sameLore(target)
+    const where = (list: unknown) => {
+        const items = (Array.isArray(list) ? list : []).filter(item => typeof item?.target === 'string') as Entry[]
+        const found = items.map((item): Entry | HeldReason => indexOf(item.target, 'lore') >= 0 ? locate(item, { data: own.data, lore: mine.globalLore }, candidates)
+            : targetKept(item.target!) ? { target: item.target } : 'character-missing')
+        return items.map((item, index): [Entry, Entry | HeldReason] => {
+            const target = found[index]
+            if (typeof target === 'string') return [item, target]
+            return [item, found.some((other, at) => other === target && items[at].target !== item.target) ? 'character-ambiguous' : placed(target) ? target : 'character-missing']
+        })
+    }
+    const ownReferences: CharacterReference[] = []
+    // Asset Maid ignores a character reference of a character that has forms: such a reference of the installed body was never in use.
+    const ownFormTargets = new Set(entriesOf(own.data).map(entry => String(entry.target ?? '').trim())) // Asset Maid trims targets
+    const ownCharacterReferences = where((Array.isArray(ownSelection?.characterReferences) ? ownSelection.characterReferences : [])
+        .filter(reference => !ownFormTargets.has(String(reference?.target ?? '').trim())))
+    for (const [index, [reference, target]] of ownCharacterReferences.entries()) {
+        // Asset Maid takes the last reference of a target: an earlier one of the same target was never in use.
+        if (ownCharacterReferences.slice(index + 1).some(([later]) => later.target === reference.target)) continue
+        if (typeof target === 'string') { hold('mine', reference.target, (reference as CharacterReference).asset, target); continue }
+        // Asset Maid uses a character reference only for a character without forms: where the new body gave the character forms the
+        // installed body did not have, the user's reference goes to its default form, as a form reference of the user's would. A form
+        // that already took another reference of the user's (from another installed character) keeps it; this one is held.
+        const forms = entriesOf(data).find(entry => entry.target === target.target)
+        const slot = forms ? (forms.forms ?? []).find(form => sameId(form?.id, forms.defaultFormId)) ?? forms.forms?.[0] : undefined
+        if (slot && ownSlots.has(slot)) { hold('mine', reference.target, (reference as CharacterReference).asset, 'character-ambiguous'); continue }
+        const moved = place(reference as CharacterReference, 'mine')
+        if (!moved) { hold('mine', reference.target, (reference as CharacterReference).asset, 'asset-missing'); continue }
+        selected++
+        if (slot) {
+            const copy: Reference = { ...moved }
+            delete copy.target
+            slot.reference = copy
+            ownSlots.add(slot)
+            continue
+        }
+        ownReferences.push({ ...moved, target: target.target })
+    }
+    // The new body's form references that missed their picture, now that every picture the user's references need is back; a form
+    // the user's reference took stays the user's (as on any form the user set), only a picture still missing is reported.
+    for (const [entry, form, reference] of missing) {
+        if (form.reference && (!isCustomTarget(entry.target) || Object.keys(form.reference).length > 0)) continue // as for the user's own
+        const moved = place(reference, 'theirs')
+        if (moved) form.reference = moved
+        else held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(form.id ?? ''), reference, reason: 'asset-missing' })
+    }
+    // The new body's outfit references (forms[].outfits[], features.outfits) follow their pictures too, or their numbers would be left
+    // without a record.
+    const outfits = data.features?.outfits as { entries?: Entry[] } | undefined
+    for (const [entry, list] of [...entriesOf(data).flatMap(entry => (entry.forms ?? []).map(form => [entry, form?.outfits] as const)),
+        ...(Array.isArray(outfits?.entries) ? outfits.entries : []).map(entry => [entry, entry?.outfits] as const)]) {
+        for (const outfit of (Array.isArray(list) ? list : []) as Form[]) {
+            if (!outfit?.reference) continue
+            const moved = placed(entry) ? place(outfit.reference, 'theirs') : null
+            if (moved) outfit.reference = moved
+            else {
+                held.push({ side: 'theirs', target: String(entry.target ?? ''), character: commentOf(theirs.globalLore, entry.target), formId: String(outfit.id ?? ''), reference: outfit.reference, reason: placed(entry) ? 'asset-missing' : 'character-missing' })
+                delete outfit.reference
+            }
+        }
+    }
+    if (selection || ownSelection) {
+        const rows = new Map<string, string[]>(), references = new Map<string, CharacterReference>()
+        const pick = (token: unknown, side: 'mine' | 'theirs') => typeof token === 'string' ? place({ asset: token }, side, false)?.asset : undefined
+        // A pick named twice for one character (in one row or two) counts once.
+        const seen = new Set<string>()
+        const first = (side: 'mine' | 'theirs', target: string, token: unknown) => !seen.has(JSON.stringify([side, target, token])) && !!seen.add(JSON.stringify([side, target, token]))
+        // A row or reference of the new body whose lore entry is left out goes with it (reported with the dropped characters).
+        const drop = (target: string) => {
+            if (droppedTargets.has(target)) return
+            droppedTargets.add(target)
+            dropped.push(commentOf(theirs.globalLore, target) || target)
+        }
+        for (const row of Array.isArray(selection?.selections) ? selection.selections : []) {
+            if (typeof row?.target !== 'string') continue
+            if (!placed(row)) { drop(row.target); continue }
+            const tokens = rows.get(row.target) ?? []
+            for (const token of Array.isArray(row.assets) ? row.assets : []) {
+                if (!first('theirs', row.target, token)) continue
+                const moved = pick(token, 'theirs')
+                if (!moved) hold('theirs', row.target, token, 'asset-missing')
+                else if (!tokens.includes(moved)) tokens.push(moved)
+            }
+            rows.set(row.target, tokens)
+        }
+        const theirsCharacterReferences = Array.isArray(selection?.characterReferences) ? selection.characterReferences : []
+        for (const [index, reference] of theirsCharacterReferences.entries()) {
+            if (typeof reference?.target !== 'string') continue
+            if (theirsCharacterReferences.slice(index + 1).some(later => later?.target === reference.target)) continue // the last one is in use
+            if (!placed(reference)) { drop(reference.target); continue }
+            const moved = place(reference, 'theirs')
+            if (moved) references.set(reference.target, moved)
+            else hold('theirs', reference.target, reference.asset, 'asset-missing')
+        }
+        for (const reference of ownReferences) references.set(reference.target!, reference)
+        for (const [row, target] of where(ownSelection?.selections)) {
+            const assets = Array.isArray(row.assets) ? row.assets : []
+            if (typeof target === 'string') { for (const token of assets) if (first('mine', row.target!, token)) hold('mine', row.target, token, target); continue }
+            const tokens = rows.get(target.target!) ?? []
+            for (const token of assets) {
+                if (!first('mine', target.target!, token)) continue
+                const moved = pick(token, 'mine')
+                if (!moved) { hold('mine', row.target, token, 'asset-missing'); continue }
+                if (!tokens.includes(moved)) tokens.push(moved)
+                selected++
+            }
+            rows.set(target.target!, tokens)
+        }
+        const next: Selection = { ...selection }
+        const filled = [...rows].filter(([, tokens]) => tokens.length).map(([target, assets]) => ({ target, assets }))
+        if (filled.length || Array.isArray(selection?.selections)) next.selections = filled
+        if (references.size || Array.isArray(selection?.characterReferences)) next.characterReferences = [...references.values()]
+        if (selection || Object.keys(next).length) data.features = { ...data.features, assetSelection: next }
     }
     // Final order includes user-added pictures; occurrence counts every eligible picture, not just referenced ones.
     const locators = assetMaidCharacterLocators(result)
@@ -302,7 +492,7 @@ export function mergeAssetMaid(mineEntry: loreBook, theirsEntry: loreBook, mine:
     else delete entities.assets
     data.entities = entities
     if (map) data = moveLore(data, map) as Portable
-    return { content: other.prefix + JSON.stringify(data), kept, replaced, held, appended, dropped }
+    return { content: other.prefix + JSON.stringify(data), kept, replaced, held, appended, dropped, selected }
 }
 
 let pending: { id: string, text: string, chaId: string, incoming: object, mineEntry: loreBook, theirsEntry: loreBook } | null = null
@@ -322,7 +512,7 @@ export function presetAssetMaidMerge(plan: UpdatePlan | null, mine: character, t
         Object.fromEntries(pictures.map(entry => [entry.id, entry.choice ?? 'mine']))).additionalAssets ?? []
     const merged = mergeAssetMaid(item.mine as loreBook, item.theirs as loreBook, mine, theirs, [...order])
     // Nothing of the user's moved (none set, or none has a place in the new body): upstream's choice as it is.
-    if (!merged || merged.kept === 0) return null
+    if (!merged || (merged.kept === 0 && merged.selected === 0)) return null
     pending = { id: item.id, text: merged.content, chaId: mine.chaId, incoming: theirs, mineEntry: item.mine as loreBook, theirsEntry: item.theirs as loreBook }
     return { id: item.id, text: merged.content, kept: merged.kept, held: merged.held }
 }
@@ -359,9 +549,13 @@ const reasonText: Record<HeldReason, string> = {
 
 function report(held: HeldReference[], dropped: string[]) {
     if (!held.length && !dropped.length) return
-    const lines = held.map(entry => `${entry.character || entry.target} / ${entry.formId} (${entry.side === 'mine' ? '내 레퍼런스' : '새 판 레퍼런스'}: ${reasonText[entry.reason]}, ${entry.reference.asset ?? ''})`)
+    const lines = held.map(entry => entry.selection
+        ? `${entry.character || entry.target} / 에셋 선택 (${entry.side === 'mine' ? '내 선택' : '새 판 선택'}: ${reasonText[entry.reason]}, ${entry.reference.asset ?? ''})`
+        : `${entry.character || entry.target} / ${entry.formId} (${entry.side === 'mine' ? '내 레퍼런스' : '새 판 레퍼런스'}: ${reasonText[entry.reason]}, ${entry.reference.asset ?? ''})`)
     for (const name of dropped) lines.push(`${name} (업데이트 뒤 로어에 없어 Asset Maid 설정에서 뺌)`)
-    const message = held.length ? `Asset Maid 레퍼런스 ${held.length}개는 새 판으로 옮기지 못했어요(보류).` : `Asset Maid 인물 ${dropped.length}개는 업데이트 뒤 로어에 없어 설정에서 뺐어요.`
+    const picks = held.filter(entry => entry.selection).length
+    const what = !picks ? '레퍼런스' : picks === held.length ? '선택 그림' : '레퍼런스·선택 그림'
+    const message = held.length ? `Asset Maid ${what} ${held.length}개는 새 판으로 옮기지 못했어요(보류).` : `Asset Maid 인물 ${dropped.length}개는 업데이트 뒤 로어에 없어 설정에서 뺐어요.`
     addLog({ level: 'warning', message, description: lines.join('\n'), source: 'character-update' })
     // Not notifyWarning: it would also close the "applying" notice of the import that is still running.
     toast.warning(message, { description: lines.slice(0, 8).join('\n') + (lines.length > 8 ? `\n… 외 ${lines.length - 8}개 (로그)` : '') })

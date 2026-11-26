@@ -72,3 +72,19 @@
 
 - 배포로 받은 캐릭터는 원작 「설치된 봇 업데이트」로 적용된다. 그 합치기에서 Asset Maid 전용 로어 항목(`__ASSET_MAID_DATA__`)이 양쪽에서 다르면(충돌, 또는 기준 기록이 없는 '다름') 그리고 내 레퍼런스를 하나라도 새 판으로 옮길 수 있으면, `src/ts/content-updates/characterUpdateRefKeep.ts`(+test)가 새 판 본문에 내 레퍼런스를 같은 인물·폼으로 옮긴 값을 원작 「직접 고침」 선택으로 미리 골라 둔다(`applyAssetMaidPreset`, 기준 파일로 다시 비교할 때는 손대지 않은 미리 고른 값만 새로 만듦). 그 값이 그대로 적용됐을 때만 `finalizeAssetMaidMerge`가 최종 로어·그림 순서에 맞춰 `lore:N`·`asset:N`과 지문 키를 다시 매기고, 가리키는 그림·자르기 그림을 남기며, 옮기지 못한 레퍼런스는 알림·앱 기록(보류)으로 남긴다. 사용자가 내 버전·새 버전을 직접 고르거나 글을 고치면 원작 그대로다.
 - 연결(host-bridges, v0.9.96 어댑터의 대상 전용 호스트): `src/ts/characterUpdateFlow.svelte.ts`에 import 1줄과 호출 3곳, `src/ts/characterUpdate.ts` `canon()`에 카드 형식 사본(`extentions`의 `risu_id`·`risu_loreCache`·`risu_bookVersion`)을 비교에서 빼는 함수 1개.
+
+## 0.9.103-ver4: 카드 업데이트 때 Asset Maid 에셋 선택(assetSelection) 유지, 그림은 기록(지문)으로 찾기
+
+- 위 합치기(`mergeAssetMaid`의 `place`)는 그림을 `asset:N` 번호의 위치가 아니라 그 번호의 기록(`entities.assets`의 지문 `descriptor`·`occurrence`, 옛 지문 포함)으로 찾는다. Asset Maid가 그림을 찾는 방식과 같다. 기록이 그쪽 그림을 가리키지 않으면 이전처럼 번호의 위치를 쓴다. 번호가 위치와 같은 본문의 결과는 바이트까지 이전과 같다. (1.4.3 카드처럼 번호가 위치와 다른 본문에서 ver3까지는 레퍼런스가 다른 그림으로 옮겨졌다.)
+- `features.assetSelection`(Asset Maid 에셋 분석 탭의 인물별 그림 줄 `selections[]`, 인물 기준 그림 `characterReferences[]`)도 같은 `place`로 옮겨, 본문의 모든 번호가 `entities.assets` 기록을 갖는다(기록 없는 번호가 하나라도 있으면 Asset Maid가 본문 전체를 손상으로 본다).
+  - 줄은 인물별 합집합이다. 새 판 그림 먼저, 그다음 이 기기에서 고른 그림 중 아직 없는 것. 내 줄의 인물은 레퍼런스와 같은 `locate`(로어 지문 → 로어 이름)로 새 판 인물을 찾고, 둘 이상이 한 인물에 모이면 둘 다 보류한다.
+  - 합친 뒤 그림이 남지 않는 선택은 뺀다(선택 때문에 그림을 다시 붙이지 않는다). 빈 줄은 버린다. 같은 인물의 `characterReferences`는 내 것이 이긴다(폼 레퍼런스와 같음, 그림은 레퍼런스처럼 필요하면 끝에 붙인다).
+  - 옮기지 못한 선택은 레퍼런스와 같은 알림·앱 기록에 「에셋 선택 (내 선택/새 판 선택: 사유)」로 남는다.
+  - 내 선택만 있고 레퍼런스가 없어도 미리 고른 합치기를 만든다. 양쪽 모두 `assetSelection`이 없으면 본문에 키를 만들지 않는다.
+  - 내 줄의 인물은 폼이 없는 로어라도 새 판 본문의 로어 기록에서 찾는다. `self`·`description:self`, 새 판에 있는 `custom:<id>`(`features.characters`)·member(`member:N`, `member:N/description:self`) 줄, 새 판 기록이 같은 항목인 member 로어(`member:N/lore:M`) 줄은 그대로 둔다(Asset Maid의 대상 검사와 같음). 원래 같은 인물의 줄 여러 개는 하나로 합치고, 같은 그림이 여러 번 있으면 한 번만 센다(보류 보고도 한 번). 내 `characterReferences`가 그림을 다시 붙이는 것은 양쪽 줄·의상 레퍼런스보다 먼저 처리하고, 그림이 아직 없어 못 찾은 새 판 폼 레퍼런스는 그 뒤에 한 번 더 찾는다(내 레퍼런스가 차지한 폼은 내 것, custom 빈 칸 `{}`은 차지한 것으로 보지 않음). 새 판이 그 인물에 폼을 새로 만들었으면(설치본에는 폼 없음) 내 `characterReferences`는 새 판 기본 폼의 레퍼런스로 들어간다(Asset Maid는 폼이 있는 인물의 characterReference를 쓰지 않음). 그 폼이 이미 다른 설치 인물의 내 레퍼런스를 받았으면 그것을 두고 이 characterReference는 보류(「새 판에 같은 인물이 여럿」). 한 대상에 characterReference가 여럿이면(내 것·새 판 것 모두) Asset Maid처럼 마지막 것만 옮긴다. 설치본에서 폼이 있는 인물(대상 앞뒤 공백은 Asset Maid처럼 무시)의 내 characterReference는 쓰이지 않던 것이므로 옮기지 않는다.
+  - 새 판의 줄·characterReferences 중 로어에서 빠진 인물의 것은 인물과 함께 빠지고, 그 인물은 「업데이트 뒤 로어에 없어 뺌」 보고에 대상마다 한 번 들어간다.
+- `place`는 기록 없는 번호를 옮기지 않는다(보류, 폼·의상 레퍼런스도 같음). Asset Maid는 기록 없는 번호가 있는 본문 전체를 거부한다.
+- 모듈 그림 기록(`module`)은 카드 그림이 아니므로 카드 그림 위치로 옮기지 않고, 결과가 가질 수 있는 카드 그림 번호보다 큰 번호에 기록 그대로 둔다. 같은 모듈 그림(모듈·지문·occurrence가 같음)은 양쪽 어디서 오든, 기록을 어떻게 적었든 번호 하나다(ver3까지는 카드 그림 위치에 모듈 기록을 써서 다른 그림을 가리킬 수 있었다).
+- 새 판 본문의 의상 레퍼런스(`forms[].outfits[].reference`, `features.outfits`)도 같은 `place`로 옮긴다(ver3까지는 번호가 기록 없이 남을 수 있었다).
+- 로어 번호 옮기기(`moveLore`)는 Asset Maid처럼 `target`, 대상 목록(`sourceSelection.selectedTargets`·`workspaceDisabledTargets`), 키만 바꾼다. `label`·`description`·매칭 키·별칭 같은 글은 `lore:N`처럼 보여도 그대로 둔다(ver3까지는 지워지거나 바뀌어 본문이 거부될 수 있었다). 대상의 앞뒤 공백은 Asset Maid처럼 무시한다: 합치기는 양쪽 본문의 `target`을 trim해서 읽고 쓴다(` lore:0 `은 `lore:0`). 폼 id·기본 폼 id·custom 인물 id도 Asset Maid의 `wr()`처럼(글자로 바꿔 trim) 비교한다(본문의 id는 그대로). Asset Maid가 폼 id를 다시 매기는 규칙(`Zn`: 소문자·`form_` 접두 등)까지는 따르지 않는다(인계 §6).
+- 대상 정리(`placed`)는 로어 번호(`lore:N`)에만 적용한다. `custom:`·`self` 등은 로어 순서와 관계없이 남는다. 레퍼런스 옮기기(`locate`)도 `lore:N`이 아닌 대상은 같은 대상으로 찾는다(ver3까지는 `custom:`만, `self` 폼의 내 레퍼런스는 보류됐다).
