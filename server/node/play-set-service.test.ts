@@ -602,15 +602,15 @@ test('send packages: listed with size and notes, the same selection is offered a
     // and the other order: once a deletion started, an upload or download cannot take the package (Codex R1b #1)
     const spare = await s.service.exportSet({ characterId: 'card', chatIds: ['chat'], primaryChatId: 'chat', compatibility: true })
     const realRm = promiseFiles.rm
-    let letGo!: () => void
-    const gate = new Promise<void>(r => { letGo = r })
-    const spy = vi.spyOn(promiseFiles, 'rm').mockImplementation(async (...args: any[]) => { if (String(args[0]).includes(spare.id)) await gate; return (realRm as any)(...args) })
+    let letGo!: () => void, entered!: () => void
+    const gate = new Promise<void>(r => { letGo = r }), inRm = new Promise<void>(r => { entered = r })
+    const spy = vi.spyOn(promiseFiles, 'rm').mockImplementation(async (...args: any[]) => { if (String(args[0]).includes(spare.id)) { entered(); await gate } return (realRm as any)(...args) })
     try {
         const removing = s.service.removeSent(spare.id)
-        await new Promise(r => setTimeout(r, 20))
+        await inRm // the deletion reached the folder removal (reserved before it)
         expect(() => s.service.hold(spare.id)).toThrow(/지우는 중/)
         letGo(); expect(await removing).toEqual({ removed: true })
-    } finally { spy.mockRestore() }
+    } finally { letGo(); spy.mockRestore() }
     expect(() => s.service.hold(spare.id)()).not.toThrow()
     await expect(s.service.removeSent('11111111-1111-4111-8111-111111111111')).rejects.toThrow(/아직 만들고/)
     // over HTTP both deletions need the confirmation flag

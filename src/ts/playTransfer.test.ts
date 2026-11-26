@@ -344,9 +344,11 @@ test('a reading that started during the own hand-over copy is dropped even when 
     try {
         await vi.waitFor(() => expect(asked).toBe(1), { timeout: 3000, interval: 20 })
         endLocalCopy(); nativeLocalCopyUntil.set(Date.now() - 1) // the window is over before the slow answer lands
+        await new Promise(r => setTimeout(r, 1700)) // a tick passes (the line's clock is past the window; no second reading while one is out)
+        expect(asked).toBe(1)
         answer(reply([{ id: 'own-copy', bytes: 1_000_000, bytesTotal: null, elapsedMs: 1000, speed: null }]))
         await new Promise(r => setTimeout(r, 100))
-        expect(t.querySelector('[data-transfer-arrival]')).toBeNull()
+        expect(asked).toBe(1); expect(t.querySelector('[data-transfer-arrival]')).toBeNull() // the late answer of the old reading is dropped
         await vi.waitFor(() => expect(t.querySelector('[data-transfer-arrival]')?.textContent).toContain('50%'), { timeout: 5000, interval: 100 })
     } finally { await unmount(m); t.remove(); delete (globalThis as any).RisuPlay; nativeLocalCopyUntil.set(0) }
 }, 20000)
