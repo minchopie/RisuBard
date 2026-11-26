@@ -180,8 +180,10 @@ function createNasSyncService({ dataRoot, readDatabase, memory, storage, readCol
         try {
             const previous = keepUnchecked ? readMissingMedia() : null;
             if (previous) {
+                // A cut list (more than 200 paths) cannot tell which of this check's paths it already counted: then the larger total is kept.
                 const listed = new Set(previous.files.map(f => f.path)), added = [...new Set(missing)].filter(path => !listed.has(path));
-                writeMissingMedia({ id: randomUUID(), count: previous.count + added.length, files: [...previous.files.map(f => f.path), ...visible.filter(path => !listed.has(path))].slice(0, 200).map(path => ({ path })) });
+                const total = previous.count === previous.files.length ? previous.count + added.length : Math.max(previous.count, count);
+                writeMissingMedia({ id: randomUUID(), count: total, files: [...previous.files.map(f => f.path), ...visible.filter(path => !listed.has(path))].slice(0, 200).map(path => ({ path })) });
             } else writeMissingMedia({ id: randomUUID(), count, files: visible.map(path => ({ path })) });
         } catch { /* Diagnostic I/O must not change the snapshot error. */ }
         return Object.assign(new Error('빠진 그림 파일이 있어요. NAS 동기화 화면에서 확인해 주세요.'), { code: 'SNAPSHOT_MISSING', detail: { missingFiles: count, logged } });

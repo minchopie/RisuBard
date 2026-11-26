@@ -2904,6 +2904,15 @@ test('chats-only upload once (20, Codex R1 #2): a scope change queued before it 
     expect(result).toMatchObject({ chatsOnly: true, committed: { revisions: 1, tombstones: 0 } })
     expect(lastCommitRoots(tablet)).toEqual(['play/chat/chat'])
 })
+test('chats-only upload once (22, Codex R2 #1): with a cut picture list (more than 200 paths) repeated chats-only checks never raise the total', async t => {
+    const dav = fixtureDav(), tablet = await seedTablet(t, dav), inlay = '12345678-abcd-4321-8abc-9876543210ae'
+    const icons = Array.from({ length: 201 }, (_, i) => ['i' + i, 'assets/' + i.toString(16).padStart(64, 'f') + '.png', 'png'])
+    const db = tablet.db(); db.modules.push({ id: 'many', name: '그림 많은 모듈', lorebook: [], assets: icons }); db.characters[0].chats[0].message.push({ role: 'char', data: '{{inlay::' + inlay + '}}' }); tablet.save(db)
+    await expect(tablet.service.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING' })
+    const full = tablet.service.status().missingMedia; expect(full.count).toBe(202); expect(full.files.length).toBe(200)
+    for (let i = 0; i < 3; i++) await expect(tablet.service.snapshot({ chatsOnly: true })).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING' })
+    expect(tablet.service.status().missingMedia.count).toBe(202)
+})
 test('chats-only upload once (21, Codex R1 #3): when a chat picture is missing too, the picture report of the full check keeps its module picture and gains the chat one', async t => {
     const dav = fixtureDav(), tablet = await seedTablet(t, dav)
     const moduleIcon = 'assets/' + 'e'.repeat(64) + '.png', inlay = '12345678-abcd-4321-8abc-9876543210ad'
@@ -2912,6 +2921,8 @@ test('chats-only upload once (21, Codex R1 #3): when a chat picture is missing t
     expect(tablet.service.status().missingMedia).toMatchObject({ count: 1, files: [{ path: moduleIcon }] })
     const chat = tablet.db(); chat.characters[0].chats[0].message.push({ role: 'char', data: '{{inlay::' + inlay + '}}' }); tablet.save(chat)
     await expect(tablet.service.snapshot({ chatsOnly: true })).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING', detail: { missingFiles: 1 } })
+    expect(tablet.service.status().missingMedia).toMatchObject({ count: 2, files: [{ path: moduleIcon }, { path: 'inlay/' + inlay }] })
+    await expect(tablet.service.snapshot({ chatsOnly: true })).rejects.toMatchObject({ code: 'SNAPSHOT_MISSING' }) // again: nothing counted twice
     expect(tablet.service.status().missingMedia).toMatchObject({ count: 2, files: [{ path: moduleIcon }, { path: 'inlay/' + inlay }] })
     // A full check rewrites the report as it finds it.
     tablet.inlays.set(inlay, { data: Buffer.from('chat inlay'), metadata: {} })
