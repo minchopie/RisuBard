@@ -306,7 +306,8 @@
         "src/ts/risubard/risuBardSettings.test.ts",
         "src/ts/setting/risuBardCommonSettingsData.ts",
         "src/lib/Others/RisuBardCurrentChatSettings.svelte",
-        "src/lib/Setting/RisuBardModeSettings.test.ts"
+        "src/lib/Setting/RisuBardModeSettings.test.ts",
+        "src/ts/risubard/narrativeContext.ts"
       ],
       "files": [
         "src/ts/process/request/googleAndroidRequest.test.ts",
@@ -769,7 +770,7 @@
         {
           "module": "model-compat",
           "path": "docs/fork-modules/compat/v0.9.103/model-compat.patch",
-          "sourceSha256": "8256704262a398adbf32e4fcca660dba6085cb137886ea25811d6dee09ff9559"
+          "sourceSha256": "b083f884c3f80476e19dce9cd67deec3a805dc7ed3f28eddbe927e4655ab39f4"
         },
         {
           "module": "storage-recovery",
@@ -828,7 +829,7 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.92/transfer-sync.patch",
-          "sourceSha256": "035bdf73463c02cc2aad66d117fdcece382974cd794fe7fda259cb3fbbcd3e5c"
+          "sourceSha256": "c123ae68d2a10d58681fd73a2f499ff6263ba1a5be1fee48123e311c6131e76e"
         }
       ],
       "payloadTargets": {

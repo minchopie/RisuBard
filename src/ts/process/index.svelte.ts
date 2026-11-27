@@ -50,6 +50,7 @@ import {
 import { projectActiveNarrativeSources } from "../risubard/sourceProjection";
 import {
     createNarrativeSourcesPrompt,
+    deduplicateNarrativeEvidenceRules,
     isNarrativeContextOptedIn,
     loadNarrativeInquiry,
     mergeNarrativeContextWithStaticPrompt,
@@ -2045,11 +2046,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     //await tokenize currernt
     let currentTokens = maxResponseTokens
     const requiredWikiMessage = createRequiredWikiMessage(requiredWikiSources, responseWikiPromptGuide)
-    if (requiredWikiMessage) currentTokens += await tokenizer.tokenizeChat(requiredWikiMessage)
-    if (cacheFriendlyNarrativeMessage) currentTokens += await tokenizer.tokenizeChat(cacheFriendlyNarrativeMessage)
     const cacheFriendlyWikiMessages = cacheFriendlyContext
-        ? [requiredWikiMessage, cacheFriendlyNarrativeMessage].filter((message) => message !== null)
+        ? deduplicateNarrativeEvidenceRules([requiredWikiMessage, cacheFriendlyNarrativeMessage].filter((message) => message !== null))
         : []
+    for (const message of cacheFriendlyContext ? cacheFriendlyWikiMessages : [requiredWikiMessage, cacheFriendlyNarrativeMessage].filter((message) => message !== null)) {
+        currentTokens += await tokenizer.tokenizeChat(message)
+    }
     let supaMemoryCardUsed = false
     
     //for unexpected error

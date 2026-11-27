@@ -170,10 +170,18 @@ index 713480a..f0c548e 100644
          stopImportProgress()
      }
 diff --git a/src/ts/process/index.svelte.ts b/src/ts/process/index.svelte.ts
-index d8b1110..ada7fa2 100644
+index d8b1110..26f9ff6 100644
 --- a/src/ts/process/index.svelte.ts
 +++ b/src/ts/process/index.svelte.ts
-@@ -1840,9 +1840,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+@@ -50,6 +50,7 @@ import {
+ import { projectActiveNarrativeSources } from "../risubard/sourceProjection";
+ import {
+     createNarrativeSourcesPrompt,
++    deduplicateNarrativeEvidenceRules,
+     isNarrativeContextOptedIn,
+     loadNarrativeInquiry,
+     mergeNarrativeContextWithStaticPrompt,
+@@ -1840,9 +1841,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                          performance.now() - inquiryStartedAt
                  }
              }
@@ -185,7 +193,7 @@ index d8b1110..ada7fa2 100644
              const currentPrompt = narrativeContext.sourceChanged
                  ? null
                  : createNarrativeSourcesPrompt(
-@@ -1851,10 +1850,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+@@ -1851,10 +1851,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                      undefined,
                      requiredWikiSources.length ? '' : responseWikiPromptGuide
                  )
@@ -197,7 +205,7 @@ index d8b1110..ada7fa2 100644
              if (currentPrompt || baselinePrompt) {
                  narrativeContextObservation.mode = 'current'
                  narrativeContextObservation.reason =
-@@ -1906,9 +1902,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+@@ -1906,9 +1903,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                      cacheFriendlyNarrativeMessage = currentContextMessage
                  }
                  const staticContextMessage: OpenAIChat | null = cacheFriendlyContext
@@ -208,7 +216,23 @@ index d8b1110..ada7fa2 100644
                      : currentContextMessage
                  if (staticContextMessage) {
                  const mergedContext = mergeNarrativeContextWithStaticPrompt({
-@@ -2912,7 +2906,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+@@ -2051,11 +2046,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+     //await tokenize currernt
+     let currentTokens = maxResponseTokens
+     const requiredWikiMessage = createRequiredWikiMessage(requiredWikiSources, responseWikiPromptGuide)
+-    if (requiredWikiMessage) currentTokens += await tokenizer.tokenizeChat(requiredWikiMessage)
+-    if (cacheFriendlyNarrativeMessage) currentTokens += await tokenizer.tokenizeChat(cacheFriendlyNarrativeMessage)
+     const cacheFriendlyWikiMessages = cacheFriendlyContext
+-        ? [requiredWikiMessage, cacheFriendlyNarrativeMessage].filter((message) => message !== null)
++        ? deduplicateNarrativeEvidenceRules([requiredWikiMessage, cacheFriendlyNarrativeMessage].filter((message) => message !== null))
+         : []
++    for (const message of cacheFriendlyContext ? cacheFriendlyWikiMessages : [requiredWikiMessage, cacheFriendlyNarrativeMessage].filter((message) => message !== null)) {
++        currentTokens += await tokenizer.tokenizeChat(message)
++    }
+     let supaMemoryCardUsed = false
+     
+     //for unexpected error
+@@ -2912,7 +2908,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
          }, 'instruction'))
      }
  
@@ -217,7 +241,7 @@ index d8b1110..ada7fa2 100644
      for(const message of formated) syncRequestStatusSource(message)
  
      // Inject after preset/script assembly, before the model's token check. This
-@@ -2933,7 +2927,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
+@@ -2933,7 +2929,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
      narrativeContextObservation.inquiryDurationMs += requiredWikiDurationMs
  
      if(requestSettings.promptInfoInsideChat && requestSettings.promptTextInfoInsideChat){

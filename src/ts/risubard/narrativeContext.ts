@@ -551,6 +551,18 @@ export function createNarrativeSourcesPrompt(
     )
 }
 
+// Strip only a complete repeated prefix; guides, evidence and truncated rules stay untouched.
+export function deduplicateNarrativeEvidenceRules<Message extends { content: string }>(messages: readonly Message[]): Message[] {
+    const prefix = `${NARRATIVE_EVIDENCE_RULES}\n\n`
+    let included = false
+    return messages.map((message) => {
+        if (!message.content.startsWith(prefix) || message.content.length === prefix.length) return message
+        if (included) return { ...message, content: message.content.slice(prefix.length) }
+        included = true
+        return message
+    })
+}
+
 // Cache-friendly placement: the latest user turn is the first message that
 // changes every turn anyway, so per-turn memory placed just before it keeps
 // the preset, description, lorebook and earlier chat as a stable prefix.

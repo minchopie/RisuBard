@@ -51,9 +51,9 @@
       "path": "src/ts/process/index.svelte.ts",
       "module": "transfer-sync",
       "kind": "hosts",
-      "sha256": "ff0b17ef7dda75179dacc014519948bc6c43a03d200be82f938755bcf11e6a42",
-      "contentSha256": "09530f156a709ed2ffcec58c641a0791d75949125948e21ce617230d6534b914",
-      "bytes": 159834
+      "sha256": "042c82f1975710658b18dc3f3ee96b6c1077ee917c62d7fc3a22a71b1dfd1d74",
+      "contentSha256": "970174091b92dd3fde75400da15962b781092d5da058a88be271c8b05dbad1b2",
+      "bytes": 159938
     },
     {
       "path": "android-app/app/build.gradle.kts",
@@ -2272,6 +2272,14 @@
       "bytes": 14516
     },
     {
+      "path": "src/ts/risubard/narrativeContext.ts",
+      "module": "model-compat",
+      "kind": "hosts",
+      "sha256": "184920e719486ae9e50ccbf3b31cdfeb850f82f19ed629d24c0a14766d4eec34",
+      "contentSha256": "184920e719486ae9e50ccbf3b31cdfeb850f82f19ed629d24c0a14766d4eec34",
+      "bytes": 31208
+    },
+    {
       "path": "src/ts/process/request/googleAndroidRequest.test.ts",
       "module": "model-compat",
       "kind": "files",
@@ -2331,9 +2339,9 @@
       "path": "src/ts/process/cacheFriendlyContextContract.test.ts",
       "module": "model-compat",
       "kind": "files",
-      "sha256": "e44fbf471a5c7234a821e3f7fc5d19278d5f3948cc39e6c2dc3b84c0e35188ed",
-      "contentSha256": "e44fbf471a5c7234a821e3f7fc5d19278d5f3948cc39e6c2dc3b84c0e35188ed",
-      "bytes": 7066
+      "sha256": "061522947b8ef3936019548af28e4559ec9adfc9baae0cbf4ba578abfa36ec89",
+      "contentSha256": "061522947b8ef3936019548af28e4559ec9adfc9baae0cbf4ba578abfa36ec89",
+      "bytes": 12518
     },
     {
       "path": "shared/play-set/nas-diagnostic.ts",
@@ -5302,7 +5310,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/transfer-sync.patch",
-        "sha256": "035bdf73463c02cc2aad66d117fdcece382974cd794fe7fda259cb3fbbcd3e5c"
+        "sha256": "c123ae68d2a10d58681fd73a2f499ff6263ba1a5be1fee48123e311c6131e76e"
       }
     },
     {
@@ -5367,7 +5375,8 @@
         "src/ts/risubard/risuBardSettings.test.ts",
         "src/ts/setting/risuBardCommonSettingsData.ts",
         "src/lib/Others/RisuBardCurrentChatSettings.svelte",
-        "src/lib/Setting/RisuBardModeSettings.test.ts"
+        "src/lib/Setting/RisuBardModeSettings.test.ts",
+        "src/ts/risubard/narrativeContext.ts"
       ],
       "files": [
         "src/ts/process/request/googleAndroidRequest.test.ts",
@@ -5382,7 +5391,7 @@
       ],
       "patch": {
         "path": "docs/fork-modules/patches/model-compat.patch",
-        "sha256": "8256704262a398adbf32e4fcca660dba6085cb137886ea25811d6dee09ff9559"
+        "sha256": "b083f884c3f80476e19dce9cd67deec3a805dc7ed3f28eddbe927e4655ab39f4"
       }
     },
     {
@@ -5851,7 +5860,7 @@
     },
     {
       "path": "docs/fork-modules/features.json",
-      "sha256": "27efdded004402f17434f66245c47b56fe377fcc74d6dce3faf93ee2c389b38b"
+      "sha256": "a30eff906d0f5631edca260a07cb9b5dde1a29ce0344c6b74338c6eed8dec3d5"
     },
     {
       "path": "scripts/fork-modules/cleanup-workdirs.mjs",
@@ -5902,8 +5911,8 @@
         {
           "module": "model-compat",
           "path": "docs/fork-modules/compat/v0.9.103/model-compat.patch",
-          "sourceSha256": "8256704262a398adbf32e4fcca660dba6085cb137886ea25811d6dee09ff9559",
-          "sha256": "647f9d39346d4d6cf92f6ba1ba71f0c75b6ed34305b444c4482f6a881efdac38"
+          "sourceSha256": "b083f884c3f80476e19dce9cd67deec3a805dc7ed3f28eddbe927e4655ab39f4",
+          "sha256": "01d11c9bba287df6652370babf283623b983f26993a4116a14a81a524e35170e"
         },
         {
           "module": "storage-recovery",
@@ -5968,8 +5977,8 @@
         {
           "module": "transfer-sync",
           "path": "docs/fork-modules/compat/v0.9.92/transfer-sync.patch",
-          "sourceSha256": "035bdf73463c02cc2aad66d117fdcece382974cd794fe7fda259cb3fbbcd3e5c",
-          "sha256": "8b645be36d81224169ef57112d3779ce13fd2a3744f2f7161339daac184c6ada"
+          "sourceSha256": "c123ae68d2a10d58681fd73a2f499ff6263ba1a5be1fee48123e311c6131e76e",
+          "sha256": "4c9ea13a435ee360bddd64ae7d1ef70e92f762ffe5d70ea90dc32fc40a71451e"
         }
       ],
       "payloadTargets": {

@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import ts from 'typescript'
+import * as narrativeContext from '../risubard/narrativeContext'
+import { createRequiredWikiMessage } from '../risubard/requiredWikiContext'
 import type { ContextSource } from '../../../packages/risubard-core/src/contextCompiler'
 import type { OpenAIChat } from './index.svelte'
 import type { RequestInjectionSource } from '../status/requestStatus'
@@ -11,6 +13,75 @@ import {
 } from '../risubard/narrativeContext'
 
 const source = readFileSync('src/ts/process/index.svelte.ts', 'utf8').replace(/\r\n/g, '\n')
+
+describe('assembled cache-friendly wiki evidence rules', () => {
+    const makePrompt = (id: string, body: string, guide = '', budget?: number) => createNarrativeSourcesPrompt([
+        { id, kind: 'memory', role: 'system', content: body, tokens: 4 },
+    ], '', budget, guide)!
+
+    test('preserves zero/one message fallback and removes only the second exact complete prefix', () => {
+        const first: OpenAIChat = { role: 'system', content: makePrompt('required', 'REQUIRED\r\n가', 'GUIDE\nbytes'), removable: false }
+        const second: OpenAIChat = { role: 'system', content: makePrompt('optional', 'OPTIONAL\r\n나'), requestStatusSources: [{ kind: 'wiki', role: 'system', content: 'OPTIONAL\r\n나' }] }
+        const original = structuredClone([first, second])
+        const prefix = second.content.slice(0, second.content.indexOf('Relevant narrative memory:'))
+        expect(narrativeContext.deduplicateNarrativeEvidenceRules([])).toEqual([])
+        expect(narrativeContext.deduplicateNarrativeEvidenceRules([first])).toEqual([first])
+        expect(narrativeContext.deduplicateNarrativeEvidenceRules([second])).toEqual([second])
+        const output = narrativeContext.deduplicateNarrativeEvidenceRules([first, second])
+        expect(output[0]).toBe(first)
+        expect(output[1]).toEqual({ ...second, content: second.content.slice(prefix.length) })
+        expect(output[1].requestStatusSources).toBe(second.requestStatusSources)
+        expect([first, second]).toEqual(original)
+        expect(prefix).toMatch(/^Narrative continuity:/)
+        expect(output[0].content).toContain('GUIDE\nbytes')
+    })
+
+    test('keeps custom or partially truncated rules and preserves an evidence suffix cut by the existing budget', () => {
+        const full = makePrompt('a', 'evidence '.repeat(100))
+        const prefixLength = full.indexOf('Relevant narrative memory:')
+        const make = (content: string) => ({ role: 'system', content })
+        const first = make(full)
+        for (const text of [full.slice(0, prefixLength - 3), full.slice(0, prefixLength), full.replace('Narrative continuity:', 'Custom continuity:')]) {
+            expect(narrativeContext.deduplicateNarrativeEvidenceRules([first, make(text)])[1].content).toBe(text)
+        }
+        const cut = makePrompt('b', 'b'.repeat(1000), '', prefixLength + 80)
+        const output = narrativeContext.deduplicateNarrativeEvidenceRules([first, make(cut)])
+        expect(output[1].content).toBe(cut.slice(prefixLength))
+        // A lone partial prefix cannot authorize stripping the complete rules from the next message.
+        expect(narrativeContext.deduplicateNarrativeEvidenceRules([make(full.slice(0, 40)), first])[1]).toBe(first)
+    })
+
+    test.each([true, false])('counts the final messages and preserves evidence (cache-friendly=%j)', async (enabled) => {
+        const requiredWikiSources: ContextSource[] = [{ id: 'required', kind: 'memory', role: 'system', content: 'REQUIRED_BYTES\r\n가', tokens: 4 }]
+        const optional: ContextSource[] = [{ id: 'optional', kind: 'memory', role: 'system', content: 'OPTIONAL_BYTES\r\n나', tokens: 4 }]
+        const current = { role: 'system', content: createNarrativeSourcesPrompt(optional)! }
+        const start = source.indexOf('const requiredWikiMessage = createRequiredWikiMessage(')
+        const end = source.indexOf('let supaMemoryCardUsed', start)
+        expect(start).toBeGreaterThan(-1)
+        expect(end).toBeGreaterThan(start)
+        const assembly = ts.transpileModule(source.slice(start, end), {
+            compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+        }).outputText
+        const run = new Function('createRequiredWikiMessage', 'deduplicateNarrativeEvidenceRules', 'cacheFriendlyNarrativeMessage', 'requiredWikiSources', 'cacheFriendlyContext', `return (async () => {
+            let currentTokens = 0;
+            const responseWikiPromptGuide = 'CUSTOM_GUIDE_BYTES';
+            const tokenizer = { tokenizeChat: async message => message.content.length };
+            ${assembly}
+            return { messages: cacheFriendlyContext ? cacheFriendlyWikiMessages : [requiredWikiMessage, cacheFriendlyNarrativeMessage], currentTokens };
+        })()`)
+        const output = await run(createRequiredWikiMessage,
+            (narrativeContext as unknown as Record<string, unknown>).deduplicateNarrativeEvidenceRules,
+            current, requiredWikiSources, enabled)
+        expect(output.messages).toHaveLength(2)
+        expect(output.messages.map((m: { content: string }) => m.content).join('\n').match(/^Narrative continuity:/gm)).toHaveLength(enabled ? 1 : 2)
+        expect(output.messages[0].content).toContain('REQUIRED_BYTES\r\n가')
+        expect(output.messages[0].content).toContain('CUSTOM_GUIDE_BYTES')
+        expect(output.messages[1].content).toContain('OPTIONAL_BYTES\r\n나')
+        expect(output.currentTokens).toBe(output.messages.reduce((n: number, m: { content: string }) => n + m.content.length, 0))
+        expect(source).toContain('formated = insertBeforeLatestUserMessage(formated, cacheFriendlyWikiMessages)')
+        expect(source).toContain('promptBodyformatedForChatStore = insertBeforeLatestUserMessage(promptBodyformatedForChatStore, cacheFriendlyWikiMessages)')
+    })
+})
 const start = source.indexOf('const currentPrompt = narrativeContext.sourceChanged')
 const end = source.indexOf('\n            }\n            }\n        }\n        catch', start) + '\n            }'.length
 expect(start).toBeGreaterThan(-1)
