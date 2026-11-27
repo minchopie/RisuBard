@@ -662,6 +662,7 @@
         "patchnote/0.9.103-ver3.md",
         "patchnote/0.9.103-ver4.md",
         "patchnote/0.9.103-ver5.md",
+        "patchnote/0.9.103-ver6.md",
         "docs/fork-modules/compat/v0.9.92/mobile-ui.patch",
         "docs/fork-modules/compat/v0.9.96/lore-lua.patch",
         "docs/fork-modules/compat/v0.9.86/storage-recovery.patch",
